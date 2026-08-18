@@ -339,6 +339,16 @@ pub struct ExactlyOnceReport {
     /// Counted rather than ignored: a verdict computed over a silently smaller
     /// population is a weaker claim than it appears to be.
     pub keys_unprobed: u64,
+    /// Keys whose probe failed in a way that does not answer the question.
+    ///
+    /// A probe that dies at transport level says nothing about whether the
+    /// platform has the result — only that the driver could not ask. Treating
+    /// that as "accepted work has no final result" would report a connection
+    /// problem as a correctness defect, which is the exact mistake the rest of
+    /// this suite is built to avoid. They are counted here and named in the
+    /// report so a clean verdict over a large number of them can be read for
+    /// what it is: a weaker claim.
+    pub keys_inconclusive: u64,
     /// Keys that had a final result after recovery.
     pub keys_with_final_result: u64,
     /// Keys the driver never got a result for, but which the platform produced
@@ -392,12 +402,25 @@ impl ExactlyOnceReport {
 
             match probe.final_value {
                 None => {
+                    // Only a *definite* answer is evidence. A probe that was
+                    // refused outright asked the question and was told there is
+                    // nothing; a probe that died at transport level never got
+                    // to ask, and the platform may hold the result perfectly
+                    // well. Failing a run on the second would be reporting a
+                    // connection problem as a correctness defect.
+                    let definitive = probe
+                        .error_class
+                        .is_some_and(|class| class.is_definite_rejection());
+                    if !definitive {
+                        report.keys_inconclusive += 1;
+                        continue;
+                    }
                     report.findings.push(ExactlyOnceFinding {
                         violation: ExactlyOnceViolation::MissingFinalResult,
                         idempotency_key: record.idempotency_key.clone(),
                         agent: record.agent.clone(),
                         detail: format!(
-                            "accepted as {} but has no final result after recovery: {}",
+                            "accepted as {} but the platform refused to produce a final result                              for this key after recovery: {}",
                             record.outcome,
                             probe.error.as_deref().unwrap_or("probe returned no value")
                         ),

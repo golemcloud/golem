@@ -439,35 +439,63 @@ pub async fn probe_keys(ctx: &WorkloadContext, records: &[OperationRecord]) -> V
     probes
 }
 
+/// Probes one key, retrying once on a transport failure.
+///
+/// The retry follows the same rule as the workload itself — one attempt, same
+/// idempotency key, transport failures only — and here it is purely about not
+/// losing a key to a single dropped connection. A probe that cannot complete
+/// leaves the key inconclusive, and an inconclusive key weakens the verdict; a
+/// cheap same-key retry buys most of them back. It cannot mask a real problem,
+/// because a definite refusal is not retried.
 async fn probe_one(ctx: &WorkloadContext, agent: &str, key: &str) -> KeyProbe {
     let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
     let idempotency_key = golem_common::model::IdempotencyKey::new(key.to_string());
 
-    match ctx
-        .user
-        .invoke_and_await_agent_with_key(
-            &ctx.counters,
-            &parsed,
-            &idempotency_key,
-            PINNED_METHOD,
-            data_value!(PROBE_MILLIS),
-        )
-        .await
-    {
-        Ok(value) => KeyProbe {
-            idempotency_key: key.to_string(),
-            agent: agent.to_string(),
-            final_value: workload::as_u32_value(value),
-            error: None,
-            error_class: None,
-        },
-        Err(e) => KeyProbe {
-            idempotency_key: key.to_string(),
-            agent: agent.to_string(),
-            final_value: None,
-            error: Some(format!("{e:#}")),
-            error_class: Some(crate::chaos::errors::classify(&e)),
-        },
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        let outcome = ctx
+            .user
+            .invoke_and_await_agent_with_key(
+                &ctx.counters,
+                &parsed,
+                &idempotency_key,
+                PINNED_METHOD,
+                data_value!(PROBE_MILLIS),
+            )
+            .await;
+
+        match outcome {
+            Ok(value) => {
+                return KeyProbe {
+                    idempotency_key: key.to_string(),
+                    agent: agent.to_string(),
+                    final_value: workload::as_u32_value(value),
+                    error: None,
+                    error_class: None,
+                };
+            }
+            Err(e) => {
+                let class = crate::chaos::errors::classify(&e);
+                if attempts <= ctx.retry.max_retries && class.is_retryable_transport_failure() {
+                    tokio::time::sleep(ctx.retry.delay()).await;
+                    continue;
+                }
+                if !class.is_definite_rejection() {
+                    warn!(
+                        "S8: probe of {key} could not complete ({class}), leaving the key \
+                         inconclusive rather than reporting a lost result: {e:#}"
+                    );
+                }
+                return KeyProbe {
+                    idempotency_key: key.to_string(),
+                    agent: agent.to_string(),
+                    final_value: None,
+                    error: Some(format!("{e:#}")),
+                    error_class: Some(class),
+                };
+            }
+        }
     }
 }
 

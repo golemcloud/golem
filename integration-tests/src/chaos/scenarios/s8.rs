@@ -435,6 +435,7 @@ fn readback_agents(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chaos::errors::ErrorClass;
     use crate::chaos::history::Outcome;
     use crate::chaos::pinned::KeyProbe;
     use crate::chaos::summary::ExactlyOnceViolation;
@@ -470,13 +471,28 @@ mod tests {
         }
     }
 
+    /// A probe that got a definite answer from the platform.
     fn probe(record: &OperationRecord, final_value: Option<u32>) -> KeyProbe {
         KeyProbe {
             idempotency_key: record.idempotency_key.clone(),
             agent: record.agent.clone(),
             final_value,
-            error: final_value.is_none().then(|| "probe failed".to_string()),
-            error_class: None,
+            error: final_value.is_none().then(|| "refused".to_string()),
+            // `Response` is the class that means "the platform answered, and the
+            // answer was no" — the only failure that is evidence about the key
+            // rather than about the connection.
+            error_class: final_value.is_none().then_some(ErrorClass::Response),
+        }
+    }
+
+    /// A probe that never got to ask.
+    fn probe_failed(record: &OperationRecord, class: ErrorClass) -> KeyProbe {
+        KeyProbe {
+            idempotency_key: record.idempotency_key.clone(),
+            agent: record.agent.clone(),
+            final_value: None,
+            error: Some(format!("{class} failure")),
+            error_class: Some(class),
         }
     }
 
@@ -530,6 +546,60 @@ mod tests {
             report.findings[0].violation,
             ExactlyOnceViolation::MissingFinalResult
         );
+    }
+
+    /// The distinction the whole verdict rests on: a probe that *could not ask*
+    /// says nothing about whether the platform has the result. Reporting it as
+    /// lost work would turn a connection problem into a correctness defect,
+    /// which is the exact mistake this suite is built to avoid.
+    #[test]
+    fn a_probe_that_could_not_complete_leaves_the_key_inconclusive_rather_than_failing() {
+        for class in [
+            ErrorClass::Transport,
+            ErrorClass::Platform,
+            ErrorClass::Application,
+        ] {
+            let r = record(9, "chaos-s8-pinned-http-0009", Outcome::Indeterminate, None);
+            let report = ExactlyOnceReport::build(
+                std::slice::from_ref(&r),
+                &[probe_failed(&r, class)],
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            );
+            assert!(
+                !report.has_violations(),
+                "a {class} probe failure must not fail the run: {:?}",
+                report.findings
+            );
+            assert_eq!(
+                report.keys_inconclusive, 1,
+                "but it must be counted, so a clean verdict over many of them reads as weaker"
+            );
+        }
+    }
+
+    /// The other half of that distinction: a probe the platform *answered*, by
+    /// refusing, is real evidence and does fail the run.
+    #[test]
+    fn a_probe_the_platform_definitively_refused_is_a_missing_result() {
+        let r = record(
+            10,
+            "chaos-s8-pinned-http-0010",
+            Outcome::Indeterminate,
+            None,
+        );
+        let report = ExactlyOnceReport::build(
+            std::slice::from_ref(&r),
+            &[probe_failed(&r, ErrorClass::Response)],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        assert!(report.has_violations());
+        assert_eq!(
+            report.findings[0].violation,
+            ExactlyOnceViolation::MissingFinalResult
+        );
+        assert_eq!(report.keys_inconclusive, 0);
     }
 
     /// A definite refusal is not accepted work, so the platform owes it nothing
