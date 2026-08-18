@@ -184,6 +184,7 @@ mod tests {
                 kind: "pod-kill".to_string(),
                 target: "shard-manager".to_string(),
                 mode: "one".to_string(),
+                target_count: None,
                 duration_secs: 60,
             },
             workload: Some(WorkloadConfig {
@@ -385,6 +386,7 @@ mod sample_artifact {
                 kind: "pod-kill".to_string(),
                 target: "shard-manager".to_string(),
                 mode: "one".to_string(),
+                target_count: None,
                 duration_secs: 60,
             },
             workload: Some(WorkloadConfig {

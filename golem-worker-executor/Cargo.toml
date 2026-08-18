@@ -27,6 +27,7 @@ path = "tests/lib.rs"
 harness = false
 
 [dependencies]
+axum = { workspace = true }
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 
@@ -117,7 +118,6 @@ golem-test-framework = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }
 
 assert2 = { workspace = true }
-axum = { workspace = true }
 futures-concurrency = { workspace = true }
 goldenfile = { workspace = true }
 pretty_assertions = { workspace = true, features = [ "unstable" ] }

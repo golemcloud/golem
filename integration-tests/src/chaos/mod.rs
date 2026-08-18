@@ -33,7 +33,9 @@
 //!    conditions that fail a run outright.
 
 pub mod errors;
+pub mod executors;
 pub mod history;
+pub mod ownership;
 pub mod pinned;
 pub mod prep;
 pub mod result;
@@ -51,6 +53,8 @@ use std::time::Duration;
 /// the result artifact and the tickets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ScenarioCode {
+    /// Shard-manager to executor network partition.
+    S1,
     /// Executor pod kill with pinned HTTP invocations in flight.
     S8,
     /// Shard-manager pod restart under mixed workload.
@@ -60,6 +64,7 @@ pub enum ScenarioCode {
 impl ScenarioCode {
     pub fn as_str(self) -> &'static str {
         match self {
+            ScenarioCode::S1 => "S1",
             ScenarioCode::S8 => "S8",
             ScenarioCode::S12 => "S12",
         }
@@ -68,7 +73,7 @@ impl ScenarioCode {
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 2] = [ScenarioCode::S8, ScenarioCode::S12];
+    pub const ALL: [ScenarioCode; 3] = [ScenarioCode::S1, ScenarioCode::S8, ScenarioCode::S12];
 
     pub fn parse(s: &str) -> Option<Self> {
         ScenarioCode::ALL
@@ -96,6 +101,13 @@ pub struct FaultConfig {
     /// Chaos Mesh selection mode, e.g. `one`.
     #[serde(default = "default_fault_mode")]
     pub mode: String,
+    /// How many pods the fault applies to, for the modes that take a count.
+    ///
+    /// Recorded here rather than only in the manifest so the archived result
+    /// says how wide the blast radius was *configured* to be — "we partitioned
+    /// half the executors" is only meaningful next to how many that was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_count: Option<u32>,
     pub duration_secs: u64,
 }
 
@@ -221,6 +233,27 @@ fn default_candidate_pool_multiplier() -> u32 {
     8
 }
 
+/// Settings for the shard-ownership oracle (GOL-364).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnershipConfig {
+    /// How long to wait after the fault is reported healed before taking the
+    /// sample the run is *judged* on.
+    ///
+    /// This is the one number that decides what the scenario actually tests.
+    /// Too short and it measures a rebalance in progress, where transient
+    /// disagreement is normal and a verdict would be noise. Long enough and it
+    /// measures the state the cluster settled into, which is the only state
+    /// worth asserting about.
+    pub settle_secs: u64,
+}
+
+impl OwnershipConfig {
+    pub fn settle(&self) -> Duration {
+        Duration::from_secs(self.settle_secs)
+    }
+}
+
 /// One scenario's entry in the suite YAML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -239,6 +272,10 @@ pub struct ScenarioConfig {
     /// The pinned in-flight workload. Absent for scenarios that do not run one.
     #[serde(default)]
     pub pinned: Option<PinnedConfig>,
+    /// Shard-ownership oracle settings. Absent for scenarios that do not sample
+    /// executor assignments.
+    #[serde(default)]
+    pub ownership: Option<OwnershipConfig>,
     #[serde(default)]
     pub retry_policy: RetryPolicy,
     /// How long the driver waits for each workflow signal before aborting.
@@ -269,6 +306,16 @@ impl ScenarioConfig {
         self.workload.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "chaos scenario {} needs a `workload` block in the suite YAML",
+                self.code
+            )
+        })
+    }
+
+    /// The ownership-oracle block. See [`Self::require_workload`].
+    pub fn require_ownership(&self) -> anyhow::Result<&OwnershipConfig> {
+        self.ownership.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs an `ownership` block in the suite YAML",
                 self.code
             )
         })
@@ -376,6 +423,7 @@ mod tests {
                     kind: "pod-kill".to_string(),
                     target: "shard-manager".to_string(),
                     mode: "one".to_string(),
+                    target_count: None,
                     duration_secs: 60,
                 },
                 phases: PhaseConfig {
@@ -391,6 +439,7 @@ mod tests {
                     rate_per_sec: 1,
                 }),
                 pinned: None,
+                ownership: None,
                 retry_policy: RetryPolicy::default(),
                 signal_timeout_secs: 1,
             }],
@@ -412,6 +461,7 @@ mod tests {
         assert_eq!(ScenarioCode::parse("s12"), Some(ScenarioCode::S12));
         assert_eq!(ScenarioCode::parse("S12"), Some(ScenarioCode::S12));
         assert_eq!(ScenarioCode::parse("s8"), Some(ScenarioCode::S8));
+        assert_eq!(ScenarioCode::parse("s1"), Some(ScenarioCode::S1));
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
@@ -427,6 +477,10 @@ mod tests {
                 }
                 ScenarioCode::S8 => {
                     entry.require_pinned().unwrap();
+                }
+                ScenarioCode::S1 => {
+                    entry.require_workload().unwrap();
+                    entry.require_ownership().unwrap();
                 }
             }
         }

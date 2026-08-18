@@ -197,6 +197,16 @@ pub enum BenchmarkConfig {
         #[arg(long)]
         signal_dir: Option<PathBuf>,
 
+        /// JSON file describing how to reach each worker-executor's
+        /// introspection endpoint. Required by scenarios whose verdict is built
+        /// from per-executor shard assignments; see
+        /// `integration_tests::chaos::executors`.
+        ///
+        /// Re-read at every sample rather than loaded once, so a scenario whose
+        /// executor set changes mid-run picks the change up.
+        #[arg(long)]
+        executor_endpoints: Option<PathBuf>,
+
         /// Save the scenario result to a JSON file. Also written on abort, with
         /// whatever the run got through.
         #[arg(long)]
@@ -222,6 +232,8 @@ pub enum ChaosAction {
 /// Cloud Chaos Tests v1 project and the `code` fields in the suite YAML.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ChaosScenarioArg {
+    /// Shard-manager to executor network partition.
+    S1,
     /// Executor pod kill with pinned HTTP invocations in flight.
     S8,
     /// Shard-manager pod restart under mixed workload.

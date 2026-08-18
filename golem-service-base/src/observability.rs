@@ -46,6 +46,32 @@ pub async fn start_health_and_metrics_server_with_extra(
     body_message: &'static str,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<u16, anyhow::Error> {
+    start_health_and_metrics_server_with_routes(
+        addr,
+        registry,
+        extra,
+        body_message,
+        Router::new(),
+        join_set,
+    )
+    .await
+}
+
+/// As [`start_health_and_metrics_server_with_extra`], plus service-specific
+/// routes merged onto the same listener.
+///
+/// This port is already the one an operator reaches for when they want to know
+/// what a single process thinks — it carries the healthcheck and the metrics —
+/// so read-only introspection belongs on it rather than on a new listener or on
+/// the gRPC API the platform's own components speak to each other over.
+pub async fn start_health_and_metrics_server_with_routes(
+    addr: impl ToSocketAddrs,
+    registry: Registry,
+    extra: Option<ExtraMetrics>,
+    body_message: &'static str,
+    extra_routes: Router,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> Result<u16, anyhow::Error> {
     let app = Router::new()
         .route("/healthcheck", get(move || async move { body_message }))
         .route(
@@ -54,7 +80,8 @@ pub async fn start_health_and_metrics_server_with_extra(
                 let extra = extra.clone();
                 async move { prometheus_metrics(registry.clone(), extra) }
             }),
-        );
+        )
+        .merge(extra_routes);
 
     let listener = TcpListener::bind(addr).await?;
     let local_addr = listener.local_addr()?;

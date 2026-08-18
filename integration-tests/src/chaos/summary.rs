@@ -49,6 +49,7 @@
 //! queries. One global counter would have produced a haystack instead.
 
 use crate::chaos::history::{Outcome, Phase, Stream};
+use crate::chaos::ownership::OwnershipReport;
 use crate::chaos::pinned::KeyProbe;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -465,6 +466,15 @@ pub struct ChaosSummary {
     /// read as "checked, nothing found".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exactly_once: Option<ExactlyOnceReport>,
+    /// Shard-ownership samples, in the order they were taken. Empty for
+    /// scenarios that do not sample executor assignments.
+    ///
+    /// Every sample is kept, not just the judged one: what an operator needs in
+    /// order to read a violation is the *before* and *during* pictures next to
+    /// it, so keeping only the verdict would throw away the context that makes
+    /// it interpretable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ownership: Vec<OwnershipReport>,
     /// The read-back verdicts that need a human, hoisted for scanning.
     pub attention: Vec<String>,
 }
@@ -574,6 +584,7 @@ impl ChaosSummary {
                 .collect(),
             routing_snapshots,
             exactly_once: None,
+            ownership: Vec::new(),
             attention,
         }
     }
@@ -589,6 +600,21 @@ impl ChaosSummary {
             ));
         }
         self.exactly_once = Some(report);
+        self
+    }
+
+    /// Attaches the shard-ownership samples and hoists their findings into
+    /// [`Self::attention`].
+    ///
+    /// Findings from *every* sample surface, not only the judged one: a
+    /// mid-fault overlap that healed before the settle sample is not a run
+    /// failure, but it is absolutely something an operator wants to know
+    /// happened.
+    pub fn with_ownership(mut self, reports: Vec<OwnershipReport>) -> Self {
+        for report in &reports {
+            self.attention.extend(report.attention_lines());
+        }
+        self.ownership = reports;
         self
     }
 }
@@ -620,6 +646,11 @@ pub enum TerminationReason {
     /// maintenance window fixing that than to kill an unrelated pod and report
     /// on it as though it were the right one.
     FaultTargetUnverified { detail: String },
+    /// After the settling window, two or more executors still believed they
+    /// owned the same shard. Asserted rather than reported: an agent with two
+    /// owners is an agent whose state can fork, and there is no instant at
+    /// which that is legitimate.
+    ShardOwnershipViolated { findings: u64, first: String },
 }
 
 impl TerminationReason {

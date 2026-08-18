@@ -332,6 +332,7 @@ async fn main() {
             suite,
             prep_manifest,
             signal_dir,
+            executor_endpoints,
             save_to_json,
             save_history_to_json,
             ..
@@ -345,6 +346,7 @@ async fn main() {
                 suite.clone(),
                 prep_manifest,
                 signal_dir.clone(),
+                executor_endpoints.clone(),
                 save_to_json.clone(),
                 save_history_to_json.clone(),
             )
@@ -558,6 +560,7 @@ async fn run_chaos(
     suite: Option<std::path::PathBuf>,
     prep_manifest_path: &std::path::Path,
     signal_dir: Option<std::path::PathBuf>,
+    executor_endpoints: Option<std::path::PathBuf>,
     save_to_json: Option<std::path::PathBuf>,
     save_history_to_json: Option<std::path::PathBuf>,
 ) {
@@ -584,6 +587,7 @@ async fn run_chaos(
 
             let suite = chaos::ChaosSuite::load(&suite_path).expect("failed to load chaos suite");
             let code = match scenario {
+                ChaosScenarioArg::S1 => chaos::ScenarioCode::S1,
                 ChaosScenarioArg::S8 => chaos::ScenarioCode::S8,
                 ChaosScenarioArg::S12 => chaos::ScenarioCode::S12,
             };
@@ -602,6 +606,17 @@ async fn run_chaos(
             };
 
             let result = match code {
+                chaos::ScenarioCode::S1 => {
+                    chaos::scenarios::s1::run(
+                        &config,
+                        &manifest,
+                        &deps,
+                        &signals,
+                        executor_endpoints.as_ref(),
+                        &outputs,
+                    )
+                    .await
+                }
                 chaos::ScenarioCode::S8 => {
                     chaos::scenarios::s8::run(&config, &manifest, &deps, &signals, &outputs).await
                 }

@@ -21,6 +21,7 @@ pub mod metrics;
 pub mod model;
 pub mod preview2;
 pub mod services;
+pub mod shard_introspection;
 pub mod storage;
 pub mod wasi_host;
 pub mod worker;
@@ -48,6 +49,7 @@ use self::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use self::services::worker_fork::DefaultWorkerFork;
 use self::wasi_host::create_linker;
 use crate::grpc::WorkerExecutorImpl;
+use crate::services::HasShardService;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
@@ -1079,13 +1081,19 @@ pub async fn bootstrap_and_run_worker_executor<
         join_set,
     );
 
+    // Taken before the impl is moved into the gRPC server. The introspection
+    // route needs the same shard service the executor routes on, not a copy of
+    // it — a snapshot of anything else would answer a different question.
+    let shard_service = worker_executor_impl.shard_service();
+
     let grpc_port = run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
 
-    let http_port = golem_service_base::observability::start_health_and_metrics_server_with_extra(
+    let http_port = golem_service_base::observability::start_health_and_metrics_server_with_routes(
         golem_config.http_addr()?,
         prometheus_registry,
         runtime_metrics,
         "Worker executor is running",
+        crate::shard_introspection::router(shard_service),
         join_set,
     )
     .await?;

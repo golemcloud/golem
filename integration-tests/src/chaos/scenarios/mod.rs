@@ -25,6 +25,7 @@
 //! abort path, or that invented a phase window it never reached, would still
 //! produce a plausible-looking report from a wasted maintenance window.
 
+pub mod s1;
 pub mod s12;
 pub mod s8;
 

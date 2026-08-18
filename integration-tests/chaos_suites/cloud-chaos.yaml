@@ -150,3 +150,67 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # S1 — shard-manager / executor network partition (GOL-364). Nothing crashes
+  # and nothing restarts: only the link between the shard-manager and half the
+  # executors is cut, so both sides keep serving while each believes its own
+  # view is current. The question is what they agree on once they can talk
+  # again, and the answer has to be "no shard has two owners".
+  #
+  # This is the first scenario whose fault is NOT a PodChaos. NetworkChaos is a
+  # separate grant in the bench runner's Kubernetes Role — see the S1 runbook.
+  - code: S1
+    name: shard-manager-executor-partition
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: shard-manager
+      # Selected by label, not by name: unlike S8 the claim is about *any*
+      # partition healing cleanly, so which executors land on the far side
+      # carries no information the run depends on.
+      mode: all
+      # How many executors to cut off. Half of the two-executor topology, which
+      # is what makes this a partition rather than a shard-manager outage: the
+      # executors that stay connected keep getting told the truth, and the
+      # disagreement between the two groups is the whole experiment.
+      targetCount: 1
+      durationSecs: 120
+
+    phases:
+      baselineSecs: 300
+      # Long enough for the shard-manager to notice the cut-off executors miss
+      # their health checks and start reassigning their shards. Reassigning is
+      # what creates the opportunity for overlap: the partitioned executor has
+      # not been told to stop serving them.
+      faultSecs: 180
+      # Covers the ownership settle window below plus time for in-flight and
+      # scheduled work to drain before read-back.
+      recoverySecs: 420
+
+    ownership:
+      # The load-bearing number of this scenario. After the partition heals the
+      # cluster rebalances, and during a rebalance transient disagreement is
+      # normal — sampling too early would measure that instead of the state the
+      # cluster settled into. Comfortably longer than one shard-manager health
+      # check cycle plus a re-registration round trip.
+      settleSecs: 120
+
+    workload:
+      # The same mixed workload S12 runs. S1 is about ownership, but the
+      # completion and read-back evidence has to keep running alongside the
+      # oracle rather than instead of it: an overlap finding is much easier to
+      # believe when the operations on the affected agents are archived next to
+      # it.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 50
+      promiseAgents: 50
+      ratePerSec: 100
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
