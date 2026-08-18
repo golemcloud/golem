@@ -33,11 +33,11 @@
 //!    conditions that fail a run outright.
 
 pub mod errors;
-pub mod executors;
 pub mod history;
 pub mod ownership;
 pub mod pinned;
 pub mod prep;
+pub mod probe;
 pub mod result;
 pub mod scenarios;
 pub mod signal;

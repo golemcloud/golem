@@ -49,8 +49,8 @@
 //! queries. One global counter would have produced a haystack instead.
 
 use crate::chaos::history::{Outcome, Phase, Stream};
-use crate::chaos::ownership::OwnershipReport;
-use crate::chaos::pinned::KeyProbe;
+use crate::chaos::ownership::OwnershipSample;
+use crate::chaos::probe::KeyProbe;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -373,9 +373,14 @@ pub struct ExactlyOnceReport {
 impl ExactlyOnceReport {
     /// Builds the account from the pinned records, the probe results, and the
     /// counter read-backs taken either side of the probe pass.
+    /// `stream` is the population being accounted for, and it has to match the
+    /// stream the probes were taken from. Passing it explicitly rather than
+    /// inferring it keeps a mismatch loud: a report built over the wrong stream
+    /// finds no records, checks nothing, and reports a flawless result.
     pub fn build(
         records: &[OperationRecord],
         probes: &[KeyProbe],
+        stream: Stream,
         before_probe: &BTreeMap<String, u64>,
         after_probe: &BTreeMap<String, u64>,
     ) -> Self {
@@ -385,7 +390,7 @@ impl ExactlyOnceReport {
             .collect();
 
         let mut report = ExactlyOnceReport::default();
-        for record in records.iter().filter(|r| r.stream == Stream::PinnedHttp) {
+        for record in records.iter().filter(|r| r.stream == stream) {
             let Some(probe) = by_key.get(record.idempotency_key.as_str()) else {
                 report.keys_unprobed += 1;
                 continue;
@@ -497,7 +502,7 @@ pub struct ChaosSummary {
     /// it, so keeping only the verdict would throw away the context that makes
     /// it interpretable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ownership: Vec<OwnershipReport>,
+    pub ownership: Vec<OwnershipSample>,
     /// The read-back verdicts that need a human, hoisted for scanning.
     pub attention: Vec<String>,
 }
@@ -633,7 +638,7 @@ impl ChaosSummary {
     /// mid-fault overlap that healed before the settle sample is not a run
     /// failure, but it is absolutely something an operator wants to know
     /// happened.
-    pub fn with_ownership(mut self, reports: Vec<OwnershipReport>) -> Self {
+    pub fn with_ownership(mut self, reports: Vec<OwnershipSample>) -> Self {
         for report in &reports {
             self.attention.extend(report.attention_lines());
         }

@@ -53,6 +53,7 @@
 use crate::chaos::history::{OperationHistory, OperationRecord, Phase, Stream};
 use crate::chaos::pinned::{self, PinnedSelection};
 use crate::chaos::prep::ChaosPrepManifest;
+use crate::chaos::probe;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
 use crate::chaos::scenarios::{
     OutputPaths, ScenarioOutcome, build_result, readback_for, signal_termination, snapshot_routing,
@@ -322,10 +323,16 @@ pub async fn run(
     let before_probe = read_counters(&ctx, &chosen).await;
     let readback = readback_agents(&chosen, &records, &baseline_counters, &before_probe);
 
-    let probes = pinned::probe_keys(&ctx, &records).await;
+    let probes = probe::probe_keys(&ctx, &records, Stream::PinnedHttp).await;
     let after_probe = read_counters(&ctx, &chosen).await;
 
-    let report = ExactlyOnceReport::build(&records, &probes, &before_probe, &after_probe);
+    let report = ExactlyOnceReport::build(
+        &records,
+        &probes,
+        Stream::PinnedHttp,
+        &before_probe,
+        &after_probe,
+    );
     info!(
         "S8: exactly-once account — {} keys checked, {} with a final result, \
          {} recovered by the probe, {} findings",
@@ -437,7 +444,7 @@ mod tests {
     use super::*;
     use crate::chaos::errors::ErrorClass;
     use crate::chaos::history::Outcome;
-    use crate::chaos::pinned::KeyProbe;
+    use crate::chaos::probe::KeyProbe;
     use crate::chaos::summary::ExactlyOnceViolation;
     use test_r::test;
 
@@ -504,6 +511,7 @@ mod tests {
         let report = ExactlyOnceReport::build(
             std::slice::from_ref(&r),
             &[probe(&r, Some(7))],
+            Stream::PinnedHttp,
             &BTreeMap::new(),
             &BTreeMap::new(),
         );
@@ -520,6 +528,7 @@ mod tests {
         let report = ExactlyOnceReport::build(
             std::slice::from_ref(&r),
             &[probe(&r, Some(9))],
+            Stream::PinnedHttp,
             &BTreeMap::new(),
             &BTreeMap::new(),
         );
@@ -538,6 +547,7 @@ mod tests {
         let report = ExactlyOnceReport::build(
             std::slice::from_ref(&r),
             &[probe(&r, None)],
+            Stream::PinnedHttp,
             &BTreeMap::new(),
             &BTreeMap::new(),
         );
@@ -563,6 +573,7 @@ mod tests {
             let report = ExactlyOnceReport::build(
                 std::slice::from_ref(&r),
                 &[probe_failed(&r, class)],
+                Stream::PinnedHttp,
                 &BTreeMap::new(),
                 &BTreeMap::new(),
             );
@@ -591,6 +602,7 @@ mod tests {
         let report = ExactlyOnceReport::build(
             std::slice::from_ref(&r),
             &[probe_failed(&r, ErrorClass::Response)],
+            Stream::PinnedHttp,
             &BTreeMap::new(),
             &BTreeMap::new(),
         );
@@ -610,6 +622,7 @@ mod tests {
         let report = ExactlyOnceReport::build(
             std::slice::from_ref(&r),
             &[probe(&r, None)],
+            Stream::PinnedHttp,
             &BTreeMap::new(),
             &BTreeMap::new(),
         );
@@ -625,6 +638,7 @@ mod tests {
         let report = ExactlyOnceReport::build(
             std::slice::from_ref(&r),
             &[probe(&r, Some(3))],
+            Stream::PinnedHttp,
             &BTreeMap::new(),
             &BTreeMap::new(),
         );
@@ -640,7 +654,7 @@ mod tests {
         let agent = "chaos-s8-pinned-http-0000".to_string();
         let before = BTreeMap::from([(agent.clone(), 40u64)]);
         let after = BTreeMap::from([(agent.clone(), 42u64)]);
-        let report = ExactlyOnceReport::build(&[], &[], &before, &after);
+        let report = ExactlyOnceReport::build(&[], &[], Stream::PinnedHttp, &before, &after);
         assert_eq!(report.probe_executed_total, 2);
         assert_eq!(report.probe_executed_per_agent.get(&agent), Some(&2));
     }

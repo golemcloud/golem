@@ -59,8 +59,7 @@
 //! probe executed fresh work" distinguishable in aggregate.
 
 use crate::chaos::PinnedConfig;
-use crate::chaos::errors::ErrorClass;
-use crate::chaos::history::{OperationRecord, Stream};
+use crate::chaos::history::Stream;
 use crate::chaos::workload::{self, WorkloadContext};
 use anyhow::Context;
 use golem_common::base_model::agent::ParsedAgentId;
@@ -73,7 +72,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use tokio::task::JoinSet;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Agent type the pinned stream drives. The same durable `Counter` the mixed
 /// workload uses, so its state can be read back the same way.
@@ -82,22 +81,6 @@ const COUNTER_AGENT: &str = "Counter";
 /// The method held in flight. See the counters component: it waits, *then*
 /// increments, so the state change falls inside the fault window.
 const PINNED_METHOD: &str = "sleep_and_increment";
-
-/// How many probes run at once. The probe pass is thousands of replays of
-/// stored results, so it wants some concurrency — but it runs against a cluster
-/// that has just been through a pod kill, and hammering it would be a second
-/// experiment nobody asked for.
-const PROBE_CONCURRENCY: usize = 32;
-
-/// Duration passed to a probe invocation, in milliseconds.
-///
-/// Zero, and deliberately not the workload's duration: a probe of a key that
-/// already ran replays its stored result and ignores the arguments entirely,
-/// while a probe of a key that never ran executes for real. Making that second
-/// case instant keeps the probe pass from taking as long as the run it is
-/// measuring — and the fresh execution still shows up in the counter delta,
-/// which is what the pass is there to measure.
-const PROBE_MILLIS: u32 = 0;
 
 /// One executor, the agents it owns, and how the choice was made.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -385,118 +368,6 @@ async fn submit_one(ctx: &WorkloadContext, agent: &str, seq: u64, millis: u32) {
         },
     )
     .await;
-}
-
-/// What the platform said when a key was asked about again after recovery.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KeyProbe {
-    pub idempotency_key: String,
-    pub agent: String,
-    /// The value the platform returned. `None` means the probe itself failed,
-    /// which for an accepted operation is the scenario's hard failure: after
-    /// recovery, work the platform took has to have a result.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub final_value: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_class: Option<ErrorClass>,
-}
-
-/// Re-invokes every recorded key under its original idempotency key.
-///
-/// Read the module documentation before changing anything here: the pass only
-/// means what it means because the key is reused verbatim and because the
-/// counters are read on either side of it.
-pub async fn probe_keys(ctx: &WorkloadContext, records: &[OperationRecord]) -> Vec<KeyProbe> {
-    let keys: Vec<(String, String)> = records
-        .iter()
-        .filter(|r| r.stream == Stream::PinnedHttp)
-        .map(|r| (r.idempotency_key.clone(), r.agent.clone()))
-        .collect();
-
-    info!("S8: probing {} keys for their final results", keys.len());
-
-    let mut probes = Vec::with_capacity(keys.len());
-    for chunk in keys.chunks(PROBE_CONCURRENCY) {
-        let mut batch = JoinSet::new();
-        for (key, agent) in chunk {
-            let ctx = ctx.clone();
-            let key = key.clone();
-            let agent = agent.clone();
-            batch.spawn(async move { probe_one(&ctx, &agent, &key).await });
-        }
-        while let Some(joined) = batch.join_next().await {
-            match joined {
-                Ok(probe) => probes.push(probe),
-                Err(e) => warn!("S8: a probe task panicked: {e}"),
-            }
-        }
-    }
-
-    probes.sort_by(|a, b| a.idempotency_key.cmp(&b.idempotency_key));
-    probes
-}
-
-/// Probes one key, retrying once on a transport failure.
-///
-/// The retry follows the same rule as the workload itself — one attempt, same
-/// idempotency key, transport failures only — and here it is purely about not
-/// losing a key to a single dropped connection. A probe that cannot complete
-/// leaves the key inconclusive, and an inconclusive key weakens the verdict; a
-/// cheap same-key retry buys most of them back. It cannot mask a real problem,
-/// because a definite refusal is not retried.
-async fn probe_one(ctx: &WorkloadContext, agent: &str, key: &str) -> KeyProbe {
-    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
-    let idempotency_key = golem_common::model::IdempotencyKey::new(key.to_string());
-
-    let mut attempts = 0u32;
-    loop {
-        attempts += 1;
-        let outcome = ctx
-            .user
-            .invoke_and_await_agent_with_key(
-                &ctx.counters,
-                &parsed,
-                &idempotency_key,
-                PINNED_METHOD,
-                data_value!(PROBE_MILLIS),
-            )
-            .await;
-
-        match outcome {
-            Ok(value) => {
-                return KeyProbe {
-                    idempotency_key: key.to_string(),
-                    agent: agent.to_string(),
-                    final_value: workload::as_u32_value(value),
-                    error: None,
-                    error_class: None,
-                };
-            }
-            Err(e) => {
-                let class = crate::chaos::errors::classify(&e);
-                if attempts <= ctx.retry.max_retries && class.is_retryable_transport_failure() {
-                    tokio::time::sleep(ctx.retry.delay()).await;
-                    continue;
-                }
-                if !class.is_definite_rejection() {
-                    warn!(
-                        "S8: probe of {key} could not complete ({class}), leaving the key \
-                         inconclusive rather than reporting a lost result: {e:#}"
-                    );
-                }
-                return KeyProbe {
-                    idempotency_key: key.to_string(),
-                    agent: agent.to_string(),
-                    final_value: None,
-                    error: Some(format!("{e:#}")),
-                    error_class: Some(class),
-                };
-            }
-        }
-    }
 }
 
 #[cfg(test)]

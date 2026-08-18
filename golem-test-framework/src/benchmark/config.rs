@@ -197,16 +197,6 @@ pub enum BenchmarkConfig {
         #[arg(long)]
         signal_dir: Option<PathBuf>,
 
-        /// JSON file describing how to reach each worker-executor's
-        /// introspection endpoint. Required by scenarios whose verdict is built
-        /// from per-executor shard assignments; see
-        /// `integration_tests::chaos::executors`.
-        ///
-        /// Re-read at every sample rather than loaded once, so a scenario whose
-        /// executor set changes mid-run picks the change up.
-        #[arg(long)]
-        executor_endpoints: Option<PathBuf>,
-
         /// Save the scenario result to a JSON file. Also written on abort, with
         /// whatever the run got through.
         #[arg(long)]
