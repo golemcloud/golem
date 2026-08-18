@@ -597,23 +597,55 @@ fn exactly_once_termination(report: &ExactlyOnceReport) -> Option<TerminationRea
 ///
 /// Scoped to the agents in the history rather than the whole configured pool:
 /// an agent the run never drove has nothing to say about it.
+///
+/// Concurrent and bounded, for the same reason [`super::read_back_agents`] is,
+/// and this function learned it the expensive way: it walked 200 agents one at
+/// a time behind a 30s ceiling, so a run where every agent had stopped
+/// answering spent 100 minutes here producing nothing but timeouts. Reads do
+/// not mutate, so batching them changes none of the numbers.
 async fn read_counters(
     ctx: &WorkloadContext,
     records: &[OperationRecord],
 ) -> std::collections::BTreeMap<String, u64> {
-    let agents: std::collections::BTreeSet<&str> = records
+    let agents: Vec<String> = records
         .iter()
         .filter(|r| r.stream == Stream::Durable)
-        .map(|r| r.agent.as_str())
+        .map(|r| r.agent.clone())
+        .collect::<std::collections::BTreeSet<String>>()
+        .into_iter()
         .collect();
 
+    let total = agents.len();
     let mut values = std::collections::BTreeMap::new();
-    for agent in agents {
-        match workload::read_counter(ctx, agent).await {
-            Ok(value) => {
-                values.insert(agent.to_string(), value);
+    let mut done = 0usize;
+    let mut next_report = super::READ_PROGRESS_EVERY;
+
+    for chunk in agents.chunks(super::READ_CONCURRENCY) {
+        let mut batch = tokio::task::JoinSet::new();
+        for agent in chunk.iter().cloned() {
+            let ctx = ctx.clone();
+            batch.spawn(async move {
+                let value = workload::read_counter(&ctx, &agent).await;
+                (agent, value)
+            });
+        }
+
+        while let Some(joined) = batch.join_next().await {
+            match joined {
+                Ok((agent, Ok(value))) => {
+                    values.insert(agent, value);
+                }
+                Ok((agent, Err(e))) => {
+                    warn!("S1: could not read durable agent {agent}: {e}")
+                }
+                Err(e) => warn!("S1: a durable read-back task panicked: {e}"),
             }
-            Err(e) => warn!("S1: could not read durable agent {agent}: {e}"),
+        }
+
+        done += chunk.len();
+        if done >= next_report {
+            info!("S1: read {done} of {total} durable counters");
+            next_report += super::READ_PROGRESS_EVERY;
         }
     }
     values
