@@ -188,16 +188,27 @@ scenarios:
       # scheduled work to drain before read-back.
       recoverySecs: 420
 
-    # NOTE: forcing a rebalance mid-fault is not wired up yet.
+    # Second traffic generator: the executor scale schedule.
     #
-    # The obvious form — scale executors up during the partition — cannot work
-    # on golem-dev. An executor requests 13Gi and the worker-exec nodes are
-    # c7gd.2xlarge (16 GiB), so exactly one executor fits per node; the
-    # nodegroup is pinned at desired_size=2 and there is no cluster-autoscaler.
-    # A third replica would sit Pending for the whole run and the scenario would
-    # report, truthfully and uselessly, that the new pod never got a share.
+    # The quota stream above covers executor → shard-manager. This covers the
+    # other direction — removing an executor forces a revoke and reassign,
+    # adding one back forces a register and rebalance, and all of those are
+    # shard-manager → executor calls the partition can block.
     #
-    # See GOL-364 for the alternatives under a fixed two-node budget.
+    # Down and back up, not up and down. An executor requests 13Gi against
+    # 16 GiB nodes, so exactly one fits per node, and the worker-exec nodegroup
+    # is pinned at two with no autoscaler: a third replica would sit Pending for
+    # the whole run and generate no traffic at all. Scaling down to one and back
+    # exercises the same code paths within the capacity that exists.
+    scaleDuringFault:
+      steps:
+        # A quarter in, so the partition is established first.
+        - afterFraction: 0.25
+          toReplicas: 1
+        # Two thirds in, leaving the rest of the window plus the settle window
+        # for the restored executor to register and be rebalanced onto.
+        - afterFraction: 0.65
+          toReplicas: 2
 
     ownership:
       # The load-bearing number of this scenario. After the partition heals the

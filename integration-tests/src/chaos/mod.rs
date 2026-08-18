@@ -289,20 +289,36 @@ fn default_candidate_pool_multiplier() -> u32 {
     8
 }
 
-/// Asks the workflow to change the executor count partway through the fault.
+/// One step of the executor scale schedule the workflow runs during the fault.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScaleStep {
+    /// How far into the fault window to run this step, as a fraction of it.
+    pub after_fraction: f64,
+    pub to_replicas: u32,
+}
+
+/// The executor scale schedule — S1's second traffic generator (GOL-364).
 ///
-/// The driver cannot scale a Deployment and does not try — this block is read
-/// by the *workflow*, which performs the scale and writes
-/// `executors-scaled.json`. It lives in the suite YAML so the operational
-/// switchboard stays the single place a run's shape is decided.
+/// S12 drives four streams of invocations and S8 drives one pinned stream, but
+/// none of that traffic goes anywhere near the shard-manager: invocations run
+/// client → worker-service → executor. S1 needs traffic on the link it
+/// partitions, and there are exactly two kinds.
+///
+/// The quota stream covers executor → shard-manager. This covers the other
+/// direction: **removing an executor forces a revoke and reassign, adding one
+/// back forces a register and rebalance**, and both are shard-manager →
+/// executor calls that a partition can block.
+///
+/// Scaling *down* and back up rather than up and down is what makes this fit
+/// the cluster: an executor requests 13Gi against 16 GiB nodes, so exactly one
+/// fits per node, and the worker-exec nodegroup is pinned at two with no
+/// autoscaler. A third replica would sit `Pending` for the whole run and
+/// generate no traffic at all.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScaleDuringFaultConfig {
-    /// How far into the fault window to scale, as a fraction of it. Late enough
-    /// that the partition is established, early enough that the rest of the
-    /// window is spent with the new pod present.
-    pub after_fraction: f64,
-    pub to_replicas: u32,
+    pub steps: Vec<ScaleStep>,
 }
 
 /// Settings for the shard-ownership oracle (GOL-364).

@@ -74,7 +74,7 @@ use crate::chaos::scenarios::{
     OutputPaths, ScenarioOutcome, build_result, readback_for, signal_termination, snapshot_routing,
     write_outputs,
 };
-use crate::chaos::signal::{BaselineReady, ExecutorsScaled, FaultSignals};
+use crate::chaos::signal::{BaselineReady, FaultSignals, ScaleEvent};
 use crate::chaos::summary::{AgentReadback, ChaosSummary, ExactlyOnceReport, TerminationReason};
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
@@ -368,10 +368,12 @@ pub async fn run(
     // health checks, so sampling immediately would show an unchanged table for
     // a reason that says nothing about the fault — and "unchanged" is exactly
     // the reading this sample exists to support.
-    // The workflow scales the executor deployment partway through the fault
-    // window, if the scenario asked it to. Picked up here rather than awaited:
-    // it is context for the samples, not a gate.
-    let mut executors_scaled: Option<ExecutorsScaled> = None;
+    // S1's second traffic generator. The workflow runs an executor scale
+    // schedule inside the fault window — down, then back up — which is what
+    // puts shard-manager → executor calls (revoke, assign, register) on the
+    // partitioned link. Picked up rather than awaited: it is traffic the
+    // scenario induces, not a gate it waits on.
+    let mut scale_events: Vec<ScaleEvent>;
 
     let observe_after = config
         .phases
@@ -380,14 +382,14 @@ pub async fn run(
         .min(DURING_FAULT_SAMPLE_CAP);
     info!("S1: sampling assignment {observe_after:?} into the fault window");
     tokio::time::sleep(observe_after).await;
-    // Read here as well as after the heal: the scale may land before or after
-    // this point in the fault window, and logging it when it happens is what
-    // makes the assignment samples readable afterwards.
-    if let Some(scaled) = signals.read_executors_scaled() {
-        executors_scaled = Some(scaled.clone());
+    // Read mid-window as well as after the heal: the steps land at different
+    // points and logging them as they happen is what makes the assignment
+    // samples readable afterwards.
+    scale_events = signals.read_scale_events();
+    for event in &scale_events {
         info!(
             "S1: workflow scaled executors {} -> {} at {}",
-            scaled.from_replicas, scaled.to_replicas, scaled.scaled_at
+            event.from_replicas, event.to_replicas, event.scaled_at
         );
     }
     ownership.push(sample_ownership(deps, "during-fault", ownership.last(), false).await);
@@ -420,7 +422,9 @@ pub async fn run(
     );
     tokio::time::sleep(ownership_config.settle()).await;
 
-    executors_scaled = executors_scaled.or_else(|| signals.read_executors_scaled());
+    // Re-read: later steps in the schedule may have landed since.
+    scale_events = signals.read_scale_events();
+    let scale_events = scale_events;
 
     let settled = sample_ownership(deps, "after-settle", ownership.last(), true).await;
     info!(
@@ -504,15 +508,16 @@ pub async fn run(
         ));
     }
 
-    // Did a pod added during the partition end up with a fair share once the
-    // partition healed? Reported, not asserted: "fair" is a judgement about a
-    // rebalancer, and the driver is not in a position to make it.
-    if let Some(scaled) = &executors_scaled
+    // Did the cluster come back to the executor count it was scaled to, and
+    // spread work across it? Reported, not asserted: "fair" is a judgement
+    // about a rebalancer, and the driver is not in a position to make it.
+    if let Some(final_step) = scale_events.last()
         && let Some(settled) = ownership.iter().find(|s| s.settled)
         && let Some(total) = settled.number_of_shards
     {
+        let expected = final_step.to_replicas as usize;
         let executors = settled.executors_with_shards();
-        let balanced = total / scaled.to_replicas.max(1) as usize;
+        let balanced = total / expected.max(1);
         let smallest = settled
             .shards_per_executor
             .values()
@@ -520,20 +525,20 @@ pub async fn run(
             .copied()
             .unwrap_or(0);
         info!(
-            "S1: after settling, {executors} executors hold shards; smallest holds {smallest}, \
-             a balanced split across {} would be {balanced}",
-            scaled.to_replicas
+            "S1: after settling, {executors} of {expected} executors hold shards; smallest \
+             holds {smallest} against a balanced {balanced}"
         );
-        if executors < scaled.to_replicas as usize {
+        if executors < expected {
             attention_extra.push(format!(
-                "executors were scaled to {} during the fault, but only {executors} hold shards \
-                 after settling — a pod added while a peer was unreachable did not get a share",
-                scaled.to_replicas
+                "executors were scaled back to {expected} during the fault, but only \
+                 {executors} hold shards after settling — the cluster did not take the \
+                 restored executor back"
             ));
         } else if smallest * 2 < balanced {
             attention_extra.push(format!(
                 "after settling the least-loaded executor holds {smallest} shards against a \
-                 balanced {balanced}: the cluster took the new pod but has not rebalanced onto it"
+                 balanced {balanced}: the cluster took the executor back but has not \
+                 rebalanced onto it"
             ));
         }
     }
