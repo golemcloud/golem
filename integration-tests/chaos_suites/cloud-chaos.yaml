@@ -188,17 +188,16 @@ scenarios:
       # scheduled work to drain before read-back.
       recoverySecs: 420
 
-    # Second half of the experiment: add an executor while a peer is
-    # unreachable, so the shard-manager has to revoke shards from a pod it
-    # cannot reach before it can hand them to the new one. The workflow performs
-    # the scale and signals the driver; the driver only labels its samples
-    # around it.
-    scaleDuringFault:
-      # Fraction of the fault window to wait before scaling, so the partition is
-      # established first and the new pod arrives into a cluster that is already
-      # cut.
-      afterFraction: 0.3
-      toReplicas: 3
+    # NOTE: forcing a rebalance mid-fault is not wired up yet.
+    #
+    # The obvious form — scale executors up during the partition — cannot work
+    # on golem-dev. An executor requests 13Gi and the worker-exec nodes are
+    # c7gd.2xlarge (16 GiB), so exactly one executor fits per node; the
+    # nodegroup is pinned at desired_size=2 and there is no cluster-autoscaler.
+    # A third replica would sit Pending for the whole run and the scenario would
+    # report, truthfully and uselessly, that the new pod never got a share.
+    #
+    # See GOL-364 for the alternatives under a fixed two-node budget.
 
     ownership:
       # The load-bearing number of this scenario. After the partition heals the
