@@ -223,7 +223,15 @@ pub async fn run_prep(deps: &BenchmarkTestDependencies) -> anyhow::Result<ChaosP
             },
         )
         .await
-        .map_err(|e| anyhow::anyhow!("create_resource({QUOTA_RESOURCE}) failed: {e:?}"))?;
+        // Name the endpoint. The first failure here was a bare
+        // `Decode("EOF while parsing a value")` from a client pointed at the
+        // wrong base URL, which said nothing about where it had been looking.
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "create_resource({QUOTA_RESOURCE}) on environment {} failed: {e:?}",
+                counters_env.id.0
+            )
+        })?;
 
     let promise_env = create_env(
         &user_client,
