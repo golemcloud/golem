@@ -97,6 +97,79 @@ pub(crate) struct FilesystemCapacity {
     pub available_filesystem_objects: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FilesystemPressure {
+    bytes: bool,
+    filesystem_objects: bool,
+}
+
+impl FilesystemPressure {
+    pub(crate) fn include(self, pressure: Option<Self>) -> Self {
+        match pressure {
+            Some(pressure) => Self {
+                bytes: self.bytes || pressure.bytes,
+                filesystem_objects: self.filesystem_objects || pressure.filesystem_objects,
+            },
+            None => self,
+        }
+    }
+}
+
+impl FilesystemPressureConfig {
+    pub(super) fn validate(&self) -> Result<(), FilesystemStorageError> {
+        if self.minimum_available_bytes < self.target_available_bytes
+            && self.minimum_available_filesystem_objects < self.target_available_filesystem_objects
+            && self.reclamation_observation_attempts != 0
+        {
+            Ok(())
+        } else {
+            Err(FilesystemStorageError::verification(
+                "validate filesystem pressure watermarks",
+                Path::new("<configuration>"),
+            ))
+        }
+    }
+
+    pub(super) fn validate_capacity(
+        &self,
+        capacity: FilesystemCapacity,
+    ) -> Result<(), FilesystemStorageError> {
+        if self.target_available_bytes <= capacity.total_bytes {
+            Ok(())
+        } else {
+            Err(FilesystemStorageError::verification(
+                "fit filesystem pressure byte target within managed capacity",
+                Path::new("<configuration>"),
+            ))
+        }
+    }
+
+    pub(crate) fn pressure(
+        &self,
+        operation: MutationOperation,
+        capacity: FilesystemCapacity,
+    ) -> Option<FilesystemPressure> {
+        let bytes = capacity.available_bytes <= self.minimum_available_bytes;
+        let filesystem_objects = operation == MutationOperation::Create
+            && capacity.available_filesystem_objects <= self.minimum_available_filesystem_objects;
+        (bytes || filesystem_objects).then_some(FilesystemPressure {
+            bytes,
+            filesystem_objects,
+        })
+    }
+
+    pub(crate) fn target_reached(
+        &self,
+        pressure: FilesystemPressure,
+        capacity: FilesystemCapacity,
+    ) -> bool {
+        (!pressure.bytes || capacity.available_bytes >= self.target_available_bytes)
+            && (!pressure.filesystem_objects
+                || capacity.available_filesystem_objects
+                    >= self.target_available_filesystem_objects)
+    }
+}
+
 impl AgentFilesystems {
     #[allow(
         dead_code,
@@ -125,6 +198,10 @@ impl AgentFilesystems {
             "observe capacity for unmanaged filesystem storage",
             Path::new("<unmanaged>"),
         ))
+    }
+
+    pub(crate) fn pressure_policy(&self) -> &FilesystemPressureConfig {
+        &self.pressure
     }
 }
 

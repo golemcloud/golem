@@ -53,7 +53,7 @@ use golem_common::tracing::TraceOrigin;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -96,6 +96,8 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     /// Only actively running agents hold a permit. Dropped automatically when
     /// the task is aborted (e.g. `RunningWorker::stop()`).
     pub concurrent_agent_permit: Option<crate::services::active_workers::ConcurrentAgentPermit>,
+    pub concurrent_agent_permit_held: Arc<AtomicBool>,
+    pub idle_since_millis: Arc<AtomicU64>,
     /// `ResumeReplay` is not represented in the internal queue, so we track it
     /// explicitly to avoid evicting a worker that is blocked waking up for it.
     pub resume_replay_pending: Arc<AtomicBool>,
@@ -273,6 +275,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     invocations_since_snapshot: 0,
                     idle_snapshot_task: None,
                     concurrent_agent_permit: &mut self.concurrent_agent_permit,
+                    concurrent_agent_permit_held: self.concurrent_agent_permit_held.clone(),
+                    idle_since_millis: self.idle_since_millis.clone(),
                     resume_replay_pending: self.resume_replay_pending.clone(),
                     worker_trace: self.worker_trace.clone(),
                     deferred_wakeups: &mut deferred_wakeups,
@@ -699,6 +703,8 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     /// `InvocationLoop`. Set to `None` when entering idle (releasing the
     /// permit back to the semaphore pool) and re-acquired on wake.
     concurrent_agent_permit: &'a mut Option<crate::services::active_workers::ConcurrentAgentPermit>,
+    concurrent_agent_permit_held: Arc<AtomicBool>,
+    idle_since_millis: Arc<AtomicU64>,
     resume_replay_pending: Arc<AtomicBool>,
     deferred_wakeups: &'a mut VecDeque<WorkerCommand>,
     /// What this worker's phase spans link back to, and the fields they carry.
@@ -732,12 +738,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         // from the same account can start without evicting this one.
         self.check_no_active_tail_work_on_idle().await;
         self.release_concurrent_agent_permit();
+        mark_idle(&self.idle_since_millis);
         self.waiting_for_command.store(true, Ordering::Release);
         while let Some(cmd) = self.next_wakeup_or_initial().await {
             // Waking from idle: re-acquire the concurrent-agent permit before
             // processing any commands.
-            self.acquire_concurrent_agent_permit().await;
             self.waiting_for_command.store(false, Ordering::Release);
+            self.acquire_concurrent_agent_permit().await;
             let outcome = match cmd {
                 WorkerCommand::WorkAvailable | WorkerCommand::InternalStatusChanged => {
                     loop {
@@ -801,6 +808,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             // Returning to idle: release the concurrent-agent permit.
             self.check_no_active_tail_work_on_idle().await;
             self.release_concurrent_agent_permit();
+            mark_idle(&self.idle_since_millis);
             self.waiting_for_command.store(true, Ordering::Release);
         }
         self.abort_idle_snapshot_task();
@@ -857,6 +865,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             self.linear_memory.pause(std::time::Instant::now());
             debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
             drop(permit);
+            self.concurrent_agent_permit_held
+                .store(false, Ordering::Release);
         }
     }
 
@@ -876,6 +886,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             .instrument(span)
             .await;
             *self.concurrent_agent_permit = Some(permit);
+            self.concurrent_agent_permit_held
+                .store(true, Ordering::Release);
             self.linear_memory.resume(std::time::Instant::now());
         }
     }
@@ -1156,6 +1168,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     async fn interrupt(&self, interrupt: PendingWorkerInterrupt) -> CommandOutcome {
         CommandOutcome::BreakInnerLoop(interrupt.retry_decision())
     }
+}
+
+fn mark_idle(idle_since_millis: &AtomicU64) {
+    let now = Timestamp::now_utc().to_millis();
+    let _ = idle_since_millis.fetch_update(Ordering::Release, Ordering::Acquire, |previous| {
+        Some(now.max(previous.saturating_add(1)))
+    });
 }
 
 async fn take_pending_interrupt(

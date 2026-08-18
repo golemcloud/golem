@@ -30,18 +30,18 @@ use crate::durable_host::tail_work::TailActivity;
 #[cfg(test)]
 use crate::services::agent_filesystem::state_postcondition;
 use crate::services::agent_filesystem::{
-    AgentFilesystemRuntime, MutationDecision, MutationEffect, MutationFailure, MutationOperation,
-    MutationPostcondition, NativeMutationGuestError, NativeOpenOptions, NativeOpenResult,
-    PathObjectType, RequestedTime, create_directory as native_create_directory,
-    create_directory_postcondition, descriptor_state, descriptor_times,
-    hard_link as native_hard_link, link_postcondition, native_write_failure_effect,
-    open as native_open, open_postcondition, path_state, path_state_with_follow, path_times,
-    proven_write_progress_effect, remove_directory as native_remove_directory,
-    remove_postcondition, rename as native_rename, rename_postcondition,
-    resize_file as native_resize_file, resize_postcondition, run_blocking_filesystem_mutation,
-    set_descriptor_times as native_set_descriptor_times, set_path_times as native_set_path_times,
-    symlink as native_symlink, symlink_postcondition, symlink_state,
-    sync_descriptor as native_sync_descriptor, times_postcondition,
+    AgentFilesystemRuntime, FILESYSTEM_MUTATION_MAX_ATTEMPTS, FILESYSTEM_MUTATION_RETRY_TIMEOUT,
+    MutationDecision, MutationEffect, MutationFailure, MutationOperation, MutationPostcondition,
+    NativeMutationGuestError, NativeOpenOptions, NativeOpenResult, PathObjectType, RequestedTime,
+    create_directory as native_create_directory, create_directory_postcondition, descriptor_state,
+    descriptor_times, hard_link as native_hard_link, link_postcondition,
+    native_write_failure_effect, open as native_open, open_postcondition, path_state,
+    path_state_with_follow, path_times, proven_write_progress_effect,
+    remove_directory as native_remove_directory, remove_postcondition, rename as native_rename,
+    rename_postcondition, resize_file as native_resize_file, resize_postcondition,
+    run_blocking_filesystem_mutation, set_descriptor_times as native_set_descriptor_times,
+    set_path_times as native_set_path_times, symlink as native_symlink, symlink_postcondition,
+    symlink_state, sync_descriptor as native_sync_descriptor, times_postcondition,
     unlink_file as native_unlink_file, validate_descriptor_times, validate_directory_mutation,
     validate_open, validate_resize, validate_two_directory_mutation,
 };
@@ -165,11 +165,34 @@ impl P3MutationAdapter {
             MutationDecision::InsufficientSpace => {
                 P3MutationAction::Error(types::ErrorCode::InsufficientSpace.into())
             }
+            MutationDecision::PhysicalPressure
+                if retry_safe
+                    && postcondition == MutationPostcondition::NoEffect
+                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
+            {
+                if self
+                    .runtime
+                    .recover_physical_pressure(
+                        self.operation,
+                        self.started + FILESYSTEM_MUTATION_RETRY_TIMEOUT,
+                    )
+                    .await
+                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT
+                {
+                    P3MutationAction::Retry
+                } else {
+                    P3MutationAction::Error(types::ErrorCode::InsufficientSpace.into())
+                }
+            }
+            MutationDecision::PhysicalPressure => {
+                P3MutationAction::Error(types::ErrorCode::InsufficientSpace.into())
+            }
             MutationDecision::BoundedRetry
                 if retry_safe
                     && postcondition == MutationPostcondition::NoEffect
-                    && self.attempts < 2
-                    && self.started.elapsed() <= Duration::from_millis(250) =>
+                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
             {
                 P3MutationAction::Retry
             }
@@ -209,11 +232,34 @@ impl P3MutationAdapter {
             MutationDecision::InsufficientSpace => {
                 P3MutationAction::Error(types::ErrorCode::InsufficientSpace.into())
             }
+            MutationDecision::PhysicalPressure
+                if retry_safe
+                    && postcondition == MutationPostcondition::NoEffect
+                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
+            {
+                if self
+                    .runtime
+                    .recover_physical_pressure(
+                        self.operation,
+                        self.started + FILESYSTEM_MUTATION_RETRY_TIMEOUT,
+                    )
+                    .await
+                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT
+                {
+                    P3MutationAction::Retry
+                } else {
+                    P3MutationAction::Error(types::ErrorCode::InsufficientSpace.into())
+                }
+            }
+            MutationDecision::PhysicalPressure => {
+                P3MutationAction::Error(types::ErrorCode::InsufficientSpace.into())
+            }
             MutationDecision::BoundedRetry
                 if retry_safe
                     && postcondition == MutationPostcondition::NoEffect
-                    && self.attempts < 2
-                    && self.started.elapsed() <= Duration::from_millis(250) =>
+                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
             {
                 P3MutationAction::Retry
             }
@@ -679,7 +725,7 @@ async fn p3_initial_probe<T>(
                 .await
             {
                 MutationDecision::Quota => Err(types::ErrorCode::Quota.into()),
-                MutationDecision::InsufficientSpace => {
+                MutationDecision::InsufficientSpace | MutationDecision::PhysicalPressure => {
                     Err(types::ErrorCode::InsufficientSpace.into())
                 }
                 MutationDecision::BoundedRetry | MutationDecision::PreserveRaw => Err(guest.into()),
@@ -1175,7 +1221,8 @@ async fn run_classified_filesystem_write_chunk<W: FilesystemChunkWriter>(
                 return (completed, Ok(()));
             }
             MutationDecision::BoundedRetry
-                if failed_attempts < 2 && started.elapsed() <= Duration::from_millis(250) => {}
+                if failed_attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                    && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT => {}
             MutationDecision::BoundedRetry => {
                 let error = raw_os_error.map_or_else(
                     || std::io::Error::new(error_kind, error_message),
@@ -1200,6 +1247,27 @@ async fn run_classified_filesystem_write_chunk<W: FilesystemChunkWriter>(
                 );
             }
             MutationDecision::InsufficientSpace => {
+                return (
+                    completed,
+                    Err(FilesystemWriteFailure::Guest(
+                        types::ErrorCode::InsufficientSpace,
+                    )),
+                );
+            }
+            MutationDecision::PhysicalPressure if cancellation.is_cancelled() => {
+                return (completed, Ok(()));
+            }
+            MutationDecision::PhysicalPressure
+                if failed_attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                    && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT
+                    && filesystem_runtime
+                        .recover_physical_pressure(
+                            MutationOperation::Write,
+                            started + FILESYSTEM_MUTATION_RETRY_TIMEOUT,
+                        )
+                        .await
+                    && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT => {}
+            MutationDecision::PhysicalPressure => {
                 return (
                     completed,
                     Err(FilesystemWriteFailure::Guest(
@@ -2392,7 +2460,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::agent_filesystem::{ObjectIdentity, PathState};
+    use crate::services::agent_filesystem::{FilesystemCapacity, ObjectIdentity, PathState};
     use fs_set_times::{SystemTimeSpec, set_symlink_times, set_times};
     use golem_common::model::oplog::types::SerializableDateTime;
     use std::collections::VecDeque;
@@ -2568,6 +2636,157 @@ mod tests {
             P3MutationAction::Trap
         ));
         assert!(runtime.begin_effect().await.is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    async fn p3_physical_pressure_runs_one_safe_recovery_cycle() {
+        let runtime = AgentFilesystemRuntime::new_for_test_with_observations(
+            None,
+            None,
+            FilesystemCapacity {
+                total_bytes: 100,
+                available_bytes: 0,
+                total_filesystem_objects: 100,
+                available_filesystem_objects: 100,
+            },
+        );
+        let recovery_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        runtime.set_pressure_recovery_callback(Some({
+            let recovery_attempts = Arc::clone(&recovery_attempts);
+            Arc::new(move |operation, _deadline| {
+                let recovery_attempts = Arc::clone(&recovery_attempts);
+                Box::pin(async move {
+                    assert_eq!(operation, MutationOperation::Metadata);
+                    recovery_attempts.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    true
+                })
+            })
+        }));
+        let mut adapter = P3MutationAdapter::new(runtime);
+        adapter.begin_attempt();
+        assert!(matches!(
+            adapter
+                .failure(
+                    types::ErrorCode::InsufficientSpace.into(),
+                    MutationPostcondition::NoEffect,
+                    true,
+                )
+                .await,
+            P3MutationAction::Retry
+        ));
+        adapter.begin_attempt();
+        assert!(matches!(
+            adapter
+                .failure(
+                    types::ErrorCode::InsufficientSpace.into(),
+                    MutationPostcondition::NoEffect,
+                    true,
+                )
+                .await,
+            P3MutationAction::Error(error)
+                if matches!(error.downcast_ref(), Some(types::ErrorCode::InsufficientSpace))
+        ));
+        assert_eq!(
+            recovery_attempts.load(std::sync::atomic::Ordering::Acquire),
+            1
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    async fn p3_physical_pressure_respects_effect_and_time_bounds() {
+        fn pressure_runtime() -> AgentFilesystemRuntime {
+            AgentFilesystemRuntime::new_for_test_with_observations(
+                None,
+                None,
+                FilesystemCapacity {
+                    total_bytes: 100,
+                    available_bytes: 0,
+                    total_filesystem_objects: 100,
+                    available_filesystem_objects: 100,
+                },
+            )
+        }
+
+        let completed_recoveries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let completed = pressure_runtime();
+        completed.set_pressure_recovery_callback(Some({
+            let completed_recoveries = Arc::clone(&completed_recoveries);
+            Arc::new(move |_, _deadline| {
+                let completed_recoveries = Arc::clone(&completed_recoveries);
+                Box::pin(async move {
+                    completed_recoveries.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    true
+                })
+            })
+        }));
+        let mut completed_adapter = P3MutationAdapter::new(completed);
+        completed_adapter.begin_attempt();
+        assert!(matches!(
+            completed_adapter
+                .failure(
+                    types::ErrorCode::InsufficientSpace.into(),
+                    MutationPostcondition::Satisfied,
+                    true,
+                )
+                .await,
+            P3MutationAction::Success
+        ));
+        assert_eq!(
+            completed_recoveries.load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+
+        let unknown_recoveries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let unknown = pressure_runtime();
+        unknown.set_pressure_recovery_callback(Some({
+            let unknown_recoveries = Arc::clone(&unknown_recoveries);
+            Arc::new(move |_, _deadline| {
+                let unknown_recoveries = Arc::clone(&unknown_recoveries);
+                Box::pin(async move {
+                    unknown_recoveries.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    true
+                })
+            })
+        }));
+        let mut unknown_adapter = P3MutationAdapter::new(unknown);
+        unknown_adapter.begin_attempt();
+        assert!(matches!(
+            unknown_adapter
+                .failure(
+                    types::ErrorCode::InsufficientSpace.into(),
+                    MutationPostcondition::Unknown,
+                    true,
+                )
+                .await,
+            P3MutationAction::Trap
+        ));
+        assert_eq!(
+            unknown_recoveries.load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
+
+        let timed_out = pressure_runtime();
+        timed_out.set_pressure_recovery_callback(Some(Arc::new(move |_, _deadline| {
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(260)).await;
+                true
+            })
+        })));
+        let mut timed_out_adapter = P3MutationAdapter::new(timed_out);
+        timed_out_adapter.begin_attempt();
+        assert!(matches!(
+            timed_out_adapter
+                .failure(
+                    types::ErrorCode::InsufficientSpace.into(),
+                    MutationPostcondition::NoEffect,
+                    true,
+                )
+                .await,
+            P3MutationAction::Error(error)
+                if matches!(error.downcast_ref(), Some(types::ErrorCode::InsufficientSpace))
+        ));
     }
 
     #[cfg(target_os = "linux")]

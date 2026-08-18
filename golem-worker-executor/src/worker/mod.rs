@@ -376,6 +376,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     instance: Arc<Mutex<WorkerInstance>>,
     startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
+    filesystem_runtime: StdMutex<Option<crate::services::agent_filesystem::AgentFilesystemRuntime>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
@@ -796,6 +797,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             instance,
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
+            filesystem_runtime: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
             execution_status,
             initial_worker_metadata,
@@ -2078,9 +2080,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let has_queued_internal_work = !running.queue.read().await.is_empty();
         let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
         let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
+        let has_filesystem_effects = self.has_active_filesystem_effects();
+        let has_concurrent_agent_permit =
+            running.concurrent_agent_permit_held.load(Ordering::Acquire);
 
         debug!(
-            "Worker {} idle check: waiting_for_command={waiting_for_command} has_pending_invocations={has_pending_invocations} has_queued_internal_work={has_queued_internal_work} has_resume_replay={has_resume_replay} has_interrupt={has_interrupt}",
+            "Worker {} idle check: waiting_for_command={waiting_for_command} has_pending_invocations={has_pending_invocations} has_queued_internal_work={has_queued_internal_work} has_resume_replay={has_resume_replay} has_interrupt={has_interrupt} has_filesystem_effects={has_filesystem_effects} has_concurrent_agent_permit={has_concurrent_agent_permit}",
             self.owned_agent_id
         );
 
@@ -2089,6 +2094,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && !has_queued_internal_work
             && !has_resume_replay
             && !has_interrupt
+            && !has_filesystem_effects
+            && !has_concurrent_agent_permit
+    }
+
+    fn has_active_filesystem_effects(&self) -> bool {
+        self.filesystem_runtime
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|runtime| runtime.has_active_effects())
     }
 
     /// Returns `true` iff this worker currently has a loaded wasmtime instance
@@ -2119,13 +2134,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let has_queued_internal_work = !running.queue.read().await.is_empty();
                 let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
                 let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
+                let has_filesystem_effects = self.has_active_filesystem_effects();
+                let has_concurrent_agent_permit =
+                    running.concurrent_agent_permit_held.load(Ordering::Acquire);
 
                 // Non-evictable if actively executing or has non-durable in-memory work
-                if !waiting_for_command
-                    || has_queued_internal_work
-                    || has_resume_replay
-                    || has_interrupt
-                {
+                if !running_worker_can_be_evicted(
+                    waiting_for_command,
+                    has_queued_internal_work,
+                    has_resume_replay,
+                    has_interrupt,
+                    has_filesystem_effects,
+                    has_concurrent_agent_permit,
+                ) {
                     return None;
                 }
 
@@ -2145,6 +2166,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Re-checks the eviction classification under the instance lock to avoid
     /// races. Returns `true` if the worker was actually stopped.
     pub async fn stop_if_evictable(&self, target_class: EvictionClass) -> bool {
+        self.stop_if_evictable_with_outcome(target_class, None)
+            .await
+            != EvictionStopOutcome::Ineligible
+    }
+
+    pub(crate) async fn stop_if_evictable_with_outcome(
+        &self,
+        target_class: EvictionClass,
+        expected_eligibility: Option<FilesystemPressureEligibility>,
+    ) -> EvictionStopOutcome {
         let mut instance_guard = self.lock_non_stopping_worker().await;
         let should_stop = match &*instance_guard {
             WorkerInstance::Running(running) => {
@@ -2152,14 +2183,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let has_queued_internal_work = !running.queue.read().await.is_empty();
                 let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
                 let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
+                let has_filesystem_effects = self.has_active_filesystem_effects();
+                let has_concurrent_agent_permit =
+                    running.concurrent_agent_permit_held.load(Ordering::Acquire);
 
-                if !waiting_for_command
-                    || has_queued_internal_work
-                    || has_resume_replay
-                    || has_interrupt
-                {
+                if !running_worker_can_be_evicted(
+                    waiting_for_command,
+                    has_queued_internal_work,
+                    has_resume_replay,
+                    has_interrupt,
+                    has_filesystem_effects,
+                    has_concurrent_agent_permit,
+                ) {
                     false
                 } else {
+                    let eligibility = self.current_filesystem_pressure_eligibility(running);
                     let has_pending_invocations = !self.pending_invocations().await.is_empty();
                     let current_class = if has_pending_invocations {
                         EvictionClass::WarmRunnable
@@ -2167,6 +2205,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         EvictionClass::LoadedIdle
                     };
                     current_class.eviction_priority() <= target_class.eviction_priority()
+                        && expected_eligibility.is_none_or(|expected| expected == eligibility)
+                        && expected_eligibility.is_none_or(|_| {
+                            self.filesystem_runtime
+                                .lock()
+                                .unwrap()
+                                .as_ref()
+                                .is_none_or(|runtime| runtime.seal_if_no_active_effects())
+                        })
                 }
             }
             _ => false,
@@ -2185,16 +2231,55 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             drop(instance_guard);
             self.handle_stop_result(stop_result).await;
-            true
+            match &*self.instance.lock().await {
+                WorkerInstance::CleanupFailed(_) => EvictionStopOutcome::CleanupFailed,
+                _ => EvictionStopOutcome::Unloaded,
+            }
         } else {
             drop(instance_guard);
-            false
+            EvictionStopOutcome::Ineligible
         }
     }
 
     /// Gets the timestamp of the last time the execution status changed
     pub fn last_execution_state_change(&self) -> Timestamp {
         self.execution_status.read().unwrap().timestamp()
+    }
+
+    pub(crate) async fn filesystem_pressure_eligibility(
+        &self,
+    ) -> Option<FilesystemPressureEligibility> {
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(running) => {
+                Some(self.current_filesystem_pressure_eligibility(running))
+            }
+            _ => None,
+        }
+    }
+
+    fn current_filesystem_pressure_eligibility(
+        &self,
+        running: &RunningWorker,
+    ) -> FilesystemPressureEligibility {
+        let idle_since = running.idle_since_millis.load(Ordering::Acquire);
+        let last_effect_completion = self
+            .filesystem_runtime
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map_or(0, |runtime| runtime.last_effect_completion_millis());
+        FilesystemPressureEligibility {
+            idle_since,
+            last_effect_completion,
+        }
+    }
+
+    pub(crate) fn filesystem_pressure_eligible_since(
+        eligibility: FilesystemPressureEligibility,
+    ) -> u64 {
+        eligibility
+            .idle_since
+            .max(eligibility.last_effect_completion)
     }
 
     /// Records a committed guest `memory.grow` without blocking the store callback.
@@ -4102,6 +4187,8 @@ struct RunningWorker {
     sender: UnboundedSender<WorkerCommand>,
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
     waiting_for_command: Arc<AtomicBool>,
+    concurrent_agent_permit_held: Arc<AtomicBool>,
+    idle_since_millis: Arc<AtomicU64>,
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
     /// `ResumeReplay` is signalled directly through the command channel rather
     /// than the internal queue, so eviction must treat it as pending work.
@@ -4257,6 +4344,10 @@ impl RunningWorker {
         let owned_agent_id_clone = owned_agent_id.clone();
         let waiting_for_command = Arc::new(AtomicBool::new(false));
         let waiting_for_command_clone = waiting_for_command.clone();
+        let concurrent_agent_permit_held = Arc::new(AtomicBool::new(true));
+        let concurrent_agent_permit_held_clone = Arc::clone(&concurrent_agent_permit_held);
+        let idle_since_millis = Arc::new(AtomicU64::new(0));
+        let idle_since_millis_clone = Arc::clone(&idle_since_millis);
         let interrupt_signal = parent.interrupt_signal.clone();
         let interrupt_signal_clone = interrupt_signal.clone();
         let resume_replay_pending = Arc::new(AtomicBool::new(false));
@@ -4275,6 +4366,8 @@ impl RunningWorker {
                 interrupt_signal_clone,
                 oom_retry_count,
                 concurrent_agent_permit,
+                concurrent_agent_permit_held_clone,
+                idle_since_millis_clone,
                 resume_replay_pending_clone,
                 start_attempt,
                 worker_trace,
@@ -4288,6 +4381,8 @@ impl RunningWorker {
             sender,
             queue,
             waiting_for_command,
+            concurrent_agent_permit_held,
+            idle_since_millis,
             interrupt_signal,
             resume_replay_pending,
             start_attempt,
@@ -4489,6 +4584,8 @@ impl RunningWorker {
                 }
             })?;
 
+        *parent.filesystem_runtime.lock().unwrap() = Some(filesystem.runtime());
+
         filesystem.runtime().set_invalidation_callback(Some({
             let worker = Arc::downgrade(&parent);
             Arc::new(move || {
@@ -4496,6 +4593,22 @@ impl RunningWorker {
                 Box::pin(async move {
                     if let Some(worker) = worker.upgrade() {
                         worker.request_filesystem_invalidation().await;
+                    }
+                })
+            })
+        }));
+        filesystem.runtime().set_pressure_recovery_callback(Some({
+            let active_workers = Arc::downgrade(&parent.active_workers());
+            Arc::new(move |operation, deadline| {
+                let active_workers = active_workers.clone();
+                Box::pin(async move {
+                    match active_workers.upgrade() {
+                        Some(active_workers) => {
+                            active_workers
+                                .recover_filesystem_pressure(operation, deadline)
+                                .await
+                        }
+                        None => false,
                     }
                 })
             })
@@ -4660,6 +4773,8 @@ impl RunningWorker {
         interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
         oom_retry_count: u32,
         concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
+        concurrent_agent_permit_held: Arc<AtomicBool>,
+        idle_since_millis: Arc<AtomicU64>,
         resume_replay_pending: Arc<AtomicBool>,
         start_attempt: Uuid,
         worker_trace: WorkerTrace,
@@ -4673,6 +4788,8 @@ impl RunningWorker {
             interrupt_signal,
             oom_retry_count,
             concurrent_agent_permit: Some(concurrent_agent_permit),
+            concurrent_agent_permit_held,
+            idle_since_millis,
             resume_replay_pending,
             start_attempt,
             worker_trace,
@@ -4722,6 +4839,35 @@ pub enum EvictionClass {
     LoadedIdle,
     /// Resident in memory, not executing, has durable pending invocations.
     WarmRunnable,
+}
+
+fn running_worker_can_be_evicted(
+    waiting_for_command: bool,
+    has_queued_internal_work: bool,
+    has_resume_replay: bool,
+    has_interrupt: bool,
+    has_filesystem_effects: bool,
+    has_concurrent_agent_permit: bool,
+) -> bool {
+    waiting_for_command
+        && !has_queued_internal_work
+        && !has_resume_replay
+        && !has_interrupt
+        && !has_filesystem_effects
+        && !has_concurrent_agent_permit
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EvictionStopOutcome {
+    Ineligible,
+    Unloaded,
+    CleanupFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FilesystemPressureEligibility {
+    idle_since: u64,
+    last_effect_completion: u64,
 }
 
 impl EvictionClass {
@@ -4947,6 +5093,19 @@ mod tests {
     use super::*;
     use golem_common::model::oplog::AgentError;
     use test_r::test;
+
+    #[test]
+    fn active_filesystem_effects_exclude_an_otherwise_idle_worker() {
+        assert!(running_worker_can_be_evicted(
+            true, false, false, false, false, false
+        ));
+        assert!(!running_worker_can_be_evicted(
+            true, false, false, false, true, false
+        ));
+        assert!(!running_worker_can_be_evicted(
+            true, false, false, false, false, true
+        ));
+    }
 
     #[test]
     fn merging_unloaded_states_preserves_startup_failure() {

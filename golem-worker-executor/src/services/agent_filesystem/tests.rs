@@ -300,7 +300,19 @@ async fn storage_exhaustion_uses_fresh_quota_and_capacity_observations() {
                 MutationEffect::ProvenNoEffect,
             )
             .await,
-        MutationDecision::InsufficientSpace
+        MutationDecision::Quota
+    );
+    assert_eq!(
+        unmanaged
+            .classify_mutation_failure(
+                MutationFailure::StorageExhaustion {
+                    guest: (),
+                    quota_hint: true,
+                },
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::Quota
     );
 }
 
@@ -512,6 +524,110 @@ async fn unmanaged_runtime_observes_fresh_physical_capacity() {
     assert!(capacity.total_filesystem_objects > 0);
     assert!(capacity.available_filesystem_objects <= capacity.total_filesystem_objects);
     filesystem.close_and_delete().await.unwrap();
+}
+
+#[test]
+fn pressure_policy_uses_independent_minimum_and_target_watermarks() {
+    let policy = FilesystemPressureConfig {
+        minimum_available_bytes: 10,
+        target_available_bytes: 20,
+        minimum_available_filesystem_objects: 2,
+        target_available_filesystem_objects: 4,
+        ..FilesystemPressureConfig::default()
+    };
+    let byte_pressure = policy
+        .pressure(
+            MutationOperation::Write,
+            FilesystemCapacity {
+                total_bytes: 100,
+                available_bytes: 10,
+                total_filesystem_objects: 100,
+                available_filesystem_objects: 100,
+            },
+        )
+        .unwrap();
+    assert!(!policy.target_reached(
+        byte_pressure,
+        FilesystemCapacity {
+            total_bytes: 100,
+            available_bytes: 19,
+            total_filesystem_objects: 100,
+            available_filesystem_objects: 100,
+        }
+    ));
+    assert!(policy.target_reached(
+        byte_pressure,
+        FilesystemCapacity {
+            total_bytes: 100,
+            available_bytes: 20,
+            total_filesystem_objects: 100,
+            available_filesystem_objects: 0,
+        }
+    ));
+
+    let object_capacity = FilesystemCapacity {
+        total_bytes: 100,
+        available_bytes: 100,
+        total_filesystem_objects: 100,
+        available_filesystem_objects: 2,
+    };
+    assert!(
+        policy
+            .pressure(MutationOperation::Write, object_capacity)
+            .is_none()
+    );
+    let object_pressure = policy
+        .pressure(MutationOperation::Create, object_capacity)
+        .unwrap();
+    assert!(policy.target_reached(
+        object_pressure,
+        FilesystemCapacity {
+            available_filesystem_objects: 4,
+            ..object_capacity
+        }
+    ));
+}
+
+#[test]
+fn pressure_policy_rejects_targets_below_minimums() {
+    assert!(
+        FilesystemPressureConfig {
+            minimum_available_bytes: 2,
+            target_available_bytes: 1,
+            minimum_available_filesystem_objects: 1,
+            target_available_filesystem_objects: 1,
+            ..FilesystemPressureConfig::default()
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        FilesystemPressureConfig {
+            minimum_available_bytes: 1,
+            target_available_bytes: 1,
+            minimum_available_filesystem_objects: 1,
+            target_available_filesystem_objects: 1,
+            ..FilesystemPressureConfig::default()
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        FilesystemPressureConfig {
+            minimum_available_bytes: 1,
+            target_available_bytes: 101,
+            minimum_available_filesystem_objects: 1,
+            target_available_filesystem_objects: 1,
+            ..FilesystemPressureConfig::default()
+        }
+        .validate_capacity(FilesystemCapacity {
+            total_bytes: 100,
+            available_bytes: 100,
+            total_filesystem_objects: 1,
+            available_filesystem_objects: 1,
+        })
+        .is_err()
+    );
 }
 
 #[test]
@@ -820,6 +936,12 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
         .unwrap();
     dense.write_all(&vec![0x4e; 4096]).unwrap();
     dense.sync_all().unwrap();
+    let capacity_during_allocation = filesystems.capacity().await.unwrap();
+    assert!(capacity_during_allocation.available_bytes < capacity.available_bytes);
+    assert!(
+        capacity_during_allocation.available_filesystem_objects
+            < capacity.available_filesystem_objects
+    );
     let usage = filesystem.usage().await.unwrap().unwrap();
     assert!(usage.allocated_bytes > 4096);
     let limit_exceeded = Arc::new(AtomicBool::new(false));
@@ -884,6 +1006,22 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
             allocated_bytes: 0,
             filesystem_objects: 0,
         }
+    );
+    let mut capacity_after_deletion = filesystems.capacity().await.unwrap();
+    for _ in 0..50 {
+        if capacity_after_deletion.available_bytes > capacity_during_allocation.available_bytes
+            && capacity_after_deletion.available_filesystem_objects
+                > capacity_during_allocation.available_filesystem_objects
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        capacity_after_deletion = filesystems.capacity().await.unwrap();
+    }
+    assert!(capacity_after_deletion.available_bytes > capacity_during_allocation.available_bytes);
+    assert!(
+        capacity_after_deletion.available_filesystem_objects
+            > capacity_during_allocation.available_filesystem_objects
     );
 
     let over_limit_id = agent_id();
@@ -1376,6 +1514,42 @@ async fn seal_rejects_new_effects_without_waiting_for_existing_effects() {
     assert!(filesystem.path().exists());
     drop(effect);
     filesystem.close_and_delete().await.unwrap();
+}
+
+#[test]
+async fn conditional_seal_is_atomic_with_effect_admission() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let effect = runtime.begin_effect().await.unwrap();
+
+    assert!(!runtime.seal_if_no_active_effects());
+    drop(effect);
+    assert!(runtime.seal_if_no_active_effects());
+    assert!(runtime.begin_effect().await.is_err());
+}
+
+#[test]
+async fn conditional_seal_races_effect_admission_atomically() {
+    for _ in 0..100 {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let effect_runtime = runtime.clone();
+        let effect_barrier = Arc::clone(&barrier);
+        let seal_runtime = runtime.clone();
+        let seal_barrier = Arc::clone(&barrier);
+
+        let effect = async move {
+            effect_barrier.wait().await;
+            effect_runtime.begin_effect().await
+        };
+        let seal = async move {
+            seal_barrier.wait().await;
+            seal_runtime.seal_if_no_active_effects()
+        };
+        let release = barrier.wait();
+        let (effect, sealed, _) = tokio::join!(effect, seal, release);
+
+        assert_ne!(effect.is_ok(), sealed);
+    }
 }
 
 #[test]

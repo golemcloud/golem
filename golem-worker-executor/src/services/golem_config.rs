@@ -1799,6 +1799,76 @@ pub struct FilesystemStorageConfig {
     /// Private policy for deriving an agent's filesystem-object hard limit
     /// proportionally from its allocated-byte limit, with fixed bounds.
     pub filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
+    /// Physical capacity watermarks for managed filesystem pressure recovery.
+    #[serde(default)]
+    pub pressure: FilesystemPressureConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FilesystemPressureConfig {
+    /// Available bytes at or below which physical pressure is active.
+    pub minimum_available_bytes: u64,
+    /// Available bytes required after reclamation before retrying a mutation.
+    pub target_available_bytes: u64,
+    /// Available filesystem objects at or below which object pressure is active.
+    pub minimum_available_filesystem_objects: u64,
+    /// Available filesystem objects required after reclamation before retrying a mutation.
+    pub target_available_filesystem_objects: u64,
+    /// Number of fresh observations allowed after each completed deletion.
+    pub reclamation_observation_attempts: u32,
+    /// Delay between post-deletion observations while reclamation settles.
+    #[serde(with = "humantime_serde")]
+    pub reclamation_observation_delay: Duration,
+}
+
+impl Default for FilesystemPressureConfig {
+    fn default() -> Self {
+        Self {
+            minimum_available_bytes: 64 * 1024 * 1024,
+            target_available_bytes: 128 * 1024 * 1024,
+            minimum_available_filesystem_objects: 8_192,
+            target_available_filesystem_objects: 16_384,
+            reclamation_observation_attempts: 4,
+            reclamation_observation_delay: Duration::from_millis(25),
+        }
+    }
+}
+
+impl SafeDisplay for FilesystemPressureConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "minimum available bytes: {}",
+            self.minimum_available_bytes
+        );
+        let _ = writeln!(
+            &mut result,
+            "target available bytes: {}",
+            self.target_available_bytes
+        );
+        let _ = writeln!(
+            &mut result,
+            "minimum available filesystem objects: {}",
+            self.minimum_available_filesystem_objects
+        );
+        let _ = writeln!(
+            &mut result,
+            "target available filesystem objects: {}",
+            self.target_available_filesystem_objects
+        );
+        let _ = writeln!(
+            &mut result,
+            "reclamation observation attempts: {}",
+            self.reclamation_observation_attempts
+        );
+        let _ = writeln!(
+            &mut result,
+            "reclamation observation delay: {:?}",
+            self.reclamation_observation_delay
+        );
+        result
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1853,6 +1923,8 @@ impl SafeDisplay for FilesystemStorageConfig {
             self.filesystem_object_limit_policy
                 .to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "pressure:");
+        let _ = writeln!(&mut result, "{}", self.pressure.to_safe_string_indented());
         result
     }
 }
@@ -1870,6 +1942,7 @@ impl Default for FilesystemStorageConfig {
             deterministic_root_dir: None,
             managed_xfs_root_dir: None,
             filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig::default(),
+            pressure: FilesystemPressureConfig::default(),
         }
     }
 }

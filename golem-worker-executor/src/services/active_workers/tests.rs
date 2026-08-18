@@ -1,16 +1,364 @@
 use super::concurrent_agents_scheduler::ConcurrentAgentsScheduler;
 use super::concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
+use super::{
+    FilesystemPressureRecoverySource, recover_filesystem_pressure_from,
+    sort_filesystem_pressure_candidates, spawn_before_deadline,
+};
+use crate::services::agent_filesystem::{FilesystemCapacity, MutationOperation};
+use crate::services::golem_config::FilesystemPressureConfig;
 use crate::services::resource_limits::AtomicResourceEntry;
+use crate::worker::EvictionStopOutcome;
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use test_r::{non_flaky, test, timeout};
 use tokio::sync::Barrier;
 use uuid::Uuid;
 
 test_r::enable!();
+
+struct TestFilesystemPressureSource {
+    capacities: Mutex<VecDeque<Result<FilesystemCapacity, String>>>,
+    candidates: Mutex<Option<Vec<u8>>>,
+    outcomes: Mutex<HashMap<u8, EvictionStopOutcome>>,
+    evicted: Mutex<Vec<u8>>,
+}
+
+#[async_trait::async_trait]
+impl FilesystemPressureRecoverySource for TestFilesystemPressureSource {
+    type Candidate = u8;
+
+    async fn capacity(&self) -> Result<FilesystemCapacity, String> {
+        self.capacities.lock().unwrap().pop_front().unwrap()
+    }
+
+    async fn candidates(&self) -> Vec<Self::Candidate> {
+        self.candidates.lock().unwrap().take().unwrap()
+    }
+
+    fn candidate_name(&self, candidate: &Self::Candidate) -> String {
+        candidate.to_string()
+    }
+
+    async fn evict(
+        &self,
+        candidate: Self::Candidate,
+        _deadline: Instant,
+    ) -> Option<EvictionStopOutcome> {
+        self.evicted.lock().unwrap().push(candidate);
+        Some(self.outcomes.lock().unwrap()[&candidate])
+    }
+}
+
+fn filesystem_capacity(available_bytes: u64) -> FilesystemCapacity {
+    FilesystemCapacity {
+        total_bytes: 100,
+        available_bytes,
+        total_filesystem_objects: 100,
+        available_filesystem_objects: 100,
+    }
+}
+
+fn filesystem_object_capacity(available_filesystem_objects: u64) -> FilesystemCapacity {
+    FilesystemCapacity {
+        total_bytes: 100,
+        available_bytes: 100,
+        total_filesystem_objects: 100,
+        available_filesystem_objects,
+    }
+}
+
+fn pressure_policy() -> FilesystemPressureConfig {
+    FilesystemPressureConfig {
+        minimum_available_bytes: 10,
+        target_available_bytes: 20,
+        minimum_available_filesystem_objects: 2,
+        target_available_filesystem_objects: 4,
+        reclamation_observation_attempts: 2,
+        reclamation_observation_delay: Duration::ZERO,
+    }
+}
+
+fn recovery_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(1)
+}
+
+#[test]
+fn filesystem_pressure_candidates_are_oldest_first_with_stable_ties() {
+    let mut candidates = vec![
+        (2, "a".to_string(), "new"),
+        (1, "z".to_string(), "old-z"),
+        (1, "a".to_string(), "old-a"),
+    ];
+
+    sort_filesystem_pressure_candidates(&mut candidates);
+
+    assert_eq!(
+        candidates
+            .into_iter()
+            .map(|(_, _, candidate)| candidate)
+            .collect::<Vec<_>>(),
+        vec!["old-a", "old-z", "new"]
+    );
+}
+
+#[test]
+async fn filesystem_pressure_recovery_observes_after_successful_deletion() {
+    let source = TestFilesystemPressureSource {
+        capacities: Mutex::new(
+            [
+                Ok(filesystem_capacity(5)),
+                Ok(filesystem_capacity(5)),
+                Ok(filesystem_capacity(5)),
+                Ok(filesystem_capacity(20)),
+            ]
+            .into(),
+        ),
+        candidates: Mutex::new(Some(vec![1, 2])),
+        outcomes: Mutex::new(HashMap::from([
+            (1, EvictionStopOutcome::CleanupFailed),
+            (2, EvictionStopOutcome::Unloaded),
+        ])),
+        evicted: Mutex::new(Vec::new()),
+    };
+
+    assert!(
+        recover_filesystem_pressure_from(
+            &source,
+            &pressure_policy(),
+            MutationOperation::Write,
+            recovery_deadline(),
+        )
+        .await
+    );
+    assert_eq!(*source.evicted.lock().unwrap(), vec![1, 2]);
+    assert!(source.capacities.lock().unwrap().is_empty());
+}
+
+#[test]
+async fn filesystem_pressure_recovery_rechecks_raced_candidate_eligibility() {
+    let source = TestFilesystemPressureSource {
+        capacities: Mutex::new(
+            [
+                Ok(filesystem_capacity(5)),
+                Ok(filesystem_capacity(5)),
+                Ok(filesystem_capacity(5)),
+                Ok(filesystem_capacity(20)),
+            ]
+            .into(),
+        ),
+        candidates: Mutex::new(Some(vec![1, 2])),
+        outcomes: Mutex::new(HashMap::from([
+            (1, EvictionStopOutcome::Ineligible),
+            (2, EvictionStopOutcome::Unloaded),
+        ])),
+        evicted: Mutex::new(Vec::new()),
+    };
+
+    assert!(
+        recover_filesystem_pressure_from(
+            &source,
+            &pressure_policy(),
+            MutationOperation::Write,
+            recovery_deadline(),
+        )
+        .await
+    );
+    assert_eq!(*source.evicted.lock().unwrap(), vec![1, 2]);
+}
+
+#[test]
+async fn filesystem_pressure_recovery_waits_for_delayed_reclamation() {
+    let source = TestFilesystemPressureSource {
+        capacities: Mutex::new(
+            [
+                Ok(filesystem_capacity(5)),
+                Ok(filesystem_capacity(5)),
+                Ok(filesystem_capacity(12)),
+                Ok(filesystem_capacity(20)),
+            ]
+            .into(),
+        ),
+        candidates: Mutex::new(Some(vec![1, 2])),
+        outcomes: Mutex::new(HashMap::from([
+            (1, EvictionStopOutcome::Unloaded),
+            (2, EvictionStopOutcome::Unloaded),
+        ])),
+        evicted: Mutex::new(Vec::new()),
+    };
+
+    assert!(
+        recover_filesystem_pressure_from(
+            &source,
+            &pressure_policy(),
+            MutationOperation::Write,
+            recovery_deadline(),
+        )
+        .await
+    );
+    assert_eq!(*source.evicted.lock().unwrap(), vec![1]);
+}
+
+#[test]
+async fn filesystem_pressure_recovery_handles_object_pressure() {
+    let source = TestFilesystemPressureSource {
+        capacities: Mutex::new(
+            [
+                Ok(filesystem_object_capacity(1)),
+                Ok(filesystem_object_capacity(1)),
+                Ok(filesystem_object_capacity(4)),
+            ]
+            .into(),
+        ),
+        candidates: Mutex::new(Some(vec![1])),
+        outcomes: Mutex::new(HashMap::from([(1, EvictionStopOutcome::Unloaded)])),
+        evicted: Mutex::new(Vec::new()),
+    };
+
+    assert!(
+        recover_filesystem_pressure_from(
+            &source,
+            &pressure_policy(),
+            MutationOperation::Create,
+            recovery_deadline(),
+        )
+        .await
+    );
+    assert_eq!(*source.evicted.lock().unwrap(), vec![1]);
+}
+
+#[test]
+async fn filesystem_pressure_recovery_includes_new_pressure_dimensions() {
+    let source = TestFilesystemPressureSource {
+        capacities: Mutex::new(
+            [
+                Ok(FilesystemCapacity {
+                    available_bytes: 5,
+                    available_filesystem_objects: 100,
+                    ..filesystem_capacity(5)
+                }),
+                Ok(FilesystemCapacity {
+                    available_bytes: 20,
+                    available_filesystem_objects: 1,
+                    ..filesystem_capacity(20)
+                }),
+                Ok(FilesystemCapacity {
+                    available_bytes: 20,
+                    available_filesystem_objects: 4,
+                    ..filesystem_capacity(20)
+                }),
+            ]
+            .into(),
+        ),
+        candidates: Mutex::new(Some(vec![1])),
+        outcomes: Mutex::new(HashMap::from([(1, EvictionStopOutcome::Unloaded)])),
+        evicted: Mutex::new(Vec::new()),
+    };
+
+    assert!(
+        recover_filesystem_pressure_from(
+            &source,
+            &pressure_policy(),
+            MutationOperation::Create,
+            recovery_deadline(),
+        )
+        .await
+    );
+    assert_eq!(*source.evicted.lock().unwrap(), vec![1]);
+}
+
+#[test]
+async fn filesystem_pressure_observation_failure_stops_without_eviction() {
+    let source = TestFilesystemPressureSource {
+        capacities: Mutex::new([Err("statvfs failed".to_string())].into()),
+        candidates: Mutex::new(Some(vec![1])),
+        outcomes: Mutex::new(HashMap::from([(1, EvictionStopOutcome::Unloaded)])),
+        evicted: Mutex::new(Vec::new()),
+    };
+
+    assert!(
+        !recover_filesystem_pressure_from(
+            &source,
+            &pressure_policy(),
+            MutationOperation::Write,
+            recovery_deadline(),
+        )
+        .await
+    );
+    assert!(source.evicted.lock().unwrap().is_empty());
+}
+
+#[test]
+async fn filesystem_pressure_recovery_does_not_start_after_deadline() {
+    let source = TestFilesystemPressureSource {
+        capacities: Mutex::new(VecDeque::new()),
+        candidates: Mutex::new(Some(vec![1])),
+        outcomes: Mutex::new(HashMap::from([(1, EvictionStopOutcome::Unloaded)])),
+        evicted: Mutex::new(Vec::new()),
+    };
+
+    assert!(
+        !recover_filesystem_pressure_from(
+            &source,
+            &pressure_policy(),
+            MutationOperation::Write,
+            Instant::now(),
+        )
+        .await
+    );
+    assert!(source.evicted.lock().unwrap().is_empty());
+}
+
+#[test]
+#[timeout("1s")]
+async fn filesystem_pressure_reclamation_wait_is_bounded_by_deadline() {
+    let source = TestFilesystemPressureSource {
+        capacities: Mutex::new(
+            [
+                Ok(filesystem_capacity(5)),
+                Ok(filesystem_capacity(5)),
+                Ok(filesystem_capacity(12)),
+            ]
+            .into(),
+        ),
+        candidates: Mutex::new(Some(vec![1])),
+        outcomes: Mutex::new(HashMap::from([(1, EvictionStopOutcome::Unloaded)])),
+        evicted: Mutex::new(Vec::new()),
+    };
+    let mut policy = pressure_policy();
+    policy.reclamation_observation_delay = Duration::from_secs(5);
+
+    assert!(
+        !recover_filesystem_pressure_from(
+            &source,
+            &policy,
+            MutationOperation::Write,
+            Instant::now() + Duration::from_millis(10),
+        )
+        .await
+    );
+    assert_eq!(*source.evicted.lock().unwrap(), vec![1]);
+}
+
+#[test]
+async fn timed_out_eviction_continues_to_completion() {
+    let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let task_completed = Arc::clone(&completed);
+
+    assert!(
+        spawn_before_deadline(Instant::now() + Duration::from_millis(10), async move {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            task_completed.store(true, std::sync::atomic::Ordering::Release);
+        })
+        .await
+        .is_none()
+    );
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(completed.load(std::sync::atomic::Ordering::Acquire));
+}
 
 fn concurrent_agents_semaphore() -> ConcurrentAgentsSemaphore {
     ConcurrentAgentsSemaphore::new()

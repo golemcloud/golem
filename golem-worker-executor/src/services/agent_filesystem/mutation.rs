@@ -20,7 +20,9 @@ use cap_std::fs::FileExt;
 use fs_set_times::{SetTimes as _, SystemTimeSpec};
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::OwnedRwLockReadGuard;
 use wasmtime_wasi::filesystem::{Descriptor, Dir, File, OpenMode};
 use wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode;
@@ -367,6 +369,18 @@ impl AgentFilesystemRuntime {
             .fetch_or(FILESYSTEM_RUNTIME_SEALED, Ordering::AcqRel);
     }
 
+    pub(crate) fn seal_if_no_active_effects(&self) -> bool {
+        self.inner
+            .state
+            .compare_exchange(
+                0,
+                FILESYSTEM_RUNTIME_SEALED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
     pub(super) async fn drain(&self) {
         while self.has_active_effects() {
             let drained = self.inner.drained.notified();
@@ -377,8 +391,14 @@ impl AgentFilesystemRuntime {
         }
     }
 
-    pub(super) fn has_active_effects(&self) -> bool {
+    pub(crate) fn has_active_effects(&self) -> bool {
         self.inner.state.load(Ordering::Acquire) & FILESYSTEM_RUNTIME_ACTIVE_EFFECTS != 0
+    }
+
+    pub(crate) fn last_effect_completion_millis(&self) -> u64 {
+        self.inner
+            .last_effect_completion_millis
+            .load(Ordering::Acquire)
     }
 }
 
@@ -388,6 +408,16 @@ impl AgentFilesystemRuntimeInner {
         let previous_active = previous & FILESYSTEM_RUNTIME_ACTIVE_EFFECTS;
         debug_assert!(previous_active > 0);
         if previous_active == 1 {
+            let completed_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let completed_at = u64::try_from(completed_at).unwrap_or(u64::MAX);
+            let _ = self.last_effect_completion_millis.fetch_update(
+                Ordering::Release,
+                Ordering::Acquire,
+                |previous| Some(completed_at.max(previous.saturating_add(1))),
+            );
             self.drained.notify_waiters();
         }
     }
@@ -890,7 +920,8 @@ async fn run_classified_filesystem_stream_write<W: FilesystemStreamWriter + ?Siz
                 return (completed, Ok(()));
             }
             MutationDecision::BoundedRetry
-                if failed_attempts < 2 && started.elapsed() <= Duration::from_millis(250) => {}
+                if failed_attempts < super::failure::FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                    && started.elapsed() <= super::failure::FILESYSTEM_MUTATION_RETRY_TIMEOUT => {}
             MutationDecision::BoundedRetry => {
                 let error = raw_os_error.map_or_else(
                     || std::io::Error::new(error_kind, error_message),
@@ -924,6 +955,27 @@ async fn run_classified_filesystem_stream_write<W: FilesystemStreamWriter + ?Siz
                 );
             }
             MutationDecision::InsufficientSpace => {
+                return (
+                    completed,
+                    Err(ClassifiedFilesystemStreamFailure::Guest(
+                        ErrorCode::InsufficientSpace,
+                    )),
+                );
+            }
+            MutationDecision::PhysicalPressure if cancellation.is_cancelled() => {
+                return (completed, Ok(()));
+            }
+            MutationDecision::PhysicalPressure
+                if failed_attempts < super::failure::FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                    && started.elapsed() <= super::failure::FILESYSTEM_MUTATION_RETRY_TIMEOUT
+                    && filesystem_runtime
+                        .recover_physical_pressure(
+                            MutationOperation::Write,
+                            started + super::failure::FILESYSTEM_MUTATION_RETRY_TIMEOUT,
+                        )
+                        .await
+                    && started.elapsed() <= super::failure::FILESYSTEM_MUTATION_RETRY_TIMEOUT => {}
+            MutationDecision::PhysicalPressure => {
                 return (
                     completed,
                     Err(ClassifiedFilesystemStreamFailure::Guest(

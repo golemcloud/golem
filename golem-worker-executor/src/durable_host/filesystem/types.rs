@@ -37,11 +37,11 @@ use wasmtime_wasi::runtime::spawn_blocking;
 use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, FilesystemOutputStreamState};
 use crate::services::agent_filesystem::{
-    AgentFilesystemRuntime, ClassifiedFileOutputStream, FilesystemStreamMode, MutationDecision,
-    MutationEffect, MutationFailure, MutationOperation,
-    MutationPostcondition as P2MutationPostcondition, NativeMutationGuestError, NativeOpenOptions,
-    NativeOpenResult, PathObjectType as P2PathObjectType, RequestedTime,
-    create_directory as native_create_directory,
+    AgentFilesystemRuntime, ClassifiedFileOutputStream, FILESYSTEM_MUTATION_MAX_ATTEMPTS,
+    FILESYSTEM_MUTATION_RETRY_TIMEOUT, FilesystemStreamMode, MutationDecision, MutationEffect,
+    MutationFailure, MutationOperation, MutationPostcondition as P2MutationPostcondition,
+    NativeMutationGuestError, NativeOpenOptions, NativeOpenResult,
+    PathObjectType as P2PathObjectType, RequestedTime, create_directory as native_create_directory,
     create_directory_postcondition as p2_create_directory_postcondition,
     descriptor_state as p2_descriptor_state, descriptor_times as p2_descriptor_times,
     hard_link as native_hard_link, link_postcondition as p2_link_postcondition,
@@ -156,11 +156,34 @@ impl P2MutationAdapter {
             MutationDecision::InsufficientSpace => {
                 P2MutationAction::Error(ErrorCode::InsufficientSpace.into())
             }
+            MutationDecision::PhysicalPressure
+                if retry_safe
+                    && postcondition == P2MutationPostcondition::NoEffect
+                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
+            {
+                if self
+                    .runtime
+                    .recover_physical_pressure(
+                        self.operation,
+                        self.started + FILESYSTEM_MUTATION_RETRY_TIMEOUT,
+                    )
+                    .await
+                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT
+                {
+                    P2MutationAction::Retry
+                } else {
+                    P2MutationAction::Error(ErrorCode::InsufficientSpace.into())
+                }
+            }
+            MutationDecision::PhysicalPressure => {
+                P2MutationAction::Error(ErrorCode::InsufficientSpace.into())
+            }
             MutationDecision::BoundedRetry
                 if retry_safe
                     && postcondition == P2MutationPostcondition::NoEffect
-                    && self.attempts < 2
-                    && self.started.elapsed() <= Duration::from_millis(250) =>
+                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
             {
                 P2MutationAction::Retry
             }
@@ -199,11 +222,34 @@ impl P2MutationAdapter {
             MutationDecision::InsufficientSpace => {
                 P2MutationAction::Error(ErrorCode::InsufficientSpace.into())
             }
+            MutationDecision::PhysicalPressure
+                if retry_safe
+                    && postcondition == P2MutationPostcondition::NoEffect
+                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
+            {
+                if self
+                    .runtime
+                    .recover_physical_pressure(
+                        self.operation,
+                        self.started + FILESYSTEM_MUTATION_RETRY_TIMEOUT,
+                    )
+                    .await
+                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT
+                {
+                    P2MutationAction::Retry
+                } else {
+                    P2MutationAction::Error(ErrorCode::InsufficientSpace.into())
+                }
+            }
+            MutationDecision::PhysicalPressure => {
+                P2MutationAction::Error(ErrorCode::InsufficientSpace.into())
+            }
             MutationDecision::BoundedRetry
                 if retry_safe
                     && postcondition == P2MutationPostcondition::NoEffect
-                    && self.attempts < 2
-                    && self.started.elapsed() <= Duration::from_millis(250) =>
+                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
             {
                 P2MutationAction::Retry
             }
@@ -250,7 +296,9 @@ async fn p2_initial_probe<T>(
                 .await
             {
                 MutationDecision::Quota => Err(ErrorCode::Quota.into()),
-                MutationDecision::InsufficientSpace => Err(ErrorCode::InsufficientSpace.into()),
+                MutationDecision::InsufficientSpace | MutationDecision::PhysicalPressure => {
+                    Err(ErrorCode::InsufficientSpace.into())
+                }
                 MutationDecision::BoundedRetry | MutationDecision::PreserveRaw => {
                     let error = raw_os_error.map_or_else(
                         || std::io::Error::new(error_kind, message),
@@ -346,7 +394,7 @@ async fn classified_positioned_write(
     let effect = Arc::new(effect);
     let started = Instant::now();
 
-    for attempt in 0..2 {
+    for attempt in 0..FILESYSTEM_MUTATION_MAX_ATTEMPTS {
         let file = Arc::clone(&file);
         let buffer = buffer.clone();
         let effect = Arc::clone(&effect);
@@ -373,7 +421,8 @@ async fn classified_positioned_write(
                     .await;
                 match decision {
                     MutationDecision::BoundedRetry
-                        if attempt == 0 && started.elapsed() <= Duration::from_millis(250) => {}
+                        if attempt + 1 < FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                            && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT => {}
                     MutationDecision::BoundedRetry => {
                         let error = raw_os_error.map_or_else(
                             || std::io::Error::new(error_kind, error_message),
@@ -391,6 +440,19 @@ async fn classified_positioned_write(
                     MutationDecision::PreserveGuest(error) => return Err(error.into()),
                     MutationDecision::Quota => return Err(ErrorCode::Quota.into()),
                     MutationDecision::InsufficientSpace => {
+                        return Err(ErrorCode::InsufficientSpace.into());
+                    }
+                    MutationDecision::PhysicalPressure
+                        if attempt + 1 < FILESYSTEM_MUTATION_MAX_ATTEMPTS
+                            && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT
+                            && filesystem_runtime
+                                .recover_physical_pressure(
+                                    MutationOperation::Write,
+                                    started + FILESYSTEM_MUTATION_RETRY_TIMEOUT,
+                                )
+                                .await
+                            && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT => {}
+                    MutationDecision::PhysicalPressure => {
                         return Err(ErrorCode::InsufficientSpace.into());
                     }
                     MutationDecision::Success => return Ok(0),
@@ -1493,6 +1555,7 @@ mod p2_mutation_tests {
     use crate::services::agent_filesystem::{
         AgentFilesystemUsage, FilesystemCapacity, ResolvedAgentFilesystemLimits,
     };
+    use test_r::test;
 
     fn healthy_capacity() -> FilesystemCapacity {
         FilesystemCapacity {
@@ -1511,7 +1574,7 @@ mod p2_mutation_tests {
         }
     }
 
-    #[test_r::test]
+    #[test]
     fn p2_object_comparison_requires_authoritative_identity() {
         assert!(!p2_same_object(path_state(None), path_state(None)));
         assert!(!p2_same_optional_object(
@@ -1530,7 +1593,7 @@ mod p2_mutation_tests {
         ));
     }
 
-    #[test_r::test]
+    #[test]
     async fn p2_adapter_retries_only_proven_no_effect_and_at_most_once() {
         let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
         let mut adapter = P2MutationAdapter::new(runtime);
@@ -1666,7 +1729,30 @@ mod p2_mutation_tests {
             crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test_with_observations(
                 None, None, exhausted,
             );
+        let recovery_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        physical_runtime.set_pressure_recovery_callback(Some({
+            let recovery_attempts = Arc::clone(&recovery_attempts);
+            Arc::new(move |operation, _deadline| {
+                let recovery_attempts = Arc::clone(&recovery_attempts);
+                Box::pin(async move {
+                    assert_eq!(operation, MutationOperation::Metadata);
+                    recovery_attempts.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    true
+                })
+            })
+        }));
         let mut physical = P2MutationAdapter::new(physical_runtime);
+        physical.begin_attempt();
+        assert!(matches!(
+            physical
+                .failure(
+                    ErrorCode::InsufficientSpace.into(),
+                    P2MutationPostcondition::NoEffect,
+                    true,
+                )
+                .await,
+            P2MutationAction::Retry
+        ));
         physical.begin_attempt();
         assert!(matches!(
             physical
@@ -1679,6 +1765,10 @@ mod p2_mutation_tests {
             P2MutationAction::Error(error)
                 if error.downcast_ref() == Some(&ErrorCode::InsufficientSpace)
         ));
+        assert_eq!(
+            recovery_attempts.load(std::sync::atomic::Ordering::Acquire),
+            1
+        );
     }
 
     #[test_r::test]

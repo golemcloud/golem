@@ -21,6 +21,15 @@ pub(crate) type AgentFilesystemInvalidationCallback =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 pub(crate) type AgentFilesystemRetryCallback =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
+pub(crate) type AgentFilesystemPressureRecoveryCallback = Arc<
+    dyn Fn(MutationOperation, std::time::Instant) -> Pin<Box<dyn Future<Output = bool> + Send>>
+        + Send
+        + Sync,
+>;
+
+pub(crate) const FILESYSTEM_MUTATION_MAX_ATTEMPTS: usize = 2;
+pub(crate) const FILESYSTEM_MUTATION_RETRY_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MutationEffect {
@@ -73,6 +82,7 @@ pub(crate) enum MutationDecision<G> {
     PreserveGuest(G),
     Quota,
     InsufficientSpace,
+    PhysicalPressure,
     BoundedRetry,
     PreserveRaw,
     Success,
@@ -120,11 +130,12 @@ impl AgentFilesystemRuntime {
                         let quota_exhausted = usage.zip(limits).is_some_and(|(usage, limits)| {
                             quota_exhausted(operation, usage, limits)
                         });
-                        let physical_exhausted = physical_exhausted(operation, capacity);
-                        if quota_exhausted {
+                        let physical_exhausted =
+                            self.inner.pressure.pressure(operation, capacity).is_some();
+                        if quota_hint || quota_exhausted {
                             MutationDecision::Quota
                         } else if physical_exhausted {
-                            MutationDecision::InsufficientSpace
+                            MutationDecision::PhysicalPressure
                         } else {
                             tracing::warn!(
                                 operation = ?operation,
@@ -166,18 +177,12 @@ impl AgentFilesystemRuntime {
                         let quota_exhausted = usage.zip(limits).is_some_and(|(usage, limits)| {
                             quota_exhausted(operation, usage, limits)
                         });
-                        let physical_exhausted = physical_exhausted(operation, capacity);
-                        if quota_exhausted {
+                        let physical_exhausted =
+                            self.inner.pressure.pressure(operation, capacity).is_some();
+                        if is_quota_error(&error) || quota_exhausted {
                             MutationDecision::Quota
                         } else if physical_exhausted {
-                            MutationDecision::InsufficientSpace
-                        } else if is_quota_error(&error) {
-                            tracing::warn!(
-                                operation = ?operation,
-                                raw_os_error = ?error.raw_os_error(),
-                                "Filesystem storage exhaustion was not explained by fresh quota or capacity observations"
-                            );
-                            MutationDecision::Quota
+                            MutationDecision::PhysicalPressure
                         } else {
                             tracing::warn!(
                                 operation = ?operation,
@@ -237,6 +242,45 @@ impl AgentFilesystemRuntime {
             .expect("agent filesystem retry callback lock poisoned") = callback;
     }
 
+    pub(crate) fn set_pressure_recovery_callback(
+        &self,
+        callback: Option<AgentFilesystemPressureRecoveryCallback>,
+    ) {
+        *self
+            .inner
+            .pressure_recovery
+            .lock()
+            .expect("agent filesystem pressure callback lock poisoned") = callback;
+    }
+
+    pub(crate) async fn recover_physical_pressure(
+        &self,
+        operation: MutationOperation,
+        deadline: std::time::Instant,
+    ) -> bool {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        if !self.retry_permitted().await {
+            return false;
+        }
+        let callback = self
+            .inner
+            .pressure_recovery
+            .lock()
+            .expect("agent filesystem pressure callback lock poisoned")
+            .clone();
+        match callback {
+            Some(callback) if std::time::Instant::now() < deadline => tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                callback(operation, deadline),
+            )
+            .await
+            .unwrap_or(false),
+            Some(_) | None => false,
+        }
+    }
+
     async fn retry_permitted(&self) -> bool {
         if self.inner.state.load(Ordering::Acquire) & super::mutation::FILESYSTEM_RUNTIME_SEALED
             != 0
@@ -287,17 +331,6 @@ fn quota_exhausted(
 ) -> bool {
     let bytes_exhausted = usage.allocated_bytes >= limits.allocated_bytes;
     let objects_exhausted = usage.filesystem_objects >= limits.filesystem_objects;
-    match operation {
-        MutationOperation::Write | MutationOperation::Resize | MutationOperation::Metadata => {
-            bytes_exhausted
-        }
-        MutationOperation::Create => bytes_exhausted || objects_exhausted,
-    }
-}
-
-fn physical_exhausted(operation: MutationOperation, capacity: FilesystemCapacity) -> bool {
-    let bytes_exhausted = capacity.available_bytes == 0;
-    let objects_exhausted = capacity.available_filesystem_objects == 0;
     match operation {
         MutationOperation::Write | MutationOperation::Resize | MutationOperation::Metadata => {
             bytes_exhausted

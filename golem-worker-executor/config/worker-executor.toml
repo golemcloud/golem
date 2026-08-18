@@ -74,6 +74,14 @@ maximum_objects = 131072
 minimum_objects = 8192
 objects_per_gib = 32768
 
+[filesystem_storage.pressure]
+minimum_available_bytes = 67108864
+minimum_available_filesystem_objects = 8192
+reclamation_observation_attempts = 4
+reclamation_observation_delay = "25ms"
+target_available_bytes = 134217728
+target_available_filesystem_objects = 16384
+
 [grpc]
 max_message_size = 33554432
 port = 9093
@@ -459,6 +467,14 @@ without_time = false
 # minimum_objects = 8192
 # objects_per_gib = 32768
 # 
+# [filesystem_storage.pressure]
+# minimum_available_bytes = 67108864
+# minimum_available_filesystem_objects = 8192
+# reclamation_observation_attempts = 4
+# reclamation_observation_delay = "25ms"
+# target_available_bytes = 134217728
+# target_available_filesystem_objects = 16384
+#
 # [grpc]
 # max_message_size = 33554432
 # port = 9093
@@ -817,6 +833,14 @@ without_time = false
 # minimum_objects = 8192
 # objects_per_gib = 32768
 # 
+# [filesystem_storage.pressure]
+# minimum_available_bytes = 67108864
+# minimum_available_filesystem_objects = 8192
+# reclamation_observation_attempts = 4
+# reclamation_observation_delay = "25ms"
+# target_available_bytes = 134217728
+# target_available_filesystem_objects = 16384
+#
 # [grpc]
 # max_message_size = 33554432
 # port = 9093

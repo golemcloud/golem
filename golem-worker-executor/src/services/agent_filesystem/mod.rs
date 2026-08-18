@@ -14,7 +14,9 @@
 
 use crate::metrics::workers::record_agent_filesystem_lifecycle;
 use crate::services::file_loader::FileLoader;
-use crate::services::golem_config::{FilesystemObjectLimitPolicyConfig, FilesystemStorageConfig};
+use crate::services::golem_config::{
+    FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageConfig,
+};
 use crate::services::resource_limits::AtomicResourceEntry;
 use golem_common::model::component::InitialAgentFile;
 use golem_common::model::{OwnedAgentId, RetryConfig};
@@ -51,9 +53,10 @@ mod xfs;
     reason = "mutation classification is exposed for filesystem host adapters"
 )]
 pub(crate) use failure::{
-    AgentFilesystemInvalidationCallback, AgentFilesystemRetryCallback, MutationDecision,
-    MutationEffect, MutationFailure, MutationOperation, native_write_failure_effect,
-    proven_write_progress_effect,
+    AgentFilesystemInvalidationCallback, AgentFilesystemPressureRecoveryCallback,
+    AgentFilesystemRetryCallback, FILESYSTEM_MUTATION_MAX_ATTEMPTS,
+    FILESYSTEM_MUTATION_RETRY_TIMEOUT, MutationDecision, MutationEffect, MutationFailure,
+    MutationOperation, native_write_failure_effect, proven_write_progress_effect,
 };
 pub(crate) use mutation::{
     AgentFilesystemEffectAdmission, AgentFilesystemEffectLease, AgentFilesystemUpdateEffectLease,
@@ -200,6 +203,7 @@ pub(crate) struct AgentFilesystems {
     deterministic_root: Option<PathBuf>,
     cleanup_retry: RetryConfig,
     filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
+    pressure: FilesystemPressureConfig,
     #[cfg(target_os = "linux")]
     managed_xfs: Option<Arc<xfs::XfsBackend>>,
 }
@@ -223,14 +227,24 @@ impl AgentFilesystems {
 
         if settings.managed_xfs_root_dir.is_some() {
             settings.filesystem_object_limit_policy.validate()?;
+            settings.pressure.validate()?;
         }
 
         #[cfg(target_os = "linux")]
         let managed_xfs = match settings.managed_xfs_root_dir.as_deref() {
-            Some(root) => Some(Arc::new(xfs::XfsBackend::new(
-                root,
-                &settings.cleanup_retry,
-            )?)),
+            Some(root) => {
+                let backend = Arc::new(xfs::XfsBackend::new(root, &settings.cleanup_retry)?);
+                settings
+                    .pressure
+                    .validate_capacity(backend.capacity().map_err(|error| {
+                        FilesystemStorageError::io(
+                            "validate managed XFS pressure capacity",
+                            root,
+                            error,
+                        )
+                    })?)?;
+                Some(backend)
+            }
             None => None,
         };
 
@@ -246,6 +260,7 @@ impl AgentFilesystems {
             deterministic_root: settings.deterministic_root_dir.clone(),
             cleanup_retry: settings.cleanup_retry.clone(),
             filesystem_object_limit_policy: settings.filesystem_object_limit_policy.clone(),
+            pressure: settings.pressure.clone(),
             #[cfg(target_os = "linux")]
             managed_xfs,
         })
@@ -488,6 +503,7 @@ impl AgentFilesystems {
                     project_id,
                 },
                 self.filesystem_object_limit_policy.clone(),
+                self.pressure.clone(),
             ),
             cleanup_retry: self.cleanup_retry.clone(),
             storage: AgentFilesystemStorage::Managed {
@@ -527,6 +543,7 @@ impl AgentFilesystems {
             runtime: AgentFilesystemRuntime::new(
                 AgentFilesystemMaterializer::Unmanaged { root: path.clone() },
                 self.filesystem_object_limit_policy.clone(),
+                self.pressure.clone(),
             ),
             cleanup_retry: self.cleanup_retry.clone(),
             storage: AgentFilesystemStorage::Unmanaged,
@@ -581,6 +598,7 @@ impl AgentFilesystems {
             runtime: AgentFilesystemRuntime::new(
                 AgentFilesystemMaterializer::Unmanaged { root: path.clone() },
                 self.filesystem_object_limit_policy.clone(),
+                self.pressure.clone(),
             ),
             cleanup_retry: self.cleanup_retry.clone(),
             storage: AgentFilesystemStorage::Unmanaged,
@@ -821,6 +839,7 @@ impl std::fmt::Debug for AgentFilesystemRuntime {
 
 struct AgentFilesystemRuntimeInner {
     state: AtomicUsize,
+    last_effect_completion_millis: std::sync::atomic::AtomicU64,
     drained: tokio::sync::Notify,
     append: Arc<Mutex<()>>,
     namespace: Arc<Mutex<()>>,
@@ -828,6 +847,7 @@ struct AgentFilesystemRuntimeInner {
     materializer: AgentFilesystemMaterializer,
     initial_files: std::sync::RwLock<HashMap<PathBuf, InitialAgentFile>>,
     filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
+    pressure: FilesystemPressureConfig,
     applied_limits: std::sync::RwLock<Option<ResolvedAgentFilesystemLimits>>,
     limit_exceeded: std::sync::Mutex<Option<FilesystemLimitExceededCallback>>,
     #[allow(
@@ -841,6 +861,7 @@ struct AgentFilesystemRuntimeInner {
     )]
     invalidated: std::sync::Mutex<Option<failure::AgentFilesystemInvalidationCallback>>,
     retry_permitted: std::sync::Mutex<Option<failure::AgentFilesystemRetryCallback>>,
+    pressure_recovery: std::sync::Mutex<Option<failure::AgentFilesystemPressureRecoveryCallback>>,
     #[cfg(test)]
     failure_observations:
         std::sync::RwLock<Option<(Option<AgentFilesystemUsage>, FilesystemCapacity)>>,
@@ -862,10 +883,12 @@ impl AgentFilesystemRuntime {
     fn new(
         materializer: AgentFilesystemMaterializer,
         filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
+        pressure: FilesystemPressureConfig,
     ) -> Self {
         Self {
             inner: Arc::new(AgentFilesystemRuntimeInner {
                 state: AtomicUsize::new(0),
+                last_effect_completion_millis: std::sync::atomic::AtomicU64::new(0),
                 drained: tokio::sync::Notify::new(),
                 append: Arc::new(Mutex::new(())),
                 namespace: Arc::new(Mutex::new(())),
@@ -873,11 +896,13 @@ impl AgentFilesystemRuntime {
                 materializer,
                 initial_files: std::sync::RwLock::new(HashMap::new()),
                 filesystem_object_limit_policy,
+                pressure,
                 applied_limits: std::sync::RwLock::new(None),
                 limit_exceeded: std::sync::Mutex::new(None),
                 invalidation_notified: AtomicBool::new(false),
                 invalidated: std::sync::Mutex::new(None),
                 retry_permitted: std::sync::Mutex::new(None),
+                pressure_recovery: std::sync::Mutex::new(None),
                 #[cfg(test)]
                 failure_observations: std::sync::RwLock::new(None),
             }),
@@ -909,6 +934,13 @@ impl AgentFilesystemRuntime {
                 root: PathBuf::from("<test>"),
             },
             FilesystemObjectLimitPolicyConfig::default(),
+            FilesystemPressureConfig {
+                minimum_available_bytes: 0,
+                target_available_bytes: 0,
+                minimum_available_filesystem_objects: 0,
+                target_available_filesystem_objects: 0,
+                ..FilesystemPressureConfig::default()
+            },
         );
         *runtime
             .inner
@@ -930,6 +962,13 @@ impl AgentFilesystemRuntime {
                 root: PathBuf::from("<missing-test-filesystem>"),
             },
             FilesystemObjectLimitPolicyConfig::default(),
+            FilesystemPressureConfig {
+                minimum_available_bytes: 0,
+                target_available_bytes: 0,
+                minimum_available_filesystem_objects: 0,
+                target_available_filesystem_objects: 0,
+                ..FilesystemPressureConfig::default()
+            },
         )
     }
 }

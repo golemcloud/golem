@@ -339,7 +339,7 @@ pub mod workers {
         .unwrap();
         pub static ref WORKER_ADMISSION_WAIT_SECONDS: HistogramVec = register_histogram_vec!(
             "worker_admission_wait_seconds",
-            "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory, filesystem_storage). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
+            "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
             &["executor_id", "phase"],
             crate::metrics::ADMISSION_WAIT_BUCKETS.to_vec()
         )
@@ -571,7 +571,6 @@ pub mod workers {
         ResolveComponentCharge,
         ConcurrencySlot,
         Memory,
-        FilesystemStorage,
     }
 
     impl AdmissionPhase {
@@ -580,7 +579,6 @@ pub mod workers {
                 AdmissionPhase::ResolveComponentCharge => "resolve_component_charge",
                 AdmissionPhase::ConcurrencySlot => "concurrency_slot",
                 AdmissionPhase::Memory => "memory",
-                AdmissionPhase::FilesystemStorage => "filesystem_storage",
             }
         }
     }
