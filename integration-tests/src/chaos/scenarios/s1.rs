@@ -89,6 +89,15 @@ use tracing::{info, warn};
 /// early would report a mismatch that says nothing about the platform.
 const SETTLE_BEFORE_READBACK: Duration = Duration::from_secs(30);
 
+/// How far into the fault window the `during-fault` assignment sample is taken,
+/// as a fraction of that window, and the ceiling on it.
+///
+/// The shard-manager reassigns a cut-off executor's shards only after it has
+/// missed enough health checks. Sampling at injection time would reliably show
+/// an unchanged table and prove nothing about the fault.
+const DURING_FAULT_SAMPLE_FRACTION: f64 = 0.6;
+const DURING_FAULT_SAMPLE_CAP: Duration = Duration::from_secs(120);
+
 /// Runs S1 end to end.
 pub async fn run(
     config: &ScenarioConfig,
@@ -138,6 +147,7 @@ pub async fn run(
     let mut fault_recovered_at = None;
     let mut fault_id = None;
     let mut fault_target_observed = None;
+    let mut inconclusive: Option<String> = None;
 
     macro_rules! finish {
         ($reason:expr, $records:expr, $readback:expr, $exactly_once:expr) => {{
@@ -148,6 +158,9 @@ pub async fn run(
                 fault_injected_at,
             )
             .with_ownership(ownership.clone());
+            if let Some(detail) = inconclusive.clone() {
+                summary.attention.push(detail);
+            }
             if let Some(report) = $exactly_once {
                 summary = summary.with_exactly_once(report);
             }
@@ -201,8 +214,46 @@ pub async fn run(
     } else if let Some(sample) = ownership.last() {
         info!(
             "S1: baseline assignment covers {} executors, {} shards unassigned",
-            sample.shards_per_executor.len(),
+            sample.executors_with_shards(),
             sample.unassigned_shards
+        );
+    }
+
+    // Refuse to inject a partition that cannot possibly be observed.
+    //
+    // The fault cuts the shard-manager off from `targetCount` executors chosen
+    // by label. If the routing table lists no more executors than that, the one
+    // picked either owns everything (and there is nowhere for its shards to go)
+    // or owns nothing (and losing it changes nothing) — either way the run
+    // produces a report that looks healthy and tested nothing.
+    //
+    // Executors owning zero shards are invisible here by construction: the
+    // routing table is a shard→pod map, so an executor with no shards has no
+    // entry. That is exactly the case worth catching, and it is what a real run
+    // hit — two executor pods Ready, one holding all 1024 shards, the other
+    // absent from the table and therefore a free target for the partition.
+    let partitioned = config.fault.target_count.unwrap_or(1) as usize;
+    if let Some(sample) = ownership.last()
+        && sample.unavailable_reason.is_none()
+        && sample.executors_with_shards() <= partitioned
+    {
+        warn!("S1: the configured partition cannot be observed, refusing to inject");
+        handle.stop().await;
+        let records = history.snapshot();
+        finish!(
+            TerminationReason::FaultTargetUnverified {
+                detail: format!(
+                    "the routing table lists {} executor(s) holding shards, but the fault \
+                     partitions {partitioned} of them — whichever is cut off, the assignment \
+                     cannot change and the run would prove nothing. Executors owning zero \
+                     shards do not appear in the routing table, so check that every \
+                     worker-executor pod has actually registered and been assigned shards.",
+                    sample.executors_with_shards()
+                ),
+            },
+            &records,
+            Vec::new(),
+            None
         );
     }
 
@@ -256,6 +307,19 @@ pub async fn run(
     // Evidence, not verdict: while the link is cut the two sides are *supposed*
     // to disagree, and a sample that showed them agreeing would mean the
     // partition never took hold.
+    //
+    // Taken part-way into the fault window, not the instant it lands. The
+    // shard-manager only reassigns once the cut-off executor has missed enough
+    // health checks, so sampling immediately would show an unchanged table for
+    // a reason that says nothing about the fault — and "unchanged" is exactly
+    // the reading this sample exists to support.
+    let observe_after = config
+        .phases
+        .fault()
+        .mul_f64(DURING_FAULT_SAMPLE_FRACTION)
+        .min(DURING_FAULT_SAMPLE_CAP);
+    info!("S1: sampling assignment {observe_after:?} into the fault window");
+    tokio::time::sleep(observe_after).await;
     ownership.push(sample_ownership(deps, "during-fault", ownership.last(), false).await);
 
     let recovered = match signals.await_fault_recovered(config.signal_timeout()).await {
@@ -289,7 +353,7 @@ pub async fn run(
     let settled = sample_ownership(deps, "after-settle", ownership.last(), true).await;
     info!(
         "S1: settled assignment covers {} executors, {} shards unassigned, {} findings",
-        settled.shards_per_executor.len(),
+        settled.executors_with_shards(),
         settled.unassigned_shards,
         settled.findings.len()
     );
@@ -341,6 +405,21 @@ pub async fn run(
         exactly_once.keys_recovered_by_probe,
         exactly_once.findings.len()
     );
+
+    // An assignment that never moved means the partition had no effect on
+    // routing at all, and a clean verdict then says only that an undisturbed
+    // cluster stayed consistent. Not a failure — the platform did nothing wrong
+    // — but the operator has to be told the run is inconclusive, so it goes in
+    // front of them rather than only into the artifact.
+    if let (Some(first), Some(during)) = (ownership.first(), ownership.get(1))
+        && during.assignment_matches(first)
+    {
+        inconclusive = Some(format!(
+            "the fault moved no shards: assignment was identical before and during it \
+             ({} executor(s) holding shards). This run did not exercise recovery.",
+            first.executors_with_shards()
+        ));
+    }
 
     // A key that executed twice is the observable consequence of two executors
     // owning one shard, and it is the only thing this scenario asserts.
@@ -541,6 +620,76 @@ mod tests {
             }
             other => panic!("expected a shard-ownership violation, got {other:?}"),
         }
+    }
+
+    /// The precondition that would have caught the real inconclusive run: a
+    /// partition of 1 of N executors proves nothing when the routing table
+    /// lists only one executor holding shards.
+    #[test]
+    fn a_partition_that_cannot_move_anything_is_refused() {
+        let one_executor = OwnershipSample {
+            at: "before-fault".to_string(),
+            taken_at: Utc::now(),
+            number_of_shards: Some(1024),
+            shards_per_executor: BTreeMap::from([("172.17.217.159:9093".to_string(), 1024usize)]),
+            unassigned_shards: 0,
+            unavailable_reason: None,
+            settled: false,
+            findings: Vec::new(),
+        };
+        assert_eq!(one_executor.executors_with_shards(), 1);
+        assert!(
+            one_executor.executors_with_shards() <= 1,
+            "partitioning 1 of 1 executors cannot change the assignment"
+        );
+
+        let two = OwnershipSample {
+            shards_per_executor: BTreeMap::from([
+                ("a:9093".to_string(), 512usize),
+                ("b:9093".to_string(), 512usize),
+            ]),
+            ..one_executor.clone()
+        };
+        assert!(two.executors_with_shards() > 1, "two is enough to observe");
+    }
+
+    /// An assignment identical before and during the fault means the partition
+    /// landed somewhere it could not matter.
+    #[test]
+    fn an_unchanged_assignment_across_the_fault_is_detected() {
+        let before = OwnershipSample {
+            at: "before-fault".to_string(),
+            taken_at: Utc::now(),
+            number_of_shards: Some(1024),
+            shards_per_executor: BTreeMap::from([("a:9093".to_string(), 1024usize)]),
+            unassigned_shards: 0,
+            unavailable_reason: None,
+            settled: false,
+            findings: Vec::new(),
+        };
+        let during = OwnershipSample {
+            at: "during-fault".to_string(),
+            ..before.clone()
+        };
+        assert!(during.assignment_matches(&before));
+
+        let moved = OwnershipSample {
+            shards_per_executor: BTreeMap::from([
+                ("a:9093".to_string(), 512usize),
+                ("b:9093".to_string(), 512usize),
+            ]),
+            ..during.clone()
+        };
+        assert!(!moved.assignment_matches(&before));
+    }
+
+    /// A sample that could not be taken must not read as "unchanged" — that
+    /// would turn an unreachable shard-manager into a false all-clear.
+    #[test]
+    fn an_unavailable_sample_never_counts_as_unchanged() {
+        let before = OwnershipSample::from_routing("before-fault", None, None, false);
+        let during = OwnershipSample::from_routing("during-fault", None, None, false);
+        assert!(!during.assignment_matches(&before));
     }
 
     /// Routing-table observations are context, never the verdict — the table

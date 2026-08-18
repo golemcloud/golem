@@ -261,6 +261,27 @@ impl OwnershipSample {
             .sum()
     }
 
+    /// Executors the shard-manager is currently routing to.
+    ///
+    /// Only executors holding at least one shard appear: the routing table is a
+    /// shard→pod map, so a registered executor that owns nothing has no entry.
+    /// That absence is the point — an executor with no shards is one a partition
+    /// can be aimed at without moving anything.
+    pub fn executors_with_shards(&self) -> usize {
+        self.shards_per_executor.len()
+    }
+
+    /// Whether this sample assigns shards exactly as `other` does.
+    ///
+    /// Used to notice that a fault changed nothing. Compares per-executor
+    /// totals, so it inherits the same blind spot as
+    /// [`Self::shards_moved_since`]: a symmetric swap reads as unchanged.
+    pub fn assignment_matches(&self, other: &OwnershipSample) -> bool {
+        self.unavailable_reason.is_none()
+            && other.unavailable_reason.is_none()
+            && self.shards_per_executor == other.shards_per_executor
+    }
+
     /// One-line summaries for the operator-facing attention list.
     ///
     /// Only from the settled sample, and never for reassignment. While the fault
