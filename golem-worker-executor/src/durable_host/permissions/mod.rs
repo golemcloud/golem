@@ -848,10 +848,51 @@ async fn durable_now<Ctx: WorkerCtx>(
         .ok_or_else(|| anyhow!("durable wall-clock timestamp is invalid"))
 }
 
-async fn persist_runtime_card<Ctx, Pair, DeriveCardId, BuildCard>(
+async fn complete_runtime_card_creation<Ctx, Pair>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    mut handle: CallHandle<Pair, NotCancellable>,
+    card: StoredCard,
+    provenance: CardManagedByRuntimeDerived,
+) -> anyhow::Result<HostResponsePermissionCardDerived>
+where
+    Ctx: WorkerCtx,
+    Pair: HostPayloadPair<
+            Req = HostRequestPermissionCardDerive,
+            Resp = HostResponsePermissionCardDerived,
+        >,
+{
+    let card_id = card.card_id();
+    let created = match ctx
+        .state
+        .card_service
+        .create_runtime_card(card, provenance)
+        .await
+    {
+        Ok(created) => created,
+        Err(error) => return Err(handle.trap(error)),
+    };
+    if created.card_id() != card_id {
+        return Err(handle.trap(anyhow!(
+            "runtime permission-card creation returned {}, expected {card_id}",
+            created.card_id()
+        )));
+    }
+    let card = serialize(&created).map_err(|err| {
+        handle.trap(anyhow!(
+            "failed to serialize runtime permission card {card_id}: {err}"
+        ))
+    })?;
+    handle
+        .complete(ctx, HostResponsePermissionCardDerived { card })
+        .await
+        .map_err(Into::into)
+}
+
+async fn persist_runtime_card<Ctx, Pair, DeriveCardId, BuildCard, RepairAuthorization>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     derive_card_id: DeriveCardId,
     build_card: BuildCard,
+    repair_authorization: RepairAuthorization,
 ) -> anyhow::Result<StoredCard>
 where
     Ctx: WorkerCtx,
@@ -861,6 +902,8 @@ where
         >,
     DeriveCardId: FnOnce(&DurableWorkerCtx<Ctx>, &IdempotencyKey, OplogIndex) -> CardId,
     BuildCard: FnOnce(CardId) -> StoredCard,
+    RepairAuthorization:
+        FnOnce(&mut DurableWorkerCtx<Ctx>) -> Result<(), permissions_types::PermissionError>,
 {
     let invocation_key = ctx
         .state
@@ -894,26 +937,26 @@ where
         begun.start_replay(ctx).await?
     };
 
-    let card_for_creation = card.clone();
-    let response = handle
-        .run(ctx, async move |ctx| {
-            let created = ctx
-                .state
-                .card_service
-                .create_runtime_card(card_for_creation, provenance)
-                .await?;
-            if created.card_id() != card_id {
-                return Err(anyhow!(
-                    "runtime permission-card creation returned {}, expected {card_id}",
-                    created.card_id()
-                ));
+    let response = if handle.is_live() {
+        complete_runtime_card_creation(ctx, handle, card.clone(), provenance).await?
+    } else {
+        match handle.replay(ctx).await? {
+            CallReplayOutcome::Replayed(response) => response,
+            CallReplayOutcome::Incomplete(mut handle) => {
+                let authorization = ctx
+                    .with_agent_authority_at_boundary(repair_authorization)
+                    .await;
+                match authorization {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        return Err(handle.trap(permission_error_to_anyhow(error)));
+                    }
+                    Err(error) => return Err(handle.trap(error)),
+                }
+                complete_runtime_card_creation(ctx, handle, card.clone(), provenance).await?
             }
-            let card = serialize(&created).map_err(|err| {
-                anyhow!("failed to serialize runtime permission card {card_id}: {err}")
-            })?;
-            Ok::<_, anyhow::Error>(HostResponsePermissionCardDerived { card })
-        })
-        .await?;
+        }
+    };
 
     let created: StoredCard = deserialize(&response.card)
         .map_err(|err| anyhow!("failed to deserialize runtime permission card {card_id}: {err}"))?;
@@ -960,14 +1003,42 @@ where
     Ok(created)
 }
 
+#[derive(Clone, Copy)]
+enum PersistentDerivationSource {
+    ExplicitCard,
+    Wallet,
+}
+
+fn ensure_persistent_derivation_repair_authority(
+    surface: &EffectiveSurface,
+    created_by_email: &AccountEmail,
+    parent_id: CardId,
+    source: PersistentDerivationSource,
+    parent_is_current_wallet_card: bool,
+) -> Result<(), permissions_types::PermissionError> {
+    ensure_card_permission_in_surface(
+        surface,
+        created_by_email,
+        CardVerb::Derive,
+        CardResourcePattern::Any,
+    )?;
+    if matches!(source, PersistentDerivationSource::Wallet) && !parent_is_current_wallet_card {
+        return Err(permissions_types::PermissionError::NotPermitted(format!(
+            "derive-from-wallet parent {parent_id} is no longer in the active wallet"
+        )));
+    }
+    Ok(())
+}
+
 async fn persist_derived_card<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     parent_id: CardId,
     grants: DerivedGrantSets,
     created_at: DateTime<Utc>,
     expires_at: Option<DateTime<Utc>>,
+    source: PersistentDerivationSource,
 ) -> anyhow::Result<Resource<PermissionCardHandleRep>> {
-    let created = persist_runtime_card::<Ctx, GolemPermissionsDerivePersist, _, _>(
+    let created = persist_runtime_card::<Ctx, GolemPermissionsDerivePersist, _, _, _>(
         ctx,
         |ctx, invocation_key, oplog_index| ctx.derive_card_id(invocation_key, oplog_index),
         |card_id| {
@@ -983,6 +1054,15 @@ async fn persist_derived_card<Ctx: WorkerCtx>(
                 system_card: false,
                 managed_by: None,
             })
+        },
+        move |ctx| {
+            ensure_persistent_derivation_repair_authority(
+                &ctx.state.agent_effective_surface,
+                &ctx.state.created_by_email,
+                parent_id,
+                source,
+                ctx.state.agent_wallet_cards.contains_key(&parent_id),
+            )
         },
     )
     .await?;
@@ -1004,7 +1084,9 @@ pub(crate) async fn persist_installed_child_card<Ctx: WorkerCtx>(
     target: &AgentPermissionMonomorphizationContext,
 ) -> anyhow::Result<StoredCard> {
     let created_at = durable_now(ctx).await?;
-    persist_runtime_card::<Ctx, GolemPermissionsInstallChildPersist, _, _>(
+    let source_card_id = source.card_id;
+    let target_recipient = agent_recipient_pattern(target);
+    persist_runtime_card::<Ctx, GolemPermissionsInstallChildPersist, _, _, _>(
         ctx,
         |ctx, invocation_key, oplog_index| {
             ctx.derive_installed_child_card_id(invocation_key, oplog_index)
@@ -1017,6 +1099,14 @@ pub(crate) async fn persist_installed_child_card<Ctx: WorkerCtx>(
                 created_at,
             ))
         },
+        move |ctx| {
+            ensure_install_permission_in_surface(
+                &ctx.state.agent_effective_surface,
+                &ctx.state.created_by_email,
+                source_card_id,
+                &target_recipient,
+            )
+        },
     )
     .await
 }
@@ -1026,13 +1116,14 @@ async fn derive_and_persist_card<Ctx: WorkerCtx>(
     parent: &Card,
     grants: DerivedGrantSets,
     lifespan: Option<&permissions_types::Duration>,
+    source: PersistentDerivationSource,
 ) -> anyhow::Result<Result<Resource<PermissionCardHandleRep>, permissions_types::PermissionError>> {
     let now = durable_now(ctx).await?;
     let expires_at = match derive_expires_at(now, lifespan, parent.expires_at) {
         Ok(expires_at) => expires_at,
         Err(error) => return Ok(Err(error)),
     };
-    persist_derived_card(ctx, parent.card_id, grants, now, expires_at)
+    persist_derived_card(ctx, parent.card_id, grants, now, expires_at, source)
         .await
         .map(Ok)
 }
@@ -2036,11 +2127,11 @@ pub(super) async fn complete_pending_source_card_transfers<Ctx: WorkerCtx>(
 
 fn ensure_revoke_authority(
     target_and_ancestor_ids: &[CardId],
-    active_wallet: &[StoredCard],
+    active_wallet_card_ids: &[CardId],
 ) -> Result<(), permissions_types::PermissionError> {
-    if active_wallet
+    if active_wallet_card_ids
         .iter()
-        .any(|card| target_and_ancestor_ids.contains(&card.card_id()))
+        .any(|card_id| target_and_ancestor_ids.contains(card_id))
     {
         Ok(())
     } else {
@@ -2051,16 +2142,27 @@ fn ensure_revoke_authority(
     }
 }
 
+fn capture_revoke_authority<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+) -> Result<Vec<CardId>, permissions_types::PermissionError> {
+    ensure_card_permission(ctx, CardVerb::Revoke, CardResourcePattern::Any)?;
+    Ok(ctx.state.agent_effective_surface.source_card_ids.clone())
+}
+
 async fn permission_card_revoke_response<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: &Resource<PermissionCardHandleRep>,
     card_id: CardId,
+    authority: Result<Vec<CardId>, permissions_types::PermissionError>,
 ) -> Result<HostResponsePermissionCardsRevoked, WorkerExecutorError> {
-    if let Err(error) = ensure_card_permission(ctx, CardVerb::Revoke, CardResourcePattern::Any) {
-        return Ok(HostResponsePermissionCardsRevoked {
-            result: Err(permission_error_to_revoke_error(error)?),
-        });
-    }
+    let active_wallet_card_ids = match authority {
+        Ok(card_ids) => card_ids,
+        Err(error) => {
+            return Ok(HostResponsePermissionCardsRevoked {
+                result: Err(permission_error_to_revoke_error(error)?),
+            });
+        }
+    };
     let card = match resolve_permission_card(ctx, handle).await {
         Ok(card) => card,
         Err(error) => {
@@ -2075,13 +2177,12 @@ async fn permission_card_revoke_response<Ctx: WorkerCtx>(
             card.card_id()
         )));
     }
-    let active_wallet = ctx.agent_wallet_cards_snapshot();
     let ancestor_ids = ctx
         .state
         .card_service
         .live_ancestor_ids_including_self(&card)
         .await?;
-    if let Err(error) = ensure_revoke_authority(&ancestor_ids, &active_wallet) {
+    if let Err(error) = ensure_revoke_authority(&ancestor_ids, &active_wallet_card_ids) {
         return Ok(HostResponsePermissionCardsRevoked {
             result: Err(permission_error_to_revoke_error(error)?),
         });
@@ -2122,8 +2223,10 @@ async fn complete_permission_card_revoke<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     card_handle: &Resource<PermissionCardHandleRep>,
     card_id: CardId,
+    authority: Result<Vec<CardId>, permissions_types::PermissionError>,
 ) -> anyhow::Result<HostResponsePermissionCardsRevoked> {
-    let response = match permission_card_revoke_response(ctx, card_handle, card_id).await {
+    let response = match permission_card_revoke_response(ctx, card_handle, card_id, authority).await
+    {
         Ok(response) => response,
         Err(error) => {
             handle.abandon_for_trap();
@@ -2159,19 +2262,38 @@ async fn revoke_and_persist_card<Ctx: WorkerCtx>(
         }
     };
     let card_id = CardId(snapshot.card_id);
-    let handle = CallHandle::<GolemPermissionsRevokePersist, NotCancellable>::start(
+    let (mut handle, captured_authority) = CallHandle::<
+        GolemPermissionsRevokePersist,
+        NotCancellable,
+    >::start_with_agent_authority_capture(
         ctx,
         HostRequestPermissionCardRevoke { card_id: card_id.0 },
         DurableFunctionType::WriteRemote,
+        capture_revoke_authority,
     )
     .await?;
     let response = if handle.is_live() {
-        complete_permission_card_revoke(handle, ctx, card_handle, card_id).await?
+        let Some(authority) = captured_authority else {
+            return Err(handle
+                .trap(WorkerExecutorError::runtime(
+                    "live permission-card revoke has no captured authority",
+                ))
+                .into());
+        };
+        complete_permission_card_revoke(handle, ctx, card_handle, card_id, authority).await?
     } else {
         match handle.replay(ctx).await? {
             CallReplayOutcome::Replayed(response) => response,
-            CallReplayOutcome::Incomplete(handle) => {
-                complete_permission_card_revoke(handle, ctx, card_handle, card_id).await?
+            CallReplayOutcome::Incomplete(mut handle) => {
+                let authority = match ctx
+                    .with_agent_authority_at_boundary(capture_revoke_authority)
+                    .await
+                {
+                    Ok(authority) => authority,
+                    Err(error) => return Err(handle.trap(error)),
+                };
+                complete_permission_card_revoke(handle, ctx, card_handle, card_id, authority)
+                    .await?
             }
         }
     };
@@ -2319,10 +2441,11 @@ impl<Ctx: WorkerCtx> permissions_inspect::Host for DurableWorkerCtx<Ctx> {
     {
         DurabilityHost::observe_function_call(self, "golem::permissions::inspect", "inspect-card");
         let result = async {
-            self.synchronize_agent_wallet_at_boundary()
-                .await
-                .map_err(worker_error_to_permission_error)?;
-            ensure_card_permission(self, CardVerb::Inspect, CardResourcePattern::Any)?;
+            self.with_agent_authority_at_boundary(|ctx| {
+                ensure_card_permission(ctx, CardVerb::Inspect, CardResourcePattern::Any)
+            })
+            .await
+            .map_err(worker_error_to_permission_error)??;
             let card = resolve_permission_card_handle(self, &c).await?;
             card_view(&card)
         }
@@ -2345,10 +2468,11 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive");
 
         async {
-            self.synchronize_agent_wallet_at_boundary()
-                .await
-                .map_err(worker_error_to_permission_error)?;
-            ensure_card_permission(self, CardVerb::Derive, CardResourcePattern::Any)?;
+            self.with_agent_authority_at_boundary(|ctx| {
+                ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)
+            })
+            .await
+            .map_err(worker_error_to_permission_error)??;
             let parent = resolve_permission_card_handle(self, &parent)
                 .await?
                 .into_persistent("derive")?;
@@ -2369,7 +2493,14 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
                 Ok(grants) => grants,
                 Err(error) => return Ok(Err(error)),
             };
-            derive_and_persist_card(self, &parent, grants, lifespan.as_ref()).await
+            derive_and_persist_card(
+                self,
+                &parent,
+                grants,
+                lifespan.as_ref(),
+                PersistentDerivationSource::ExplicitCard,
+            )
+            .await
         }
         .await
     }
@@ -2390,32 +2521,39 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         );
 
         async {
-            self.synchronize_agent_wallet_at_boundary()
-                .await
-                .map_err(worker_error_to_permission_error)?;
-            ensure_card_permission(self, CardVerb::Derive, CardResourcePattern::Any)?;
             let grants = parse_derived_grant_sets(
                 &lower_positive,
                 &lower_negative,
                 &upper_positive,
                 &upper_negative,
             )?;
-            let wallet = self.agent_wallet_cards_snapshot();
-            let Some(agent_id) = self.state.agent_id.as_ref() else {
-                return Ok(Err(permissions_types::PermissionError::NotPermitted(
-                    "derive-from-wallet is only available to an agent".to_string(),
-                )));
-            };
-            let context = super::agent_monomorphization_context(
-                &self.state.component_metadata,
-                &self.owned_agent_id,
-                agent_id,
-            );
-            let parent = match select_wallet_derivation_parent(&wallet, &context, &grants) {
-                Ok(parent) => parent,
-                Err(error) => return Ok(Err(error)),
-            };
-            derive_and_persist_card(self, &parent, grants, lifespan.as_ref()).await
+            let (wallet, context) = self
+                .with_agent_authority_at_boundary(|ctx| {
+                    ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
+                    let wallet = ctx.agent_wallet_cards_snapshot();
+                    let Some(agent_id) = ctx.state.agent_id.as_ref() else {
+                        return Err(permissions_types::PermissionError::NotPermitted(
+                            "derive-from-wallet is only available to an agent".to_string(),
+                        ));
+                    };
+                    let context = super::agent_monomorphization_context(
+                        &ctx.state.component_metadata,
+                        &ctx.owned_agent_id,
+                        agent_id,
+                    );
+                    Ok::<_, permissions_types::PermissionError>((wallet, context))
+                })
+                .await
+                .map_err(worker_error_to_permission_error)??;
+            let parent = select_wallet_derivation_parent(&wallet, &context, &grants)?;
+            derive_and_persist_card(
+                self,
+                &parent,
+                grants,
+                lifespan.as_ref(),
+                PersistentDerivationSource::Wallet,
+            )
+            .await
         }
         .await
     }
@@ -2432,16 +2570,20 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, "golem::permissions::derive", "derive-scope");
 
         let result = async {
-            self.synchronize_agent_wallet_at_boundary()
+            let (wallet, invocation_key) = self
+                .with_agent_authority_at_boundary(|ctx| {
+                    ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
+                    let wallet = ctx.agent_wallet_cards_snapshot();
+                    let invocation_key =
+                        ctx.state.get_current_idempotency_key().ok_or_else(|| {
+                            permissions_types::PermissionError::NotPermitted(
+                                "derive-scope requires an active invocation".to_string(),
+                            )
+                        })?;
+                    Ok::<_, permissions_types::PermissionError>((wallet, invocation_key))
+                })
                 .await
-                .map_err(worker_error_to_permission_error)?;
-            ensure_card_permission(self, CardVerb::Derive, CardResourcePattern::Any)?;
-            let wallet = self.agent_wallet_cards_snapshot();
-            let invocation_key = self.state.get_current_idempotency_key().ok_or_else(|| {
-                permissions_types::PermissionError::NotPermitted(
-                    "derive-scope requires an active invocation".to_string(),
-                )
-            })?;
+                .map_err(worker_error_to_permission_error)??;
             let parents =
                 resolve_scope_derivation_parents(self, &wallet, &parents, &invocation_key).await?;
             let grants = parse_derived_grant_sets(
@@ -2543,9 +2685,6 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), permissions_types::PermissionError>> {
         DurabilityHost::observe_function_call(self, "golem::permissions::wallet", "install-card");
         let result: anyhow::Result<Result<(), permissions_types::PermissionError>> = async {
-            self.synchronize_agent_wallet_at_boundary()
-                .await
-                .map_err(worker_error_to_permission_error)?;
             let target = match require_agent_install_target(target) {
                 Ok(target) => target,
                 Err(error) => return Ok(Err(error)),
@@ -2562,12 +2701,18 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 Err(error) => return Ok(Err(error)),
             };
             let target_recipient = agent_recipient_pattern(&target.context);
-            if let Err(error) = ensure_install_permission_in_surface(
-                &self.state.agent_effective_surface,
-                &self.state.created_by_email,
-                source_card.card_id(),
-                &target_recipient,
-            ) {
+            if let Err(error) = self
+                .with_agent_authority_at_boundary(|ctx| {
+                    ensure_install_permission_in_surface(
+                        &ctx.state.agent_effective_surface,
+                        &ctx.state.created_by_email,
+                        source_card.card_id(),
+                        &target_recipient,
+                    )
+                })
+                .await
+                .map_err(worker_error_to_permission_error)?
+            {
                 return Ok(Err(error));
             }
             if !card_matches_agent_recipient(&source_card, &target.context) {
@@ -2639,6 +2784,23 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                         transfer = CardTransferData::from_request(
                             load_card_transfer_request(self, start_index).await?,
                         )?;
+                        let authorization = self
+                            .with_agent_authority_at_boundary(|ctx| {
+                                ensure_install_permission_in_surface(
+                                    &ctx.state.agent_effective_surface,
+                                    &ctx.state.created_by_email,
+                                    transfer.source_card.card_id(),
+                                    &target_recipient,
+                                )
+                            })
+                            .await;
+                        match authorization {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                return Err(handle.trap(permission_error_to_anyhow(error)));
+                            }
+                            Err(error) => return Err(handle.trap(error)),
+                        }
                     }
                 }
             }
@@ -3167,6 +3329,44 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_wallet_derivation_requires_its_parent_to_still_be_current() {
+        let account = AccountEmail::from("alice@example.com");
+        let surface = derive_authorization_surface();
+        let parent_id = CardId::new();
+
+        assert!(
+            ensure_persistent_derivation_repair_authority(
+                &surface,
+                &account,
+                parent_id,
+                PersistentDerivationSource::Wallet,
+                true,
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            ensure_persistent_derivation_repair_authority(
+                &surface,
+                &account,
+                parent_id,
+                PersistentDerivationSource::Wallet,
+                false,
+            ),
+            Err(permissions_types::PermissionError::NotPermitted(_))
+        ));
+        assert!(
+            ensure_persistent_derivation_repair_authority(
+                &surface,
+                &account,
+                parent_id,
+                PersistentDerivationSource::ExplicitCard,
+                false,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn revoke_requires_possession_of_the_target_or_a_live_ancestor() {
         let target = wallet_parent(3, &valid_filesystem_grant());
         let ancestor = wallet_parent(2, &valid_filesystem_grant());
@@ -3178,13 +3378,24 @@ mod tests {
         ];
 
         assert!(
-            ensure_revoke_authority(&target_and_ancestors, std::slice::from_ref(&target)).is_ok()
+            ensure_revoke_authority(
+                &target_and_ancestors,
+                std::slice::from_ref(&target.card_id()),
+            )
+            .is_ok()
         );
         assert!(
-            ensure_revoke_authority(&target_and_ancestors, std::slice::from_ref(&ancestor)).is_ok()
+            ensure_revoke_authority(
+                &target_and_ancestors,
+                std::slice::from_ref(&ancestor.card_id()),
+            )
+            .is_ok()
         );
         assert!(matches!(
-            ensure_revoke_authority(&target_and_ancestors, std::slice::from_ref(&unrelated)),
+            ensure_revoke_authority(
+                &target_and_ancestors,
+                std::slice::from_ref(&unrelated.card_id()),
+            ),
             Err(permissions_types::PermissionError::NotPermitted(_))
         ));
         assert!(matches!(

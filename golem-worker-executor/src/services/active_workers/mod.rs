@@ -42,7 +42,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug};
 
 use crate::services::HasAll;
-use crate::services::card_interest::CardInterestIndex;
+use crate::services::card_interest::{
+    CardAuthorityRecoveryEpoch, CardAuthorityRecoveryFinalize, CardInterestIndex,
+};
 use crate::services::golem_config::{
     AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
@@ -283,6 +285,33 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
     pub async fn tracked_card_ids(&self) -> Vec<CardId> {
         self.card_interest_index.tracked_card_ids().await
+    }
+
+    pub(crate) fn close_card_authority(&self) -> CardAuthorityRecoveryEpoch {
+        self.card_interest_index.close_authority()
+    }
+
+    pub(crate) fn is_current_card_authority_recovery(
+        &self,
+        epoch: CardAuthorityRecoveryEpoch,
+    ) -> bool {
+        self.card_interest_index.is_current_recovery(epoch)
+    }
+
+    pub(crate) async fn tracked_card_ids_with_revision(&self) -> (u64, Vec<CardId>) {
+        self.card_interest_index
+            .tracked_card_ids_with_revision()
+            .await
+    }
+
+    pub(crate) async fn finalize_card_authority_recovery(
+        &self,
+        epoch: CardAuthorityRecoveryEpoch,
+        expected_interest_revision: u64,
+    ) -> CardAuthorityRecoveryFinalize {
+        self.card_interest_index
+            .finalize_recovery(epoch, expected_interest_revision)
+            .await
     }
 
     pub async fn notify_revoked_cards(&self, card_ids: &[CardId]) {

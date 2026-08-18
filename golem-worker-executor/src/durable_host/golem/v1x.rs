@@ -226,14 +226,35 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<bool> {
         let promise_id: PromiseId = promise_id.into();
 
-        let mut handle = CallHandle::<GolemApiCompletePromise, NotCancellable>::start(
-            self,
-            HostRequestGolemApiPromiseId {
-                promise_id: promise_id.clone(),
-            },
-            DurableFunctionType::WriteLocal,
-        )
-        .await?;
+        let initial_is_local_worker = if self.state.is_live() {
+            Some(
+                match self.state.shard_service.check_worker(&promise_id.agent_id) {
+                    Ok(()) => true,
+                    Err(WorkerExecutorError::InvalidShardId { .. }) => false,
+                    Err(other) => return Err(other.into()),
+                },
+            )
+        } else {
+            None
+        };
+        let request = HostRequestGolemApiPromiseId {
+            promise_id: promise_id.clone(),
+        };
+        let mut handle = if initial_is_local_worker == Some(false) {
+            CallHandle::<GolemApiCompletePromise, NotCancellable>::start_with_agent_authority(
+                self,
+                request,
+                DurableFunctionType::WriteLocal,
+            )
+            .await?
+        } else {
+            CallHandle::<GolemApiCompletePromise, NotCancellable>::start(
+                self,
+                request,
+                DurableFunctionType::WriteLocal,
+            )
+            .await?
+        };
 
         let result = 'result: {
             if !handle.is_live() {
@@ -246,12 +267,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // A promise must be completed on the instance that is owning the agent that originally created here.
             let agent_id = &promise_id.agent_id;
 
-            let is_local_worker = match self.state.shard_service.check_worker(agent_id) {
-                Ok(()) => true,
-                Err(WorkerExecutorError::InvalidShardId { .. }) => false,
-                Err(other) => {
-                    return Err(handle.trap(other));
-                }
+            let is_local_worker = match initial_is_local_worker {
+                Some(is_local_worker) => is_local_worker,
+                None => match self.state.shard_service.check_worker(agent_id) {
+                    Ok(()) => true,
+                    Err(WorkerExecutorError::InvalidShardId { .. }) => false,
+                    Err(other) => {
+                        return Err(handle.trap(other));
+                    }
+                },
             };
 
             let promise_completion_result = if is_local_worker {
@@ -268,10 +292,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             } else {
                 // talk to the executor that actually owns the promise
+                let newly_captured_auth_ctx = if initial_is_local_worker == Some(false) {
+                    None
+                } else {
+                    Some(match self.capture_agent_auth_ctx_at_boundary().await {
+                        Ok(Some(auth_ctx)) => auth_ctx,
+                        Ok(None) => {
+                            return Err(handle.trap(WorkerExecutorError::runtime(
+                                "remote promise completion did not switch to live execution",
+                            )));
+                        }
+                        Err(error) => return Err(handle.trap(error)),
+                    })
+                };
+                let auth_ctx = newly_captured_auth_ctx
+                    .as_ref()
+                    .unwrap_or_else(|| handle.agent_auth_ctx());
                 match self
                     .state
                     .worker_proxy
-                    .complete_promise(promise_id.clone(), data, &self.agent_auth_ctx())
+                    .complete_promise(promise_id.clone(), data, auth_ctx)
                     .await
                 {
                     Ok(completed) => completed,
@@ -730,16 +770,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let target_revision: ComponentRevision =
             target_version.try_into().map_err(|e: String| anyhow!(e))?;
 
-        let mut handle = CallHandle::<GolemApiUpdateWorker, NotCancellable>::start(
-            self,
-            HostRequestGolemApiUpdateAgent {
-                agent_id,
-                target_revision,
-                mode,
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut handle =
+            CallHandle::<GolemApiUpdateWorker, NotCancellable>::start_with_agent_authority(
+                self,
+                HostRequestGolemApiUpdateAgent {
+                    agent_id,
+                    target_revision,
+                    mode,
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
         let result = 'result: {
             if !handle.is_live() {
@@ -759,7 +800,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         target_revision,
                         mode,
                         false,
-                        &self.agent_auth_ctx(),
+                        handle.agent_auth_ctx(),
                     )
                     .await;
                 match handle
@@ -865,16 +906,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let oplog_index_cut_off: OplogIndex = OplogIndex::from_u64(oplog_idx_cut_off);
 
-        let mut handle = CallHandle::<GolemApiForkWorker, NotCancellable>::start(
-            self,
-            HostRequestGolemApiForkAgent {
-                source_agent_id: source_agent_id.clone(),
-                target_agent_id: target_agent_id.clone(),
-                oplog_index_cut_off,
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut handle =
+            CallHandle::<GolemApiForkWorker, NotCancellable>::start_with_agent_authority(
+                self,
+                HostRequestGolemApiForkAgent {
+                    source_agent_id: source_agent_id.clone(),
+                    target_agent_id: target_agent_id.clone(),
+                    oplog_index_cut_off,
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
         let result = 'result: {
             if !handle.is_live() {
@@ -893,7 +935,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &source_agent_id,
                         &target_agent_id,
                         &oplog_index_cut_off,
-                        &self.agent_auth_ctx(),
+                        handle.agent_auth_ctx(),
                     )
                     .await;
                 match handle
@@ -926,15 +968,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let agent_id: AgentId = agent_id.into();
         let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
 
-        let mut handle = CallHandle::<GolemApiRevertWorker, NotCancellable>::start(
-            self,
-            HostRequestGolemApiRevertAgent {
-                agent_id: agent_id.clone(),
-                target: target.clone(),
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut handle =
+            CallHandle::<GolemApiRevertWorker, NotCancellable>::start_with_agent_authority(
+                self,
+                HostRequestGolemApiRevertAgent {
+                    agent_id: agent_id.clone(),
+                    target: target.clone(),
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
         let result = 'result: {
             if !handle.is_live() {
@@ -948,7 +991,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = loop {
                 let result = self
                     .worker_proxy()
-                    .revert(&agent_id, target.clone(), &self.agent_auth_ctx())
+                    .revert(&agent_id, target.clone(), handle.agent_auth_ctx())
                     .await;
                 match handle
                     .try_trigger_retry_or_loop_with_properties(
@@ -1099,7 +1142,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn fork(&mut self) -> anyhow::Result<ForkResult> {
-        let mut handle = CallHandle::<GolemApiFork, NotCancellable>::start(
+        let mut handle = CallHandle::<GolemApiFork, NotCancellable>::start_with_agent_authority(
             self,
             HostRequestNoInput {},
             DurableFunctionType::WriteRemote,
@@ -1164,7 +1207,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         oplog_index_cut_off,
                         copied_scope_start,
                         forked_phantom_id,
-                        &self.agent_auth_ctx(),
+                        handle.agent_auth_ctx(),
                     )
                     .await;
                 match handle

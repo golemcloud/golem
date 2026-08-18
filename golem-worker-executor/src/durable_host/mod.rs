@@ -1113,7 +1113,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn active_agent_wallet_cards_snapshot(
         &mut self,
     ) -> Result<Vec<StoredCard>, WorkerExecutorError> {
-        let _boundary_guard = self.lock_synchronized_card_event_boundary().await?;
+        let _boundary_guard = self
+            .lock_synchronized_card_event_boundary_with_authority()
+            .await?;
         if self.state.is_replay() {
             return Ok(self.agent_wallet_cards_snapshot());
         }
@@ -1162,9 +1164,73 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
+    pub(crate) async fn capture_agent_auth_ctx_at_boundary(
+        &mut self,
+    ) -> Result<Option<AuthCtx>, WorkerExecutorError> {
+        self.capture_live_agent_authority_at_boundary(&mut |ctx| ctx.agent_auth_ctx())
+            .await
+    }
+
+    pub(crate) async fn capture_live_agent_authority_at_boundary<T>(
+        &mut self,
+        capture: &mut impl FnMut(&mut Self) -> T,
+    ) -> Result<Option<T>, WorkerExecutorError> {
+        let _boundary_guard = self
+            .lock_synchronized_card_event_boundary_with_authority()
+            .await?;
+        Ok(self.state.is_live().then(|| capture(self)))
+    }
+
+    pub(crate) async fn with_agent_authority_at_boundary<T>(
+        &mut self,
+        capture: impl FnOnce(&mut Self) -> T,
+    ) -> Result<T, WorkerExecutorError> {
+        let _boundary_guard = self
+            .lock_synchronized_card_event_boundary_with_authority()
+            .await?;
+        Ok(capture(self))
+    }
+
+    pub(crate) async fn try_agent_auth_ctx_at_boundary(
+        &mut self,
+    ) -> Result<Option<AuthCtx>, WorkerExecutorError> {
+        let Some(_boundary_guard) = self
+            .try_lock_synchronized_card_event_boundary_with_authority()
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(self.agent_auth_ctx()))
+    }
+
     async fn lock_synchronized_card_event_boundary(
         &mut self,
     ) -> Result<tokio::sync::OwnedMutexGuard<()>, WorkerExecutorError> {
+        self.lock_synchronized_card_event_boundary_inner(false, true)
+            .await?
+            .ok_or_else(|| WorkerExecutorError::runtime("unrestricted card boundary was closed"))
+    }
+
+    async fn lock_synchronized_card_event_boundary_with_authority(
+        &mut self,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, WorkerExecutorError> {
+        self.lock_synchronized_card_event_boundary_inner(true, true)
+            .await?
+            .ok_or_else(|| WorkerExecutorError::runtime("card authority boundary did not reopen"))
+    }
+
+    async fn try_lock_synchronized_card_event_boundary_with_authority(
+        &mut self,
+    ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, WorkerExecutorError> {
+        self.lock_synchronized_card_event_boundary_inner(true, false)
+            .await
+    }
+
+    async fn lock_synchronized_card_event_boundary_inner(
+        &mut self,
+        requires_agent_authority: bool,
+        wait_for_authority: bool,
+    ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, WorkerExecutorError> {
         loop {
             let boundary_guard = self
                 .state
@@ -1172,15 +1238,42 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .clone()
                 .lock_owned()
                 .await;
+            let authority_checked = requires_agent_authority && self.state.is_live();
+            if authority_checked && !self.state.card_interest_index.authority_is_open() {
+                drop(boundary_guard);
+                if !wait_for_authority {
+                    return Ok(None);
+                }
+                self.state
+                    .card_interest_index
+                    .wait_until_authority_open()
+                    .await;
+                continue;
+            }
             self.process_pending_replay_events_locked().await?;
             self.drain_card_events_at_boundary().await?;
+            if requires_agent_authority
+                && !authority_checked
+                && self.state.is_live()
+                && !self.state.card_interest_index.authority_is_open()
+            {
+                drop(boundary_guard);
+                if !wait_for_authority {
+                    return Ok(None);
+                }
+                self.state
+                    .card_interest_index
+                    .wait_until_authority_open()
+                    .await;
+                continue;
+            }
             let retries = if self.has_pending_source_card_transfers_at_boundary() {
                 permissions::prepare_pending_source_card_transfers(self).await?
             } else {
                 Vec::new()
             };
             if retries.is_empty() {
-                return Ok(boundary_guard);
+                return Ok(Some(boundary_guard));
             }
             // Delivery acquires the target worker's boundary lock. Release the source lock to
             // avoid self-transfer and opposite-direction transfer deadlocks, then loop so no
@@ -3901,7 +3994,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let interested_card_ids = self.interested_card_ids();
         self.refresh_card_interest().await;
 
-        if interested_card_ids.is_empty() {
+        if interested_card_ids.is_empty() || !self.state.card_interest_index.authority_is_open() {
             return Ok(());
         }
 

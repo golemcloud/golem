@@ -15,6 +15,7 @@
 use super::*;
 use crate::services::card::CardState;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
+use golem_service_base::model::auth::AuthCtx;
 
 pub(super) fn ambient_trap_context<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
@@ -145,6 +146,12 @@ pub struct CallHandle<Pair: HostPayloadPair, P: DropPolicy> {
     /// In-function retry decision logic. Also the home of the call's `DurableFunctionType` and
     /// captured `DurableExecutionState`.
     pub(super) retry: InFunctionRetryController,
+    /// Whether switching this call to live execution requires a recovered, synchronized agent
+    /// permission-card authority boundary.
+    pub(super) requires_agent_authority: bool,
+    /// The authority snapshot captured at the same boundary that admitted live execution.
+    /// Replay handles acquire it only if an incomplete call switches back to live execution.
+    pub(super) agent_auth_ctx: Option<AuthCtx>,
     /// Policy-controlled sink for unfinished drops, from [`DropPolicy::production_drop_sink`]:
     /// the worker's dropped-call event sender for `Cancellable`/`LeaveIncompleteOnDrop`, `None`
     /// for `NotCancellable`. Unit tests attach their own sink to observe drop events.
@@ -566,7 +573,40 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         request: Pair::Req,
         function_type: DurableFunctionType,
     ) -> Result<Self, WorkerExecutorError> {
-        let begun = Self::begin(ctx, function_type).await?;
+        Self::start_inner(ctx, request, function_type, false).await
+    }
+
+    pub async fn start_with_agent_authority<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+    ) -> Result<Self, WorkerExecutorError> {
+        Self::start_inner(ctx, request, function_type, true).await
+    }
+
+    pub async fn start_with_agent_authority_capture<Ctx: WorkerCtx, T>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> T,
+    ) -> Result<(Self, Option<T>), WorkerExecutorError> {
+        let (begun, captured) =
+            Self::begin_with_agent_authority_capture(ctx, function_type, capture).await?;
+        let handle = if begun.is_live() {
+            begun.start_live(ctx, request).await?
+        } else {
+            begun.start_replay(ctx).await?
+        };
+        Ok((handle, captured))
+    }
+
+    async fn start_inner<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        requires_agent_authority: bool,
+    ) -> Result<Self, WorkerExecutorError> {
+        let begun = Self::begin_inner(ctx, function_type, requires_agent_authority).await?;
         if begun.is_live() {
             begun.start_live(ctx, request).await
         } else {
@@ -1298,6 +1338,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             parked_undelivered_replay: false,
             execution_scope: executed.execution_scope,
             retry: executed.retry,
+            requires_agent_authority: false,
+            agent_auth_ctx: None,
             drop_sink: executed.drop_sink,
             cleanup_sink: executed.cleanup_sink,
             // Taken at prepare time (or at the replay→live switch), before this call's first
@@ -1329,6 +1371,43 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
     ) -> Result<BegunCall<Pair, P>, WorkerExecutorError> {
+        Self::begin_inner(ctx, function_type, false).await
+    }
+
+    pub async fn begin_with_agent_authority<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+    ) -> Result<BegunCall<Pair, P>, WorkerExecutorError> {
+        Self::begin_inner(ctx, function_type, true).await
+    }
+
+    async fn begin_with_agent_authority_capture<Ctx: WorkerCtx, T>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> T,
+    ) -> Result<(BegunCall<Pair, P>, Option<T>), WorkerExecutorError> {
+        drain_queued_dropped_call_events(ctx)
+            .await
+            .map_err(|err| err.source)?;
+        DurabilityHost::observe_function_call(ctx, Pair::INTERFACE, Pair::FUNCTION);
+        let (begin_index, captured) = ctx
+            .begin_durable_function_with_agent_authority_capture(
+                &function_type,
+                Pair::FQFN,
+                capture,
+            )
+            .await?;
+        Ok((
+            Self::finish_begin(ctx, function_type, begin_index, false, None),
+            captured,
+        ))
+    }
+
+    async fn begin_inner<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        requires_agent_authority: bool,
+    ) -> Result<BegunCall<Pair, P>, WorkerExecutorError> {
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(|err| err.source)?;
@@ -1336,9 +1415,34 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
 
         // Read-only guard, pending replay events and durable-scope open all happen inside
         // `begin_durable_function`.
-        let begin_index = ctx
-            .begin_durable_function(&function_type, Pair::FQFN)
-            .await?;
+        let (begin_index, agent_auth_ctx) = if requires_agent_authority {
+            let (begin_index, auth_ctx) = ctx
+                .begin_durable_function_with_agent_authority(&function_type, Pair::FQFN)
+                .await?;
+            (begin_index, auth_ctx)
+        } else {
+            (
+                ctx.begin_durable_function(&function_type, Pair::FQFN)
+                    .await?,
+                None,
+            )
+        };
+        Ok(Self::finish_begin(
+            ctx,
+            function_type,
+            begin_index,
+            requires_agent_authority,
+            agent_auth_ctx,
+        ))
+    }
+
+    fn finish_begin<Ctx: WorkerCtx>(
+        ctx: &DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        begin_index: OplogIndex,
+        requires_agent_authority: bool,
+        agent_auth_ctx: Option<AuthCtx>,
+    ) -> BegunCall<Pair, P> {
         let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
         let execution_scope = BegunCallExecutionScope {
             parent_start_index: ctx
@@ -1354,14 +1458,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
 
-        Ok(BegunCall {
+        BegunCall {
             begin_index,
             execution_scope,
             retry,
+            requires_agent_authority,
+            agent_auth_ctx,
             drop_sink: P::production_drop_sink(ctx.state.dropped_call_event_sender()),
             cleanup_sink: ctx.state.dropped_call_event_sender(),
             _phantom: PhantomData,
-        })
+        }
     }
 
     pub fn is_live(&self) -> bool {
@@ -1378,6 +1484,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     /// derivation).
     pub fn begin_index(&self) -> OplogIndex {
         self.begin_index
+    }
+
+    pub fn agent_auth_ctx(&self) -> &AuthCtx {
+        self.agent_auth_ctx
+            .as_ref()
+            .expect("agent authority context requested from a call without live agent authority")
+    }
+
+    pub fn take_agent_auth_ctx(&mut self) -> AuthCtx {
+        self.agent_auth_ctx
+            .take()
+            .expect("agent authority context requested from a call without live agent authority")
     }
 
     /// Low-level abandon: marks the call as finished without writing anything to the oplog, leaving
@@ -2005,6 +2123,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     || ctx.state.live_host_call_counter(),
                 )?;
+                if self.requires_agent_authority {
+                    match ctx.capture_agent_auth_ctx_at_boundary().await {
+                        Ok(Some(auth_ctx)) => self.agent_auth_ctx = Some(auth_ctx),
+                        Ok(None) => {
+                            self.abandon_for_trap();
+                            return Err(WorkerExecutorError::runtime(
+                                "incomplete authority-bearing call did not switch to live execution",
+                            ));
+                        }
+                        Err(error) => {
+                            self.abandon_for_trap();
+                            return Err(error);
+                        }
+                    }
+                }
                 Ok(CallReplayOutcome::Incomplete(self))
             }
         }
@@ -2074,9 +2207,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         })
                     },
                 )?;
-                if let Err(error) =
+                let synchronization = if self.requires_agent_authority {
+                    match agent_auth_ctx_at_serialized_access(store, get_ctx).await {
+                        Ok(auth_ctx) => {
+                            self.agent_auth_ctx = Some(auth_ctx);
+                            Ok(())
+                        }
+                        Err(error) => Err(error),
+                    }
+                } else {
                     synchronize_agent_wallet_at_serialized_access(store, get_ctx).await
-                {
+                };
+                if let Err(error) = synchronization {
                     self.abandon_for_trap();
                     return Err(error);
                 }
@@ -2176,9 +2318,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         })
                     },
                 )?;
-                if let Err(error) =
+                let synchronization = if self.requires_agent_authority {
+                    match agent_auth_ctx_at_serialized_access(store, get_ctx).await {
+                        Ok(auth_ctx) => {
+                            self.agent_auth_ctx = Some(auth_ctx);
+                            Ok(())
+                        }
+                        Err(error) => Err(error),
+                    }
+                } else {
                     synchronize_agent_wallet_at_serialized_access(store, get_ctx).await
-                {
+                };
+                if let Err(error) = synchronization {
                     self.abandon_for_trap();
                     return Err(error);
                 }
@@ -2931,10 +3082,63 @@ where
     Ok(())
 }
 
+pub(crate) async fn try_agent_auth_ctx_at_serialized_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<Option<AuthCtx>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let Some(_boundary_guard) =
+        lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, false).await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(store.with(|mut access| {
+        get_ctx(access.data_mut()).agent_auth_ctx()
+    })))
+}
+
+pub(crate) async fn agent_auth_ctx_at_serialized_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<AuthCtx, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let _boundary_guard =
+        lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, true)
+            .await?
+            .expect("waiting authority boundary always returns a guard");
+    Ok(store.with(|mut access| get_ctx(access.data_mut()).agent_auth_ctx()))
+}
+
 async fn lock_synchronized_card_event_boundary_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
 ) -> Result<tokio::sync::OwnedMutexGuard<()>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    Ok(
+        lock_synchronized_card_event_boundary_access_inner(store, get_ctx, false, true)
+            .await?
+            .expect("unrestricted card boundary always returns a guard"),
+    )
+}
+
+async fn lock_synchronized_card_event_boundary_access_inner<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    requires_agent_authority: bool,
+    wait_for_authority: bool,
+) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, WorkerExecutorError>
 where
     T: 'static,
     D: HasData + ?Sized,
@@ -2948,7 +3152,37 @@ where
     });
     loop {
         let boundary_guard = boundary_lock.clone().lock_owned().await;
+        let (authority_checked, authority_open, card_interest_index) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                requires_agent_authority && ctx.state.is_live(),
+                ctx.state.card_interest_index.authority_is_open(),
+                ctx.state.card_interest_index.clone(),
+            )
+        });
+        if authority_checked && !authority_open {
+            drop(boundary_guard);
+            if !wait_for_authority {
+                return Ok(None);
+            }
+            card_interest_index.wait_until_authority_open().await;
+            continue;
+        }
         synchronize_agent_wallet_at_boundary_access(store, get_ctx).await?;
+        if requires_agent_authority && !authority_checked {
+            let authority_open_after_replay = store.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                !ctx.state.is_live() || ctx.state.card_interest_index.authority_is_open()
+            });
+            if !authority_open_after_replay {
+                drop(boundary_guard);
+                if !wait_for_authority {
+                    return Ok(None);
+                }
+                card_interest_index.wait_until_authority_open().await;
+                continue;
+            }
+        }
         let has_pending_source_transfer = store.with(|mut access| {
             get_ctx(access.data_mut())
                 .state
@@ -2966,7 +3200,7 @@ where
             Vec::new()
         };
         if retries.is_empty() {
-            return Ok(boundary_guard);
+            return Ok(Some(boundary_guard));
         }
         // Target delivery takes the target worker's boundary lock. Release the source lock while
         // delivering, then reconcile again before returning the guard that protects live Start.
@@ -4172,6 +4406,8 @@ pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
     begin_index: OplogIndex,
     execution_scope: BegunCallExecutionScope,
     retry: InFunctionRetryController,
+    requires_agent_authority: bool,
+    agent_auth_ctx: Option<AuthCtx>,
     drop_sink: Option<UnboundedSender<DropEvent>>,
     cleanup_sink: Option<UnboundedSender<DropEvent>>,
     _phantom: PhantomData<(Pair, P)>,
@@ -4276,6 +4512,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             parked_undelivered_replay: false,
             execution_scope,
             retry: self.retry,
+            requires_agent_authority: self.requires_agent_authority,
+            agent_auth_ctx: self.agent_auth_ctx,
             drop_sink: self.drop_sink,
             cleanup_sink: self.cleanup_sink,
             live_call_permit: Some(LiveCallPermit::new(ctx.state.live_host_call_counter())),
@@ -4322,6 +4560,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             parked_undelivered_replay: false,
             execution_scope,
             retry: self.retry,
+            requires_agent_authority: self.requires_agent_authority,
+            agent_auth_ctx: self.agent_auth_ctx,
             drop_sink: self.drop_sink,
             cleanup_sink: self.cleanup_sink,
             live_call_permit: None,
