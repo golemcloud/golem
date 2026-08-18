@@ -73,7 +73,7 @@ pub async fn run(
     let started_at = Utc::now();
     let workload_config = config.require_workload()?;
     let history = OperationHistory::new(ScenarioCode::S12.as_str());
-    let key_prefix = format!("chaos-{}", ScenarioCode::S12.as_str().to_lowercase());
+    let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S12);
 
     let user = manifest.user_context(deps);
     let counters = user

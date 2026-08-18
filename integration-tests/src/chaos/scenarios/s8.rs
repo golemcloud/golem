@@ -90,7 +90,7 @@ pub async fn run(
     let started_at = Utc::now();
     let pinned_config = config.require_pinned()?;
     let history = OperationHistory::new(ScenarioCode::S8.as_str());
-    let key_prefix = format!("chaos-{}", ScenarioCode::S8.as_str().to_lowercase());
+    let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S8);
 
     let user = manifest.user_context(deps);
     let counters = user

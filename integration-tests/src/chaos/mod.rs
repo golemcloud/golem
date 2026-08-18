@@ -88,6 +88,58 @@ impl std::fmt::Display for ScenarioCode {
     }
 }
 
+/// Environment variable carrying a value unique to one *invocation* of a
+/// scenario, set by the workflow.
+pub const RUN_NONCE_ENV: &str = "GOLEM_CHAOS_RUN_NONCE";
+
+/// The prefix every agent id and idempotency key of one scenario invocation
+/// shares.
+///
+/// The scenario code alone is not enough, and getting this wrong is silent
+/// rather than loud. Idempotency keys are deterministic *by design* — that is
+/// what makes a retry the same operation to the platform, and it is the whole
+/// basis of the duplicate-execution checks. But determinism across a *resumed
+/// run* is a different thing entirely: the resume path reuses the prep
+/// manifest, so the same account, components and agent names come back, and
+/// without a per-invocation component every key would collide with the previous
+/// invocation's.
+///
+/// The platform would then replay stored results instead of executing anything,
+/// and the run would be worse than useless:
+///
+/// * S8 would find every key already complete and report `0 findings` with a
+///   probe that executed nothing — a perfect-looking result that tested nothing.
+/// * S12 and S1 would count those replays as confirmed while the durable
+///   counters never moved, and read-back would report **lost work** that never
+///   happened.
+///
+/// The nonce goes *after* the scenario code so that the documented trace
+/// queries (`span.idempotency_key=~"chaos-s12-.*"`) still match every run.
+pub fn scenario_key_prefix(code: ScenarioCode) -> String {
+    key_prefix_with_nonce(code, std::env::var(RUN_NONCE_ENV).ok().as_deref())
+}
+
+/// The pure half of [`scenario_key_prefix`], so the rule can be tested without
+/// mutating process-global state from a parallel test suite.
+fn key_prefix_with_nonce(code: ScenarioCode, nonce: Option<&str>) -> String {
+    let base = format!("chaos-{}", code.as_str().to_lowercase());
+    // Kept to characters that are safe in an agent id and readable in a Grafana
+    // query. An absent nonce is the normal local case: a hand-driven run against
+    // a fresh cluster has nothing to collide with.
+    let nonce: String = nonce
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .take(32)
+        .collect();
+    let nonce = nonce.trim_matches('-');
+    if nonce.is_empty() {
+        base
+    } else {
+        format!("{base}-{nonce}")
+    }
+}
+
 /// What the workflow is expected to do to the cluster, mirrored here only so the
 /// result can record what the run was configured to provoke. The driver does not
 /// act on any of it.
@@ -454,6 +506,51 @@ mod tests {
         assert!(policy.transport_only);
         assert_eq!(policy.max_retries, 1);
         assert_eq!(policy.delay_secs, 5);
+    }
+
+    /// The property the whole resume path depends on: two invocations must not
+    /// produce the same keys, or the second replays the first's results.
+    #[test]
+    fn a_run_nonce_makes_the_key_prefix_unique_per_invocation() {
+        let first = key_prefix_with_nonce(ScenarioCode::S8, Some("32093963216-1"));
+        let second = key_prefix_with_nonce(ScenarioCode::S8, Some("32093963216-2"));
+
+        assert_eq!(first, "chaos-s8-32093963216-1");
+        assert_ne!(first, second, "a second attempt must not reuse the keys");
+    }
+
+    /// The documented trace queries key on `chaos-<code>-`, so the nonce has to
+    /// go after the code rather than in front of it.
+    #[test]
+    fn the_key_prefix_still_starts_with_the_scenario_code() {
+        let prefix = key_prefix_with_nonce(ScenarioCode::S12, Some("run-7"));
+        assert!(
+            prefix.starts_with("chaos-s12-"),
+            "{prefix} must still match the documented chaos-s12-.* query"
+        );
+    }
+
+    /// A local run against a fresh cluster has nothing to collide with, and an
+    /// unset or unusable nonce must not produce a trailing separator.
+    #[test]
+    fn an_absent_or_unusable_nonce_falls_back_to_the_bare_code() {
+        for nonce in [None, Some(""), Some("   "), Some("///"), Some("-")] {
+            assert_eq!(
+                key_prefix_with_nonce(ScenarioCode::S1, nonce),
+                "chaos-s1",
+                "nonce {nonce:?} should have fallen back to the bare code"
+            );
+        }
+    }
+
+    /// Agent ids end up in URLs and Grafana queries, so a nonce carrying
+    /// anything else must be stripped rather than passed through.
+    #[test]
+    fn a_nonce_is_reduced_to_characters_that_are_safe_in_an_agent_id() {
+        assert_eq!(
+            key_prefix_with_nonce(ScenarioCode::S8, Some("run/42 attempt#2")),
+            "chaos-s8-run42attempt2"
+        );
     }
 
     #[test]

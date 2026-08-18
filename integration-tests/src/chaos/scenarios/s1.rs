@@ -92,7 +92,7 @@ pub async fn run(
     let workload_config = config.require_workload()?;
     let ownership_config = config.require_ownership()?;
     let history = OperationHistory::new(ScenarioCode::S1.as_str());
-    let key_prefix = format!("chaos-{}", ScenarioCode::S1.as_str().to_lowercase());
+    let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S1);
 
     // Without executor endpoints the ownership oracle has nothing to read, and
     // an S1 run without it is just a slower S12 wearing its name. Refuse rather
