@@ -57,6 +57,21 @@ use tracing::warn;
 /// worse than a sample that records a timeout.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Attempts per executor per sample, and the pause between them.
+///
+/// Not about the executor — about the hop in front of it. In cloud mode every
+/// endpoint is a `kubectl port-forward`, which drops when idle, and the phases
+/// of a chaos run are minutes of silence punctuated by one read. The workflow's
+/// watchdog restarts a dead forward within a couple of seconds, so a single
+/// attempt can fail purely because it was the one that discovered the drop.
+///
+/// That matters more than it sounds: an executor excluded from a sample is an
+/// executor that cannot be compared against the others, and overlap is only
+/// visible by comparison. Losing one to a transport blip narrows the verdict
+/// for no good reason.
+const READ_ATTEMPTS: u32 = 3;
+const READ_RETRY_DELAY: Duration = Duration::from_secs(3);
+
 /// One executor the workflow has made reachable, as it described it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -157,7 +172,43 @@ pub async fn sample(endpoints: &[ExecutorEndpoint]) -> Vec<ExecutorAssignment> {
     samples
 }
 
+/// Reads one executor, retrying only failures that are about the connection.
+///
+/// A `404` is not retried: it is a definite answer, and it means the deployed
+/// executor does not have the endpoint at all. Retrying that would just spend
+/// the sample's budget rediscovering the same fact.
 async fn read_one(client: &reqwest::Client, endpoint: &ExecutorEndpoint) -> ExecutorAssignment {
+    let mut last = read_once(client, endpoint).await;
+    for attempt in 2..=READ_ATTEMPTS {
+        let connection_failure = last
+            .read_error
+            .as_deref()
+            .is_some_and(is_connection_failure);
+        if !connection_failure {
+            break;
+        }
+        warn!(
+            "Chaos: attempt {} of {READ_ATTEMPTS} to read {} failed at the connection; \
+             the forward may be restarting",
+            attempt - 1,
+            endpoint.endpoint
+        );
+        tokio::time::sleep(READ_RETRY_DELAY).await;
+        last = read_once(client, endpoint).await;
+    }
+    last
+}
+
+/// Whether a recorded read error was a failure to reach the endpoint at all, as
+/// opposed to the endpoint answering something unusable.
+///
+/// Keyed on the shape [`read_once`] records rather than on a reqwest type,
+/// because by this point the error has already been rendered to a string.
+fn is_connection_failure(error: &str) -> bool {
+    !error.contains("answered") && !error.contains("unreadable JSON")
+}
+
+async fn read_once(client: &reqwest::Client, endpoint: &ExecutorEndpoint) -> ExecutorAssignment {
     let unreadable = |detail: String| ExecutorAssignment {
         pod_name: endpoint.pod_name.clone(),
         pod_ip: endpoint.pod_ip.clone(),
@@ -173,8 +224,18 @@ async fn read_one(client: &reqwest::Client, endpoint: &ExecutorEndpoint) -> Exec
     let response = match client.get(&url).send().await {
         Ok(response) => response,
         Err(e) => {
-            warn!("Chaos: could not read {url}: {e}");
-            return unreadable(format!("{e}"));
+            // `{e:#}`-style detail: reqwest's outer message is only "error
+            // sending request for url (...)", which does not distinguish a
+            // refused connection from a DNS failure or a timeout.
+            let detail =
+                std::iter::successors(Some(&e as &(dyn std::error::Error + 'static)), |e| {
+                    e.source()
+                })
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join(": ");
+            warn!("Chaos: could not read {url}: {detail}");
+            return unreadable(detail);
         }
     };
     if !response.status().is_success() {
@@ -290,6 +351,27 @@ mod tests {
             ..Default::default()
         };
         assert!(!unreadable.is_usable());
+    }
+
+    /// The retry exists for the hop in front of the executor, not the executor
+    /// itself. An endpoint that *answered* has given a definite answer, and
+    /// retrying it would just spend the sample's budget rediscovering it — a
+    /// `404` from a cluster running an older image being the case that matters.
+    #[test]
+    fn only_connection_failures_are_worth_retrying() {
+        assert!(is_connection_failure(
+            "error sending request for url (http://localhost:9301/shard-assignment):              tcp connect error: Connection refused (os error 111)"
+        ));
+        assert!(is_connection_failure("operation timed out"));
+        assert!(!is_connection_failure(
+            "http://localhost:9302/shard-assignment answered 404 Not Found"
+        ));
+        assert!(!is_connection_failure(
+            "http://localhost:9302/shard-assignment answered 503 Service Unavailable"
+        ));
+        assert!(!is_connection_failure(
+            "http://localhost:9302/shard-assignment returned unreadable JSON: expected value"
+        ));
     }
 
     /// A crossed port-forward produces a perfectly plausible and completely
