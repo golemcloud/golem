@@ -89,18 +89,11 @@ async fn go_counter_survives_restart(
 /// oplog after a restart rather than re-fetched: the external counter advances
 /// once per *live* call, so the second invocation sees "1-b", not "2-b".
 ///
-/// IGNORED — flaky on replay after an executor restart; needs an executor/runtime
-/// investigation. The first (live) call records correctly ("0-a"). After the restart,
-/// replaying that first invocation intermittently either hangs (the worker never
-/// finishes replay and the test times out) or crashes with "Unexpected oplog entry
-/// during replay: expected Start { monotonic_clock::now, ReadLocal, ... }". Observed:
-/// while the guest is blocked on the outbound `wasi:http` call, the Go runtime issues
-/// a number of `monotonic_clock::now` reads that is not reproduced on replay, so the
-/// replayed reads no longer line up with the recorded oplog. A pure-state restart
-/// (go_counter_survives_restart) replays fine — the failure is specific to replaying
-/// a blocking host call.
+/// This also covers the distinct host-completion and guest-delivery boundaries of
+/// concurrent P3 calls: replay must not expose the recorded HTTP result before the
+/// point where the live execution delivered it to the Go callback, because durable
+/// clock and body operations may have occurred between those boundaries.
 #[test]
-#[ignore = "flaky: after an executor restart, replaying a blocking outbound-HTTP call intermittently hangs or hits an oplog mismatch on monotonic_clock::now — needs executor/runtime investigation"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_outgoing_http_replayed_without_network(

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::services::oplog::{CommitLevel, Oplog, OrderedOplogStart};
+use crate::services::oplog::{CommitLevel, Oplog, OplogAddReceipt, OrderedOplogStart};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::payload::types::{
@@ -120,6 +120,13 @@ impl Oplog for FrameTestOplog {
         let mut entries = self.entries.lock().unwrap();
         entries.push(entry);
         OplogIndex::from_u64(entries.len() as u64)
+    }
+
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        let mut entries = self.entries.lock().unwrap();
+        entries.push(entry);
+        let index = OplogIndex::from_u64(entries.len() as u64);
+        Box::pin(async move { index })
     }
 
     async fn add_pair(

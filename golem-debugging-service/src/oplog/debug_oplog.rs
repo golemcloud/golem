@@ -18,7 +18,7 @@ use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
 use golem_worker_executor::services::oplog::{
-    CommitLevel, Oplog, OrderedOplogStart, PendingUpload,
+    CommitLevel, Oplog, OplogAddReceipt, OrderedOplogStart, PendingUpload,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
@@ -82,6 +82,10 @@ impl Oplog for DebugOplog {
     // `Start`/`End` pair is ever created against a `NONE` index during replay.
     async fn add(&self, _entry: OplogEntry) -> OplogIndex {
         OplogIndex::NONE
+    }
+
+    fn enqueue_add(&self, _entry: OplogEntry) -> OplogAddReceipt {
+        Box::pin(async { OplogIndex::NONE })
     }
 
     // Mirrors `add`: a debugging session never writes to the oplog, so both entries are built (to

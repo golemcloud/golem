@@ -234,10 +234,28 @@ impl ReplayState {
         &self,
         claim: StartClaim,
     ) -> Result<(ReplayCallHandle, Box<OplogEntry>), WorkerExecutorError> {
-        self.run_owned_cursor_op(move |state| async move {
-            state.with_tx(async |tx| tx.claim_start(&claim).await).await
-        })
-        .await
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+
+            let owned_claim = claim.clone();
+            let (claimed, blocked_on_completion_delivery) = self
+                .run_owned_cursor_op(move |state| async move {
+                    state
+                        .with_tx(async |tx| {
+                            let claimed = tx.claim_start(&owned_claim).await?;
+                            Ok((claimed, tx.blocked_on_completion_delivery))
+                        })
+                        .await
+                })
+                .await?;
+            if let Some(claimed) = claimed {
+                return Ok(claimed);
+            }
+            debug_assert!(blocked_on_completion_delivery);
+            progress.await;
+        }
     }
 
     /// Claims the next top-level (unowned) durable-call `Start` matching the expected identity

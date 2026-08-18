@@ -45,10 +45,10 @@ use crate::model::oplog::public_oplog_entry::{
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardEventQueuedParams, CardInstallFailedParams, CardInstalledParams,
     CardRevokedParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
-    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
+    ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams,
+    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
     OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
     RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
@@ -611,6 +611,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     ),
                 }),
             ),
+            oplog_entry::Entry::CompletionDelivered(completion_delivered) => Ok(
+                PublicOplogEntry::CompletionDelivered(CompletionDeliveredParams {
+                    timestamp: completion_delivered
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                    start_index: crate::base_model::OplogIndex::from_u64(
+                        completion_delivered.start_index,
+                    ),
+                }),
+            ),
             oplog_entry::Entry::AgentInvocationStarted(agent_invocation_started) => Ok(
                 PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                     timestamp: agent_invocation_started
@@ -1120,6 +1131,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::CompletionDiscardedParameters {
                             timestamp: Some(completion_discarded.timestamp.into()),
                             start_index: completion_discarded.start_index.as_u64(),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CompletionDelivered(completion_delivered) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CompletionDelivered(
+                        golem_api_grpc::proto::golem::worker::CompletionDeliveredParameters {
+                            timestamp: Some(completion_delivered.timestamp.into()),
+                            start_index: completion_delivered.start_index.as_u64(),
                         },
                     )),
                 }
@@ -2562,6 +2583,12 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     start_index: completion_discarded.start_index,
                 })
             }
+            PublicOplogEntry::CompletionDelivered(completion_delivered) => {
+                Ok(OplogEntry::CompletionDelivered {
+                    timestamp: completion_delivered.timestamp,
+                    start_index: completion_delivered.start_index,
+                })
+            }
             PublicOplogEntry::AgentInvocationStarted(_) => {
                 Err("Converting AgentInvocationStarted from public to raw oplog entry is not yet supported".to_string())
             }
@@ -3208,10 +3235,10 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             RawCancelPendingInvocationParameters, RawCancelledParameters,
             RawCardEventQueuedParameters, RawCardInstallFailedParameters,
             RawCardInstalledParameters, RawCardRevokedParameters,
-            RawChangePersistenceLevelParameters, RawCompletionDiscardedParameters,
-            RawCreateParameters, RawCreateResourceParameters, RawDeactivatePluginParameters,
-            RawDropResourceParameters, RawEndAtomicRegionParameters, RawEndParameters, RawEnvVar,
-            RawErrorParameters, RawFailedUpdateParameters,
+            RawChangePersistenceLevelParameters, RawCompletionDeliveredParameters,
+            RawCompletionDiscardedParameters, RawCreateParameters, RawCreateResourceParameters,
+            RawDeactivatePluginParameters, RawDropResourceParameters, RawEndAtomicRegionParameters,
+            RawEndParameters, RawEnvVar, RawErrorParameters, RawFailedUpdateParameters,
             RawFilesystemStorageUsageUpdateParameters, RawFinishSpanParameters,
             RawGrowMemoryParameters, RawHostStreamFrameParameters, RawJumpParameters,
             RawLogParameters, RawOplogProcessorCheckpointParameters, RawOplogRegion,
@@ -3298,6 +3325,11 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::CompletionDiscarded { start_index, .. } => {
                 Entry::CompletionDiscarded(RawCompletionDiscardedParameters {
+                    start_index: start_index.as_u64(),
+                })
+            }
+            OplogEntry::CompletionDelivered { start_index, .. } => {
+                Entry::CompletionDelivered(RawCompletionDeliveredParameters {
                     start_index: start_index.as_u64(),
                 })
             }
@@ -3736,6 +3768,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 })
             }
             Entry::CompletionDiscarded(p) => Ok(OplogEntry::CompletionDiscarded {
+                timestamp,
+                start_index: crate::base_model::OplogIndex::from_u64(p.start_index),
+            }),
+            Entry::CompletionDelivered(p) => Ok(OplogEntry::CompletionDelivered {
                 timestamp,
                 start_index: crate::base_model::OplogIndex::from_u64(p.start_index),
             }),

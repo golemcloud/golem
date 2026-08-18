@@ -318,6 +318,15 @@ type CompletionDiscardedParameters struct {
 	StartIndex uint64
 }
 
+// Parameters of a `completion-delivered` entry: the successful result of the durable host
+// call started at `start-index` was handed to the agent at this point in the recorded
+// execution. Replay may prepare the recorded host result earlier, but does not hand it to the
+// agent until this marker and prevents later oplog entries from advancing until that handoff.
+type CompletionDeliveredParameters struct {
+	Timestamp  wasi_clocks_0_3_0_system_clock.Instant
+	StartIndex uint64
+}
+
 type LocalSpanData struct {
 	SpanId string
 	Start  wasi_clocks_0_3_0_system_clock.Instant
@@ -1143,6 +1152,11 @@ type RawCompletionDiscardedParameters struct {
 	StartIndex uint64
 }
 
+type RawCompletionDeliveredParameters struct {
+	Timestamp  wasi_clocks_0_3_0_system_clock.Instant
+	StartIndex uint64
+}
+
 // Parameters for a host-stream-frame oplog entry, with the frame payload in raw
 // (possibly externally stored) form.
 type RawHostStreamFrameParameters struct {
@@ -1399,6 +1413,9 @@ const (
 	// was persisted, but its response was never delivered to the agent (the agent dropped
 	// the completion future after the `end` was recorded)
 	OplogEntryCompletionDiscarded uint8 = 47
+	// The successful completion of the durable host call started by the matching `start`
+	// was delivered to the agent at this point in the recorded execution
+	OplogEntryCompletionDelivered uint8 = 48
 )
 
 type OplogEntry struct {
@@ -1698,6 +1715,12 @@ func (self OplogEntry) CompletionDiscarded() RawCompletionDiscardedParameters {
 	}
 	return self.value.(RawCompletionDiscardedParameters)
 }
+func (self OplogEntry) CompletionDelivered() RawCompletionDeliveredParameters {
+	if self.tag != OplogEntryCompletionDelivered {
+		panic("tag mismatch")
+	}
+	return self.value.(RawCompletionDeliveredParameters)
+}
 
 func MakeOplogEntryCreate(value RawCreateParameters) OplogEntry {
 	return OplogEntry{OplogEntryCreate, value}
@@ -1843,6 +1866,9 @@ func MakeOplogEntryHostStreamFrame(value RawHostStreamFrameParameters) OplogEntr
 func MakeOplogEntryCompletionDiscarded(value RawCompletionDiscardedParameters) OplogEntry {
 	return OplogEntry{OplogEntryCompletionDiscarded, value}
 }
+func MakeOplogEntryCompletionDelivered(value RawCompletionDeliveredParameters) OplogEntry {
+	return OplogEntry{OplogEntryCompletionDelivered, value}
+}
 
 const (
 	// The initial agent oplog entry
@@ -1953,6 +1979,9 @@ const (
 	// was persisted, but its response was never delivered to the agent (the agent dropped
 	// the completion future after the `end` was recorded)
 	PublicOplogEntryCompletionDiscarded uint8 = 47
+	// The successful completion of the durable host call started by the matching `start`
+	// was delivered to the agent at this point in the recorded execution
+	PublicOplogEntryCompletionDelivered uint8 = 48
 )
 
 type PublicOplogEntry struct {
@@ -2252,6 +2281,12 @@ func (self PublicOplogEntry) CompletionDiscarded() CompletionDiscardedParameters
 	}
 	return self.value.(CompletionDiscardedParameters)
 }
+func (self PublicOplogEntry) CompletionDelivered() CompletionDeliveredParameters {
+	if self.tag != PublicOplogEntryCompletionDelivered {
+		panic("tag mismatch")
+	}
+	return self.value.(CompletionDeliveredParameters)
+}
 
 func MakePublicOplogEntryCreate(value CreateParameters) PublicOplogEntry {
 	return PublicOplogEntry{PublicOplogEntryCreate, value}
@@ -2396,6 +2431,9 @@ func MakePublicOplogEntryHostStreamFrame(value HostStreamFrameParameters) Public
 }
 func MakePublicOplogEntryCompletionDiscarded(value CompletionDiscardedParameters) PublicOplogEntry {
 	return PublicOplogEntry{PublicOplogEntryCompletionDiscarded, value}
+}
+func MakePublicOplogEntryCompletionDelivered(value CompletionDeliveredParameters) PublicOplogEntry {
+	return PublicOplogEntry{PublicOplogEntryCompletionDelivered, value}
 }
 
 //go:wasmimport golem:api/oplog@1.5.0 [resource-drop]get-oplog
@@ -5128,6 +5166,13 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 		case OplogEntryCompletionDiscarded:
 			payload := (element).F1.CompletionDiscarded()
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(47))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
+			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).StartIndex)
+
+		case OplogEntryCompletionDelivered:
+			payload := (element).F1.CompletionDelivered()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(48))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = ((payload).Timestamp).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)) = int32(((payload).Timestamp).Nanoseconds)
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64((payload).StartIndex)
@@ -27463,6 +27508,10 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 			case 47:
 
 				variant2693 = MakePublicOplogEntryCompletionDiscarded(CompletionDiscardedParameters{wasi_clocks_0_3_0_system_clock.Instant{*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
+
+			case 48:
+
+				variant2693 = MakePublicOplogEntryCompletionDelivered(CompletionDeliveredParameters{wasi_clocks_0_3_0_system_clock.Instant{*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
 			default:
 				panic("unreachable")
@@ -49835,6 +49884,10 @@ func (self *GetOplog) GetNext() witTypes.Option[[]PublicOplogEntry] {
 
 				variant2471 = MakePublicOplogEntryCompletionDiscarded(CompletionDiscardedParameters{wasi_clocks_0_3_0_system_clock.Instant{*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
 
+			case 48:
+
+				variant2471 = MakePublicOplogEntryCompletionDelivered(CompletionDeliveredParameters{wasi_clocks_0_3_0_system_clock.Instant{*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))}, uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 24)))})
+
 			default:
 				panic("unreachable")
 			}
@@ -72203,6 +72256,10 @@ func (self *SearchOplog) GetNext() witTypes.Option[[]witTypes.Tuple2[uint64, Pub
 			case 47:
 
 				variant2471 = MakePublicOplogEntryCompletionDiscarded(CompletionDiscardedParameters{wasi_clocks_0_3_0_system_clock.Instant{*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))})
+
+			case 48:
+
+				variant2471 = MakePublicOplogEntryCompletionDelivered(CompletionDeliveredParameters{wasi_clocks_0_3_0_system_clock.Instant{*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)), uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 24)))}, uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))})
 
 			default:
 				panic("unreachable")

@@ -113,7 +113,9 @@ use golem_worker_executor::services::golem_config::{
     ResourceLimitsDisabledConfig, SchedulerStorageConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
-use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService, OrderedOplogStart};
+use golem_worker_executor::services::oplog::{
+    CommitLevel, Oplog, OplogAddReceipt, OplogService, OrderedOplogStart,
+};
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
 use golem_worker_executor::services::rdbms::ignite::IgniteType;
@@ -2544,7 +2546,7 @@ struct TestOplog {
     oplog: Arc<dyn Oplog>,
     additional_test_deps: AdditionalTestDeps,
     /// Indices of `Start` entries this agent appended for durable consume-body
-    /// chunk reads, so the gated `add` below can recognize their matching `End`
+    /// chunk reads, so the gated append below can recognize their matching `End`
     /// appends (an `End` only carries its `start_index`).
     consume_body_chunk_starts: Arc<std::sync::Mutex<HashSet<OplogIndex>>>,
 }
@@ -2671,6 +2673,19 @@ impl Oplog for TestOplog {
             self.pause_at_consume_body_chunk_end_gate().await;
         }
         index
+    }
+
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        let gated = self.is_consume_body_chunk_data_end(&entry);
+        let pending = self.oplog.enqueue_add(entry);
+        let this = self.clone();
+        Box::pin(async move {
+            let index = pending.await;
+            if gated {
+                this.pause_at_consume_body_chunk_end_gate().await;
+            }
+            index
+        })
     }
 
     async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
@@ -3111,7 +3126,7 @@ impl AdditionalTestDeps {
 
 /// A one-shot pause point at an agent's first consume-body chunk `End` append,
 /// shared between [`AdditionalTestDeps`] (which arms it) and the agent's
-/// [`TestOplog`] (which trips it). The gated `Oplog::add` fires `appended_tx`
+/// [`TestOplog`] (which trips it). The gated append fires `appended_tx`
 /// only after the underlying oplog append returned — the `End` is durable — and
 /// then blocks until a `release` permit arrives, so a test can act (e.g. make
 /// the guest drop the body reader) in between with both sides settled.
@@ -3123,7 +3138,7 @@ struct ConsumeBodyChunkEndGate {
 
 /// Test-facing side of a [`ConsumeBodyChunkEndGate`]: await [`Self::appended`]
 /// to learn that the gated chunk `End` is durable and the producer is paused,
-/// then [`Self::release`] to let the paused `Oplog::add` return.
+/// then [`Self::release`] to let the paused append return.
 pub struct ConsumeBodyChunkEndGateHandle {
     appended_rx: tokio::sync::oneshot::Receiver<()>,
     gate: Arc<ConsumeBodyChunkEndGate>,

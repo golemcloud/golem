@@ -14,57 +14,131 @@
 
 use super::*;
 
-/// Everything needed to append a `CompletionDiscarded` marker from an owned task when an armed
-/// [`AccessTerminalGuard`] is dropped: the guest tore the accessor completion future *after* the
-/// successful `End` append was handed to its owned task, so the response was persisted but never
-/// delivered. Armed only on the `End` path ([`CallHandle::persist_access_terminal`]) — never for
-/// cancellations — and explicitly suppressed on internal-error returns the caller observes
-/// ([`AccessTerminalGuard::suppress_discard_marker`]), so a marker is recorded exactly when the
-/// completion was silently discarded by the guest.
-pub(super) struct DiscardMarker {
-    pub(super) start_idx: OplogIndex,
-    pub(super) oplog: Arc<dyn Oplog>,
-    pub(super) replay_state: ReplayState,
+pub(super) type MarkerReceipt = tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>;
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum CompletionMarkerKind {
+    Delivered,
+    Discarded,
 }
 
-impl DiscardMarker {
-    /// Appends the `CompletionDiscarded` marker entry and records it in the replay state. The
-    /// terminal `End` append (and any ordered post-`End` append, e.g. a `FinishSpan`) must
-    /// already be durable when this runs.
-    async fn append(self) {
-        let marker_idx = self
-            .oplog
-            .add(OplogEntry::CompletionDiscarded {
-                timestamp: Timestamp::now_utc(),
-                start_index: self.start_idx,
-            })
-            .await;
-        self.replay_state
-            .record_discarded_completion(self.start_idx, marker_idx);
+pub(super) enum OrderedAppend {
+    Receipt(crate::services::oplog::OplogAddReceipt),
+    Task(tokio::task::JoinHandle<Result<(), WorkerExecutorError>>),
+}
+
+impl OrderedAppend {
+    async fn wait(self) -> Result<(), WorkerExecutorError> {
+        match self {
+            Self::Receipt(receipt) => {
+                receipt.await;
+                Ok(())
+            }
+            Self::Task(task) => task.await.map_err(|err| {
+                WorkerExecutorError::runtime(format!("ordered oplog append task failed: {err}"))
+            })?,
+        }
+    }
+}
+
+/// Records successful-completion delivery markers in the exact order their guest boundaries occur.
+/// Recording is initiated synchronously from Wasmtime's terminal observer and reserves the marker's
+/// oplog position before returning; only waiting for the append is asynchronous.
+#[derive(Clone, Debug)]
+pub(in crate::durable_host) struct CompletionMarkerRecorder {
+    oplog: Arc<dyn Oplog>,
+    replay_state: ReplayState,
+}
+
+impl CompletionMarkerRecorder {
+    pub(in crate::durable_host) fn new(oplog: Arc<dyn Oplog>, replay_state: ReplayState) -> Self {
+        Self {
+            oplog,
+            replay_state,
+        }
     }
 
-    /// Spawns the owned marker-recording task, chained after the (possibly still pending) owned
-    /// terminal `End` append. Returns the chained handle, which replaces the terminal handle in
-    /// the emitted [`DropEvent::CleanupAfterTerminal`], so every existing drain that joins the
-    /// terminal also awaits the marker append — invocation completion cannot overtake it. The
-    /// task is detached (`tokio::spawn`): even if the drain future itself is torn and the event
-    /// is lost, the marker append still runs to completion.
-    pub(super) fn spawn_chained(
-        self,
-        terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
-    ) -> tokio::task::JoinHandle<Result<(), WorkerExecutorError>> {
+    pub(super) fn record(
+        &self,
+        start_idx: OplogIndex,
+        kind: CompletionMarkerKind,
+        pending_append: Option<OrderedAppend>,
+    ) -> MarkerReceipt {
+        let entry = match kind {
+            CompletionMarkerKind::Delivered => OplogEntry::CompletionDelivered {
+                timestamp: Timestamp::now_utc(),
+                start_index: start_idx,
+            },
+            CompletionMarkerKind::Discarded => OplogEntry::CompletionDiscarded {
+                timestamp: Timestamp::now_utc(),
+                start_index: start_idx,
+            },
+        };
+
+        // This call reserves the marker in the same oplog actor queue as every subsequent durable
+        // operation before Wasmtime can enter the guest callback.
+        let marker_append = self.oplog.enqueue_add(entry);
+        let replay_state = self.replay_state.clone();
+        let (done, receipt) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            if let Some(handle) = terminal {
-                handle.await.map_err(|err| {
-                    WorkerExecutorError::runtime(format!(
-                        "durable call terminal recorder task failed: {err}"
-                    ))
-                })??;
+            if let Some(append) = pending_append {
+                if let Err(error) = append.wait().await {
+                    let _ = done.send(Err(error));
+                    return;
+                }
             }
-            self.append().await;
-            Ok(())
-        })
+            let marker_idx = marker_append.await;
+            match kind {
+                CompletionMarkerKind::Delivered => {
+                    replay_state.record_delivered_completion(start_idx, marker_idx)
+                }
+                CompletionMarkerKind::Discarded => {
+                    replay_state.record_discarded_completion(start_idx, marker_idx)
+                }
+            }
+            let _ = done.send(Ok(()));
+        });
+        receipt
     }
+}
+
+pub(super) struct CompletionMarkerRecord {
+    pub(super) start_idx: OplogIndex,
+    pub(super) recorder: CompletionMarkerRecorder,
+}
+
+impl CompletionMarkerRecord {
+    pub(super) fn record(
+        self,
+        kind: CompletionMarkerKind,
+        pending_append: Option<OrderedAppend>,
+    ) -> MarkerReceipt {
+        self.recorder.record(self.start_idx, kind, pending_append)
+    }
+}
+
+pub(super) async fn await_marker_receipt(
+    receipt: &mut MarkerReceipt,
+) -> Result<(), WorkerExecutorError> {
+    receipt.await.map_err(|_| {
+        WorkerExecutorError::runtime(
+            "completion-marker recorder dropped a command without replying",
+        )
+    })?
+}
+
+fn receipt_for_pending_append(append: OrderedAppend) -> MarkerReceipt {
+    let (done, receipt) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let _ = done.send(append.wait().await);
+    });
+    receipt
+}
+
+pub(super) fn task_for_marker_receipt(
+    mut receipt: MarkerReceipt,
+) -> tokio::task::JoinHandle<Result<(), WorkerExecutorError>> {
+    tokio::spawn(async move { await_marker_receipt(&mut receipt).await })
 }
 
 /// A deferred guest-delivery token returned by [`CallHandle::complete_access_deferred`] /
@@ -76,7 +150,8 @@ impl DiscardMarker {
 /// and the real delivery, which replay would otherwise deliver.
 ///
 /// Live, the token stays armed after the `End` is persisted and the durable scope is closed:
-/// - [`Self::delivered`] — the final guest-facing transfer succeeded; no marker.
+/// - [`Self::delivered`] — the final guest-facing transfer succeeded; records a
+///   `CompletionDelivered` marker at that boundary.
 /// - [`Self::suppress`] — a post-`End` error is observed by the caller (the worker traps); no
 ///   marker.
 /// - [`Self::discarded`] — the caller detected a silent discard (e.g. the guest dropped the
@@ -84,14 +159,13 @@ impl DiscardMarker {
 ///   inline and returns once it is durable.
 /// - `Drop` while armed — the delivering future itself was torn; spawns exactly one owned marker
 ///   append (ordered after any pending [`Self::append_ordered`] entry) and hands its join plus
-///   the in-flight [`LiveCallPermit`] to the drain queue via [`DropEvent::AwaitDiscardMarker`],
+///   the in-flight [`LiveCallPermit`] to the drain queue via [`DropEvent::AwaitCompletionMarker`],
 ///   so invocation settlement cannot overtake the append.
 ///
-/// On replay the token mirrors the recorded delivery status: [`Self::is_replay_discarded`]
-/// reports whether the recorded run discarded the completion, in which case the caller must not
-/// deliver — it performs its deterministic post-`End` continuation (span consumption, terminal
-/// bookkeeping) and parks at the exact point where live delivery would have happened. All token
-/// operations are no-ops on replay.
+/// On replay the token mirrors the recorded delivery status. A discarded completion parks at its
+/// delivery boundary. A delivered completion first lets the host-side post-`End` continuation run,
+/// then [`Self::prepare_delivery`] consumes its exact `CompletionDelivered` marker and holds the
+/// global replay cursor until [`Self::delivered`] observes the actual guest-facing boundary.
 pub struct CompletionDelivery {
     pub(super) state: CompletionDeliveryState,
 }
@@ -101,8 +175,9 @@ pub(super) enum CompletionDeliveryState {
     Live(Box<LiveDelivery>),
     /// Live, but the call was not persisted (snapshotting): nothing to reconcile.
     Unarmed,
-    /// Replay of a normally delivered completion.
-    ReplayDelivered,
+    /// Replay of a normally delivered completion, optionally gated by a marker (old oplogs have
+    /// no marker and retain the legacy immediate behavior).
+    ReplayDelivered(ReplayDelivery),
     /// Replay of a recorded discarded completion: the caller must not deliver and parks at the
     /// delivery boundary.
     ReplayDiscarded,
@@ -110,19 +185,47 @@ pub(super) enum CompletionDeliveryState {
     Done,
 }
 
+pub(super) enum ReplayDelivery {
+    Legacy,
+    Pending {
+        replay_state: ReplayState,
+        start_index: OplogIndex,
+        marker_index: OplogIndex,
+    },
+    Armed(crate::durable_host::replay_state::ReplayDeliveryBarrier),
+}
+
+impl ReplayDelivery {
+    fn fail(self, reason: impl Into<String>) -> WorkerExecutorError {
+        let reason = reason.into();
+        match self {
+            Self::Legacy => {}
+            Self::Pending {
+                replay_state,
+                start_index,
+                marker_index,
+            } => replay_state.fail_completion_delivery(start_index, marker_index, reason.clone()),
+            Self::Armed(barrier) => barrier.fail(reason.clone()),
+        }
+        WorkerExecutorError::runtime(format!(
+            "replay could not reproduce a recorded successful completion delivery: {reason}"
+        ))
+    }
+}
+
 pub(super) struct LiveDelivery {
-    pub(super) marker: DiscardMarker,
+    pub(super) marker: CompletionMarkerRecord,
     pub(super) trap_context: DurableCallTrapContext,
     /// Keeps the call counted as in flight (for positional-boundary and snapshot checks) until
     /// the token is consumed or its drain event is processed. Settlement itself waits for the
     /// marker because both invocation exit paths drain the drop-event queue — joining any
-    /// [`DropEvent::AwaitDiscardMarker`] — before writing their final oplog state.
+    /// [`DropEvent::AwaitCompletionMarker`] — before writing their final oplog state.
     pub(super) live_call_permit: Option<LiveCallPermit>,
     pub(super) cleanup_sink: Option<UnboundedSender<DropEvent>>,
-    /// An owned oplog append (e.g. a durable `FinishSpan`) that must land *before* any marker
-    /// append, preserving the recorded `End → FinishSpan → CompletionDiscarded` order replay
-    /// consumes positionally. See [`CompletionDelivery::append_ordered`].
-    pub(super) pending_append: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+    /// An oplog append (e.g. a durable `FinishSpan`) synchronously reserved before any marker,
+    /// preserving the recorded `End → FinishSpan → CompletionDiscarded` order replay consumes
+    /// positionally. See [`CompletionDelivery::append_ordered`].
+    pub(super) pending_append: Option<OrderedAppend>,
 }
 
 impl CompletionDelivery {
@@ -132,9 +235,20 @@ impl CompletionDelivery {
         }
     }
 
-    pub(super) fn replay_delivered() -> Self {
+    pub(super) fn replay_delivered(
+        replay_state: ReplayState,
+        start_index: OplogIndex,
+        delivery_marker: Option<OplogIndex>,
+    ) -> Self {
         Self {
-            state: CompletionDeliveryState::ReplayDelivered,
+            state: CompletionDeliveryState::ReplayDelivered(match delivery_marker {
+                Some(marker_index) => ReplayDelivery::Pending {
+                    replay_state,
+                    start_index,
+                    marker_index,
+                },
+                None => ReplayDelivery::Legacy,
+            }),
         }
     }
 
@@ -158,6 +272,28 @@ impl CompletionDelivery {
         matches!(self.state, CompletionDeliveryState::Live(_))
     }
 
+    /// Positions replay at this completion's recorded guest-delivery boundary. All deterministic
+    /// host-side continuation after `End` must run before this call. For marker-bearing replay the
+    /// returned token owns the global cursor gate until [`Self::delivered`] acknowledges the actual
+    /// callback/channel handoff; live and legacy replay are no-ops.
+    pub async fn prepare_delivery(&mut self) -> Result<(), WorkerExecutorError> {
+        let pending = match &self.state {
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Pending {
+                replay_state,
+                start_index,
+                marker_index,
+            }) => Some((replay_state.clone(), *start_index, *marker_index)),
+            _ => None,
+        };
+        if let Some((replay_state, start_index, marker_index)) = pending {
+            let barrier = replay_state
+                .await_completion_delivery(start_index, marker_index)
+                .await?;
+            self.state = CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(barrier));
+        }
+        Ok(())
+    }
+
     /// Hands an oplog entry append (e.g. a durable `FinishSpan`) to an owned task ordered
     /// *before* any later marker append by this token. Must be called with no `await` between
     /// the token's creation (or previous [`Self::wait_appends`]) and this call when the entry is
@@ -165,19 +301,9 @@ impl CompletionDelivery {
     /// transferred atomically. No-op unless live and armed.
     pub fn append_ordered(&mut self, entry: OplogEntry) {
         if let CompletionDeliveryState::Live(live) = &mut self.state {
-            let oplog = live.marker.oplog.clone();
-            let previous = live.pending_append.take();
-            live.pending_append = Some(tokio::spawn(async move {
-                if let Some(handle) = previous {
-                    handle.await.map_err(|err| {
-                        WorkerExecutorError::runtime(format!(
-                            "ordered post-End append task failed: {err}"
-                        ))
-                    })??;
-                }
-                oplog.add(entry).await;
-                Ok(())
-            }));
+            live.pending_append = Some(OrderedAppend::Receipt(
+                live.marker.recorder.oplog.enqueue_add(entry),
+            ));
         }
     }
 
@@ -185,22 +311,41 @@ impl CompletionDelivery {
     /// handle owned by the token, so the torn-drop marker append still chains after it.
     pub async fn wait_appends(&mut self) -> Result<(), WorkerExecutorError> {
         if let CompletionDeliveryState::Live(live) = &mut self.state
-            && let Some(handle) = &mut live.pending_append
+            && let Some(append) = live.pending_append.take()
         {
-            let result = handle.await.map_err(|err| {
-                WorkerExecutorError::runtime(format!("ordered post-End append task failed: {err}"))
-            });
-            live.pending_append = None;
-            result??;
+            append.wait().await?;
         }
         Ok(())
     }
 
-    /// The final guest-facing delivery succeeded: no marker. Consumes the token; any pending
-    /// ordered append keeps running as an owned task and its join (plus the in-flight permit) is
-    /// handed to the drain queue so settlement still waits for it.
+    /// The final guest-facing delivery succeeded. Synchronously queues a `CompletionDelivered`
+    /// command so callback handoffs are serialized in their observed order, then hands its receipt
+    /// and the in-flight permit to the drain queue. The next durable call and invocation settlement
+    /// both wait for the marker to become durable.
     pub fn delivered(mut self) {
-        self.settle();
+        match std::mem::replace(&mut self.state, CompletionDeliveryState::Done) {
+            CompletionDeliveryState::Live(live) => {
+                let receipt = live
+                    .marker
+                    .record(CompletionMarkerKind::Delivered, live.pending_append);
+                Self::emit_await_event(
+                    live.cleanup_sink,
+                    receipt,
+                    live.trap_context,
+                    live.live_call_permit,
+                );
+            }
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(barrier)) => {
+                barrier.acknowledge();
+            }
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Legacy) => {}
+            CompletionDeliveryState::ReplayDelivered(pending @ ReplayDelivery::Pending { .. }) => {
+                let _ = pending.fail("delivery occurred before its recorded marker was consumed");
+            }
+            CompletionDeliveryState::ReplayDiscarded
+            | CompletionDeliveryState::Unarmed
+            | CompletionDeliveryState::Done => {}
+        }
     }
 
     /// A post-`End` error is returned to (observed by) the caller — the worker traps — so the
@@ -235,14 +380,22 @@ impl CompletionDelivery {
     /// accessor has no guest-visible host subtask (e.g. a spawned background task), the token
     /// settles without a marker, matching the pre-observer behavior of consuming it at the host
     /// return.
-    pub fn deliver_at_accessor_terminal<T, D>(self, store: &Accessor<T, D>)
+    pub async fn deliver_at_accessor_terminal<T, D>(
+        mut self,
+        store: &Accessor<T, D>,
+    ) -> Result<(), WorkerExecutorError>
     where
         T: 'static,
         D: HasData + ?Sized,
     {
-        if !self.is_live_armed() {
+        self.prepare_delivery().await?;
+        let replay_barrier = matches!(
+            self.state,
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(_))
+        );
+        if !self.is_live_armed() && !replay_barrier {
             self.delivered();
-            return;
+            return Ok(());
         }
         let guard = AccessorDeliveryGuard {
             delivery: Some(self),
@@ -252,10 +405,17 @@ impl CompletionDelivery {
         {
             // No guest-visible host subtask to observe (the guard is dropped by the failed
             // registration, suppressing the token — no marker).
-            tracing::debug!(
-                "durable call completion has no guest-visible host subtask to observe: {error}"
-            );
+            if replay_barrier {
+                return Err(WorkerExecutorError::runtime(format!(
+                    "recorded completion delivery has no guest-visible host subtask during replay: {error}"
+                )));
+            } else {
+                tracing::debug!(
+                    "durable call completion has no guest-visible host subtask to observe: {error}"
+                );
+            }
         }
+        Ok(())
     }
 
     fn settle(&mut self) {
@@ -266,14 +426,16 @@ impl CompletionDelivery {
                     // the drain queue, without a marker.
                     Self::emit_await_event(
                         live.cleanup_sink,
-                        pending,
+                        receipt_for_pending_append(pending),
                         live.trap_context,
                         live.live_call_permit,
                     );
                 }
             }
-            CompletionDeliveryState::ReplayDelivered
-            | CompletionDeliveryState::ReplayDiscarded
+            CompletionDeliveryState::ReplayDelivered(replay) => {
+                let _ = replay.fail("delivery was suppressed before reaching the guest");
+            }
+            CompletionDeliveryState::ReplayDiscarded
             | CompletionDeliveryState::Unarmed
             | CompletionDeliveryState::Done => {}
         }
@@ -297,22 +459,16 @@ impl CompletionDelivery {
                     pending_append,
                 } = *live;
                 let guard = MarkerAwaitGuard {
-                    join: Some(marker.spawn_chained(pending_append)),
+                    receipt: Some(marker.record(CompletionMarkerKind::Discarded, pending_append)),
                     trap_context,
                     live_call_permit,
                     cleanup_sink,
                 };
                 guard.wait().await
             }
-            CompletionDeliveryState::ReplayDelivered => {
-                // Live delivered this completion (no marker on record), but replay could not: a
-                // nondeterministic guest tore the receiving end at a different point. Nothing
-                // durable to reconcile.
-                tracing::warn!(
-                    "replayed durable call completion could not be delivered although the recorded run delivered it"
-                );
-                Ok(())
-            }
+            CompletionDeliveryState::ReplayDelivered(replay) => Err(replay.fail(
+                "the replayed guest discarded a completion that was delivered when recorded",
+            )),
             CompletionDeliveryState::ReplayDiscarded
             | CompletionDeliveryState::Unarmed
             | CompletionDeliveryState::Done => Ok(()),
@@ -321,13 +477,13 @@ impl CompletionDelivery {
 
     fn emit_await_event(
         sink: Option<UnboundedSender<DropEvent>>,
-        terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
+        receipt: MarkerReceipt,
         trap_context: DurableCallTrapContext,
         live_call_permit: Option<LiveCallPermit>,
     ) {
         if let Some(sink) = &sink {
-            let _ = sink.send(DropEvent::AwaitDiscardMarker {
-                terminal: Some(terminal),
+            let _ = sink.send(DropEvent::AwaitCompletionMarker {
+                receipt: Some(receipt),
                 trap_context,
                 live_call_permit,
             });
@@ -362,12 +518,12 @@ impl CompletionDelivery {
             golem_common::model::regions::DeletedRegions::default(),
         )
         .await?;
+        let recorder = CompletionMarkerRecorder::new(oplog, replay_state);
         Ok(Self {
             state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
-                marker: DiscardMarker {
+                marker: CompletionMarkerRecord {
                     start_idx,
-                    oplog,
-                    replay_state,
+                    recorder,
                 },
                 trap_context: DurableCallTrapContext {
                     retry_from: start_idx,
@@ -386,6 +542,12 @@ impl CompletionDelivery {
     pub(crate) fn test_replay_discarded() -> Self {
         Self::replay_discarded()
     }
+
+    pub(crate) fn test_replay_delivered_legacy() -> Self {
+        Self {
+            state: CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Legacy),
+        }
+    }
 }
 
 impl Drop for CompletionDelivery {
@@ -397,21 +559,22 @@ impl Drop for CompletionDelivery {
                 // append after any pending ordered append (preserving the recorded
                 // `End → FinishSpan → CompletionDiscarded` order) and hand the join plus the
                 // in-flight permit to the drain queue so invocation settlement waits for it. The
-                // task is spawned unconditionally — marker recording must not depend on the
-                // event surviving the drain.
-                let terminal = live.marker.spawn_chained(live.pending_append);
+                // marker command is queued synchronously — marker recording must not depend on
+                // the event surviving the drain.
+                let receipt = live
+                    .marker
+                    .record(CompletionMarkerKind::Discarded, live.pending_append);
                 Self::emit_await_event(
                     live.cleanup_sink,
-                    terminal,
+                    receipt,
                     live.trap_context,
                     live.live_call_permit,
                 );
             }
-            CompletionDeliveryState::ReplayDelivered => {
-                // Anomalous: replay delivered a completion the recorded run delivered too, but
-                // the site dropped the token without consuming it (or the future was torn at a
-                // point live was not). Nothing durable to reconcile.
-                tracing::warn!("replay completion-delivery token dropped without being consumed");
+            CompletionDeliveryState::ReplayDelivered(replay) => {
+                let _ = replay.fail(
+                    "completion-delivery token was dropped before the recorded guest boundary",
+                );
             }
             CompletionDeliveryState::ReplayDiscarded
             | CompletionDeliveryState::Unarmed
@@ -435,14 +598,21 @@ impl AccessorDeliveryGuard {
             .take()
             .expect("terminal observers are invoked at most once");
         match consumption {
-            // The guest received the successful terminal: no marker.
+            // Queue the successful delivery marker immediately before Wasmtime enters the guest
+            // callback (or after wait/poll/sync lowering handed the result to the guest).
             TerminalConsumption::Delivered => delivery.delivered(),
             // The guest consumed the pending terminal via `subtask.cancel` after the successful
             // lowering (`Discarded`), or cancelled the call after the `End` was persisted
             // (`Cancelled`): either way the guest never observes the persisted completion.
             // Dropping the armed token spawns the owned cancellation-safe marker append and
             // hands its join to the drain queue, so invocation settlement waits for it.
-            TerminalConsumption::Discarded | TerminalConsumption::Cancelled => drop(delivery),
+            TerminalConsumption::Discarded | TerminalConsumption::Cancelled => {
+                if matches!(&delivery.state, CompletionDeliveryState::ReplayDelivered(_)) {
+                    delivery.suppress();
+                } else {
+                    drop(delivery);
+                }
+            }
         }
     }
 }
@@ -459,15 +629,15 @@ impl Drop for AccessorDeliveryGuard {
     }
 }
 
-/// RAII guard for awaiting an owned `CompletionDiscarded` marker task inline
-/// ([`CompletionDelivery::discarded`]). Marker persistence already lives in the owned task; the
-/// guard makes the *wait* cancellation-safe: a tear mid-wait hands the join plus the in-flight
-/// [`LiveCallPermit`] to the drain queue via [`DropEvent::AwaitDiscardMarker`], so invocation
+/// RAII guard for awaiting an owned `CompletionDiscarded` marker command inline
+/// ([`CompletionDelivery::discarded`]). The command already lives in the recorder actor; the
+/// guard makes the *wait* cancellation-safe: a tear mid-wait hands the receipt plus the in-flight
+/// [`LiveCallPermit`] to the drain queue via [`DropEvent::AwaitCompletionMarker`], so invocation
 /// settlement still waits for the marker append.
 struct MarkerAwaitGuard {
-    /// `Some` until the join completes (successfully or not); a `Drop` with the join still
+    /// `Some` until the receipt completes (successfully or not); a `Drop` with the receipt still
     /// pending emits the drain event.
-    join: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+    receipt: Option<MarkerReceipt>,
     trap_context: DurableCallTrapContext,
     live_call_permit: Option<LiveCallPermit>,
     cleanup_sink: Option<UnboundedSender<DropEvent>>,
@@ -475,24 +645,23 @@ struct MarkerAwaitGuard {
 
 impl MarkerAwaitGuard {
     async fn wait(mut self) -> Result<(), WorkerExecutorError> {
-        let joined = self
-            .join
-            .as_mut()
-            .expect("MarkerAwaitGuard is always constructed with a join handle")
-            .await;
-        self.join = None;
-        joined.map_err(|err| {
-            WorkerExecutorError::runtime(format!("durable call discard-marker task failed: {err}"))
-        })?
+        let result = await_marker_receipt(
+            self.receipt
+                .as_mut()
+                .expect("MarkerAwaitGuard is always constructed with a marker receipt"),
+        )
+        .await;
+        self.receipt = None;
+        result
     }
 }
 
 impl Drop for MarkerAwaitGuard {
     fn drop(&mut self) {
-        if let Some(join) = self.join.take() {
+        if let Some(receipt) = self.receipt.take() {
             CompletionDelivery::emit_await_event(
                 self.cleanup_sink.take(),
-                join,
+                receipt,
                 self.trap_context,
                 self.live_call_permit.take(),
             );

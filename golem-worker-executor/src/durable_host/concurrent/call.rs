@@ -1739,7 +1739,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         // the token to Wasmtime's terminal observer synchronously (no tear window exists between
         // the impl returning and this call) — the observer settles it when the guest actually
         // consumes (or discards) the lowered result.
-        delivery.deliver_at_accessor_terminal(store);
+        delivery
+            .deliver_at_accessor_terminal(store)
+            .await
+            .map_err(|source| TerminalCallError::new(source, context))?;
         Ok(response)
     }
 
@@ -1798,9 +1801,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         let function_type = self.retry.function_type().clone();
         let begin_index = self.begin_index;
         {
-            let (oplog, replay_state) = store.with(|mut access| {
+            let (oplog, completion_marker_recorder) = store.with(|mut access| {
                 let ctx = get_ctx(access.data_mut());
-                (ctx.state.oplog.clone(), ctx.state.replay_state.clone())
+                (
+                    ctx.state.oplog.clone(),
+                    ctx.state.completion_marker_recorder(),
+                )
             });
             let mut guard = AccessTerminalGuard::<P>::new(
                 self.dropped_call_snapshot(self.live_call_permit.clone()),
@@ -1811,7 +1817,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             let persist_result: Result<(), WorkerExecutorError> = if self.persisted {
                 Self::persist_access_terminal(
                     oplog,
-                    replay_state,
+                    completion_marker_recorder,
                     &mut guard,
                     self.start_idx,
                     &response,
@@ -1877,7 +1883,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     /// function against a gated oplog to keep that invariant observable.
     pub(super) async fn persist_access_terminal(
         oplog: Arc<dyn Oplog>,
-        replay_state: ReplayState,
+        completion_marker_recorder: CompletionMarkerRecorder,
         guard: &mut AccessTerminalGuard<P>,
         start_idx: OplogIndex,
         response: &Pair::Resp,
@@ -1894,15 +1900,19 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             &host_response,
         )
         .await?;
-        let terminal_oplog = oplog.clone();
+        // Reserve both entries synchronously in oplog order before arming the terminal guard. A
+        // tear may queue a completion marker immediately, and that marker must never overtake an
+        // unpolled spawned append task.
+        let end_append = oplog.enqueue_add(end);
+        let post_end_append = post_end_entry.map(|entry| oplog.enqueue_add(entry));
         let terminal = tokio::spawn(async move {
-            terminal_oplog.add(end).await;
+            end_append.await;
             // A deferred-delivery call's mandatory post-`End` entry (e.g. its durable
             // `FinishSpan`) is appended by the same owned task: it is recorded even when the
             // completing future is torn right after the `End`, so replay can rely on it
             // unconditionally following the `End` (any discard marker chains after this task).
-            if let Some(entry) = post_end_entry {
-                terminal_oplog.add(entry).await;
+            if let Some(append) = post_end_append {
+                append.await;
             }
             Ok(())
         });
@@ -1911,10 +1921,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         // *during* `wait_terminal` still counts — the owned task appends the `End` regardless).
         guard.cleanup_after_terminal(
             terminal,
-            Some(DiscardMarker {
+            Some(CompletionMarkerRecord {
                 start_idx,
-                oplog,
-                replay_state,
+                recorder: completion_marker_recorder,
             }),
         );
         guard.wait_terminal().await
@@ -1944,7 +1953,17 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .await_resolution_outcome(replay)
             .await?;
         match classify_replay_resolution(outcome) {
-            ReplayedResolution::Delivered(payload) => {
+            ReplayedResolution::Delivered(payload, delivery_marker) => {
+                if let Some(marker_idx) = delivery_marker {
+                    self.finished = true;
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        "a completion-delivery marker for an accessor durable call",
+                        format!(
+                            "CompletionDelivered at {marker_idx} references non-accessor durable call Start at {}",
+                            self.start_idx
+                        ),
+                    ));
+                }
                 // Terminal: mark finished up front so a decode / scope-close failure below does not
                 // drop the (replay) handle as "unfinished".
                 self.finished = true;
@@ -1994,10 +2013,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .expect("replay_access() called on a live handle");
         let outcome = replay_state.await_resolution_outcome(replay).await?;
         match classify_replay_resolution(outcome) {
-            ReplayedResolution::Delivered(payload) => {
+            ReplayedResolution::Delivered(payload, delivery_marker) => {
                 self.finished = true;
                 let response = decode_replayed_payload::<Pair>(&oplog, payload).await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
+                    .await?;
+                CompletionDelivery::replay_delivered(replay_state, self.start_idx, delivery_marker)
+                    .deliver_at_accessor_terminal(store)
                     .await?;
                 Ok(CallReplayOutcome::Replayed(response))
             }
@@ -2069,7 +2091,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .expect("replay_access_deferred() called on a live handle");
         let outcome = replay_state.await_resolution_outcome(replay).await?;
         match classify_replay_resolution(outcome) {
-            ReplayedResolution::Delivered(payload) => {
+            ReplayedResolution::Delivered(payload, delivery_marker) => {
                 self.finished = true;
                 let response = decode_replayed_payload::<Pair>(&oplog, payload).await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
@@ -2079,7 +2101,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 // unconsumed-token warning.
                 Ok(DeferredCallReplayOutcome::Replayed(
                     response,
-                    CompletionDelivery::replay_delivered(),
+                    CompletionDelivery::replay_delivered(
+                        replay_state,
+                        self.start_idx,
+                        delivery_marker,
+                    ),
                 ))
             }
             ReplayedResolution::Undelivered(UndeliveredTerminal::CompletionDiscarded {
@@ -2468,8 +2494,9 @@ impl UndeliveredTerminal {
 #[derive(Debug)]
 pub(super) enum ReplayedResolution {
     /// The recorded run delivered this payload to the guest: decode it, close the durable scope,
-    /// and return the response.
-    Delivered(ReplayedPayload),
+    /// run its deterministic post-`End` continuation, then gate the guest handoff on the optional
+    /// `CompletionDelivered` marker (absent in legacy oplogs).
+    Delivered(ReplayedPayload, Option<OplogIndex>),
     /// The recorded terminal never reached the guest.
     Undelivered(UndeliveredTerminal),
     /// The call's `Start` was committed but its terminal never was: candidate for live repair
@@ -2484,15 +2511,17 @@ pub(super) enum ReplayedResolution {
 pub(super) fn classify_replay_resolution(outcome: ResolutionOutcome) -> ReplayedResolution {
     match outcome {
         ResolutionOutcome::Incomplete => ReplayedResolution::Incomplete,
-        ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
-            ReplayedResolution::Delivered(ReplayedPayload::Completed(response))
-        }
+        ResolutionOutcome::Resolved(Resolution::Completed {
+            response,
+            delivery_marker,
+            ..
+        }) => ReplayedResolution::Delivered(ReplayedPayload::Completed(response), delivery_marker),
         ResolutionOutcome::Resolved(Resolution::Cancelled {
             cancelled_idx,
             partial,
         }) => match partial {
             Some(payload) => {
-                ReplayedResolution::Delivered(ReplayedPayload::CancelledPartial(payload))
+                ReplayedResolution::Delivered(ReplayedPayload::CancelledPartial(payload), None)
             }
             // `Cancelled` with no partial result: in the recorded run this call never returned a
             // value to the guest — its future was dropped mid-flight.

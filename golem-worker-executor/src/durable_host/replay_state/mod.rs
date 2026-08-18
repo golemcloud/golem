@@ -102,6 +102,15 @@ pub struct ReplayState {
 struct ReplayCursor {
     owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
+    /// Serializes every cursor-advance transaction. A transaction that consumes a
+    /// `CompletionDelivered` marker transfers this guard to the matching replay delivery token;
+    /// no later oplog entry can be consumed until the actual guest-delivery boundary acknowledges
+    /// and releases it.
+    advance_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Set when replay cannot reproduce a recorded successful delivery (for example, the guest
+    /// cancels the completion after its delivery marker was consumed). Every subsequent cursor
+    /// transaction fails with this same deterministic replay error.
+    delivery_failure: std::sync::Mutex<Option<String>>,
     /// Published cursor position. Lock-free reads; writes happen only through a held [`CursorTx`].
     position: PublishedPosition,
     /// The oplog index replay runs up to. Read lock-free everywhere; set at phase boundaries via
@@ -114,22 +123,17 @@ struct ReplayCursor {
     /// awaiter releases it before sleeping (see [`ReplayState::await_resolution_outcome`]) — and no
     /// operation performed while it is held re-acquires it.
     state: Mutex<CursorState>,
-    /// Durable calls whose successful `End` was persisted but whose completion was never
-    /// delivered to the guest (the guest dropped the accessor completion future), keyed by the
-    /// call's `Start` index and mapping to the physical index of the `CompletionDiscarded`
-    /// marker entry. Populated by a scan bounded by the *initial replay target* at construction
-    /// ([`ReplayState::new`]) — the marker always lies physically *after* its `End`, so replay
-    /// must know about it before the cursor reaches the `End`; discovering it via ordinary hint
-    /// skipping would be too late. When the replay target grows ([`ReplayState::set_replay_target`],
-    /// e.g. a debug session stepping to a later index), exactly the newly visible range is
-    /// rescanned and merged before the new target is published, so the map never contains — nor
-    /// misses — a marker relative to the effective target. Extended live via
-    /// [`ReplayState::record_discarded_completion`] when a marker is appended by this instance.
+    /// Guest-delivery outcomes for successful durable calls, keyed by the call's `Start` index.
+    /// `CompletionDiscarded` prevents replay from delivering the response; `CompletionDelivered`
+    /// delays delivery until the cursor reaches the marker's physical position. The marker always
+    /// lies after its `End`, so replay scans the visible oplog prefix before resolving any `End`.
+    /// Target growth rescans exactly the newly visible range, and live marker recording extends
+    /// the same map.
     ///
     /// A `std` mutex (like `log_hashes`) rather than part of [`CursorState`]: the live marker
     /// recorder is an owned tokio task that must not queue on the cursor lock, and all accesses
     /// are short synchronous map operations that never hold the lock across an `await`.
-    discarded_completions: std::sync::Mutex<HashMap<OplogIndex, OplogIndex>>,
+    completion_markers: std::sync::Mutex<HashMap<OplogIndex, CompletionMarker>>,
     /// Hashes of log entries persisted since the last read non-hint oplog entry, with their
     /// number of occurrences. A counted multiset (not a set) because large or repetitive
     /// stdout/stderr output regularly produces identical consecutive log entries, each of which
@@ -159,6 +163,82 @@ struct ReplayCursor {
     progress: Notify,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CompletionMarker {
+    Delivered(OplogIndex),
+    Discarded(OplogIndex),
+}
+
+/// Ownership of the global replay cursor gate after the matching `CompletionDelivered` marker has
+/// been consumed. The guard is acknowledged only at the same guest-facing boundary that recorded
+/// the marker live; until then every later cursor transaction remains blocked.
+pub(in crate::durable_host) struct ReplayDeliveryBarrier {
+    replay_state: ReplayState,
+    start_index: OplogIndex,
+    marker_index: OplogIndex,
+    gate: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl ReplayDeliveryBarrier {
+    fn new(
+        replay_state: ReplayState,
+        start_index: OplogIndex,
+        marker_index: OplogIndex,
+        gate: tokio::sync::OwnedMutexGuard<()>,
+    ) -> Self {
+        Self {
+            replay_state,
+            start_index,
+            marker_index,
+            gate: Some(gate),
+        }
+    }
+
+    pub(in crate::durable_host) fn acknowledge(mut self) {
+        self.gate.take();
+        self.replay_state.cursor.progress.notify_waiters();
+    }
+
+    pub(in crate::durable_host) fn fail(mut self, reason: impl Into<String>) {
+        self.replay_state.record_delivery_failure(format!(
+            "replay could not reproduce CompletionDelivered at {} for durable call Start at {}: {}",
+            self.marker_index,
+            self.start_index,
+            reason.into()
+        ));
+        self.gate.take();
+        self.replay_state.cursor.progress.notify_waiters();
+    }
+}
+
+impl Drop for ReplayDeliveryBarrier {
+    fn drop(&mut self) {
+        if self.gate.is_some() {
+            self.replay_state.record_delivery_failure(format!(
+                "replay delivery barrier for CompletionDelivered at {} and durable call Start at {} was dropped before the recorded guest-delivery boundary",
+                self.marker_index, self.start_index
+            ));
+            self.gate.take();
+            self.replay_state.cursor.progress.notify_waiters();
+        }
+    }
+}
+
+impl CompletionMarker {
+    fn index(self) -> OplogIndex {
+        match self {
+            Self::Delivered(index) | Self::Discarded(index) => index,
+        }
+    }
+
+    fn entry_name(self) -> &'static str {
+        match self {
+            Self::Delivered(_) => "CompletionDelivered",
+            Self::Discarded(_) => "CompletionDiscarded",
+        }
+    }
+}
+
 /// The published, lock-free-readable cursor position. The index fields are written only while
 /// [`ReplayCursor::state`] is held (through a [`CursorTx`]), so a lock-free reader never observes
 /// a partially-applied advance; `has_seen_logs` is written only while [`ReplayCursor::log_hashes`]
@@ -180,6 +260,10 @@ struct PublishedPosition {
 struct CursorState {
     skipped_regions: DeletedRegions,
     next_skipped_region: Option<OplogRegion>,
+    /// Set after consuming a `CompletionDelivered` marker. Its following hints cannot be skipped
+    /// until the delivery barrier is acknowledged, because doing so would advance replay beyond
+    /// the recorded guest callback boundary.
+    skip_hints_after_delivery: bool,
     /// Entries prefetched from the oplog, beginning at the next speculative cursor position.
     replay_buffer: VecDeque<(OplogIndex, OplogEntry)>,
     /// `Start` entries for `GolemApiFork` whose matching `End` has not yet been replayed. When the

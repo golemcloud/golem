@@ -13636,6 +13636,7 @@ components:
           CardExpired: '#/components/schemas/PublicOplogEntry_r#CardExpiredParams'
           HostStreamFrame: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
+          CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
@@ -13686,6 +13687,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardExpiredParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
       type: object
@@ -13866,6 +13868,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#CommittedRemoteTransactionParams'
+    PublicOplogEntry_r#CompletionDeliveredParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CompletionDelivered
+            type: string
+            enum:
+            - CompletionDelivered
+        required:
+        - type
+      - $ref: '#/components/schemas/r#CompletionDeliveredParams'
     PublicOplogEntry_r#CompletionDiscardedParams:
       allOf:
       - type: object
@@ -16571,6 +16585,19 @@ components:
       required:
       - timestamp
       - beginIndex
+    r#CompletionDeliveredParams:
+      title: r#CompletionDeliveredParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        startIndex:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - startIndex
     r#CompletionDiscardedParams:
       title: r#CompletionDiscardedParams
       type: object

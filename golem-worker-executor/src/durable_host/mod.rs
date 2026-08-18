@@ -6503,6 +6503,7 @@ struct PrivateDurableWorkerState {
         tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>,
         tokio::sync::mpsc::UnboundedReceiver<concurrent::DropEvent>,
     ),
+    completion_marker_recorder: concurrent::CompletionMarkerRecorder,
 
     /// The minimum oplog index handed to the guest via `get_oplog_index` during the current
     /// invocation (the `NoOp` marker it plants). It is the only realistic `set_oplog_index` target,
@@ -6635,6 +6636,8 @@ impl PrivateDurableWorkerState {
         };
         let replay_state =
             ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
+        let completion_marker_recorder =
+            concurrent::CompletionMarkerRecorder::new(oplog.clone(), replay_state.clone());
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         let dropped_call_events = tokio::sync::mpsc::unbounded_channel();
@@ -6752,6 +6755,7 @@ impl PrivateDurableWorkerState {
             invocation_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             tail_work_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             dropped_call_events,
+            completion_marker_recorder,
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
@@ -6944,6 +6948,10 @@ impl PrivateDurableWorkerState {
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>> {
         Some(self.dropped_call_events.0.clone())
+    }
+
+    fn completion_marker_recorder(&self) -> concurrent::CompletionMarkerRecorder {
+        self.completion_marker_recorder.clone()
     }
 
     fn live_host_call_counter(&self) -> Arc<AtomicUsize> {
