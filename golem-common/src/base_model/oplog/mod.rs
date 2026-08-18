@@ -113,6 +113,9 @@ oplog_entry! {
     /// dropped before completion); both reference this `Start` via `start_index`.
     ///
     /// `parent_start_index` is the `OplogIndex` of the enclosing scope's `Start`, if any.
+    /// `observational_owner` is the `Start` index of a custom durable invocation whose physical
+    /// call tree is recorded for observability but does not participate in replay. It is absent
+    /// for ordinary replayable calls.
     /// `request` is `Some(...)` for real host calls and `None` for scopes that have no
     /// host-level request payload (batched-write, future transaction scopes).
     Start {
@@ -122,12 +125,16 @@ oplog_entry! {
         raw {
             parent_start_index: Option<OplogIndex>,
             function_name: payload::host_functions::HostFunctionName,
+            invocation_id: Option<Uuid>,
+            observational_owner: Option<OplogIndex>,
             request: Option<payload::OplogPayload<payload::HostRequest>>,
             durable_function_type: DurableFunctionType,
         }
         public {
             parent_start_index: Option<OplogIndex>,
             function_name: String,
+            invocation_id: Option<Uuid>,
+            observational_owner: Option<OplogIndex>,
             request: Option<TypedSchemaValue>,
             durable_function_type: PublicDurableFunctionType,
         }
@@ -542,18 +549,6 @@ oplog_entry! {
             value: PublicAttributeValue,
         }
     },
-    /// Change persistence level
-    ChangePersistenceLevel {
-        hint: false
-        wit_raw_type: "change-persistence-level-parameters"
-        wit_public_type: "change-persistence-level-parameters"
-        raw {
-            persistence_level: PersistenceLevel,
-        }
-        public {
-            persistence_level: PersistenceLevel
-        }
-    },
     /// Marks the beginning of a remote transaction
     BeginRemoteTransaction {
         hint: false
@@ -930,5 +925,5 @@ oplog_entry! {
         public {
             start_index: OplogIndex,
         }
-    }
+    },
 }

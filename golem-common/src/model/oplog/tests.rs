@@ -21,6 +21,7 @@ use crate::model::card::{
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::lucene::Query;
+use crate::model::oplog::host_functions::HostFunctionName;
 use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
 use crate::model::oplog::payload::{HostRequestSecretReveal, HostResponseSecretRevealed};
 use crate::model::oplog::public_oplog_entry::{
@@ -28,21 +29,20 @@ use crate::model::oplog::public_oplog_entry::{
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardDerivedParams, CardExpiredParams, CardInstalledParams,
     CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
-    CardTransferStartedParams, CardTransferredParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams,
-    LogParams, NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
-    SuspendParams,
+    CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
+    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
+    FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
+    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, AgentResourceId, JsonSnapshotData, LogLevel,
-    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogPayload,
-    PersistenceLevel, PluginInstallationDescription, PublicAgentInvocation,
+    AgentMethodInvocationParameters, AgentResourceId, DurableFunctionType, JsonSnapshotData,
+    LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry,
+    OplogPayload, PluginInstallationDescription, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
     PublicLocalSpanData, PublicOplogEntry, PublicQueuedCardEvent, PublicSnapshotData,
     PublicSpanData, PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent,
@@ -62,6 +62,40 @@ use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet};
 use test_r::test;
 use uuid::Uuid;
+
+#[test]
+fn start_desert_roundtrip() {
+    let entry = OplogEntry::Start {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: Some(OplogIndex::from_u64(7)),
+        function_name: HostFunctionName::Custom("operation".to_string()),
+        invocation_id: Some(Uuid::new_v4()),
+        observational_owner: Some(OplogIndex::from_u64(6)),
+        request: None,
+        durable_function_type: DurableFunctionType::WriteRemote,
+    };
+
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, entry);
+}
+
+#[test]
+fn observational_start_public_protobuf_roundtrip() {
+    let owner = OplogIndex::from_u64(12);
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: Some(OplogIndex::from_u64(13)),
+        function_name: "wasi:http/outgoing-handler::handle".to_string(),
+        invocation_id: None,
+        observational_owner: Some(owner),
+        request: None,
+        durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
+    });
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), entry);
+}
 
 /// Build a single-root [`TypedSchemaValue`] fixture from an anonymous schema
 /// root and a value tree.
@@ -170,6 +204,8 @@ fn start_serialization_poem_serde_equivalence() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: None,
         function_name: "test".to_string(),
+        invocation_id: None,
+        observational_owner: Some(OplogIndex::from_u64(7)),
         request: Some(typed(
             SchemaType::string(),
             SchemaValue::String("test".to_string()),
@@ -205,6 +241,8 @@ fn start_with_handle_serialization_poem_serde_equivalence() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: Some(crate::base_model::OplogIndex::from_u64(3)),
         function_name: "golem:rpc/wasm-rpc.{invoke-and-await}".to_string(),
+        invocation_id: None,
+        observational_owner: None,
         request: Some(typed(
             SchemaType::record(vec![
                 nf("uri", SchemaType::string()),
@@ -230,6 +268,8 @@ fn start_with_complex_values_serialization_poem_serde_equivalence() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: None,
         function_name: "wasi:keyvalue/store.{get}".to_string(),
+        invocation_id: None,
+        observational_owner: None,
         request: Some(typed(
             SchemaType::record(vec![
                 nf("name", SchemaType::string()),
@@ -308,6 +348,8 @@ fn matcher_matches_payload_less_variant_case_name() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: None,
         function_name: "test".to_string(),
+        invocation_id: None,
+        observational_owner: None,
         request: Some(typed(
             SchemaType::variant(vec![vc("none", None), vc("some", Some(SchemaType::u32()))]),
             SchemaValue::Variant(VariantValuePayload {
@@ -328,6 +370,8 @@ fn matcher_matches_variant_payload_under_case_path() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: None,
         function_name: "test".to_string(),
+        invocation_id: None,
+        observational_owner: None,
         request: Some(typed(
             SchemaType::variant(vec![vc("none", None), vc("some", Some(SchemaType::u32()))]),
             SchemaValue::Variant(VariantValuePayload {
@@ -356,6 +400,8 @@ fn matcher_matches_secret_reveal_request_payload() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: None,
         function_name: "golem::secrets::reveal".to_string(),
+        invocation_id: None,
+        observational_owner: None,
         request: Some(request),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
     });
@@ -920,17 +966,6 @@ fn set_span_attribute_serialization_poem_serde_equivalence() {
         value: PublicAttributeValue::String(StringAttributeValue {
             value: "GET".to_string(),
         }),
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
-fn change_persistence_level_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ChangePersistenceLevel(ChangePersistenceLevelParams {
-        timestamp: Timestamp::now_utc().rounded(),
-        persistence_level: PersistenceLevel::Smart,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1594,6 +1629,8 @@ mod scope_scan {
             timestamp: Timestamp::now_utc(),
             parent_start_index: parent.map(idx),
             function_name: HostFunctionName::Custom("test".to_string()),
+            invocation_id: None,
+            observational_owner: None,
             request: None,
             durable_function_type,
         }
@@ -1602,12 +1639,8 @@ mod scope_scan {
     /// Replays the forward scan that `lookup_oplog_entry_with_condition_and_state` performs,
     /// returning `true` if no entry between the scope `Start` (`root`) and its `End` is a foreign
     /// concurrent side effect (i.e. `for_all_intermediate` holds for all of `entries`).
-    fn scan(
-        root: u64,
-        entries: &[(u64, OplogEntry)],
-        persistence_level: crate::model::oplog::PersistenceLevel,
-    ) -> bool {
-        let mut state = ScopeScanState::new(idx(root), persistence_level);
+    fn scan(root: u64, entries: &[(u64, OplogEntry)]) -> bool {
+        let mut state = ScopeScanState::new(idx(root));
         let mut ok = true;
         for (i, entry) in entries {
             entry.track_scope_membership(idx(*i), &mut state);
@@ -1616,10 +1649,6 @@ mod scope_scan {
             }
         }
         ok
-    }
-
-    fn persist_all() -> crate::model::oplog::PersistenceLevel {
-        crate::model::oplog::PersistenceLevel::Smart
     }
 
     fn invocation_finished() -> OplogEntry {
@@ -1642,7 +1671,7 @@ mod scope_scan {
                 DurableFunctionType::WriteRemoteBatched(Some(idx(10))),
             ),
         )];
-        assert!(scan(10, &entries, persist_all()));
+        assert!(scan(10, &entries));
     }
 
     #[test]
@@ -1656,19 +1685,19 @@ mod scope_scan {
             ),
             (12, start(Some(11), DurableFunctionType::WriteRemote)),
         ];
-        assert!(scan(10, &entries, persist_all()));
+        assert!(scan(10, &entries));
     }
 
     #[test]
     fn foreign_read_remote_is_allowed() {
         let entries = vec![(11, start(None, DurableFunctionType::ReadRemote))];
-        assert!(scan(10, &entries, persist_all()));
+        assert!(scan(10, &entries));
     }
 
     #[test]
     fn foreign_write_remote_is_rejected() {
         let entries = vec![(11, start(None, DurableFunctionType::WriteRemote))];
-        assert!(!scan(10, &entries, persist_all()));
+        assert!(!scan(10, &entries));
     }
 
     #[test]
@@ -1677,7 +1706,7 @@ mod scope_scan {
             11,
             start(None, DurableFunctionType::WriteRemoteBatched(None)),
         )];
-        assert!(!scan(10, &entries, persist_all()));
+        assert!(!scan(10, &entries));
     }
 
     #[test]
@@ -1691,17 +1720,7 @@ mod scope_scan {
             ),
             (12, start(Some(11), DurableFunctionType::WriteRemote)),
         ];
-        assert!(!scan(10, &entries, persist_all()));
-    }
-
-    #[test]
-    fn persist_nothing_ignores_foreign_side_effects() {
-        let entries = vec![(11, start(None, DurableFunctionType::WriteRemote))];
-        assert!(scan(
-            10,
-            &entries,
-            crate::model::oplog::PersistenceLevel::PersistNothing
-        ));
+        assert!(!scan(10, &entries));
     }
 
     #[test]
@@ -1722,7 +1741,7 @@ mod scope_scan {
             (12, end),
             (13, cancelled),
         ];
-        assert!(scan(10, &entries, persist_all()));
+        assert!(scan(10, &entries));
     }
 
     #[test]
@@ -1737,6 +1756,6 @@ mod scope_scan {
             ),
             (12, invocation_finished()),
         ];
-        assert!(scan(10, &entries, persist_all()));
+        assert!(scan(10, &entries));
     }
 }

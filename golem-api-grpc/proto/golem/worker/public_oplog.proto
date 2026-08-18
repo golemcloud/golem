@@ -53,7 +53,6 @@ message OplogEntry {
     StartSpanParameters StartSpan = 30;
     FinishSpanParameters FinishSpan = 31;
     SetSpanAttributeParameters SetSpanAttribute = 32;
-    ChangePersistenceLevelParameters ChangePersistenceLevel = 33;
     BeginRemoteTransactionParameters BeginRemoteTransaction = 34;
     RemoteTransactionParameters PreCommitRemoteTransaction = 35;
     RemoteTransactionParameters PreRollbackRemoteTransaction = 36;
@@ -138,6 +137,8 @@ message StartParameters {
   string function_name = 4;
   optional golem.schema.TypedSchemaValue request = 5;
   WrappedFunctionType durable_function_type = 6;
+  optional golem.common.UUID invocation_id = 7;
+  optional uint64 observational_owner = 8;
 }
 
 message EndParameters {
@@ -555,11 +556,6 @@ message SetSpanAttributeParameters {
   AttributeValue value = 4;
 }
 
-message ChangePersistenceLevelParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  PersistenceLevel persistence_level = 2;
-}
-
 enum OplogLogLevel {
   OPLOG_STDOUT = 0;
   OPLOG_STDERR = 1;
@@ -626,10 +622,4 @@ message OplogProcessorCheckpointParameters {
 message OplogEntryWithIndex {
   uint64 oplog_index = 1;
   OplogEntry entry = 2;
-}
-
-enum PersistenceLevel {
-  PERSIST_NOTHING = 0;
-  PERSIST_REMOTE_SIDE_EFFECTS = 1;
-  SMART = 2;
 }

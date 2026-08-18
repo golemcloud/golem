@@ -71,8 +71,8 @@ impl ReplayCursor {
 
     /// Forward-scans the oplog from `start` up to `replay_target`, skipping entries inside deleted
     /// regions, running `end_check`/`for_all_intermediate` (and `update_state`) over the rest. This
-    /// is the shared core of the public [`ReplayState::lookup_oplog_entry_with_condition_and_state`]
-    /// and the persist-nothing-zone scan in [`CursorTx::should_skip_to`].
+    /// is the shared core for replay scans that need to inspect entries without advancing the
+    /// cursor.
     ///
     /// It only reads the oplog (via [`Self::read_oplog`]); it never touches [`Self::state`], so it is
     /// safe to call both from inside a held [`CursorTx`] (passing a borrow of the transaction's skip
@@ -148,12 +148,16 @@ impl ReplayCursor {
 /// lock. It accumulates whether cursor progress should be signalled; the public entry point notifies
 /// (via [`ReplayCursor::finish_tx`]) after the guard is dropped.
 pub(super) struct CursorTx<'a> {
-    cursor: &'a ReplayCursor,
-    st: MutexGuard<'a, CursorState>,
+    pub(super) cursor: &'a ReplayCursor,
+    pub(super) st: MutexGuard<'a, CursorState>,
     notify_progress: bool,
 }
 
 impl CursorTx<'_> {
+    pub(super) fn register_custom_subtree_root(&mut self, root: OplogIndex) {
+        self.st.custom_subtrees.insert(root, HashSet::from([root]));
+    }
+
     /// Reads the next oplog entry (the one right after the committed cursor) **without** advancing
     /// the published cursor and **without** applying any replay side effects. This is the
     /// *speculative* read: the caller either commits it (via [`Self::commit_consumed_entry`] / the
@@ -319,6 +323,49 @@ impl CursorTx<'_> {
                 continue;
             }
 
+            if let OplogEntry::Start {
+                observational_owner: Some(owner),
+                ..
+            } = &entry
+                && let Some(root) = self.custom_subtree_root(*owner)
+            {
+                // The owning custom invocation replays as one logical operation, so its physical
+                // calls are observational records only: consume their Starts without registering
+                // resolver awaiters or waiting for terminals.
+                self.commit_consumed_entry(read_idx, &entry).await?;
+                self.st
+                    .custom_subtrees
+                    .get_mut(&root)
+                    .expect("custom subtree root disappeared while consuming an observational call")
+                    .insert(read_idx);
+                continue;
+            }
+
+            if let OplogEntry::Start {
+                parent_start_index: Some(parent_start_index),
+                ..
+            } = &entry
+                && let Some(root) = self.custom_subtree_root(*parent_start_index)
+            {
+                // A custom invocation returns its persisted root result without running its body.
+                // Nested calls, scopes, and custom invocations therefore belong to the same replay-
+                // inert tree through their ordinary parent identity, irrespective of interleaving.
+                self.commit_consumed_entry(read_idx, &entry).await?;
+                self.st
+                    .custom_subtrees
+                    .get_mut(&root)
+                    .expect("custom subtree root disappeared while consuming a descendant")
+                    .insert(read_idx);
+                continue;
+            }
+
+            if terminal_start_index(&entry)
+                .is_some_and(|start_index| self.is_custom_subtree_descendant(start_index))
+            {
+                self.commit_consumed_entry(read_idx, &entry).await?;
+                continue;
+            }
+
             if let Some(abandoned) = abandoned.as_deref_mut() {
                 // Invocation-boundary tolerance: any `Start` still unconsumed here can never be
                 // claimed anymore (the replayed guest already produced its invocation result), so
@@ -398,6 +445,18 @@ impl CursorTx<'_> {
             .is_some_and(|start_index| self.st.skipped_regions.is_in_deleted_region(start_index))
     }
 
+    fn custom_subtree_root(&self, member: OplogIndex) -> Option<OplogIndex> {
+        self.st
+            .custom_subtrees
+            .iter()
+            .find_map(|(root, members)| members.contains(&member).then_some(*root))
+    }
+
+    fn is_custom_subtree_descendant(&self, member: OplogIndex) -> bool {
+        self.custom_subtree_root(member)
+            .is_some_and(|root| root != member)
+    }
+
     /// Commits a just-read entry: apply its commit-only side effects, publish the cursor advance,
     /// skip any trailing hint entries, advance the non-hint marker, route it to the concurrent
     /// resolver, and mark that cursor progress should be signalled once the lock is released.
@@ -429,23 +488,22 @@ impl CursorTx<'_> {
         Ok(())
     }
 
-    /// Skips trailing hint entries (and persist-nothing zones) following the just-committed entry,
-    /// recording any log hints, then leaves the cursor on the next non-hint entry without consuming
-    /// it.
+    /// Skips trailing hint entries following the just-committed entry, recording any log hints,
+    /// then leaves the cursor on the next non-hint entry without consuming it.
     pub(super) async fn skip_forward(&mut self) -> Result<(), WorkerExecutorError> {
         // Skipping hint entries and recording log entries
         let mut logs: HashMap<(u64, u64), usize> = HashMap::new();
         while self.cursor.is_replay() {
             // Speculative peek: does not advance the published cursor. The cursor is advanced (via
-            // `move_replay_idx`) only when a hint / persist-nothing-zone entry is actually skipped
-            // past below; the first non-hint entry leaves the cursor untouched, so no speculative
-            // position is ever globally observable.
+            // `move_replay_idx`) only when a hint entry is actually skipped past below; the first
+            // non-hint entry leaves the cursor untouched, so no speculative position is ever
+            // globally observable.
             let (read_idx, entry) = self.raw_read_next_oplog_entry().await?;
             match self.should_skip_to(read_idx, &entry).await {
                 Some(skip_to) => {
-                    // This hint / persist-nothing-zone entry is being permanently consumed, so its
-                    // commit-only side effects fire here (they must NOT fire on the rolled-back
-                    // probe in the `None` branch below).
+                    // This hint entry is being permanently consumed, so its commit-only side
+                    // effects fire here (they must NOT fire on the rolled-back probe in the `None`
+                    // branch below).
                     self.apply_commit_effects(read_idx, &entry).await?;
 
                     // Recording seen log entries
@@ -480,14 +538,10 @@ impl CursorTx<'_> {
     /// Checks whether the currently read `entry` is a hint entry valid for replay, or
     /// if a new oplog index should be tried instead.
     ///
-    /// For hint entries, the next tried oplog index is the next one. When reaching
-    /// persist-nothing zones, it points to the end of the zone.
+    /// For hint entries, the next tried oplog index is the next one.
     ///
     /// If the entry is a hint entry, the result is `Some` and contains the current last
     /// read index, so the next read will get the next one.
-    /// If the entry is the beginning of a persist-nothing zone, the result will be `Some`
-    /// containing the _end_ of the zone so the next read will get the first entry outside
-    /// the zone.
     /// If the entry is not a hint entry the result is `None`.
     pub(super) async fn should_skip_to(
         &self,
@@ -498,47 +552,6 @@ impl CursorTx<'_> {
             // Advance to the hint entry itself; the caller publishes this (via `move_replay_idx`) so
             // the next read gets `read_idx.next()`.
             Some(read_idx)
-        } else if let OplogEntry::ChangePersistenceLevel {
-            persistence_level, ..
-        } = &entry
-        {
-            if persistence_level == &PersistenceLevel::PersistNothing {
-                let begin_index = read_idx;
-                let cursor = self.cursor;
-                // Scan with the transaction's own skip state (no re-lock); see `scan_oplog`.
-                let end_index = match cursor
-                    .scan_oplog(
-                        cursor.last_replayed_index().next(),
-                        cursor.replay_target(),
-                        &self.st.skipped_regions,
-                        self.st.next_skipped_region.clone(),
-                        begin_index,
-                        |entry, _idx, _state: &()| match entry {
-                            OplogEntry::ChangePersistenceLevel {
-                                persistence_level, ..
-                            } => persistence_level != &PersistenceLevel::PersistNothing,
-                            OplogEntry::AgentInvocationFinished { .. } => true,
-                            _ => false,
-                        },
-                        |_, _, _state: &()| true,
-                        (),
-                        |_, _, _state: &mut ()| {},
-                    )
-                    .await
-                {
-                    OplogEntryLookupResult::Found { index, .. } => Some(index),
-                    OplogEntryLookupResult::NotFound { .. } => None,
-                };
-
-                if let Some(end_index) = end_index {
-                    Some(end_index)
-                } else {
-                    // The zone has not been closed
-                    Some(cursor.replay_target())
-                }
-            } else {
-                None
-            }
         } else {
             None
         }
@@ -547,7 +560,7 @@ impl CursorTx<'_> {
     /// Applies the replay side effects of an entry that is being **permanently consumed** at
     /// `read_idx`. Split out of the raw read so it fires only on commit, never on a rolled-back
     /// speculative read. Called for the entry returned to a caller, and for each hint /
-    /// persist-nothing-zone entry skipped past in [`Self::skip_forward`].
+    /// hint entry skipped past in [`Self::skip_forward`].
     pub(super) async fn apply_commit_effects(
         &mut self,
         read_idx: OplogIndex,
@@ -723,12 +736,12 @@ impl CursorTx<'_> {
     /// into live mode.
     ///
     /// This is the single chokepoint for every replay-mode position advance — direct consumption of
-    /// the target entry, skipping past trailing hint entries, jumping over a persist-nothing zone,
-    /// and jumping over a skipped region (via [`Self::get_out_of_skipped_region`]) all funnel through
-    /// here. Detecting the transition here (rather than only when the *consumed* entry index equals
-    /// `replay_target`) guarantees `ReplayFinished` is queued on every transition to live, including
-    /// when the cursor reaches the target via a skip/jump that never consumes the target entry. The
-    /// forced transition in [`Self::switch_to_live`] is the only other path to live and emits its
+    /// the target entry, skipping past trailing hint entries, and jumping over a skipped region (via
+    /// [`Self::get_out_of_skipped_region`]) all funnel through here. Detecting the transition here
+    /// (rather than only when the *consumed* entry index equals `replay_target`) guarantees
+    /// `ReplayFinished` is queued on every transition to live, including when the cursor reaches the
+    /// target via a skip/jump that never consumes the target entry. The forced transition in
+    /// [`Self::switch_to_live`] is the only other path to live and emits its
     /// own `ReplayFinished`.
     ///
     /// Exactly-once holds because the `was_replay && is_live` edge is true only on the single advance
@@ -1158,6 +1171,8 @@ impl CursorTx<'_> {
         let matches_identity = |entry: &OplogEntry| {
             matches!(entry, OplogEntry::Start {
                 function_name,
+                invocation_id,
+                observational_owner,
                 request,
                 durable_function_type,
                 parent_start_index,
@@ -1168,6 +1183,8 @@ impl CursorTx<'_> {
                 && claim
                     .expected_function_type()
                     .is_none_or(|expected| durable_function_type == expected)
+                && invocation_id.is_none()
+                && observational_owner.is_none()
                 && request.is_some() == claim.carries_request()
                 && *parent_start_index == claim.expected_parent_start_index())
         };
@@ -1213,6 +1230,8 @@ impl CursorTx<'_> {
         // Scan-ahead-claimed `Start`s the cursor never reached are moot now: their awaiters were
         // just failed with `Incomplete`, and the cursor will not read again.
         self.st.claimed_starts.clear();
+        self.st.claimed_custom_invocation_ids.clear();
+        self.st.custom_subtrees.clear();
         self.st.replay_buffer.clear();
         self.notify_progress = true;
     }
@@ -1229,6 +1248,8 @@ impl CursorTx<'_> {
         self.cursor.set_log_hashes(HashMap::new());
         self.cursor.pending_replay_events.lock().unwrap().clear();
         self.st.claimed_starts.clear();
+        self.st.claimed_custom_invocation_ids.clear();
+        self.st.custom_subtrees.clear();
         self.st.replay_buffer.clear();
         self.cursor
             .position
@@ -1271,6 +1292,8 @@ impl ReplayState {
                 pending_fork_starts: HashSet::new(),
                 concurrent_resolver: ConcurrentReplayResolver::default(),
                 claimed_starts: HashSet::new(),
+                claimed_custom_invocation_ids: HashSet::new(),
+                custom_subtrees: HashMap::new(),
             }),
             discarded_completions: std::sync::Mutex::new(discarded_completions),
             log_hashes: std::sync::Mutex::new(HashMap::new()),
@@ -1599,13 +1622,8 @@ impl ReplayState {
     /// ahead of the candidate are drained to their awaiters first — see
     /// [`CursorTx::try_get_oplog_entry`] — and those drains stay committed.)
     ///
-    /// The auto-skipped hint entries can be of two kind:
-    /// - A set of oplog entry cases are always hint entries. They manipulate the worker status
-    ///   but are non-deterministic from the replay's point of view.
-    /// - Every oplog entry recorded in persist-nothing zones. These are there for observability,
-    ///   but they never participate in the replay. A persist-nothing zone is bounded by two
-    ///   ChangePersistenceLevel entries, or if the closing one is missing, it is up to the end of the
-    ///   oplog.
+    /// Auto-skipped hint entries manipulate worker status but are non-deterministic from the
+    /// replay's point of view.
     pub async fn try_get_oplog_entry(
         &self,
         condition: impl FnMut(&OplogEntry) -> bool,

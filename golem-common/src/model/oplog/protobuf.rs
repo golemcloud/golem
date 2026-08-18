@@ -50,21 +50,21 @@ use crate::model::oplog::public_oplog_entry::{
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardDerivedParams, CardEventQueuedParams, CardInstallFailedParams,
     CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
-    CardTransferStartedParams, CardTransferredParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CompletionDiscardedParams, CreateParams,
-    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
-    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams,
-    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
-    LogParams, NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams,
-    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
-    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
-    SuccessfulUpdateParams, SuspendParams,
+    CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
+    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
+    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
+    SuspendParams,
 };
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, HostStreamKind, OplogEntry,
-    PersistenceLevel, PublicQueuedCardEventCard, ReadOnlyViolationError,
+    PublicQueuedCardEventCard, ReadOnlyViolationError,
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
@@ -493,38 +493,6 @@ fn raw_card_install_failure_to_proto(
     }
 }
 
-impl From<PersistenceLevel> for golem_api_grpc::proto::golem::worker::PersistenceLevel {
-    fn from(value: PersistenceLevel) -> Self {
-        match value {
-            PersistenceLevel::PersistNothing => {
-                golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistNothing
-            }
-            PersistenceLevel::PersistRemoteSideEffects => {
-                golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistRemoteSideEffects
-            }
-            PersistenceLevel::Smart => {
-                golem_api_grpc::proto::golem::worker::PersistenceLevel::Smart
-            }
-        }
-    }
-}
-
-impl From<golem_api_grpc::proto::golem::worker::PersistenceLevel> for PersistenceLevel {
-    fn from(value: golem_api_grpc::proto::golem::worker::PersistenceLevel) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistNothing => {
-                PersistenceLevel::PersistNothing
-            }
-            golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistRemoteSideEffects => {
-                PersistenceLevel::PersistRemoteSideEffects
-            }
-            golem_api_grpc::proto::golem::worker::PersistenceLevel::Smart => {
-                PersistenceLevel::Smart
-            }
-        }
-    }
-}
-
 impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
     type Error = String;
 
@@ -805,6 +773,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .parent_start_index
                     .map(crate::base_model::OplogIndex::from_u64),
                 function_name: start.function_name,
+                invocation_id: start.invocation_id.map(Into::into),
+                observational_owner: start
+                    .observational_owner
+                    .map(crate::base_model::OplogIndex::from_u64),
                 request: start.request.map(TryInto::try_into).transpose()?,
                 durable_function_type: start
                     .durable_function_type
@@ -1101,12 +1073,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .try_into()?,
                 }))
             }
-            Entry::ChangePersistenceLevel(change) => Ok(PublicOplogEntry::ChangePersistenceLevel(
-                ChangePersistenceLevelParams {
-                    timestamp: change.timestamp.ok_or("Missing timestamp field")?.into(),
-                    persistence_level: change.persistence_level().into(),
-                },
-            )),
             oplog_entry::Entry::BeginRemoteTransaction(value) => Ok(
                 PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -1399,6 +1365,10 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(start.timestamp.into()),
                             parent_start_index: start.parent_start_index.map(|id| id.as_u64()),
                             function_name: start.function_name.clone(),
+                            invocation_id: start.invocation_id.map(Into::into),
+                            observational_owner: start
+                                .observational_owner
+                                .map(|id| id.as_u64()),
                             request: start.request.map(Into::into),
                             durable_function_type: Some(start.durable_function_type.into()),
                         },
@@ -1721,20 +1691,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             span_id: set.span_id.0.get(),
                             key: set.key,
                             value: Some(set.value.into()),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::ChangePersistenceLevel(change) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::ChangePersistenceLevel(
-                        golem_api_grpc::proto::golem::worker::ChangePersistenceLevelParameters {
-                            timestamp: Some(change.timestamp.into()),
-                            persistence_level: Into::<
-                                golem_api_grpc::proto::golem::worker::PersistenceLevel,
-                            >::into(
-                                change.persistence_level
-                            ) as i32,
                         },
                     )),
                 }
@@ -2913,6 +2869,8 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     timestamp: start.timestamp,
                     parent_start_index: start.parent_start_index,
                     function_name: HostFunctionName::from(start.function_name.as_str()),
+                    invocation_id: start.invocation_id,
+                    observational_owner: start.observational_owner,
                     request,
                     durable_function_type,
                 })
@@ -3097,12 +3055,6 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 key: p.key,
                 value: p.value.into(),
             }),
-            PublicOplogEntry::ChangePersistenceLevel(p) => {
-                Ok(OplogEntry::ChangePersistenceLevel {
-                    timestamp: p.timestamp,
-                    persistence_level: p.persistence_level,
-                })
-            }
             PublicOplogEntry::BeginRemoteTransaction(_) => {
                 Err("Cannot convert BeginRemoteTransaction from public to raw oplog entry"
                     .to_string())
@@ -3617,14 +3569,13 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             RawCardEventQueuedParameters, RawCardInstallFailedParameters,
             RawCardInstalledParameters, RawCardRevokedCascadeParameters, RawCardRevokedParameters,
             RawCardTransferConfirmedParameters, RawCardTransferStartedParameters,
-            RawCardTransferredParameters, RawChangePersistenceLevelParameters,
-            RawCompletionDiscardedParameters, RawCreateParameters, RawCreateResourceParameters,
-            RawDeactivatePluginParameters, RawDropResourceParameters, RawEndAtomicRegionParameters,
-            RawEndParameters, RawEnvVar, RawErrorParameters, RawFailedUpdateParameters,
-            RawFilesystemStorageUsageUpdateParameters, RawFinishSpanParameters,
-            RawGrowMemoryParameters, RawHostStreamFrameParameters, RawJumpParameters,
-            RawLogParameters, RawOplogProcessorCheckpointParameters, RawOplogRegion,
-            RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
+            RawCardTransferredParameters, RawCompletionDiscardedParameters, RawCreateParameters,
+            RawCreateResourceParameters, RawDeactivatePluginParameters, RawDropResourceParameters,
+            RawEndAtomicRegionParameters, RawEndParameters, RawEnvVar, RawErrorParameters,
+            RawFailedUpdateParameters, RawFilesystemStorageUsageUpdateParameters,
+            RawFinishSpanParameters, RawGrowMemoryParameters, RawHostStreamFrameParameters,
+            RawJumpParameters, RawLogParameters, RawOplogProcessorCheckpointParameters,
+            RawOplogRegion, RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
             RawRemoteTransactionParameters, RawRemoveRetryPolicyParameters, RawResourceTypeId,
             RawRevertParameters, RawSetRetryPolicyParameters, RawSetSpanAttributeParameters,
             RawSnapshotParameters, RawStartParameters, RawStartSpanParameters,
@@ -3678,12 +3629,16 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             OplogEntry::Start {
                 parent_start_index,
                 function_name,
+                invocation_id,
+                observational_owner,
                 request,
                 durable_function_type,
                 ..
             } => Entry::Start(RawStartParameters {
                 parent_start_index: parent_start_index.map(|id| id.as_u64()),
                 function_name: function_name.to_string(),
+                invocation_id: invocation_id.map(Into::into),
+                observational_owner: observational_owner.map(|id| id.as_u64()),
                 request: request.map(oplog_payload_to_proto).transpose()?,
                 durable_function_type: Some(durable_function_type_to_proto(durable_function_type)),
             }),
@@ -3914,14 +3869,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 value: match value {
                     crate::model::invocation_context::AttributeValue::String(s) => s,
                 },
-            }),
-            OplogEntry::ChangePersistenceLevel {
-                persistence_level, ..
-            } => Entry::ChangePersistenceLevel(RawChangePersistenceLevelParameters {
-                persistence_level:
-                    Into::<golem_api_grpc::proto::golem::worker::PersistenceLevel>::into(
-                        persistence_level,
-                    ) as i32,
             }),
             OplogEntry::BeginRemoteTransaction {
                 transaction_id,
@@ -4210,6 +4157,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         .parent_start_index
                         .map(crate::base_model::OplogIndex::from_u64),
                     function_name,
+                    invocation_id: p.invocation_id.map(Into::into),
+                    observational_owner: p
+                        .observational_owner
+                        .map(crate::base_model::OplogIndex::from_u64),
                     request,
                     durable_function_type,
                 })
@@ -4473,18 +4424,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     value: crate::model::invocation_context::AttributeValue::String(p.value),
                 })
             }
-            Entry::ChangePersistenceLevel(p) => {
-                let persistence_level: PersistenceLevel =
-                    golem_api_grpc::proto::golem::worker::PersistenceLevel::try_from(
-                        p.persistence_level,
-                    )
-                    .map_err(|_| format!("Invalid persistence level: {}", p.persistence_level))?
-                    .into();
-                Ok(OplogEntry::ChangePersistenceLevel {
-                    timestamp,
-                    persistence_level,
-                })
-            }
             Entry::BeginRemoteTransaction(p) => {
                 let transaction_id = crate::model::TransactionId::from(p.transaction_id);
                 let original_begin_index = p.original_begin_index.map(OplogIndex::from_u64);
@@ -4675,6 +4614,33 @@ fn host_stream_kind_from_proto(kind: i32) -> Result<HostStreamKind, String> {
             Ok(HostStreamKind::P3HttpRequestBody)
         }
         Err(_) => Err(format!("Invalid host stream kind: {kind}")),
+    }
+}
+
+#[cfg(test)]
+mod observational_start_proto_tests {
+    use crate::model::OplogIndex;
+    use crate::model::Timestamp;
+    use crate::model::oplog::payload::host_functions::HostFunctionName;
+    use crate::model::oplog::{DurableFunctionType, OplogEntry};
+    use golem_api_grpc::proto::golem::worker::RawOplogEntry;
+    use test_r::test;
+
+    #[test]
+    fn observational_start_raw_protobuf_roundtrips() {
+        let original = OplogEntry::Start {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index: Some(OplogIndex::from_u64(8)),
+            function_name: HostFunctionName::Custom("wasi:http/outgoing-handler::handle".into()),
+            invocation_id: None,
+            observational_owner: Some(OplogIndex::from_u64(7)),
+            request: None,
+            durable_function_type: DurableFunctionType::WriteRemote,
+        };
+
+        let proto: RawOplogEntry = original.clone().try_into().unwrap();
+        let roundtrip = OplogEntry::try_from(proto).unwrap();
+        assert_eq!(roundtrip, original);
     }
 }
 

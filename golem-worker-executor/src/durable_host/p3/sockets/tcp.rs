@@ -17,9 +17,12 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::durable_host::TcpSocketStreamDirection;
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable, NotCancellable};
+use crate::durable_host::concurrent::{
+    AccessClaimOptions, CallHandle, CallReplayOutcome, Cancellable, NotCancellable,
+    resolve_current_observational_owner,
+};
 use crate::durable_host::durability::{
-    DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
+    CustomInvocationContext, DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
 };
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
@@ -37,7 +40,7 @@ use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, Serializa
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequestNoInput, HostResponseP3SocketsTcpAcquire,
     HostResponseP3SocketsTcpReceive, HostResponseP3SocketsTcpReceiveChunk,
-    HostResponseP3SocketsTcpSend,
+    HostResponseP3SocketsTcpSend, OplogIndex,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::PollSender;
@@ -889,6 +892,7 @@ struct TcpSocketReceiveTask<Ctx> {
     socket: Resource<TcpSocket>,
     demand_rx: mpsc::Receiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpReceiveResolution>,
+    observational_owner: Option<OplogIndex>,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
@@ -898,12 +902,14 @@ impl<Ctx> TcpSocketReceiveTask<Ctx> {
         socket: Resource<TcpSocket>,
         demand_rx: mpsc::Receiver<TcpReceiveDemand>,
         result_tx: oneshot::Sender<TcpReceiveResolution>,
+        observational_owner: Option<OplogIndex>,
         activity: TailActivity,
     ) -> Self {
         Self {
             socket,
             demand_rx,
             result_tx,
+            observational_owner,
             activity,
             _phantom: PhantomData,
         }
@@ -921,6 +927,7 @@ where
             self.socket,
             self.demand_rx,
             self.result_tx,
+            self.observational_owner,
             self.activity,
         )
         .await
@@ -975,6 +982,7 @@ async fn run_tcp_socket_receive<Ctx, U>(
     socket: Resource<TcpSocket>,
     mut demand_rx: mpsc::Receiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpReceiveResolution>,
+    observational_owner: Option<OplogIndex>,
     activity: TailActivity,
 ) -> wasmtime::Result<()>
 where
@@ -982,17 +990,24 @@ where
     U: Send + 'static,
 {
     // Open the parent batched scope. Children nest under its begin index.
-    let mut parent = match CallHandle::<P3SocketsTypesTcpSocketReceive, Cancellable>::start_access(
-        accessor,
-        durable_worker_ctx::<Ctx, U>,
-        HostRequestNoInput {},
-        DurableFunctionType::WriteRemoteBatched(None),
-    )
-    .await
-    {
-        Ok(parent) => parent,
-        Err(error) => return fail_tcp_receive_task(result_tx, wasmtime::Error::from(error), None),
-    };
+    let mut parent =
+        match CallHandle::<P3SocketsTypesTcpSocketReceive, Cancellable>::start_access_with_options(
+            accessor,
+            durable_worker_ctx::<Ctx, U>,
+            DurableFunctionType::WriteRemoteBatched(None),
+            AccessClaimOptions {
+                observational_owner,
+                ..Default::default()
+            },
+            async |_| Ok(HostRequestNoInput {}),
+        )
+        .await
+        {
+            Ok(parent) => parent,
+            Err(error) => {
+                return fail_tcp_receive_task(result_tx, wasmtime::Error::from(error), None);
+            }
+        };
     let parent_begin = parent.begin_index();
 
     // Live upstream wiring: only touch the socket when the parent call is live.
@@ -1048,12 +1063,18 @@ where
         // Safe park: waiting for the guest to demand the next chunk.
         let demand = activity.park(demand_rx.recv()).await;
 
-        let mut child =
-            match CallHandle::<P3SocketsTypesTcpSocketReceiveChunk, NotCancellable>::start_access(
+        let mut child = match CallHandle::<
+            P3SocketsTypesTcpSocketReceiveChunk,
+            NotCancellable,
+        >::start_access_with_options(
                 accessor,
                 durable_worker_ctx::<Ctx, U>,
-                HostRequestNoInput {},
                 DurableFunctionType::WriteRemoteBatched(Some(parent_begin)),
+                AccessClaimOptions {
+                    observational_owner,
+                    ..Default::default()
+                },
+                async |_| Ok(HostRequestNoInput {}),
             )
             .await
             {
@@ -1588,6 +1609,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         accessor: &Accessor<U, Self>,
         socket: Resource<TcpSocket>,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
+        let custom_invocation_context = accessor.guest_task_context::<CustomInvocationContext>()?;
+        let observational_owner = accessor.with(|mut access| {
+            resolve_current_observational_owner(
+                durable_worker_ctx::<Ctx, U>(access.data_mut()),
+                custom_invocation_context.as_deref(),
+            )
+        })?;
         // One-shot acquire of the receive stream. On a second call (or when the
         // socket is not connected) this returns an error, surfaced as an empty
         // stream plus an immediately-failing result future, mirroring the native
@@ -1627,7 +1655,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 .tail_work_tracker()
                 .activity();
             store.spawn(TcpSocketReceiveTask::<Ctx>::new(
-                socket, demand_rx, result_tx, activity,
+                socket,
+                demand_rx,
+                result_tx,
+                observational_owner,
+                activity,
             ));
             Ok((stream, future))
         })

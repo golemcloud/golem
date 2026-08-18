@@ -34,7 +34,6 @@ object AgentHostApi {
 
   // --- Type aliases pointing to golem.host.js facades ---
   type AgentMetadata          = JsAgentMetadata
-  type PersistenceLevel       = JsPersistenceLevel
   type AgentStatus            = JsAgentStatus
   type UpdateMode             = JsUpdateMode
   type FilterComparator       = JsFilterComparator
@@ -159,12 +158,6 @@ object AgentHostApi {
   def oplogCommit(replicas: Int): Unit =
     HostModule.oplogCommit(replicas)
 
-  def getOplogPersistenceLevel(): PersistenceLevel =
-    HostModule.getOplogPersistenceLevel().asInstanceOf[PersistenceLevel]
-
-  def setOplogPersistenceLevel(level: PersistenceLevel): Unit =
-    HostModule.setOplogPersistenceLevel(level)
-
   def getIdempotenceMode(): Boolean =
     HostModule.getIdempotenceMode()
 
@@ -202,17 +195,6 @@ object AgentHostApi {
       highBits = _root_.scala.BigInt(uuid.highBits.toString),
       lowBits = _root_.scala.BigInt(uuid.lowBits.toString)
     )
-
-  object PersistenceLevel {
-    def PersistNothing: PersistenceLevel =
-      JsPersistenceLevel.persistNothing
-
-    def PersistRemoteSideEffects: PersistenceLevel =
-      JsPersistenceLevel.persistRemoteSideEffects
-
-    def Smart: PersistenceLevel =
-      JsPersistenceLevel.smart
-  }
 
   object AgentStatus {
     def Running: AgentStatus = "running"
@@ -380,10 +362,6 @@ object AgentHostApi {
     def trap(reason: String): Unit = js.native
 
     def oplogCommit(replicas: Int): Unit = js.native
-
-    def getOplogPersistenceLevel(): js.Any = js.native
-
-    def setOplogPersistenceLevel(level: PersistenceLevel): Unit = js.native
 
     def getIdempotenceMode(): Boolean = js.native
 

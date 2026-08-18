@@ -101,6 +101,9 @@ impl TextOutput for PublicOplogEntry {
                 if let Some(parent) = params.parent_start_index {
                     logln(format!("{pad}parent start index: {}", parent));
                 }
+                if let Some(owner) = params.observational_owner {
+                    logln(format!("{pad}observational owner: {}", owner));
+                }
                 if let Some(request) = &params.request {
                     logln(format!(
                         "{pad}input:             {}",
@@ -518,17 +521,6 @@ impl TextOutput for PublicOplogEntry {
                         PublicAttributeValue::String(StringAttributeValue { value }) =>
                             format_id(value),
                     }
-                ));
-            }
-            PublicOplogEntry::ChangePersistenceLevel(params) => {
-                logln(format_message_highlight("CHANGE PERSISTENCE LEVEL"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}level:             {}",
-                    format_id(&format!("{:?}", params.persistence_level))
                 ));
             }
             PublicOplogEntry::BeginRemoteTransaction(params) => {

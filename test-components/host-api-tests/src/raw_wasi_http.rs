@@ -60,7 +60,7 @@ impl RawWasiHttp for RawWasiHttpImpl {
 /// Sends a POST request with a small body through the raw P3 `wasi:http`
 /// bindings: the body is streamed through a `wit_stream` concurrently with the
 /// send, and the trailers future is completed after the body stream is closed.
-async fn send_http_request(path: &str) -> types::Response {
+pub(crate) async fn send_http_request(path: &str) -> types::Response {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
 
     let headers =
@@ -110,7 +110,7 @@ async fn send_http_request(path: &str) -> types::Response {
 }
 
 /// Reads the full body of an incoming response through the raw P3 body stream.
-async fn read_body(response: types::Response) -> Vec<u8> {
+pub(crate) async fn read_body(response: types::Response) -> Vec<u8> {
     let (result_writer, result_reader) = wit_future::new::<Result<(), types::ErrorCode>>(|| Ok(()));
     let (body_stream, trailers) = types::Response::consume_body(response, result_reader);
     let body = body_stream.collect().await;

@@ -1,15 +1,15 @@
 ---
 name: golem-atomic-block-moonbit
-description: "Atomic blocks, persistence control, and idempotency in MoonBit Golem agents. Use when the user asks about atomic operations, persistence levels, or idempotent execution."
+description: "Using atomic blocks and idempotency in MoonBit Golem agents. Use when the user asks about atomic operations or idempotent execution."
 ---
 
 # Atomic Blocks and Durability Controls (MoonBit)
 
 ## Overview
 
-Golem provides **automatic durable execution** — all agents are durable by default. These APIs are **advanced controls** that most agents will never need. Only use them when you have specific requirements around persistence granularity, idempotency, or atomicity.
+Golem provides **automatic durable execution** — all agents are durable by default. These APIs are **advanced controls** that most agents will never need. Only use them when you have specific requirements around idempotency or atomicity.
 
-The high-level APIs are in the `@api` package (`golemcloud/golem_sdk/api`). Import it with an alias like `@api`. The types `PersistenceLevel` and `RetryPolicy` are re-exported from this package.
+The high-level APIs are in the `@api` package (`golemcloud/golem_sdk/api`). Import it with an alias like `@api`. The retry types are re-exported from this package.
 
 ## Atomic Operations
 
@@ -17,7 +17,7 @@ Group **external, observable side effects** (HTTP calls, calls to other agents, 
 
 > **What this is NOT.** `with_atomic_operation` is **not** an STM/transaction primitive and **not** for grouping in-memory state mutations. Golem agents are single-threaded, and in-memory state is automatically rebuilt by oplog replay on recovery, so wrapping plain in-memory updates in an atomic block does nothing useful. The terminology overlaps with Haskell STM, database transactions, and `synchronized` blocks, but the semantics are different: this is purely about how durable, externally-observable effects are re-executed across a crash boundary.
 >
-> **It is also NOT how you reduce oplog size or speed up recovery.** Despite the description's mention of "persistence" and oplog-related controls, `with_atomic_operation`/persistence-level/idempotency-mode APIs do not shrink the oplog or skip replay. If your concern is that the oplog is growing too large or recovery/replay is becoming slow (long-running agents, heartbeats, polling, recurring tasks), use **snapshot-based recovery** instead — see [`golem-custom-snapshot-moonbit`](../golem-custom-snapshot-moonbit/SKILL.md). You cannot opt out of oplog writes for a durable agent.
+> **It is also NOT how you reduce oplog size or speed up recovery.** `with_atomic_operation` and idempotency-mode APIs do not shrink the oplog or skip replay. If your concern is that the oplog is growing too large or recovery/replay is becoming slow (long-running agents, heartbeats, polling, recurring tasks), use **snapshot-based recovery** instead — see [`golem-custom-snapshot-moonbit`](../golem-custom-snapshot-moonbit/SKILL.md). You cannot opt out of oplog writes for a durable agent.
 >
 > Use it only when you have **two or more external side effects** that must not be left in a "first one happened, second one didn't" state across a recovery.
 
@@ -58,45 +58,11 @@ Bad use case — pure in-memory updates that already replay deterministically:
 })
 ```
 
-## Persistence Level Control
+## Custom Durability for Libraries
 
-Adjust how the oplog is interpreted for a section of code. Setting the level to `PersistNothing` does **not** disable oplog recording — entries are still written, but they are treated only as an observable log and are **not used for replay**. On recovery, the side effects are **not** re-executed and **not** replayed; if the block naively runs the same side effects during replay, recovery will fail.
+The low-level `golem:durability@1.6.0` interface is intended for SDK and library authors, not as an application tuning knob. It lets a library represent several raw host effects as one custom durable invocation. `@api.durable` and `@api.durable_async` own the live invocation resource: they evaluate the body only on the live path, finish and persist its typed result, or return the recorded result on replay.
 
-This is **not** a knob for application code. Its primary use case is **authoring Golem-specific libraries** that implement their own custom durability on top of raw side effects. Code inside such a block must:
-
-1. Explicitly check whether the agent is in live or replay mode (via `current_durable_execution_state().is_live`).
-2. Skip the raw side effects during replay.
-3. Use the durability APIs (`begin_durable_function` / `end_durable_function`, `persist_durable_function_invocation`, `read_persisted_durable_function_invocation`) to record/recover state in a custom way.
-
-Use `with_persistence_level` for automatic save/restore:
-
-```moonbit
-fn do_fast_work() -> Unit {
-  @api.with_persistence_level(@api.PersistenceLevel::PersistNothing, fn() {
-    // Oplog entries here are observable only, never used for replay.
-    // The block MUST check live vs replay mode and use custom durability
-    // primitives — naively running side effects will break recovery.
-    do_idempotent_work()
-  })
-}
-```
-
-For manual control, use `get_oplog_persistence_level` / `set_oplog_persistence_level`:
-
-```moonbit
-let original = @api.get_oplog_persistence_level()
-@api.set_oplog_persistence_level(@api.PersistenceLevel::PersistNothing)
-do_idempotent_work()
-@api.set_oplog_persistence_level(original)
-```
-
-### PersistenceLevel Variants
-
-| Variant | Behavior |
-|---------|----------|
-| `PersistNothing` | Oplog entries are still written but only as an observable log; not used for replay. The block must implement custom durability — naive replay will fail |
-| `PersistRemoteSideEffects` | Only remote side effects are persisted for replay |
-| `Smart` | Default — Golem decides what to persist |
+A returned typed error is a normal result: the combinator finishes the invocation, persists the error, and returns the same error on replay. A raised error, trap, or cancellation before `finish` instead drops the unfinished resource without recording an `End`, so recovery retries the whole custom operation. Library authors must make repeated attempts safe with the correct operation classification, external idempotency keys, or transactions.
 
 ## Idempotence Mode
 
@@ -203,15 +169,4 @@ import {
 }
 ```
 
-All durability, persistence, idempotency, retry, and oplog APIs are available from `@api`.
-
-## Low-Level Durability API
-
-For advanced use cases (e.g., manually persisting function invocations for replay), the raw durability APIs are available in `golemcloud/golem_sdk/interface/golem/durability/durability`:
-
-- `begin_durable_function(function_type)` / `end_durable_function(function_type, begin_index, forced_commit)`
-- `current_durable_execution_state()` — returns `DurableExecutionState { is_live, persistence_level }`
-- `persist_durable_function_invocation(function_name, request, response, function_type)`
-- `read_persisted_durable_function_invocation()`
-
-These are rarely needed — prefer the `@api` wrappers above.
+The high-level idempotency, retry, atomic-operation, and oplog APIs are available from `@api`.

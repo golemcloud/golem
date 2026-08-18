@@ -368,15 +368,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 }
             );
         }
-        PublicOplogEntry::ChangePersistenceLevel(params) => {
-            let _ = writeln!(result, "CHANGE PERSISTENCE LEVEL");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(
-                result,
-                "{pad}level:             {:?}",
-                params.persistence_level,
-            );
-        }
         PublicOplogEntry::BeginRemoteTransaction(params) => {
             let _ = writeln!(result, "BEGIN REMOTE TRANSACTION");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);

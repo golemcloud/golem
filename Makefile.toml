@@ -1518,10 +1518,45 @@ rm -rf build-out
 
 [tasks.build-benchmark-components]
 description = "Builds only the benchmark test WASM components"
-dependencies = ["build", "build-sdk-ts"]
+dependencies = ["wit", "build-sdk-ts"]
+script_runner = "@duckscript"
 script = '''
+golem_cli = get_env GOLEM_CLI
+golem_cli_empty = is_empty ${golem_cli}
+if ${golem_cli_empty}
+    exec --fail-on-error cargo build --release -p golem-cli --bin golem-cli
+    golem_cli = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/release/golem-cli"
+    set_env GOLEM_CLI ${golem_cli}
+end
 cd test-components
-./build-components.sh benchmarks
+exec --fail-on-error ./build-components.sh benchmarks
+'''
+
+[tasks.run-benchmark-suite-orb]
+description = "Builds and runs the nightly spawned benchmark suite in an Amp orb"
+script_runner = "@duckscript"
+env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.1" }
+script = '''
+exec --fail-on-error docker info
+exec --fail-on-error cargo make --profile ci build-release
+golem_cli = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/release/golem-cli"
+set_env GOLEM_CLI ${golem_cli}
+exec --fail-on-error cargo make build-benchmark-components
+
+results = get_env GOLEM_BENCHMARK_RESULTS_PATH
+results_empty = is_empty ${results}
+if ${results_empty}
+    mkdir tmp
+    results = set "tmp/orb-benchmark-results.json"
+end
+
+registry_http_port = get_env GOLEM_BENCHMARK_REGISTRY_HTTP_PORT
+registry_http_port_empty = is_empty ${registry_http_port}
+if ${registry_http_port_empty}
+    registry_http_port = set "18081"
+end
+
+exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- --primary-only suite --save-to-json ${results} integration-tests/benchmark_suites/ci.yaml spawned --registry-service-http-port ${registry_http_port}
 '''
 
 [tasks.clean-test-components]

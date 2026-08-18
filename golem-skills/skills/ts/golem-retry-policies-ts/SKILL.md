@@ -136,7 +136,7 @@ reconstructed from the oplog, and the request is re-sent — without needing `at
 without the user-land throw pattern.
 
 Eligibility rules (mirror inline transport retry):
-- live execution (not replay/snapshot/`PersistNothing`)
+- live execution (not replay or snapshotting)
 - request body and trailers are reconstructible
 - the HTTP method is idempotent, or `assumeIdempotence` was set on the outgoing request
 - not inside an `atomically(...)` block — in v1 status retries are skipped inside atomic

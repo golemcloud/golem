@@ -46,7 +46,6 @@ message RawOplogEntry {
     RawStartSpanParameters start_span = 30;
     RawFinishSpanParameters finish_span = 31;
     RawSetSpanAttributeParameters set_span_attribute = 32;
-    RawChangePersistenceLevelParameters change_persistence_level = 33;
     RawBeginRemoteTransactionParameters begin_remote_transaction = 34;
     RawRemoteTransactionParameters pre_commit_remote_transaction = 35;
     RawRemoteTransactionParameters pre_rollback_remote_transaction = 36;
@@ -161,6 +160,8 @@ message RawStartParameters {
   string function_name = 3;
   optional RawOplogPayload request = 4;
   WrappedFunctionType durable_function_type = 5;
+  optional golem.common.UUID invocation_id = 6;
+  optional uint64 observational_owner = 7;
 }
 
 message RawEndParameters {
@@ -299,10 +300,6 @@ message RawSetSpanAttributeParameters {
   string span_id = 1;
   string key = 2;
   string value = 3;
-}
-
-message RawChangePersistenceLevelParameters {
-  PersistenceLevel persistence_level = 1;
 }
 
 message RawBeginRemoteTransactionParameters {

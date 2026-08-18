@@ -60,7 +60,7 @@ use golem_common::model::oplog::{
     HostResponseGolemApiComponentId, HostResponseGolemApiFork, HostResponseGolemApiIdempotencyKey,
     HostResponseGolemApiPromiseCompletion, HostResponseGolemApiPromiseId,
     HostResponseGolemApiPromiseResult, HostResponseGolemApiSelfAgentMetadata,
-    HostResponseGolemApiUnit, OplogEntry, PersistenceLevel, PublicOplogEntry,
+    HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor, Timestamp};
@@ -336,7 +336,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn get_oplog_index(&mut self) -> anyhow::Result<golem_api_1_x::oplog::OplogIndex> {
         self.observe_function_call("golem::api", "get_oplog_index");
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             Ok(self.state.current_oplog_index().await.into())
         } else if self.state.is_live() {
             // Use the index returned by `add` — a concurrently running host task (a durable
@@ -376,7 +376,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         oplog_idx: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "set_oplog_index");
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             return Ok(());
         }
         if self.state.is_live() {
@@ -385,7 +385,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // `Cancelled` terminal is recorded before the Jump (inside the deleted region), then
             // refuse to jump while any live durable call is still in flight — its `End`/
             // `Cancelled` would be recorded after the Jump and reference a `Start` inside the
-            // deleted region (mirrors the `mark_end_operation` and persistence-level guards).
+            // deleted region (mirrors the `mark_end_operation` boundary guard).
             drain_queued_dropped_call_events(self)
                 .await
                 .map_err(anyhow::Error::from)?;
@@ -459,7 +459,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn mark_begin_operation(&mut self) -> anyhow::Result<golem_api_1_x::host::OplogIndex> {
         self.observe_function_call("golem::api", "mark_begin_operation");
 
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             Ok(self.state.current_oplog_index().await.into())
         } else if self.state.is_live() {
             let next_idempotency_key_oplog_index = self
@@ -546,7 +546,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         begin: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "mark_end_operation");
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             return Ok(());
         }
         let begin_index = OplogIndex::from_u64(begin);
@@ -565,7 +565,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // (terminal join, scope close, lease release) is queued as a dropped-call event and
             // drained at the next safe worker-access window. Ending the region is such a window,
             // so drain first — otherwise a fully completed call would spuriously count as a
-            // surviving member (mirrors the jump and persistence-level guards).
+            // surviving member (mirrors the jump boundary guard).
             drain_queued_dropped_call_events(self)
                 .await
                 .map_err(anyhow::Error::from)?;
@@ -604,110 +604,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn trap(&mut self, reason: String) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "trap");
         Err(anyhow::anyhow!("guest-requested trap: {reason}"))
-    }
-
-    async fn get_oplog_persistence_level(
-        &mut self,
-    ) -> anyhow::Result<golem_api_1_x::host::PersistenceLevel> {
-        self.observe_function_call("golem::api", "get_oplog_persistence_level");
-        Ok(self.state.persistence_level.into())
-    }
-
-    async fn set_oplog_persistence_level(
-        &mut self,
-        new_persistence_level: golem_api_1_x::host::PersistenceLevel,
-    ) -> anyhow::Result<()> {
-        self.observe_function_call("golem::api", "set_oplog_persistence_level");
-
-        let new_persistence_level = new_persistence_level.into();
-        if self.state.snapshotting_mode.is_some() {
-            return Ok(());
-        }
-
-        if self.state.persistence_level != new_persistence_level {
-            // commit all pending entries and change persistence level
-            if self.state.is_live() {
-                // A persistence-level transition is a positional replay boundary: replay skips
-                // whole persist-nothing zones, so a concurrent durable call's `Start`/`End` pair
-                // must never straddle the `ChangePersistenceLevel` entry — replay would claim one
-                // half and skip the other. First drain already-dropped cancellable calls so their
-                // `Cancelled` is recorded on this side of the boundary, then refuse to switch
-                // while any live durable call is still in flight.
-                //
-                // Open *durable scopes* (batched remote writes such as an unconsumed HTTP
-                // response, remote transactions) are deliberately allowed to stay open across the
-                // boundary: their `End` is resolved by identity through the concurrent replay
-                // resolver, not positionally, so a scope whose `Start` and `End` both lie outside
-                // the zone replays correctly even with the zone skipped in between.
-                //
-                // The exception is leaving a `PersistNothing` zone while a scope *opened inside
-                // the zone* is still open: its `Start` lies in the region replay skips, so its
-                // eventual `End` outside the zone would reference a `Start` replay never sees.
-                // Such a scope must be closed before the zone is.
-                //
-                // During snapshotting no oplog entries are written, so no boundary is created and
-                // the guard is skipped.
-                if self.state.snapshotting_mode.is_none() {
-                    drain_queued_dropped_call_events(self)
-                        .await
-                        .map_err(anyhow::Error::from)?;
-                    if self.state.has_in_flight_live_host_calls() {
-                        return Err(anyhow!(
-                            "Cannot change oplog persistence level: durable host calls are still in flight"
-                        ));
-                    }
-                    if self.state.persistence_level == PersistenceLevel::PersistNothing
-                        && self.state.has_open_scope_in_persist_nothing_zone()
-                    {
-                        return Err(anyhow!(
-                            "Cannot change oplog persistence level: a durable scope (batched remote write or transaction) opened inside the PersistNothing zone is still open"
-                        ));
-                    }
-                }
-                self.public_state
-                    .worker()
-                    .add_and_commit_oplog(OplogEntry::change_persistence_level(
-                        new_persistence_level,
-                    ))
-                    .await;
-            } else {
-                let oplog_index_before = self.state.current_oplog_index().await;
-                let (_, _) =
-                    get_oplog_entry!(self.state.replay_state, OplogEntry::ChangePersistenceLevel)?;
-                let oplog_index_after = self.state.current_oplog_index().await;
-                if self.state.replay_state.is_live()
-                    && oplog_index_after > oplog_index_before.next()
-                {
-                    // get_oplog_entry jumped to live mode because the persist-nothing zone was not closed.
-                    // If the retried transactional block succeeds, and later we replay it, we need to skip the first
-                    // attempt and only replay the second.
-                    // Se we add a Jump entry to the oplog that registers a deleted region.
-                    let deleted_region = OplogRegion {
-                        start: oplog_index_before.next(), // need to keep the BeginAtomicRegion entry
-                        end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
-                    };
-
-                    self.public_state
-                        .worker()
-                        .add_and_commit_oplog(OplogEntry::jump(deleted_region))
-                        .await;
-
-                    // TODO: this recomputation should not be necessary.
-                    self.public_state.worker().reattach_worker_status().await;
-                }
-            }
-
-            self.state
-                .oplog
-                .switch_persistence_level(new_persistence_level)
-                .await;
-            self.state.persistence_level = new_persistence_level;
-            debug!(
-                "Worker's oplog persistence level is set to {:?}",
-                self.state.persistence_level
-            );
-        }
-        Ok(())
     }
 
     async fn get_idempotence_mode(&mut self) -> anyhow::Result<bool> {

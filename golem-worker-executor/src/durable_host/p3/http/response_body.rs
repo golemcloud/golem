@@ -47,7 +47,7 @@ use golem_common::model::oplog::payload::types::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult,
+    HostResponseP3HttpClientConsumeBodyResult, OplogIndex,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::HeaderMap;
@@ -95,6 +95,8 @@ pub(crate) struct OpenP3HttpResponseState {
     /// an empty placeholder body: the first live body read must re-issue the
     /// recorded request (via `resend`) to obtain a real body.
     pub(crate) body_is_placeholder: bool,
+    /// Custom durable invocation that owns the send and every later body/trailer continuation.
+    pub(super) observational_owner: Option<OplogIndex>,
 }
 
 /// The send's `outgoing-http-request` invocation-context span together with
@@ -786,21 +788,28 @@ where
             ..
         } = self;
 
-        let (response_span, retry_properties, resume_context, resend, mut pending_reissue) =
-            match response_state {
-                Some(state) => {
-                    let mut properties = RetryContext::http(&state.method, &state.uri);
-                    apply_method_idempotence(&mut properties, state.is_idempotent);
-                    (
-                        Some(state.span),
-                        Some(properties),
-                        Some((state.method, state.uri, state.is_idempotent)),
-                        state.resend,
-                        state.body_is_placeholder,
-                    )
-                }
-                None => (None, None, None, None, false),
-            };
+        let (
+            response_span,
+            retry_properties,
+            resume_context,
+            resend,
+            mut pending_reissue,
+            observational_owner,
+        ) = match response_state {
+            Some(state) => {
+                let mut properties = RetryContext::http(&state.method, &state.uri);
+                apply_method_idempotence(&mut properties, state.is_idempotent);
+                (
+                    Some(state.span),
+                    Some(properties),
+                    Some((state.method, state.uri, state.is_idempotent)),
+                    state.resend,
+                    state.body_is_placeholder,
+                    state.observational_owner,
+                )
+            }
+            None => (None, None, None, None, false, None),
+        };
         // Keeps the re-issued request's I/O task alive while its body is read;
         // dropped (aborting the task) when this task finishes. Never read —
         // it exists only for its drop timing.
@@ -836,6 +845,7 @@ where
                         .as_ref()
                         .map(|span| format!("consume-body:{}", span.send_start_index)),
                     request_identity: None,
+                    observational_owner,
                 },
                 async |_| Ok(HostRequestNoInput {}),
             )
@@ -876,12 +886,19 @@ where
                 None => break,
             };
 
-            let mut child =
-                match CallHandle::<P3HttpClientConsumeBodyChunk, NotCancellable>::start_access(
+            let mut child = match CallHandle::<
+                P3HttpClientConsumeBodyChunk,
+                NotCancellable,
+            >::start_access_with_options(
                     accessor,
                     durable_worker_ctx::<Ctx, U>,
-                    HostRequestNoInput {},
                     DurableFunctionType::WriteRemoteBatched(Some(parent_begin)),
+                    AccessClaimOptions {
+                        scope_discriminator: None,
+                        request_identity: None,
+                        observational_owner,
+                    },
+                    async |_| Ok(HostRequestNoInput {}),
                 )
                 .await
                 {
@@ -1095,7 +1112,11 @@ where
                     // The same worker-state and idempotence gates as the send's
                     // own inline-retry loop (live, not snapshotting, persistence
                     // on, no atomic region, idempotence predicate).
-                    if !inline_retry_eligible_for_method::<Ctx, U>(accessor, &resend.request.method)
+                    if observational_owner.is_some()
+                        || !inline_retry_eligible_for_method::<Ctx, U>(
+                            accessor,
+                            &resend.request.method,
+                        )
                     {
                         break;
                     }
@@ -1754,6 +1775,8 @@ mod tests {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: None,
                 function_name: HostFunctionName::P3HttpClientConsumeBody,
+                invocation_id: None,
+                observational_owner: None,
                 request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                     HostRequestNoInput {},
                 )))),
@@ -1765,6 +1788,8 @@ mod tests {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: Some(OplogIndex::from_u64(1)),
                 function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
+                invocation_id: None,
+                observational_owner: None,
                 request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                     HostRequestNoInput {},
                 )))),

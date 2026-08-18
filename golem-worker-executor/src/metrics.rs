@@ -895,6 +895,11 @@ pub mod wasm {
             "Number of in-function retries (retries inside host function without oplog replay)"
         )
         .unwrap();
+        static ref CUSTOM_INVOCATION_SCOPE_OPEN_TOTAL: Counter = register_counter!(
+            "custom_invocation_scope_open_total",
+            "Number of live custom-durability ownership scopes opened"
+        )
+        .unwrap();
     }
 
     pub fn record_host_function_call(iface: &str, name: &str) {
@@ -906,6 +911,10 @@ pub mod wasm {
 
     pub fn record_in_function_retry() {
         IN_FUNCTION_RETRY_TOTAL.inc();
+    }
+
+    pub fn record_custom_invocation_scope_open() {
+        CUSTOM_INVOCATION_SCOPE_OPEN_TOTAL.inc();
     }
 
     pub fn record_resume_worker(duration: Duration) {

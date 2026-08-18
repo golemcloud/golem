@@ -50,7 +50,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation,
     HostRequestGolemRpcScheduledInvocationCancellation, HostResponseGolemRpcCreate,
     HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcScheduledInvocation,
-    HostResponseGolemRpcUnit, HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
+    HostResponseGolemRpcUnit, HostResponseGolemRpcUnitOrFailure, OplogEntry,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, NamedRetryPolicy, OplogIndex,
@@ -705,7 +705,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 self.state.is_live(),
                 ephemeral_logical_agent_id.is_some(),
                 self.state.assume_idempotence,
-                self.state.persistence_level,
             ) {
                 InvocationFreshnessDisposition::KnownFresh
             } else {
@@ -1154,7 +1153,6 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
         handle.is_live(),
         prepared.is_ephemeral(),
         ctx.state.assume_idempotence,
-        ctx.state.persistence_level,
     ) {
         InvocationFreshnessDisposition::KnownFresh
     } else {
@@ -1277,7 +1275,6 @@ async fn run_invoke<Ctx: WorkerCtx>(
         handle.is_live(),
         prepared.is_ephemeral(),
         ctx.state.assume_idempotence,
-        ctx.state.persistence_level,
     ) {
         InvocationFreshnessDisposition::KnownFresh
     } else {
@@ -2429,12 +2426,8 @@ fn known_fresh_dispatch_allowed(
     is_live: bool,
     is_ephemeral: bool,
     assume_idempotence: bool,
-    persistence_level: PersistenceLevel,
 ) -> bool {
-    is_live
-        && is_ephemeral
-        && !assume_idempotence
-        && persistence_level != PersistenceLevel::PersistNothing
+    is_live && is_ephemeral && !assume_idempotence
 }
 
 fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
@@ -3500,30 +3493,9 @@ mod tests {
 
     #[test]
     fn known_fresh_requires_a_durably_recorded_live_host_call() {
-        assert!(known_fresh_dispatch_allowed(
-            true,
-            true,
-            false,
-            PersistenceLevel::Smart,
-        ));
-        assert!(!known_fresh_dispatch_allowed(
-            true,
-            true,
-            true,
-            PersistenceLevel::Smart,
-        ));
-        assert!(!known_fresh_dispatch_allowed(
-            true,
-            true,
-            false,
-            PersistenceLevel::PersistNothing,
-        ));
-        assert!(!known_fresh_dispatch_allowed(
-            false,
-            true,
-            false,
-            PersistenceLevel::Smart,
-        ));
+        assert!(known_fresh_dispatch_allowed(true, true, false));
+        assert!(!known_fresh_dispatch_allowed(true, true, true));
+        assert!(!known_fresh_dispatch_allowed(false, true, false));
     }
 
     #[test]

@@ -6,97 +6,52 @@ Golem provides a set of functions components can call to control details of the 
 
 ### General concepts
 
-The library allows controlling four main aspects of the durable execution engine: the current persistence level, the idempotence mode, defining atomic regions and changing retry policies (discussed in [the next page](/next/develop/retries)).
+The high-level SDKs let applications control idempotence, define atomic regions, commit the oplog, and change retry policies (discussed in [the next page](/next/develop/retries)).
 
 All these features are regional - they can be changed for a section of the code within a single exported function.
 
 <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
     <Tabs.Tab>
-        In TypeScript, the SDK provides scoped helpers such as `withPersistenceLevel`, `withIdempotenceMode`, and
+        In TypeScript, the SDK provides scoped helpers such as `withIdempotenceMode` and
         `withRetryPolicy`. They run a sync or async callback with the requested setting, then restore the previous
         settings afterwards.
     </Tabs.Tab>
     <Tabs.Tab>
-        The `golem_rust` crate provides scoped helpers such as `with_persistence_level` and `with_idempotence_mode`,
+        The `golem_rust` crate provides scoped helpers such as `with_idempotence_mode`,
         with `_async` variants for async code. They execute a closure with the requested setting, then restore the
         previous settings afterwards.
     </Tabs.Tab>
     <Tabs.Tab>
-        In Scala, `golem.Guards` provides scoped helpers such as `withPersistenceLevel`, `withIdempotenceMode`, and
+        In Scala, `golem.Guards` provides scoped helpers such as `withIdempotenceMode` and
         `withRetryPolicy`. They execute a `Future`-returning block with the requested setting, then restore the
         previous settings afterwards.
     </Tabs.Tab>
     <Tabs.Tab>
-        In MoonBit, the SDK provides scoped helpers such as `with_persistence_level`, `with_idempotence_mode`, and
+        In MoonBit, the SDK provides scoped helpers such as `with_idempotence_mode` and
         `with_retry_policy`. They execute a callback with the requested setting, then restore the previous settings
         afterwards.
     </Tabs.Tab>
 </Tabs>
 
-### Persistence level
+### Custom durable operations
 
-The persistence level can be one of the following:
+Applications normally rely on Golem's built-in durability and should not call the low-level `golem:durability@1.6.0` interface. It is intended for SDK and library authors who need to turn an otherwise raw operation into one logical durable call.
 
-| Level                    | Description                                                                                                                                                          |
-|--------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| PersistNothing           | Turns off persistence for a section. In case the agent is recovered or restarted, all the side-effecting functions will be reexecuted                               |
-| PersistRemoteSideEffects | Persists all the side-effects that are affecting the outside world. In case of recovery the side-effects won't be reexecuted and the persisted results will be used. |
-| Smart                    | The default setting; Let Golem decide what to persist to optimize performance                                                                                        |
+A custom durable operation has a replay-stable UUID, a semantic request, and one typed response. The executor allocates the UUID synchronously when the operation begins. The UUID is independent of the request value, so a generator with no input is distinct from another concurrent call of the same generator.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
-    <Tabs.Tab>
-        To change the persistence level for a section of the code, use the `withPersistenceLevel` function:
+1. `begin-custom-durable-invocation` takes the function name, typed request, and function type. It returns `live(live-invocation)` for a new or incomplete operation, or `replayed(recorded-response)` for an operation that already completed.
+2. On the live path, keep the returned resource alive while performing the operation's host effects. Host calls initiated while it is active are recorded as replay-inert observational entries owned by the custom operation.
+3. Finish consumes the live resource and records the operation's complete success or failure result. On replay, decode and return the recorded response without executing the operation body.
 
-        ```typescript
-        import {withPersistenceLevel} from "@golemcloud/golem-ts-sdk"
+Golem derives the UUID from the top-level idempotency key, the parent custom invocation when nested, and a deterministic ordinal in that logical parent's namespace. Child operations do not shift later root identities when a completed parent is skipped during replay. The function metadata and request are recorded and validated independently.
 
-        const result: string = withPersistenceLevel({tag: "persist-nothing"}, () => {
-          // this closure runs in PersistNothing mode
-          return "hello"
-        })
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        To change the persistence level for a section of the code, use the `with_persistence_level` function:
+The live invocation is an affine resource: it can be finished only once. Dropping it without finishing removes observational ownership but does not write a matching `End` entry. Recovery therefore treats the custom operation as incomplete and retries its whole body.
 
-        ```rust
-        use golem_rust::{PersistenceLevel, with_persistence_level}
+If a live attempt traps before it is finished, recovery retries the **whole custom operation**, not individual effects inside it. Library authors must therefore choose an appropriate function type and make repeated attempts safe, for example with an external idempotency key or transactional API.
 
-        let result: &str = with_persistence_level(PersistenceLevel::PersistNothing, || {
-          // this block runs in PersistNothing mode
-          "hello"
-        });
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        To change the persistence level for a section of the code, use the `Guards.withPersistenceLevel` function:
+Requests, responses, operation names, and observational host calls can be visible to oplog search, logs, metrics, and other observability tooling. Record useful names and schemas, but redact secrets and avoid putting unnecessary or unbounded payloads into observable values.
 
-        ```scala
-        import golem.{Guards, HostApi}
-
-        import scala.concurrent.Future
-
-        val result: Future[String] =
-          Guards.withPersistenceLevel(HostApi.PersistenceLevel.PersistNothing) {
-            // this block runs in PersistNothing mode
-            Future.successful("hello")
-          }
-        ```
-    </Tabs.Tab>
-    <Tabs.Tab>
-        Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`, use the `with_persistence_level` function:
-
-        ```moonbit
-        let result : String = @api.with_persistence_level(
-          @api.PersistenceLevel::PersistNothing,
-          fn() {
-            // this callback runs in PersistNothing mode
-            "hello"
-          },
-        )
-        ```
-    </Tabs.Tab>
-</Tabs>
+Use the SDK combinator for this lifecycle instead of managing the affine resource directly: `golem_rust::durability::Durability::run*` in Rust, `durable` in TypeScript, `DurabilityApi.durable`/`durableAsync` in Scala, or `@api.durable`/`durable_async` in MoonBit. Each combinator starts the invocation before evaluating the body, skips the body on replay, finishes after the complete live body returns, and drops an unfinished resource if the body fails.
 
 ### Idempotence mode
 

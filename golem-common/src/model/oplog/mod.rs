@@ -98,64 +98,51 @@ impl OplogEntry {
     /// used together with [`OplogEntry::track_scope_membership`] as the scan's state updater.
     ///
     /// Foreign benign operations (`ReadLocal`, `WriteLocal`, `ReadRemote`) are allowed to interleave;
-    /// foreign external writes and foreign batched/transaction scopes are rejected. Side effects in a
-    /// `PersistenceLevel::PersistNothing` region are ignored.
+    /// foreign external writes and foreign batched/transaction scopes are rejected.
     pub fn no_concurrent_side_effect(
         &self,
         _begin_idx: OplogIndex,
         state: &ScopeScanState,
     ) -> bool {
-        if state.persistence_level == PersistenceLevel::PersistNothing {
-            true
-        } else {
-            match self {
-                OplogEntry::Start {
-                    durable_function_type,
-                    ..
-                } => {
-                    if state.current_is_descendant_scope {
-                        // A (transitive) descendant scope of the root — part of this scope.
-                        true
-                    } else {
-                        // A foreign scope: only benign reads/local writes may interleave.
-                        matches!(
-                            durable_function_type,
-                            DurableFunctionType::ReadLocal
-                                | DurableFunctionType::WriteLocal
-                                | DurableFunctionType::ReadRemote
-                        )
-                    }
+        match self {
+            OplogEntry::Start {
+                durable_function_type,
+                ..
+            } => {
+                if state.current_is_descendant_scope {
+                    // A (transitive) descendant scope of the root — part of this scope.
+                    true
+                } else {
+                    // A foreign scope: only benign reads/local writes may interleave.
+                    matches!(
+                        durable_function_type,
+                        DurableFunctionType::ReadLocal
+                            | DurableFunctionType::WriteLocal
+                            | DurableFunctionType::ReadRemote
+                    )
                 }
-                // `End` entries are pure markers and do not themselves cause a side effect.
-                OplogEntry::End { .. } => true,
-                OplogEntry::Cancelled { .. } => true,
-                // A delayed terminal for an asynchronous host operation can be
-                // appended after the guest invocation result has already been
-                // recorded (for example a dropped P3 HTTP response body whose
-                // cleanup is driven by resource destruction). The invocation
-                // result marker is not itself a remote side effect, so it must
-                // not make the owning durable scope unreplayable.
-                OplogEntry::AgentInvocationFinished { .. } => true,
-                _ => true,
             }
+            // `End` entries are pure markers and do not themselves cause a side effect.
+            OplogEntry::End { .. } => true,
+            OplogEntry::Cancelled { .. } => true,
+            // A delayed terminal for an asynchronous host operation can be
+            // appended after the guest invocation result has already been
+            // recorded (for example a dropped P3 HTTP response body whose
+            // cleanup is driven by resource destruction). The invocation
+            // result marker is not itself a remote side effect, so it must
+            // not make the owning durable scope unreplayable.
+            OplogEntry::AgentInvocationFinished { .. } => true,
+            _ => true,
         }
     }
 
     /// State updater paired with [`OplogEntry::no_concurrent_side_effect`]. For each scanned entry
-    /// (with its own `idx`) it tracks the active persistence level and grows the set of transitive
-    /// descendant scopes of `state.root`: a `Start` whose `parent_start_index` is the root or any
+    /// (with its own `idx`) it grows the set of transitive descendant scopes of `state.root`: a
+    /// `Start` whose `parent_start_index` is the root or any
     /// already-known descendant becomes a descendant itself. `current_is_descendant_scope` records
     /// the decision for the entry just processed, so the immediately following
     /// `no_concurrent_side_effect` check can use it.
     pub fn track_scope_membership(&self, idx: OplogIndex, state: &mut ScopeScanState) {
-        if let OplogEntry::ChangePersistenceLevel {
-            persistence_level: level,
-            ..
-        } = self
-        {
-            state.persistence_level = *level;
-        }
-
         state.current_is_descendant_scope = false;
         if let OplogEntry::Start {
             parent_start_index: Some(parent),
@@ -188,8 +175,6 @@ impl OplogEntry {
 pub struct ScopeScanState {
     /// The `Start` index of the scope being validated.
     pub root: OplogIndex,
-    /// The persistence level active at the current scan position.
-    pub persistence_level: PersistenceLevel,
     /// All transitive descendant scope `Start` indices seen so far.
     pub descendants: std::collections::HashSet<OplogIndex>,
     /// Whether the entry processed most recently by `track_scope_membership` was a descendant scope
@@ -198,11 +183,10 @@ pub struct ScopeScanState {
 }
 
 impl ScopeScanState {
-    /// Creates a fresh scan state for the scope rooted at `root`, starting from `persistence_level`.
-    pub fn new(root: OplogIndex, persistence_level: PersistenceLevel) -> Self {
+    /// Creates a fresh scan state for the scope rooted at `root`.
+    pub fn new(root: OplogIndex) -> Self {
         Self {
             root,
-            persistence_level,
             descendants: std::collections::HashSet::new(),
             current_is_descendant_scope: false,
         }

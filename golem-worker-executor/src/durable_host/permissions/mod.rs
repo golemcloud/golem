@@ -967,7 +967,7 @@ where
         ));
     }
 
-    if ctx.state.snapshotting_mode.is_none() {
+    if !ctx.state.snapshotting_mode {
         let wallet_generation = Some(ctx.state.wallet_generation);
         if let Some((replayed_card, replayed_generation)) = ctx
             .state

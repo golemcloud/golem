@@ -64,12 +64,12 @@ pub(all) struct ScheduledInvocationReceipt {
 } derive(Eq, Show)
 
 pub(all) struct WasmRpc(Int) derive(Eq, Show)
-pub fn WasmRpc::async_invoke_and_await(Self, String, @types.SchemaValueTree) -> AsyncInvocationWithMetadata
+pub fn WasmRpc::async_invoke_and_await(Self, String, @types.SchemaValueTree, @types.PermissionCard?) -> AsyncInvocationWithMetadata
 pub fn WasmRpc::drop(Self) -> Unit
-pub fn WasmRpc::invoke(Self, String, @types.SchemaValueTree) -> Result[InvocationMetadata, RpcError]
-pub fn WasmRpc::invoke_and_await(Self, String, @types.SchemaValueTree) -> Result[InvocationResultWithMetadata, RpcError]
-pub fn WasmRpc::schedule_cancelable_invocation(Self, @system-clock.Instant, String, @types.SchemaValueTree) -> CancelableScheduledInvocationReceipt
-pub fn WasmRpc::schedule_invocation(Self, @system-clock.Instant, String, @types.SchemaValueTree) -> ScheduledInvocationReceipt
+pub fn WasmRpc::invoke(Self, String, @types.SchemaValueTree, @types.PermissionCard?) -> Result[InvocationMetadata, RpcError]
+pub fn WasmRpc::invoke_and_await(Self, String, @types.SchemaValueTree, @types.PermissionCard?) -> Result[InvocationResultWithMetadata, RpcError]
+pub fn WasmRpc::schedule_cancelable_invocation(Self, @system-clock.Instant, String, @types.SchemaValueTree, @types.PermissionCard?) -> CancelableScheduledInvocationReceipt
+pub fn WasmRpc::schedule_invocation(Self, @system-clock.Instant, String, @types.SchemaValueTree, @types.PermissionCard?) -> ScheduledInvocationReceipt
 pub fn WasmRpc::wasm_rpc(String, @types.SchemaValueTree, @types.Uuid?, Array[@common.TypedAgentConfigValue]) -> Self
 
 // Type aliases

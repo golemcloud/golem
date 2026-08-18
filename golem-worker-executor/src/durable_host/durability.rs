@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::concurrent::Resolution;
-use crate::metrics::wasm::{record_host_function_call, record_in_function_retry};
+use crate::durable_host::concurrent::{self, DropEvent, Resolution, ResolutionOutcome};
+use crate::metrics::wasm::{
+    record_custom_invocation_scope_open, record_host_function_call, record_in_function_retry,
+};
 use crate::model::ExecutionStatus;
 use crate::preview2::golem::durability::durability;
 use crate::services::environment_state::EnvironmentStateService;
@@ -26,11 +28,11 @@ use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, PersistenceLevel,
+    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex,
 };
 use golem_common::model::{
-    NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState, RetryProperties,
-    RetryVerdict, ThreadRng, Timestamp,
+    IdempotencyKey, NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState,
+    RetryProperties, RetryVerdict, ThreadRng, Timestamp,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -41,8 +43,242 @@ use std::fmt::{Debug, Display};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::{Mutex, Notify, oneshot};
 use tracing::{debug, warn};
+use wasmtime::AsContextMut;
+use wasmtime::component::{Access, Accessor, HasSelf, Resource, TerminalConsumption};
+
+#[derive(Debug, Clone)]
+pub(crate) struct ActiveCustomInvocation {
+    pub invocation_id: uuid::Uuid,
+    pub parent_start_index: Option<OplogIndex>,
+    initiating_children: Arc<AtomicUsize>,
+}
+
+fn next_custom_invocation_id(
+    ordinals: &mut HashMap<Option<uuid::Uuid>, u64>,
+    idempotency_key: &IdempotencyKey,
+    parent_invocation_id: Option<uuid::Uuid>,
+) -> anyhow::Result<uuid::Uuid> {
+    let next = ordinals.entry(parent_invocation_id).or_default();
+    let ordinal = *next;
+    *next = ordinal
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("custom durable invocation ordinal overflow"))?;
+
+    let mut name = b"custom-durable-invocation\0".to_vec();
+    match parent_invocation_id {
+        Some(parent) => {
+            name.extend_from_slice(b"parent\0");
+            name.extend_from_slice(parent.as_bytes());
+        }
+        None => name.extend_from_slice(b"root\0"),
+    }
+    name.extend_from_slice(&ordinal.to_be_bytes());
+
+    let id = IdempotencyKey::derived_from_bytes(idempotency_key, &name);
+    Ok(uuid::Uuid::parse_str(&id.value).expect("derived idempotency keys are always UUIDs"))
+}
+
+#[derive(Debug)]
+struct CustomChildInitiation {
+    counter: Arc<AtomicUsize>,
+}
+
+impl CustomChildInitiation {
+    fn new(counter: Arc<AtomicUsize>) -> Self {
+        counter.fetch_add(1, Ordering::AcqRel);
+        Self { counter }
+    }
+}
+
+impl Drop for CustomChildInitiation {
+    fn drop(&mut self) {
+        let previous = self.counter.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "custom child initiation count underflow");
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CustomBeginVerdict {
+    Delivered,
+    Cancelled,
+    Suppressed,
+}
+
+type CustomBeginCoordinator =
+    tokio::task::JoinHandle<Result<Option<OplogIndex>, WorkerExecutorError>>;
+
+pub struct CustomBeginLifecycle {
+    start_result: Mutex<Option<Result<OplogIndex, String>>>,
+    start_ready: Notify,
+    verdict: std::sync::Mutex<Option<oneshot::Sender<CustomBeginVerdict>>>,
+    coordinator: std::sync::Mutex<Option<CustomBeginCoordinator>>,
+    initiation: std::sync::Mutex<Option<CustomChildInitiation>>,
+    cleanup_sink: UnboundedSender<DropEvent>,
+    settled: AtomicBool,
+}
+
+impl Debug for CustomBeginLifecycle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomBeginLifecycle")
+            .field("settled", &self.settled.load(Ordering::Acquire))
+            .finish_non_exhaustive()
+    }
+}
+
+impl CustomBeginLifecycle {
+    fn new(
+        verdict: oneshot::Sender<CustomBeginVerdict>,
+        initiation: Option<CustomChildInitiation>,
+        cleanup_sink: UnboundedSender<DropEvent>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            start_result: Mutex::new(None),
+            start_ready: Notify::new(),
+            verdict: std::sync::Mutex::new(Some(verdict)),
+            coordinator: std::sync::Mutex::new(None),
+            initiation: std::sync::Mutex::new(initiation),
+            cleanup_sink,
+            settled: AtomicBool::new(false),
+        })
+    }
+
+    fn set_coordinator(&self, coordinator: CustomBeginCoordinator) {
+        *self.coordinator.lock().unwrap() = Some(coordinator);
+    }
+
+    async fn complete_start(&self, result: Result<OplogIndex, String>) {
+        *self.start_result.lock().await = Some(result);
+        self.start_ready.notify_waiters();
+    }
+
+    async fn wait_start(&self) -> Result<OplogIndex, String> {
+        loop {
+            let notified = self.start_ready.notified();
+            if let Some(result) = self.start_result.lock().await.clone() {
+                return result;
+            }
+            notified.await;
+        }
+    }
+
+    fn promote_to_active(&self) {
+        self.release_initiation();
+    }
+
+    pub(crate) fn release_initiation(&self) {
+        self.initiation.lock().unwrap().take();
+    }
+
+    fn settle(self: &Arc<Self>, verdict: CustomBeginVerdict) {
+        if self.settled.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if let Some(sender) = self.verdict.lock().unwrap().take() {
+            let _ = sender.send(verdict);
+        }
+        let coordinator = self.coordinator.lock().unwrap().take();
+        if matches!(
+            verdict,
+            CustomBeginVerdict::Cancelled | CustomBeginVerdict::Suppressed
+        ) {
+            if let Some(terminal) = coordinator {
+                let _ = self
+                    .cleanup_sink
+                    .send(DropEvent::SettleCustomInvocationBegin {
+                        lifecycle: self.clone(),
+                        terminal: Some(terminal),
+                    });
+            }
+        } else {
+            drop(coordinator);
+        }
+    }
+}
+
+struct CustomBeginTerminalGuard {
+    lifecycle: Option<Arc<CustomBeginLifecycle>>,
+}
+
+impl CustomBeginTerminalGuard {
+    fn consume(mut self, consumption: TerminalConsumption) {
+        let lifecycle = self
+            .lifecycle
+            .take()
+            .expect("custom begin terminal observer is invoked at most once");
+        match consumption {
+            TerminalConsumption::Delivered => lifecycle.settle(CustomBeginVerdict::Delivered),
+            TerminalConsumption::Discarded | TerminalConsumption::Cancelled => {
+                lifecycle.settle(CustomBeginVerdict::Cancelled)
+            }
+        }
+    }
+}
+
+impl Drop for CustomBeginTerminalGuard {
+    fn drop(&mut self) {
+        if let Some(lifecycle) = self.lifecycle.take() {
+            lifecycle.settle(CustomBeginVerdict::Suppressed);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CustomInvocationScope {
+    pub scope_id: u64,
+    pub owner_start_index: OplogIndex,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CustomInvocationContext {
+    pub scopes: Vec<CustomInvocationScope>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopeRemoval {
+    Top,
+    OutOfOrder,
+    Missing,
+}
+
+impl CustomInvocationContext {
+    pub(crate) fn current(&self) -> Option<CustomInvocationScope> {
+        self.scopes.last().copied()
+    }
+
+    fn remove(&mut self, scope_id: u64) -> ScopeRemoval {
+        let Some(position) = self
+            .scopes
+            .iter()
+            .position(|scope| scope.scope_id == scope_id)
+        else {
+            return ScopeRemoval::Missing;
+        };
+        let removal = if position + 1 == self.scopes.len() {
+            ScopeRemoval::Top
+        } else {
+            ScopeRemoval::OutOfOrder
+        };
+        self.scopes.remove(position);
+        removal
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OpenCustomInvocationScope {
+    pub owner_start_index: OplogIndex,
+    pub resource_rep: u32,
+}
+
+#[derive(Debug)]
+pub struct LiveCustomDurableInvocation {
+    scope_id: u64,
+    start_index: OplogIndex,
+}
 
 /// Classification of host function failures for semantic retry decisions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,9 +425,9 @@ pub fn find_semantic_trap_retry_override(
 /// state in `TrapType::from_error`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DurableCallTrapContext {
-    /// The retry point owned by the trapping call: its enclosing atomic region begin index if any,
-    /// otherwise its enclosing durable scope `Start` or its own `Start` (i.e.
-    /// `execution_scope.atomic_region.unwrap_or(retry_from)`).
+    /// The retry point owned by the trapping call: its custom invocation owner when observational,
+    /// otherwise its enclosing atomic region begin index if any, otherwise its enclosing durable
+    /// scope `Start` or its own `Start`.
     pub retry_from: OplogIndex,
     /// Whether the trapping call was initiated inside an atomic region (membership). Pure function of
     /// the call's execution scope, so it needs no early snapshot and cannot be made stale by a
@@ -369,8 +605,7 @@ pub enum AsyncRetryDecision {
 #[derive(Debug)]
 pub struct DurableExecutionState {
     pub is_live: bool,
-    pub persistence_level: PersistenceLevel,
-    pub snapshotting_mode: Option<PersistenceLevel>,
+    pub snapshotting_mode: bool,
     /// Whether the executor assumes idempotence for remote writes.
     pub assume_idempotence: bool,
     /// Maximum delay for in-function retries. Delays exceeding this fall back to trap+replay.
@@ -1014,92 +1249,530 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, &iface, &function);
         Ok(())
     }
+}
 
-    async fn begin_durable_function(
-        &mut self,
-        function_type: durability::DurableFunctionType,
-    ) -> anyhow::Result<durability::OplogIndex> {
-        // Called from guest code via the durability WIT binding; the guest is the "host
-        // function" identity for diagnostic purposes here.
-        let oplog_idx = DurabilityHost::begin_durable_function(
-            self,
-            &function_type.into(),
-            "golem::durability::begin-durable-function",
-        )
-        .await?;
-        Ok(oplog_idx.into())
+impl<Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocation for DurableWorkerCtx<Ctx> {}
+
+fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    start_index: OplogIndex,
+) -> anyhow::Result<Resource<LiveCustomDurableInvocation>> {
+    accessor.with(|mut access| {
+        let previous = access
+            .as_context_mut()
+            .guest_task_context::<CustomInvocationContext>()?;
+        let scope_id = {
+            let ctx = access.get();
+            let owner_invocation = ctx
+                .state
+                .active_custom_invocations
+                .get(&start_index)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "custom durable invocation {start_index} is not active in live execution"
+                    )
+                })?;
+            if let Some(current) = previous
+                .as_deref()
+                .and_then(CustomInvocationContext::current)
+            {
+                let registered = ctx
+                    .state
+                    .custom_invocation_scopes
+                    .get(&current.scope_id)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "inherited custom invocation scope {} is no longer active",
+                            current.scope_id
+                        )
+                    })?;
+                if registered.owner_start_index != current.owner_start_index {
+                    return Err(anyhow::anyhow!(
+                        "inherited custom invocation scope {} has stale attribution",
+                        current.scope_id
+                    ));
+                }
+                if current.owner_start_index != start_index
+                    && owner_invocation.parent_start_index != Some(current.owner_start_index)
+                {
+                    return Err(anyhow::anyhow!(
+                        "custom durable invocation {start_index} is not nested under the current invocation {}",
+                        current.owner_start_index
+                    ));
+                }
+            }
+            let scope_id = ctx.state.next_custom_invocation_scope_id;
+            ctx.state.next_custom_invocation_scope_id = scope_id.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!("custom invocation scope identity space exhausted")
+            })?;
+            scope_id
+        };
+        let resource = access.get().table().push(LiveCustomDurableInvocation {
+            scope_id,
+            start_index,
+        })?;
+        access.get().state.custom_invocation_scopes.insert(
+            scope_id,
+            OpenCustomInvocationScope {
+                owner_start_index: start_index,
+                resource_rep: resource.rep(),
+            },
+        );
+        let mut next = previous.as_deref().cloned().unwrap_or_default();
+        next.scopes.push(CustomInvocationScope {
+            scope_id,
+            owner_start_index: start_index,
+        });
+        if let Err(err) = access
+            .as_context_mut()
+            .set_guest_task_context(Arc::new(next))
+        {
+            let _ = access.get().table().delete(resource);
+            access.get().state.custom_invocation_scopes.remove(&scope_id);
+            return Err(err.into());
+        }
+        record_custom_invocation_scope_open();
+        Ok(resource)
+    })
+}
+
+fn close_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
+    access: &mut Access<'_, U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    resource: Resource<LiveCustomDurableInvocation>,
+) -> anyhow::Result<OplogIndex> {
+    let current = access
+        .as_context_mut()
+        .guest_task_context::<CustomInvocationContext>()?;
+    let resource_rep = resource.rep();
+    let invocation = access.get().table().delete(resource)?;
+    let registered = access
+        .get()
+        .state
+        .custom_invocation_scopes
+        .remove(&invocation.scope_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "custom invocation scope {} is no longer active",
+                invocation.scope_id
+            )
+        })?;
+    if registered.owner_start_index != invocation.start_index
+        || registered.resource_rep != resource_rep
+    {
+        return Err(anyhow::anyhow!(
+            "custom invocation scope {} has stale attribution",
+            invocation.scope_id
+        ));
     }
 
-    async fn end_durable_function(
-        &mut self,
-        function_type: durability::DurableFunctionType,
-        begin_index: durability::OplogIndex,
+    let mut next = current.as_deref().cloned().unwrap_or_default();
+    match next.remove(invocation.scope_id) {
+        ScopeRemoval::Top => {}
+        ScopeRemoval::OutOfOrder => {
+            warn!(
+                scope_id = invocation.scope_id,
+                "custom invocation resource was consumed out of nesting order"
+            );
+        }
+        ScopeRemoval::Missing => {
+            warn!(
+                scope_id = invocation.scope_id,
+                "custom invocation resource was not present in the calling guest task context"
+            );
+        }
+    }
+    if next.scopes.is_empty() {
+        access.as_context_mut().clear_guest_task_context()?;
+    } else {
+        access
+            .as_context_mut()
+            .set_guest_task_context(Arc::new(next))?;
+    }
+    Ok(invocation.start_index)
+}
+
+impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocationWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    fn drop(
+        mut access: Access<'_, U, Self>,
+        resource: Resource<LiveCustomDurableInvocation>,
+    ) -> anyhow::Result<()> {
+        let start_index = close_live_custom_durable_invocation(&mut access, resource)?;
+        access
+            .get()
+            .state
+            .active_custom_invocations
+            .remove(&start_index);
+        Ok(())
+    }
+
+    async fn finish(
+        accessor: &Accessor<U, Self>,
+        resource: Resource<LiveCustomDurableInvocation>,
+        response: golem_common::schema::wit::wire::TypedSchemaValue,
         forced_commit: bool,
     ) -> anyhow::Result<()> {
-        DurabilityHost::end_durable_function(
-            self,
-            &function_type.into(),
-            OplogIndex::from_u64(begin_index),
-            forced_commit,
-        )
-        .await?;
+        let (start_index, response, oplog, worker) = accessor.with(|mut access| {
+            let start_index = close_live_custom_durable_invocation(&mut access, resource)?;
+            let ctx = access.get();
+            let invocation = ctx
+                .state
+                .active_custom_invocations
+                .get(&start_index)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "custom durable invocation {start_index} is not active in live execution"
+                    )
+                })?;
+            if ctx
+                .state
+                .active_custom_invocations
+                .values()
+                .any(|invocation| invocation.parent_start_index == Some(start_index))
+            {
+                return Err(anyhow::anyhow!(
+                    "cannot finish custom durable invocation {start_index} while a nested custom durable invocation is still active"
+                ));
+            }
+            if invocation.initiating_children.load(Ordering::Acquire) != 0 {
+                return Err(anyhow::anyhow!(
+                    "cannot finish custom durable invocation {start_index} while a nested custom durable invocation is being started"
+                ));
+            }
+            let response = golem_common::schema::wit::decode_typed_rejecting_quota_with(
+                response, ctx,
+            )
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to decode durable function response schema value: {e}")
+            })?;
+            let oplog = ctx.state.oplog.clone();
+            let worker = ctx.public_state.worker();
+            Ok::<_, anyhow::Error>((start_index, response, oplog, worker))
+        })?;
+
+        concurrent::drain_dropped_call_events_access(accessor, accessor.getter())
+            .await
+            .map_err(|err| err.source)?;
+        let response = oplog
+            .upload_payload(&HostResponse::Custom(response))
+            .await
+            .map_err(|err| anyhow::anyhow!("Failed to store durable function response: {err}"))?;
+        worker
+            .add_and_commit_oplog(OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index,
+                response: Some(response),
+                forced_commit,
+            })
+            .await;
+        let checkpoint = accessor.with(|mut access| {
+            let ctx = access.get();
+            ctx.state.active_custom_invocations.remove(&start_index);
+            ctx.state
+                .at_clean_checkpoint_boundary()
+                .then(|| (ctx.public_state.worker(), ctx.state.min_exposed_marker))
+        });
+        if let Some((worker, min_exposed_marker)) = checkpoint {
+            worker
+                .checkpoint_status_mid_invocation(min_exposed_marker)
+                .await;
+        }
         Ok(())
     }
+}
 
-    async fn current_durable_execution_state(
-        &mut self,
-    ) -> anyhow::Result<durability::DurableExecutionState> {
-        let state = InFunctionRetryHost::durable_execution_state(self);
-        Ok(durability::DurableExecutionState {
-            is_live: state.is_live,
-            persistence_level: match state.persistence_level {
-                PersistenceLevel::PersistNothing => durability::PersistenceLevel::PersistNothing,
-                PersistenceLevel::PersistRemoteSideEffects => {
-                    durability::PersistenceLevel::PersistRemoteSideEffects
-                }
-                PersistenceLevel::Smart => durability::PersistenceLevel::Smart,
-            },
-        })
-    }
-
-    async fn persist_durable_function_invocation(
-        &mut self,
+impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
+    for HasSelf<DurableWorkerCtx<Ctx>>
+{
+    async fn begin_custom_durable_invocation(
+        accessor: &Accessor<U, Self>,
         function_name: String,
         request: golem_common::schema::wit::wire::TypedSchemaValue,
-        response: golem_common::schema::wit::wire::TypedSchemaValue,
         function_type: durability::DurableFunctionType,
-    ) -> anyhow::Result<()> {
-        // The request/response values are guest-owned and never legally carry a
-        // quota token. Decode both through the rejecting path so any owned
-        // `quota-token` handle is deleted from the resource table rather than
-        // leaked. Both are drained before the first error is surfaced, so a
-        // handle in `response` cannot leak when `request` is rejected.
-        let request_typed =
-            golem_common::schema::wit::decode_typed_rejecting_quota_with(request, self);
-        let response_typed =
-            golem_common::schema::wit::decode_typed_rejecting_quota_with(response, self);
-        let request_typed = request_typed.map_err(|e| {
-            anyhow::anyhow!("Failed to decode durable function request schema value: {e}")
-        })?;
-        let response_typed = response_typed.map_err(|e| {
-            anyhow::anyhow!("Failed to decode durable function response schema value: {e}")
-        })?;
-        DurabilityHost::persist_durable_function_invocation(
-            self,
-            HostFunctionName::Custom(function_name),
-            &HostRequest::Custom(request_typed),
-            &HostResponse::Custom(response_typed),
-            function_type.into(),
-        )
-        .await;
-        Ok(())
-    }
+    ) -> anyhow::Result<durability::CustomDurableInvocation> {
+        // Capture attribution before the first await. The immutable Arc is the initiation-time
+        // snapshot inherited by this host task and its continuations.
+        let custom_invocation_context = accessor.guest_task_context::<CustomInvocationContext>()?;
+        let (
+            request,
+            function_name,
+            invocation_id,
+            function_type,
+            parent_start_index,
+            is_live,
+            oplog,
+            worker,
+            replay_state,
+            linear_memory,
+            child_initiation,
+            cleanup_sink,
+        ) = accessor.with(|mut access| {
+            let ctx = access.get();
+            let request =
+                golem_common::schema::wit::decode_typed_rejecting_quota_with(request, ctx)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to decode durable function request schema value: {e}"
+                        )
+                    })?;
+            let function_name = HostFunctionName::Custom(function_name);
+            let function_type: DurableFunctionType = function_type.into();
+            if is_write_side_effect(&function_type) {
+                DurableWorkerCtx::check_read_only_allows(
+                    ctx,
+                    "golem::durability::begin-custom-durable-invocation",
+                )
+                .map_err(anyhow::Error::msg)?;
+            }
 
-    async fn read_persisted_durable_function_invocation(
-        &mut self,
-    ) -> anyhow::Result<durability::PersistedDurableFunctionInvocation> {
-        let invocation = DurabilityHost::read_persisted_durable_function_invocation(self).await?;
-        invocation.try_into()
+            let contextual_parent = custom_invocation_context
+                .as_deref()
+                .and_then(CustomInvocationContext::current)
+                .map(|scope| {
+                    let registered = ctx
+                        .state
+                        .custom_invocation_scopes
+                        .get(&scope.scope_id)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "custom invocation scope {} is no longer active",
+                                scope.scope_id
+                            )
+                        })?;
+                    if registered.owner_start_index != scope.owner_start_index
+                        || !ctx
+                            .state
+                            .active_custom_invocations
+                            .contains_key(&scope.owner_start_index)
+                    {
+                        return Err(anyhow::anyhow!(
+                            "custom invocation scope {} has stale ownership attribution",
+                            scope.scope_id
+                        ));
+                    }
+                    Ok(scope.owner_start_index)
+                })
+                .transpose()?;
+            let typed_parent = match &function_type {
+                DurableFunctionType::WriteRemoteBatched(Some(idx))
+                | DurableFunctionType::WriteRemoteTransaction(Some(idx)) => Some(*idx),
+                _ => None,
+            };
+            if contextual_parent.is_some()
+                && typed_parent.is_some()
+                && contextual_parent != typed_parent
+            {
+                return Err(anyhow::anyhow!(
+                    "custom durable invocation has conflicting contextual and function-type parents"
+                ));
+            }
+            let parent_start_index = contextual_parent.or(typed_parent);
+            let parent_invocation_id = parent_start_index
+                .map(|parent| {
+                    ctx.state
+                        .active_custom_invocations
+                        .get(&parent)
+                        .map(|invocation| invocation.invocation_id)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "custom durable invocation parent {parent} is not active"
+                            )
+                        })
+                })
+                .transpose()?;
+            let idempotency_key = ctx.state.get_current_idempotency_key().ok_or_else(|| {
+                anyhow::anyhow!("custom durability requires an active agent invocation")
+            })?;
+            let invocation_id = next_custom_invocation_id(
+                &mut ctx.state.custom_invocation_ordinals,
+                &idempotency_key,
+                parent_invocation_id,
+            )?;
+            let child_initiation = parent_start_index
+                .and_then(|parent| ctx.state.active_custom_invocations.get(&parent))
+                .map(|parent| CustomChildInitiation::new(parent.initiating_children.clone()));
+            Ok::<_, anyhow::Error>((
+                HostRequest::Custom(request),
+                function_name,
+                invocation_id,
+                function_type,
+                parent_start_index,
+                ctx.state.is_live(),
+                ctx.state.oplog.clone(),
+                ctx.public_state.worker(),
+                ctx.state.replay_state.clone(),
+                ctx.linear_memory_tracker(),
+                child_initiation,
+                ctx.state
+                    .dropped_call_event_sender()
+                    .expect("dropped-call event sender is always available"),
+            ))
+        })?;
+
+        concurrent::drain_dropped_call_events_access(accessor, accessor.getter())
+            .await
+            .map_err(|err| err.source)?;
+
+        if is_live {
+            let (verdict_tx, verdict_rx) = oneshot::channel();
+            let lifecycle = CustomBeginLifecycle::new(verdict_tx, child_initiation, cleanup_sink);
+            let coordinator_lifecycle = lifecycle.clone();
+            let start_function_type = function_type.clone();
+            let start_invocation_id = invocation_id;
+            let start = tokio::spawn(async move {
+                let persisted_request = oplog
+                    .upload_payload(&request)
+                    .await
+                    .map_err(|err| format!("Failed to store durable function request: {err}"))?;
+                Ok::<_, String>(
+                    worker
+                        .add_and_commit_oplog(OplogEntry::Start {
+                            timestamp: Timestamp::now_utc(),
+                            parent_start_index,
+                            function_name,
+                            invocation_id: Some(start_invocation_id),
+                            observational_owner: None,
+                            request: Some(persisted_request),
+                            durable_function_type: start_function_type,
+                        })
+                        .await,
+                )
+            });
+            let cancellation_worker =
+                accessor.with(|mut access| access.get().public_state.worker());
+            let coordinator = tokio::spawn(async move {
+                let start_result = start
+                    .await
+                    .map_err(|err| format!("custom invocation Start recorder task failed: {err}"))
+                    .and_then(|result| result);
+                coordinator_lifecycle
+                    .complete_start(start_result.clone())
+                    .await;
+                let verdict = verdict_rx.await.unwrap_or(CustomBeginVerdict::Suppressed);
+                match (verdict, start_result) {
+                    (CustomBeginVerdict::Cancelled, Ok(start_index)) => {
+                        cancellation_worker
+                            .add_and_commit_oplog(OplogEntry::Cancelled {
+                                timestamp: Timestamp::now_utc(),
+                                start_index,
+                                partial: None,
+                            })
+                            .await;
+                        Ok(Some(start_index))
+                    }
+                    (_, Err(err)) if matches!(verdict, CustomBeginVerdict::Cancelled) => {
+                        Err(WorkerExecutorError::runtime(err))
+                    }
+                    _ => Ok(None),
+                }
+            });
+            lifecycle.set_coordinator(coordinator);
+            let terminal_guard = CustomBeginTerminalGuard {
+                lifecycle: Some(lifecycle.clone()),
+            };
+            accessor
+                .register_terminal_observer(Box::new(move |consumption| {
+                    terminal_guard.consume(consumption)
+                }))
+                .map_err(|err| {
+                    anyhow::anyhow!("failed to observe custom invocation begin delivery: {err}")
+                })?;
+            let start_index = lifecycle.wait_start().await.map_err(anyhow::Error::msg)?;
+            accessor.with(|mut access| {
+                access.get().state.active_custom_invocations.insert(
+                    start_index,
+                    ActiveCustomInvocation {
+                        invocation_id,
+                        parent_start_index,
+                        initiating_children: Arc::new(AtomicUsize::new(0)),
+                    },
+                );
+            });
+            lifecycle.promote_to_active();
+            return Ok(durability::CustomDurableInvocation::Live(
+                open_live_custom_durable_invocation(accessor, start_index)?,
+            ));
+        }
+
+        let claimed = replay_state
+            .claim_custom_start_matching_invocation_id(
+                &function_name,
+                &function_type,
+                parent_start_index,
+                invocation_id,
+                &request,
+            )
+            .await?;
+        let start_index = claimed.handle.start_idx();
+        match replay_state
+            .await_resolution_outcome(claimed.handle)
+            .await?
+        {
+            ResolutionOutcome::Incomplete => {
+                replay_state.switch_to_live().await;
+                linear_memory.switch_to_live();
+                accessor.with(|mut access| {
+                    access.get().state.active_custom_invocations.insert(
+                        start_index,
+                        ActiveCustomInvocation {
+                            invocation_id,
+                            parent_start_index,
+                            initiating_children: Arc::new(AtomicUsize::new(0)),
+                        },
+                    );
+                });
+                Ok(durability::CustomDurableInvocation::Live(
+                    open_live_custom_durable_invocation(accessor, start_index)?,
+                ))
+            }
+            ResolutionOutcome::Resolved(Resolution::Completed {
+                response,
+                ..
+            }) => {
+                let response = response.ok_or_else(|| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "End { response: Some(..) }",
+                        "End { response: None }".to_string(),
+                    )
+                })?;
+                let response = oplog.download_payload(response).await.map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "End payload cannot be downloaded: {err}"
+                    ))
+                })?;
+                let invocation = PersistedDurableFunctionInvocation {
+                    timestamp: claimed.timestamp,
+                    function_name: claimed.function_name.to_string(),
+                    response,
+                    function_type: claimed.durable_function_type,
+                    oplog_entry_version: OplogEntryVersion::V2,
+                };
+                Ok(durability::CustomDurableInvocation::Replayed(
+                    invocation.try_into()?,
+                ))
+            }
+            ResolutionOutcome::Resolved(Resolution::Cancelled {
+                cancelled_idx, ..
+            }) => {
+                debug!(
+                    "custom durable invocation begin was cancelled at {cancelled_idx}; parking replay until the guest cancels it again"
+                );
+                std::future::pending::<durability::CustomDurableInvocation>().await;
+                unreachable!()
+            }
+            ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded {
+                end_idx,
+                marker_idx,
+                ..
+            }) => Err(WorkerExecutorError::unexpected_oplog_entry(
+                "End",
+                format!(
+                    "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a custom durable invocation"
+                ),
+            )
+            .into()),
+        }
     }
 }
 
@@ -1128,8 +1801,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
 
     fn durable_execution_state(&self) -> DurableExecutionState {
         DurableExecutionState {
-            is_live: self.state.is_live() || self.state.snapshotting_mode.is_some(),
-            persistence_level: self.state.persistence_level,
+            is_live: self.state.is_live() || self.state.snapshotting_mode,
             snapshotting_mode: self.state.snapshotting_mode,
             assume_idempotence: self.state.assume_idempotence,
             max_in_function_retry_delay: self.state.config.max_in_function_retry_delay,
@@ -1152,7 +1824,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             return;
         }
 
@@ -1254,7 +1926,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
         self.end_function(function_type, begin_index).await?;
-        if self.state.snapshotting_mode.is_none()
+        if !self.state.snapshotting_mode
             && (function_type == &DurableFunctionType::WriteRemote
                 || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
                 || matches!(
@@ -1310,75 +1982,69 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     async fn read_persisted_durable_function_invocation(
         &mut self,
     ) -> Result<PersistedDurableFunctionInvocation, WorkerExecutorError> {
-        if self.state.persistence_level == PersistenceLevel::PersistNothing {
-            Err(WorkerExecutorError::runtime(
-                "Trying to replay an durable invocation in a PersistNothing block",
-            ))
-        } else {
-            // A completed durable function invocation is persisted as a `Start` + `End` pair.
-            // Unlike the typed host-call readers, the guest learns the call's identity (function
-            // name, type, timestamp) from the persisted `Start` itself, so claim the next `Start`
-            // without an expected identity and await its matching `End` through the concurrent
-            // resolver. `Cancelled` is unexpected: durable invocations are always persisted as a
-            // completed pair.
-            let claimed = self.state.replay_state.claim_any_concurrent_start().await?;
-            let timestamp = claimed.timestamp;
-            let function_name = claimed.function_name.to_string();
-            let function_type = claimed.durable_function_type.clone();
-            let resolution = self
-                .state
-                .replay_state
-                .await_resolution(claimed.handle)
-                .await?;
-            match resolution {
-                Resolution::Completed { response, .. } => {
-                    let response_payload = response.ok_or_else(|| {
-                        WorkerExecutorError::unexpected_oplog_entry(
-                            "End { response: Some(..) }",
-                            "End { response: None }".to_string(),
-                        )
+        // A completed durable function invocation is persisted as a `Start` + `End` pair.
+        // Unlike the typed host-call readers, the guest learns the call's identity (function
+        // name, type, timestamp) from the persisted `Start` itself, so claim the next `Start`
+        // without an expected identity and await its matching `End` through the concurrent
+        // resolver. `Cancelled` is unexpected: durable invocations are always persisted as a
+        // completed pair.
+        let claimed = self.state.replay_state.claim_any_concurrent_start().await?;
+        let timestamp = claimed.timestamp;
+        let function_name = claimed.function_name.to_string();
+        let function_type = claimed.durable_function_type.clone();
+        let resolution = self
+            .state
+            .replay_state
+            .await_resolution(claimed.handle)
+            .await?;
+        match resolution {
+            Resolution::Completed { response, .. } => {
+                let response_payload = response.ok_or_else(|| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "End { response: Some(..) }",
+                        "End { response: None }".to_string(),
+                    )
+                })?;
+                let response = self
+                    .public_state
+                    .worker()
+                    .oplog()
+                    .download_payload(response_payload)
+                    .await
+                    .map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "End payload cannot be downloaded: {err}"
+                        ))
                     })?;
-                    let response = self
-                        .public_state
-                        .worker()
-                        .oplog()
-                        .download_payload(response_payload)
-                        .await
-                        .map_err(|err| {
-                            WorkerExecutorError::runtime(format!(
-                                "End payload cannot be downloaded: {err}"
-                            ))
-                        })?;
-                    Ok(PersistedDurableFunctionInvocation {
-                        timestamp,
-                        function_name,
-                        response,
-                        function_type,
-                        oplog_entry_version: OplogEntryVersion::V2,
-                    })
-                }
-                Resolution::Cancelled { cancelled_idx, .. } => {
-                    Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "End",
-                        format!("Cancelled at {cancelled_idx}"),
-                    ))
-                }
-                Resolution::CompletedButDiscarded {
-                    end_idx,
-                    marker_idx,
-                    ..
-                } => {
-                    // Discarded completions are recorded only on the accessor completion path;
-                    // durable invocations are always persisted as a delivered `Start` + `End`
-                    // pair, so a marker resolving here means the oplog does not match this code
-                    // path.
-                    Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "End delivered to the guest",
-                        format!(
-                            "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a non-accessor durable call"
-                        ),
-                    ))
-                }
+                Ok(PersistedDurableFunctionInvocation {
+                    timestamp,
+                    function_name,
+                    response,
+                    function_type,
+                    oplog_entry_version: OplogEntryVersion::V2,
+                })
+            }
+            Resolution::Cancelled { cancelled_idx, .. } => {
+                Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "End",
+                    format!("Cancelled at {cancelled_idx}"),
+                ))
+            }
+            Resolution::CompletedButDiscarded {
+                end_idx,
+                marker_idx,
+                ..
+            } => {
+                // Discarded completions are recorded only on the accessor completion path;
+                // durable invocations are always persisted as a delivered `Start` + `End`
+                // pair, so a marker resolving here means the oplog does not match this code
+                // path.
+                Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "End delivered to the guest",
+                    format!(
+                        "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a non-accessor durable call"
+                    ),
+                ))
             }
         }
     }
@@ -1725,8 +2391,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
     fn durable_execution_state(&self) -> DurableExecutionState {
         DurableExecutionState {
             is_live: true,
-            persistence_level: PersistenceLevel::Smart,
-            snapshotting_mode: None,
+            snapshotting_mode: false,
             assume_idempotence: true,
             max_in_function_retry_delay: self.max_in_function_retry_delay,
         }
@@ -1828,12 +2493,123 @@ where
 mod tests {
     use super::*;
     use golem_common::model::oplog::HostPayloadPair;
-    use golem_common::model::oplog::PersistenceLevel;
     use golem_common::model::oplog::host_functions::KeyvalueEventualGet;
     use golem_common::model::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use test_r::test;
+
+    #[test]
+    fn custom_invocation_ids_are_stable_and_unique_within_the_root_namespace() {
+        let key = IdempotencyKey::new("00000000-0000-0000-0000-000000000001".to_string());
+        let mut ordinals = HashMap::new();
+
+        let first = next_custom_invocation_id(&mut ordinals, &key, None).unwrap();
+        let second = next_custom_invocation_id(&mut ordinals, &key, None).unwrap();
+
+        assert_eq!(
+            first,
+            uuid::Uuid::parse_str("f3cb2923-34f5-584d-bb45-48cb55428349").unwrap()
+        );
+        assert_eq!(
+            second,
+            uuid::Uuid::parse_str("3b57da08-b770-5852-9c6d-41753b19eea4").unwrap()
+        );
+        assert_ne!(first, second);
+
+        let mut replay_ordinals = HashMap::new();
+        assert_eq!(
+            next_custom_invocation_id(&mut replay_ordinals, &key, None).unwrap(),
+            first
+        );
+        assert_eq!(
+            next_custom_invocation_id(&mut replay_ordinals, &key, None).unwrap(),
+            second
+        );
+    }
+
+    #[test]
+    fn nested_custom_invocation_ordinals_do_not_shift_root_siblings() {
+        let key = IdempotencyKey::new("root-invocation".to_string());
+        let mut live_ordinals = HashMap::new();
+        let outer = next_custom_invocation_id(&mut live_ordinals, &key, None).unwrap();
+        let nested = next_custom_invocation_id(&mut live_ordinals, &key, Some(outer)).unwrap();
+        let root_sibling = next_custom_invocation_id(&mut live_ordinals, &key, None).unwrap();
+
+        let mut replay_ordinals = HashMap::new();
+        let replayed_outer = next_custom_invocation_id(&mut replay_ordinals, &key, None).unwrap();
+        // A completed outer invocation is replayed without executing its body, so the nested
+        // namespace is intentionally untouched.
+        let replayed_root_sibling =
+            next_custom_invocation_id(&mut replay_ordinals, &key, None).unwrap();
+
+        assert_eq!(replayed_outer, outer);
+        assert_eq!(replayed_root_sibling, root_sibling);
+        assert_ne!(nested, outer);
+        assert_ne!(nested, root_sibling);
+    }
+
+    #[test]
+    fn custom_invocation_ids_are_scoped_by_top_level_idempotency_key() {
+        let mut first_ordinals = HashMap::new();
+        let first = next_custom_invocation_id(
+            &mut first_ordinals,
+            &IdempotencyKey::new("first".to_string()),
+            None,
+        )
+        .unwrap();
+        let mut second_ordinals = HashMap::new();
+        let second = next_custom_invocation_id(
+            &mut second_ordinals,
+            &IdempotencyKey::new("second".to_string()),
+            None,
+        )
+        .unwrap();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    async fn cancelled_custom_begin_holds_parent_initiation_until_terminal_settles() {
+        let parent_counter = Arc::new(AtomicUsize::new(0));
+        let initiation = CustomChildInitiation::new(parent_counter.clone());
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (verdict_tx, verdict_rx) = oneshot::channel();
+        let lifecycle = CustomBeginLifecycle::new(verdict_tx, Some(initiation), event_tx);
+        let release_terminal = Arc::new(Notify::new());
+        let release_terminal_task = release_terminal.clone();
+        lifecycle.set_coordinator(tokio::spawn(async move {
+            assert!(matches!(
+                verdict_rx.await,
+                Ok(CustomBeginVerdict::Cancelled)
+            ));
+            release_terminal_task.notified().await;
+            Ok(Some(OplogIndex::from_u64(42)))
+        }));
+
+        lifecycle.settle(CustomBeginVerdict::Cancelled);
+        let event = event_rx.recv().await.expect("settlement event");
+        assert_eq!(parent_counter.load(Ordering::Acquire), 1);
+
+        let DropEvent::SettleCustomInvocationBegin {
+            lifecycle,
+            mut terminal,
+        } = event
+        else {
+            panic!("expected custom begin settlement event");
+        };
+        release_terminal.notify_one();
+        let cancelled_start = terminal
+            .take()
+            .expect("settlement task")
+            .await
+            .expect("settlement task join")
+            .expect("settlement task result");
+        assert_eq!(cancelled_start, Some(OplogIndex::from_u64(42)));
+        assert_eq!(parent_counter.load(Ordering::Acquire), 1);
+        lifecycle.release_initiation();
+        assert_eq!(parent_counter.load(Ordering::Acquire), 0);
+    }
 
     /// A mock DurabilityHost for testing `try_trigger_retry_or_loop` in isolation.
     struct MockDurabilityHost {
@@ -1879,8 +2655,7 @@ mod tests {
         fn durable_execution_state(&self) -> DurableExecutionState {
             DurableExecutionState {
                 is_live: true,
-                persistence_level: PersistenceLevel::Smart,
-                snapshotting_mode: None,
+                snapshotting_mode: false,
                 assume_idempotence: self.assume_idempotence,
                 max_in_function_retry_delay: self.max_in_function_retry_delay,
             }
