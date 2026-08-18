@@ -27,8 +27,7 @@ fn idx(n: u64) -> OplogIndex {
 fn durable_execution_state() -> DurableExecutionState {
     DurableExecutionState {
         is_live: true,
-        persistence_level: PersistenceLevel::Smart,
-        snapshotting_mode: None,
+        snapshotting_mode: false,
         assume_idempotence: true,
         max_in_function_retry_delay: Duration::from_secs(20),
     }
@@ -172,8 +171,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
     use std::time::Duration;
     let durable_execution_state = DurableExecutionState {
         is_live: true,
-        persistence_level: PersistenceLevel::Smart,
-        snapshotting_mode: None,
+        snapshotting_mode: false,
         assume_idempotence: false,
         max_in_function_retry_delay: Duration::ZERO,
     };
@@ -189,8 +187,8 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
         execution_scope: CallExecutionScope {
             retry_from: start_idx,
             durable_scope: None,
+            observational_owner: None,
             atomic_lease: unregistered_atomic_lease(atomic_region, true),
-            persistence_level: PersistenceLevel::Smart,
         },
         retry: InFunctionRetryController::new(
             DurableFunctionType::ReadLocal,
@@ -217,8 +215,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
     use std::time::Duration;
     let durable_execution_state = DurableExecutionState {
         is_live: true,
-        persistence_level: PersistenceLevel::Smart,
-        snapshotting_mode: None,
+        snapshotting_mode: false,
         assume_idempotence: false,
         max_in_function_retry_delay: Duration::ZERO,
     };
@@ -346,6 +343,8 @@ async fn live_delivery_token(
             timestamp: Timestamp::now_utc(),
             parent_start_index: None,
             function_name: HostFunctionName::MonotonicClockNow,
+            invocation_id: None,
+            observational_owner: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 golem_common::model::oplog::HostRequestNoInput {},
             )))),
@@ -739,8 +738,6 @@ impl Oplog for InMemoryOplog {
     ) -> Result<Vec<u8>, String> {
         unimplemented!()
     }
-
-    async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
 }
 
 #[test]
@@ -757,6 +754,8 @@ async fn dropped_cancellable_call_records_cancelled_at_next_drain_point() {
             timestamp: Timestamp::now_utc(),
             parent_start_index: None,
             function_name: HostFunctionName::MonotonicClockNow,
+            invocation_id: None,
+            observational_owner: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 golem_common::model::oplog::HostRequestNoInput {},
             )))),
@@ -816,6 +815,8 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             timestamp: Timestamp::now_utc(),
             parent_start_index: None,
             function_name: HostFunctionName::MonotonicClockNow,
+            invocation_id: None,
+            observational_owner: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 golem_common::model::oplog::HostRequestNoInput {},
             )))),
@@ -928,7 +929,7 @@ fn dropped_unfinished_call_keeps_live_permit_until_drop_event_is_consumed() {
         assert_eq!(counter.load(Ordering::Acquire), 1);
     }
     // The handle is gone, but the queued drop event now owns the permit: an in-flight check
-    // (e.g. the `set_oplog_persistence_level` boundary guard) running between the drop and
+    // A boundary guard running between the drop and
     // the next drain must still count this call.
     assert_eq!(counter.load(Ordering::Acquire), 1);
     let event = rx
@@ -1132,18 +1133,14 @@ fn scoped_retry_host_uses_call_retry_point_not_inner_current() {
     let scope = CallExecutionScope {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
+        observational_owner: None,
         atomic_lease: None,
-        persistence_level: PersistenceLevel::PersistRemoteSideEffects,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
 
     assert!(!retry_host.in_atomic_region());
     assert_eq!(retry_host.current_retry_point(), idx(42));
-    assert_eq!(
-        retry_host.durable_execution_state().persistence_level,
-        PersistenceLevel::PersistRemoteSideEffects
-    );
 }
 
 #[test]
@@ -1152,8 +1149,8 @@ fn scoped_retry_host_uses_call_atomic_region_as_retry_point() {
     let scope = CallExecutionScope {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
+        observational_owner: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
-        persistence_level: PersistenceLevel::Smart,
     };
 
     let retry_host = ScopedRetryHost::new(&mut inner, &scope);
@@ -1168,8 +1165,8 @@ async fn scoped_retry_host_trap_retry_uses_call_retry_point() {
     let scope = CallExecutionScope {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
+        observational_owner: None,
         atomic_lease: None,
-        persistence_level: PersistenceLevel::Smart,
     };
     let mut retry_host = ScopedRetryHost::new(&mut inner, &scope);
 
@@ -1192,14 +1189,14 @@ async fn seam2_overlapping_semantic_traps_carry_independent_retry_points() {
     let scope_a = CallExecutionScope {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
+        observational_owner: None,
         atomic_lease: None,
-        persistence_level: PersistenceLevel::Smart,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
         durable_scope: Some(idx(70)),
+        observational_owner: None,
         atomic_lease: None,
-        persistence_level: PersistenceLevel::Smart,
     };
 
     let error_a = {
@@ -1239,14 +1236,14 @@ async fn seam2_overlapping_atomic_region_traps_use_initiation_membership() {
     let scope_a = CallExecutionScope {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
+        observational_owner: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
-        persistence_level: PersistenceLevel::Smart,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
         durable_scope: Some(idx(70)),
+        observational_owner: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(8)), true),
-        persistence_level: PersistenceLevel::Smart,
     };
 
     let error_a = {
@@ -1306,8 +1303,8 @@ fn seam2_terminal_failure_carries_call_owned_trap_context() {
     let scope = CallExecutionScope {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
+        observational_owner: None,
         atomic_lease: None,
-        persistence_level: PersistenceLevel::Smart,
     };
     let handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
 
@@ -1340,14 +1337,14 @@ fn seam2_overlapping_terminal_failures_carry_independent_trap_contexts() {
     let scope_a = CallExecutionScope {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
+        observational_owner: None,
         atomic_lease: unregistered_atomic_lease(Some(idx(7)), true),
-        persistence_level: PersistenceLevel::Smart,
     };
     let scope_b = CallExecutionScope {
         retry_from: idx(77),
         durable_scope: Some(idx(70)),
+        observational_owner: None,
         atomic_lease: None,
-        persistence_level: PersistenceLevel::Smart,
     };
     let handle_a = synthetic_finished_handle_with_scope::<Cancellable>(scope_a);
     let handle_b = synthetic_finished_handle_with_scope::<Cancellable>(scope_b);
@@ -1453,7 +1450,7 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
     let begun = BegunCallExecutionScope {
         parent_start_index: Some(idx(10)),
         atomic_region: Some(idx(2)),
-        persistence_level: PersistenceLevel::PersistNothing,
+        observational_owner: None,
     };
 
     let lease = unregistered_atomic_lease(begun.atomic_region, true);
@@ -1462,7 +1459,6 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
     assert_eq!(scope.retry_from, idx(10));
     assert_eq!(scope.durable_scope, Some(idx(10)));
     assert_eq!(scope.atomic_region(), Some(idx(2)));
-    assert_eq!(scope.persistence_level, PersistenceLevel::PersistNothing);
 }
 
 #[test]
@@ -1470,7 +1466,7 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
     let begun = BegunCallExecutionScope {
         parent_start_index: None,
         atomic_region: None,
-        persistence_level: PersistenceLevel::Smart,
+        observational_owner: None,
     };
 
     let scope = begun.finish(idx(12), None);
@@ -1478,7 +1474,24 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
     assert_eq!(scope.retry_from, idx(12));
     assert_eq!(scope.durable_scope, None);
     assert_eq!(scope.atomic_region(), None);
-    assert_eq!(scope.persistence_level, PersistenceLevel::Smart);
+}
+
+#[test]
+fn begun_observational_scope_uses_custom_owner_as_retry_from() {
+    let begun = BegunCallExecutionScope {
+        parent_start_index: Some(idx(10)),
+        atomic_region: Some(idx(2)),
+        observational_owner: Some(idx(7)),
+    };
+
+    let lease = unregistered_atomic_lease(begun.atomic_region, true);
+    let scope = begun.finish(idx(11), lease);
+
+    assert_eq!(scope.retry_from, idx(7));
+    assert_eq!(scope.trap_retry_point(), idx(7));
+    assert_eq!(scope.durable_scope, Some(idx(10)));
+    assert_eq!(scope.observational_owner, Some(idx(7)));
+    assert_eq!(scope.atomic_region(), Some(idx(2)));
 }
 
 #[test]
@@ -1486,8 +1499,8 @@ fn call_execution_scope_owns_call_retry_point() {
     let scope = CallExecutionScope {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
+        observational_owner: None,
         atomic_lease: None,
-        persistence_level: PersistenceLevel::Smart,
     };
 
     assert_eq!(scope.retry_from, idx(42));
@@ -1504,8 +1517,7 @@ fn can_reexecute_matches_internal_retry_eligibility() {
             ft,
             DurableExecutionState {
                 is_live: true,
-                persistence_level: PersistenceLevel::Smart,
-                snapshotting_mode: None,
+                snapshotting_mode: false,
                 assume_idempotence,
                 max_in_function_retry_delay: Duration::ZERO,
             },

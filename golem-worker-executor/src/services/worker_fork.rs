@@ -826,6 +826,8 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
                     timestamp: now,
                     parent_start_index: copied_scope_start,
                     function_name: GolemApiFork::HOST_FUNCTION_NAME,
+                    invocation_id: None,
+                    observational_owner: None,
                     request: Some(request_payload),
                     durable_function_type: DurableFunctionType::WriteRemote,
                 },

@@ -1,5 +1,3 @@
-use golem_rust::{PersistenceLevel, with_persistence_level};
-
 pub fn cpu_intensive(length: u32) -> u32 {
     let length = length as usize;
     let a = vec![vec![1u32; length]; length];
@@ -31,27 +29,20 @@ pub fn large_input(input: Vec<u8>) -> u32 {
     input.len() as u32
 }
 
-pub fn oplog_heavy(length: u32, persistence_on: bool, commit: bool) -> u32 {
-    let level = if persistence_on {
-        PersistenceLevel::Smart
-    } else {
-        PersistenceLevel::PersistNothing
-    };
-    with_persistence_level(level, || {
-        let mut result: u32 = 0;
+pub fn oplog_heavy(length: u32, commit: bool) -> u32 {
+    let mut result: u32 = 0;
 
-        for _i in 0..length {
-            let mut buf = [0u8; 4];
-            let bytes = golem_rust::wasip3::random::random::get_random_bytes(buf.len() as u64);
-            buf.copy_from_slice(&bytes);
-            let value = u32::from_le_bytes(buf);
-            result ^= value;
+    for _i in 0..length {
+        let mut buf = [0u8; 4];
+        let bytes = golem_rust::wasip3::random::random::get_random_bytes(buf.len() as u64);
+        buf.copy_from_slice(&bytes);
+        let value = u32::from_le_bytes(buf);
+        result ^= value;
 
-            if commit {
-                golem_rust::oplog_commit(1);
-            }
+        if commit {
+            golem_rust::oplog_commit(1);
         }
+    }
 
-        result
-    })
+    result
 }

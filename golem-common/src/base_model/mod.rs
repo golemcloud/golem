@@ -564,13 +564,18 @@ impl IdempotencyKey {
     /// we generate a UUIDv5 in the ROOT_NS namespace and use that a unique namespace for generating
     /// the new idempotency key.
     pub fn derived(base: &IdempotencyKey, oplog_index: OplogIndex) -> Self {
+        let name = format!("oplog-index-{oplog_index}");
+        Self::derived_from_bytes(base, name.as_bytes())
+    }
+
+    /// Generates a deterministic idempotency key in the namespace of `base` from arbitrary bytes.
+    pub fn derived_from_bytes(base: &IdempotencyKey, name: &[u8]) -> Self {
         let namespace = if let Ok(base_uuid) = Uuid::parse_str(&base.value) {
             base_uuid
         } else {
             Uuid::new_v5(&Self::ROOT_NS, base.value.as_bytes())
         };
-        let name = format!("oplog-index-{oplog_index}");
-        Self::from_uuid(Uuid::new_v5(&namespace, name.as_bytes()))
+        Self::from_uuid(Uuid::new_v5(&namespace, name))
     }
 }
 

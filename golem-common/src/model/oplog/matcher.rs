@@ -399,11 +399,6 @@ impl PublicOplogEntry {
                     || Self::string_match(&params.key, &[], query_path, query)
                     || Self::span_attribute_match(&attributes, &[], query_path, query)
             }
-            PublicOplogEntry::ChangePersistenceLevel(_params) => {
-                Self::string_match("changepersistencelevel", &[], query_path, query)
-                    || Self::string_match("change-persistence-level", &[], query_path, query)
-                    || Self::string_match("persistence-level", &[], query_path, query)
-            }
             PublicOplogEntry::BeginRemoteTransaction(_params) => {
                 Self::string_match("beginremotetransaction", &[], query_path, query)
                     || Self::string_match("begin-remote-transaction", &[], query_path, query)

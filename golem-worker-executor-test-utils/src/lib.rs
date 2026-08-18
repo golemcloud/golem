@@ -44,8 +44,8 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{
     AgentError, HostResponse, HostResponseP3HttpClientConsumeBodyChunk, OplogEntry, OplogPayload,
-    PayloadId, PersistenceLevel, RawOplogPayload, TimestampedUpdateDescription,
-    host_functions::HostFunctionName, types::ObjectMetadata, types::SerializableP3HttpBodyChunk,
+    PayloadId, RawOplogPayload, TimestampedUpdateDescription, host_functions::HostFunctionName,
+    types::ObjectMetadata, types::SerializableP3HttpBodyChunk,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -1890,12 +1890,12 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
         // The in-process test harness shares its process (and RSS) with the test
         // framework and other services, so a process-RSS probe cannot isolate
-        // this executor's footprint. When a test pins a memory limit via
-        // system_memory_override, give the gate a fixed probe reporting that
+        // this executor's footprint. Disable measured admission for ordinary
+        // tests. When a test pins a memory limit via system_memory_override,
+        // keep admission enabled but give the gate a fixed probe reporting that
         // limit with zero current usage, so admission is decided solely on the
         // granted accounting (exact and process-isolated) against the pinned
-        // limit. The usable_ratio (worker_memory_ratio) still applies, matching
-        // the pre-gate semaphore pool size of system_memory_override * ratio.
+        // limit. The usable_ratio (worker_memory_ratio) still applies.
         match golem_config.memory.system_memory_override {
             Some(limit) => Arc::new(ActiveWorkers::new_with_probe(
                 Box::new(FixedProbe::new(limit, 0)),
@@ -1904,12 +1904,16 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
                 &golem_config.agent_status_flush,
                 shutdown_token,
             )),
-            None => Arc::new(ActiveWorkers::new(
-                &golem_config.memory,
-                &golem_config.filesystem_storage,
-                &golem_config.agent_status_flush,
-                shutdown_token,
-            )),
+            None => {
+                let mut memory_config = golem_config.memory.clone();
+                memory_config.enable_measured_admission = false;
+                Arc::new(ActiveWorkers::new(
+                    &memory_config,
+                    &golem_config.filesystem_storage,
+                    &golem_config.agent_status_flush,
+                    shutdown_token,
+                ))
+            }
         }
     }
 
@@ -2759,10 +2763,6 @@ impl Oplog for TestOplog {
                 .insert(ordered.index);
         }
         Ok(ordered)
-    }
-
-    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
-        self.oplog.switch_persistence_level(mode).await;
     }
 
     async fn add_pair(

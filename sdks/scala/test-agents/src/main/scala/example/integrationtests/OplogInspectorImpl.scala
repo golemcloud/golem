@@ -140,10 +140,8 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
       case OplogApi.OplogEntry.CancelPendingInvocation(p) => s"CANCEL @ $ts idem=${p.idempotencyKey}"
       case OplogApi.OplogEntry.StartSpan(p)               =>
         s"START_SPAN @ $ts id=${p.spanId} parent=${p.parent.getOrElse("none")} attrs=${p.attributes.size}"
-      case OplogApi.OplogEntry.FinishSpan(p)             => s"FINISH_SPAN @ $ts id=${p.spanId}"
-      case OplogApi.OplogEntry.SetSpanAttribute(p)       => s"SET_SPAN_ATTR @ $ts span=${p.spanId} key=${p.key}"
-      case OplogApi.OplogEntry.ChangePersistenceLevel(p) =>
-        s"CHANGE_PL @ $ts level=${p.persistenceLevel.tag}"
+      case OplogApi.OplogEntry.FinishSpan(p)                   => s"FINISH_SPAN @ $ts id=${p.spanId}"
+      case OplogApi.OplogEntry.SetSpanAttribute(p)             => s"SET_SPAN_ATTR @ $ts span=${p.spanId} key=${p.key}"
       case OplogApi.OplogEntry.BeginRemoteTransaction(p)       => s"BEGIN_TX @ $ts id=${p.transactionId}"
       case OplogApi.OplogEntry.PreCommitRemoteTransaction(p)   => s"PRE_COMMIT_TX @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.PreRollbackRemoteTransaction(p) => s"PRE_ROLLBACK_TX @ $ts begin=${p.beginIndex}"
