@@ -42,7 +42,8 @@
 //! * The **lifecycle queue** runs notification and memory-accounting jobs. Jobs that take the
 //!   `instance` lock are fire-and-forget. Ordered oplog entries are awaitable but never take that
 //!   lock, so an instance-lock holder never waits on a lifecycle operation that needs the same
-//!   lock.
+//!   lock. A cancellation-safe status transaction may own guards acquired by its caller, but the
+//!   status task never acquires those locks itself.
 //!
 //! The status task is also the **only writer** of the worker's published status
 //! (`last_known_status`, an `ArcSwap`) and its `detached` flag; every other component reads them
@@ -66,13 +67,13 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::InterruptKind;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, OwnedMutexGuard, mpsc, oneshot};
 use tracing::debug;
 
 /// Handle to the worker-state actor's two job queues. Owned by [`Worker`]; dropping it aborts
 /// both tasks.
 pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
-    status_jobs: mpsc::UnboundedSender<StatusJob>,
+    status_jobs: mpsc::UnboundedSender<StatusJob<Ctx>>,
     lifecycle_jobs: mpsc::UnboundedSender<LifecycleJob<Ctx>>,
     notification_queued: Arc<AtomicBool>,
     status_task: tokio::task::JoinHandle<()>,
@@ -84,7 +85,7 @@ pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
 /// transaction. Jobs are processed strictly in enqueue order, giving the same serialization the
 /// former `update_state_lock` mutex provided — without lock-ownership handoff to potentially
 /// unpollable callers.
-enum StatusJob {
+enum StatusJob<Ctx: WorkerCtx> {
     /// Commits the oplog and folds the newly committed entries into the published status.
     /// Replies with the current oplog index after the commit and whether the status changed.
     /// The reply deliberately does not depend on the instance lock; if the caller wants the
@@ -92,6 +93,20 @@ enum StatusJob {
     CommitAndUpdateState {
         level: CommitLevel,
         done: oneshot::Sender<(OplogIndex, bool)>,
+    },
+    /// Appends an entry and completes its commit + fold transaction even if the caller is
+    /// cancelled. The caller-acquired guards remain owned by this job until the transaction ends.
+    AppendAndCommitAttached {
+        entry: Box<OplogEntry>,
+        _worker: Arc<Worker<Ctx>>,
+        _instance_guard: OwnedMutexGuard<WorkerInstance>,
+        _card_event_boundary_guard: OwnedMutexGuard<()>,
+        done: oneshot::Sender<()>,
+    },
+    /// Returns the published status after reattaching it when a jump or revert detached it.
+    /// Serialization on the status queue prevents observing an in-flight status transition.
+    AttachedStatus {
+        done: oneshot::Sender<Arc<AgentStatusRecord>>,
     },
     /// Returns the published status if it is currently attached to the oplog, `None` if it is
     /// detached. Runs on the status queue so it cannot observe the detached window of an
@@ -147,10 +162,10 @@ struct StatusState<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> Drop for WorkerStateActor<Ctx> {
     fn drop(&mut self) {
-        // In-flight status jobs borrow the owning `Worker`, so at this point no caller can be
-        // awaiting a reply anymore. Lifecycle jobs that need the worker hold a strong
-        // `Arc<Worker>` and therefore cannot be pending here; a dropped `NotifyStatusChanged` is
-        // harmless for a worker that is going away.
+        // Status jobs that must outlive a cancelled caller hold a strong `Arc<Worker>`, so the
+        // actor cannot be dropped while such a job is queued or running. Lifecycle jobs that need
+        // the worker likewise hold a strong `Arc<Worker>`; other lifecycle jobs are harmless to
+        // discard when the worker goes away.
         self.status_task.abort();
         self.lifecycle_task.abort();
     }
@@ -182,7 +197,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             status_flusher,
         };
 
-        let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob>();
+        let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob<Ctx>>();
         let status_task = tokio::spawn(async move {
             while let Some(job) = status_rx.recv().await {
                 match job {
@@ -190,6 +205,24 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         let changed = state.commit_and_update_state(level).await;
                         let index = state.oplog.current_oplog_index().await;
                         let _ = done.send((index, changed));
+                    }
+                    StatusJob::AppendAndCommitAttached {
+                        entry,
+                        _worker,
+                        _instance_guard,
+                        _card_event_boundary_guard,
+                        done,
+                    } => {
+                        state.oplog.add(*entry).await;
+                        state.commit_and_update_state(CommitLevel::Always).await;
+                        state.ensure_status_attached().await;
+                        let _ = done.send(());
+                    }
+                    StatusJob::AttachedStatus { done } => {
+                        if state.detached.load(Ordering::Acquire) {
+                            state.reattach().await;
+                        }
+                        let _ = done.send(state.last_known_status.load_full());
                     }
                     StatusJob::NonDetachedStatus { done } => {
                         let status = if state.detached.load(Ordering::Acquire) {
@@ -262,6 +295,28 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// completion on the status task (the same semantics as the oplog actor's own jobs).
     pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
         self.run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
+            .await
+    }
+
+    pub async fn append_and_commit_attached(
+        &self,
+        entry: OplogEntry,
+        worker: Arc<Worker<Ctx>>,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        card_event_boundary_guard: OwnedMutexGuard<()>,
+    ) {
+        self.run_status_job(|done| StatusJob::AppendAndCommitAttached {
+            entry: Box::new(entry),
+            _worker: worker,
+            _instance_guard: instance_guard,
+            _card_event_boundary_guard: card_event_boundary_guard,
+            done,
+        })
+        .await
+    }
+
+    pub async fn attached_status(&self) -> Arc<AgentStatusRecord> {
+        self.run_status_job(|done| StatusJob::AttachedStatus { done })
             .await
     }
 
@@ -352,7 +407,10 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// Panics if the task is gone: it is only aborted from `Drop` (when no caller can be in
     /// flight anymore), so a missing reply means the task itself panicked and the worker's
     /// status state is no longer trustworthy.
-    async fn run_status_job<R>(&self, make_job: impl FnOnce(oneshot::Sender<R>) -> StatusJob) -> R {
+    async fn run_status_job<R>(
+        &self,
+        make_job: impl FnOnce(oneshot::Sender<R>) -> StatusJob<Ctx>,
+    ) -> R {
         let (done, done_rx) = oneshot::channel();
         if self.status_jobs.send(make_job(done)).is_err() {
             panic!(
@@ -418,15 +476,16 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     async fn reattach(&self) {
         self.commit_and_update_state(CommitLevel::Always).await;
 
-        if self.detached.load(Ordering::Relaxed) {
+        self.ensure_status_attached().await;
+    }
+
+    async fn ensure_status_attached(&self) -> bool {
+        if self.detached.load(Ordering::Acquire) {
             debug!(
                 agent_id = %self.owned_agent_id.agent_id,
                 "Worker status was detached from oplog, recomputing it"
             );
 
-            // The in-memory status is no longer foldable (a jump deleted its index, or a revert
-            // moved the oplog behind it), so we recompute. Prefer folding forward from the clean
-            // checkpoint (which predates any jump region) over a full re-read of the oplog.
             let worker_status = calculate_last_known_status_with_checkpoint(
                 &self.deps,
                 &self.owned_agent_id,
@@ -446,16 +505,19 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             // recomputed status visible before readers start trusting it again.
             self.detached.store(false, Ordering::Release);
 
-            // The status was just recomputed from scratch; persist it synchronously (a full
-            // reconcile write, since the baseline was invalidated on detach) so the cache is
-            // immediately consistent rather than waiting for the next background sweep. Best-effort:
-            // a failure is logged/metered and re-queued inside `flush`.
+            // The status was recomputed from an earlier baseline; persist it synchronously so the
+            // cache is immediately usable again. A failure remains best-effort because the oplog
+            // is authoritative and the flusher will retry it in the background.
             if let Err(err) = self.status_flusher.flush(FlushReason::Forced).await {
                 debug!(
                     agent_id = %self.owned_agent_id.agent_id,
                     "Forced status flush on reattach failed (will retry in background): {err}"
                 );
             }
+
+            true
+        } else {
+            false
         }
     }
 

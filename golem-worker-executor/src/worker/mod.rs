@@ -68,9 +68,7 @@ use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal, Snapshotting,
     SnapshottingConfig, ephemeral_invocation_phantom_id,
 };
-use golem_common::model::card::{
-    AgentCardHolder, CardHolder, CardId, StoredCard, card_matches_agent_recipient,
-};
+use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
@@ -100,7 +98,7 @@ use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{Mutex, MutexGuard, RwLock};
+use tokio::sync::{Mutex, MutexGuard, OwnedMutexGuard, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, info, span, warn};
 use uuid::Uuid;
@@ -626,6 +624,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let GetOrCreateWorkerResult {
             initial_worker_metadata,
             current_status,
+            persisted_status,
             execution_status,
             agent_id,
             snapshot_policy,
@@ -715,6 +714,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps.config().agent_status_flush.enabled,
             deps.worker_service(),
             deps.active_workers().status_flush_queue(),
+            persisted_status,
             current_status.clone(),
             last_known_status_detached.clone(),
         );
@@ -2707,12 +2707,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn receive_card_transfer(
-        &self,
+        self: &Arc<Self>,
         transfer_id: Uuid,
         source_card_id: CardId,
         card: StoredCard,
     ) -> Result<(), WorkerExecutorError> {
-        let instance_guard = self.lock_non_stopping_worker().await;
+        let instance_guard = self.lock_non_stopping_worker_owned().await;
 
         if instance_guard.is_deleting() {
             return Err(WorkerExecutorError::invalid_request(
@@ -2720,117 +2720,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        let status = self.get_last_known_status().await;
-        if let Some(receipt) =
-            status
-                .pending_card_events
-                .iter()
-                .find_map(|pending_event| match &pending_event.event {
-                    QueuedCardEvent::TransferReceived(receipt)
-                        if receipt.transfer_id == transfer_id =>
-                    {
-                        Some(receipt)
-                    }
-                    _ => None,
-                })
-        {
-            let received_card = receipt.card.as_ref().ok_or_else(|| {
-                WorkerExecutorError::runtime(
-                    "received permission card transfer is missing its durable payload",
-                )
-            })?;
-            return if receipt
-                .source_card_id
-                .is_none_or(|recorded_source_card_id| recorded_source_card_id == source_card_id)
-                && received_card == &card
-            {
-                Ok(())
-            } else {
-                Err(WorkerExecutorError::invalid_request(
-                    PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
-                ))
-            };
-        }
-
-        let target_holder = CardHolder::Agent(AgentCardHolder {
-            agent_id: self.owned_agent_id.agent_id.clone(),
-        });
-        let current_oplog_index = self.oplog.current_oplog_index().await;
-        let mut next_oplog_index = OplogIndex::INITIAL;
-        let mut matching_receipt_indices = HashSet::new();
-        while next_oplog_index <= current_oplog_index {
-            let remaining = current_oplog_index.as_u64() - next_oplog_index.as_u64() + 1;
-            let count = remaining.min(1024);
-            let entries = self.oplog.read_many(next_oplog_index, count).await;
-
-            for (oplog_index, entry) in entries {
-                match entry {
-                    OplogEntry::CardEventQueued {
-                        event: QueuedCardEvent::TransferReceived(receipt),
-                        ..
-                    } if receipt.transfer_id == transfer_id => {
-                        let received_card = receipt.card.as_ref().ok_or_else(|| {
-                            WorkerExecutorError::runtime(
-                                "received permission card transfer is missing its durable payload",
-                            )
-                        })?;
-                        if !receipt
-                            .source_card_id
-                            .is_none_or(|recorded_source_card_id| {
-                                recorded_source_card_id == source_card_id
-                            })
-                            || received_card != &card
-                        {
-                            return Err(WorkerExecutorError::invalid_request(
-                                PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
-                            ));
-                        }
-                        matching_receipt_indices.insert(oplog_index);
-                    }
-                    OplogEntry::CardInstallFailed {
-                        queued_event_index,
-                        card_id,
-                        ..
-                    } if matching_receipt_indices.contains(&queued_event_index) => {
-                        return if card_id == card.card_id() {
-                            Ok(())
-                        } else {
-                            Err(WorkerExecutorError::invalid_request(
-                                PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
-                            ))
-                        };
-                    }
-                    OplogEntry::CardTransferred {
-                        transfer_id: recorded_transfer_id,
-                        source_card_id: recorded_source_card_id,
-                        installed_card_id,
-                        target_holder: recorded_target_holder,
-                        card: recorded_card,
-                        ..
-                    } if recorded_transfer_id == transfer_id
-                        && recorded_target_holder == target_holder =>
-                    {
-                        return if recorded_source_card_id.is_none_or(|recorded_source_card_id| {
-                            recorded_source_card_id == source_card_id
-                        }) && installed_card_id == card.card_id()
-                            && recorded_card == card
-                        {
-                            Ok(())
-                        } else {
-                            Err(WorkerExecutorError::invalid_request(
-                                PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
-                            ))
-                        };
-                    }
-                    _ => {}
+        let status = self.state_actor.attached_status().await;
+        if let Some(received) = status.received_card_transfers.get(&transfer_id) {
+            return match received {
+                golem_common::model::ReceivedCardTransferState::Received {
+                    source_card_id: recorded_source_card_id,
+                    card: recorded_card,
+                } if recorded_source_card_id.is_none_or(|recorded_source_card_id| {
+                    recorded_source_card_id == source_card_id
+                }) && recorded_card == &card =>
+                {
+                    Ok(())
                 }
-            }
-
-            next_oplog_index = OplogIndex::from_u64(next_oplog_index.as_u64() + count);
-        }
-
-        if !matching_receipt_indices.is_empty() {
-            return Ok(());
+                golem_common::model::ReceivedCardTransferState::Received { .. }
+                | golem_common::model::ReceivedCardTransferState::Conflict => Err(
+                    WorkerExecutorError::invalid_request(PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT),
+                ),
+            };
         }
 
         let parsed_agent_id = self.parsed_agent_id.as_ref().ok_or_else(|| {
@@ -2845,22 +2751,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        {
-            let boundary_lock = self.card_event_boundary_lock.clone();
-            let _boundary_guard = boundary_lock.lock().await;
-            self.add_and_commit_oplog_internal(
-                &instance_guard,
+        let boundary_guard = self.card_event_boundary_lock.clone().lock_owned().await;
+        self.state_actor
+            .append_and_commit_attached(
                 OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
                     transfer_id,
                     source_card_id,
                     card,
                 )),
-                None,
+                self.clone(),
+                instance_guard,
+                boundary_guard,
             )
             .await;
-        }
 
-        drop(instance_guard);
         Ok(())
     }
 
@@ -3435,6 +3339,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    async fn lock_non_stopping_worker_owned(&self) -> OwnedMutexGuard<WorkerInstance> {
+        loop {
+            let instance_guard = self.instance.clone().lock_owned().await;
+
+            match &*instance_guard {
+                WorkerInstance::Stopping(stopping) => {
+                    let notify = stopping.notify.clone();
+                    drop(instance_guard);
+                    notify.wait().await;
+                }
+                _ => return instance_guard,
+            }
+        }
+    }
+
     // Lock a worker in either Unloaded or Deleting state.
     async fn lock_stopped_worker(&self) -> MutexGuard<'_, WorkerInstance> {
         loop {
@@ -3507,6 +3426,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 initial_worker_metadata,
                 last_known_status,
             }) => {
+                let persisted_status = last_known_status.clone();
                 // make sure we are fully up to date on the oplog
                 let agent_mode = initial_worker_metadata.agent_mode;
                 let current_status = calculate_last_known_status_with_checkpoint(
@@ -3576,6 +3496,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(GetOrCreateWorkerResult {
                     initial_worker_metadata,
                     current_status,
+                    persisted_status,
                     execution_status,
                     agent_id,
                     snapshot_policy,
@@ -3752,12 +3673,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Cold path (worker creation): no previously cached status to diff against.
                 let initial_status_value = initial_status.load_full().as_ref().clone();
                 this.worker_service()
-                    .update_cached_status(owned_agent_id, None, initial_status_value)
+                    .update_cached_status(owned_agent_id, None, initial_status_value.clone())
                     .await;
 
                 Ok(GetOrCreateWorkerResult {
                     initial_worker_metadata,
                     current_status: initial_status,
+                    persisted_status: Some(initial_status_value),
                     execution_status,
                     agent_id,
                     snapshot_policy,
@@ -5430,6 +5352,8 @@ pub enum ResultOrSubscription {
 struct GetOrCreateWorkerResult {
     initial_worker_metadata: AgentMetadata,
     current_status: Arc<arc_swap::ArcSwap<AgentStatusRecord>>,
+    /// The status value currently persisted in the live cache, used as the first delta baseline.
+    persisted_status: Option<AgentStatusRecord>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     agent_id: Option<ParsedAgentId>,
     snapshot_policy: SnapshotPolicy,

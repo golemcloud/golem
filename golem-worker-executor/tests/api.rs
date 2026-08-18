@@ -659,6 +659,9 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
             ),
         )
         .await?;
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
     assert_eq!(
         deliver_card_transfer(
             &executor,
@@ -669,7 +672,7 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
         )
         .await?,
         Ok(()),
-        "the durable receipt must deduplicate a retry when cached status does not contain it"
+        "the durable receipt must deduplicate a retry after status is reconstructed from the oplog"
     );
     let entries = executor
         .get_oplog(&target_agent_id, OplogIndex::INITIAL)
@@ -909,10 +912,22 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
         "reinstalling the same card through another transfer must not bump the target generation"
     );
 
+    let read_many_before = executor.oplog_service_call_count("read_many");
+    let commit_before = executor.oplog_service_call_count("commit");
     assert_eq!(
         deliver_card_transfer(&executor, request.clone()).await?,
         Ok(()),
         "an exact retry after target admission must reuse the terminal receipt"
+    );
+    assert_eq!(
+        executor.oplog_service_call_count("read_many"),
+        read_many_before,
+        "an indexed terminal duplicate lookup must not scan the worker oplog"
+    );
+    assert_eq!(
+        executor.oplog_service_call_count("commit"),
+        commit_before,
+        "an indexed terminal duplicate lookup must not force an empty oplog commit"
     );
     assert_eq!(
         deliver_card_transfer(&executor, conflicting_request).await?,

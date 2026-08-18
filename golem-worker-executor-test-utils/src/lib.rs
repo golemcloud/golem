@@ -560,6 +560,7 @@ pub struct TestWorkerExecutor {
     pub deps: WorkerExecutorTestDependencies,
     pub client: WorkerExecutorClient<OtelGrpcService<Channel>>,
     pub context: TestContext,
+    prometheus_registry: Registry,
     /// Same `AdditionalTestDeps` instance that the worker context received via
     /// `Bootstrap::create_additional_deps`. Tests use it to evict a worker's
     /// wasmtime instance while keeping the `Worker` shell (and its read-only
@@ -589,6 +590,23 @@ impl TestWorkerExecutor {
             },
             delegation_surface: None,
         })
+    }
+
+    pub fn oplog_service_call_count(&self, api: &str) -> f64 {
+        self.prometheus_registry
+            .gather()
+            .iter()
+            .find(|family| family.name() == "oplog_svc_call_total")
+            .and_then(|family| {
+                family.get_metric().iter().find(|metric| {
+                    metric
+                        .get_label()
+                        .iter()
+                        .any(|label| label.name() == "api" && label.value() == api)
+                })
+            })
+            .map(|metric| metric.get_counter().value())
+            .unwrap_or(0.0)
     }
 
     pub async fn commit_oplog_entry_bypassing_worker_status(
@@ -1187,7 +1205,7 @@ async fn start_executor_with_config(
 
     let details = run(
         config,
-        prometheus,
+        prometheus.clone(),
         handle,
         deps.component_service_directory.clone(),
         overrides,
@@ -1220,6 +1238,7 @@ async fn start_executor_with_config(
                 deps: deps.clone(),
                 client,
                 context: context.clone(),
+                prometheus_registry: prometheus,
                 additional_test_deps,
                 leak_detector,
             });
@@ -2361,7 +2380,7 @@ async fn run_production_context_bootstrap(
             resource_limits,
         },
         config,
-        prometheus,
+        prometheus.clone(),
         handle,
         &mut join_set,
         false,
@@ -2393,6 +2412,7 @@ async fn run_production_context_bootstrap(
                 deps: deps.clone(),
                 client,
                 context: context.clone(),
+                prometheus_registry: prometheus,
                 // Production-context bootstrap path uses the real `NoAdditionalDeps`
                 // worker context, not `TestWorkerCtx`, so the worker-inspection
                 // helpers do not apply here. We hand the executor a fresh, empty

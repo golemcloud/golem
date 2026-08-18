@@ -11,8 +11,8 @@ use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogR
 use golem_common::model::{
     AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
     OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, RetryConfig, RetryPolicyState, SuccessfulUpdateRecord,
-    Timestamp,
+    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
+    RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
 };
 use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -273,6 +273,8 @@ pub fn update_status_with_new_entries(
         calculate_pending_invocations(last_known.pending_invocations, &new_entries);
     let pending_card_events =
         calculate_pending_card_events(last_known.pending_card_events, &new_entries);
+    let received_card_transfers =
+        calculate_received_card_transfers(last_known.received_card_transfers, &new_entries);
     let (
         pending_updates,
         failed_updates,
@@ -345,6 +347,7 @@ pub fn update_status_with_new_entries(
         failed_updates,
         successful_updates,
         invocation_results,
+        received_card_transfers,
         current_idempotency_key,
         component_revision,
         component_size,
@@ -861,6 +864,62 @@ pub(crate) fn calculate_pending_card_events(
     result
 }
 
+fn calculate_received_card_transfers(
+    mut transfers: ReceivedCardTransferIndex,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> ReceivedCardTransferIndex {
+    for entry in entries.values() {
+        let OplogEntry::CardEventQueued {
+            event: QueuedCardEvent::TransferReceived(receipt),
+            ..
+        } = entry
+        else {
+            continue;
+        };
+
+        let Some(card) = &receipt.card else {
+            transfers.insert(receipt.transfer_id, ReceivedCardTransferState::Conflict);
+            continue;
+        };
+
+        match transfers.get(&receipt.transfer_id) {
+            None => {
+                transfers.insert(
+                    receipt.transfer_id,
+                    ReceivedCardTransferState::Received {
+                        source_card_id: receipt.source_card_id,
+                        card: card.clone(),
+                    },
+                );
+            }
+            Some(ReceivedCardTransferState::Conflict) => {}
+            Some(ReceivedCardTransferState::Received {
+                source_card_id,
+                card: recorded_card,
+            }) => {
+                if recorded_card != card
+                    || matches!(
+                        (source_card_id, receipt.source_card_id),
+                        (Some(recorded), Some(received)) if *recorded != received
+                    )
+                {
+                    transfers.insert(receipt.transfer_id, ReceivedCardTransferState::Conflict);
+                } else if source_card_id.is_none() && receipt.source_card_id.is_some() {
+                    transfers.insert(
+                        receipt.transfer_id,
+                        ReceivedCardTransferState::Received {
+                            source_card_id: receipt.source_card_id,
+                            card: recorded_card.clone(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    transfers
+}
+
 #[allow(clippy::type_complexity)]
 fn calculate_update_fields(
     initial_pending_updates: VecDeque<PendingUpdateRef>,
@@ -1324,8 +1383,8 @@ mod test {
         AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
         AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
         OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
-        PendingUpdateRef, RetryConfig, RetryPolicyState, ScanCursor, SuccessfulUpdateRecord,
-        Timestamp,
+        PendingUpdateRef, ReceivedCardTransferState, RetryConfig, RetryPolicyState, ScanCursor,
+        SuccessfulUpdateRecord, Timestamp,
     };
     use golem_common::read_only_lock;
     use golem_common::schema::IntoTypedSchemaValue;
@@ -3706,6 +3765,7 @@ mod test {
     #[test]
     fn received_card_transfer_is_reconstructed_as_a_distinct_target_receipt() {
         let card = test_card(golem_common::model::card::CardId::new());
+        let stored_card = golem_common::model::card::StoredCard::from(card.clone());
         let transfer_id = uuid::Uuid::new_v4();
         let source_card_id = golem_common::model::card::CardId::new();
         let entries = BTreeMap::from([(
@@ -3732,8 +3792,149 @@ mod test {
                 if receipt.transfer_id == transfer_id
                     && receipt.source_card_id == Some(source_card_id)
                     && receipt.card_id == card.card_id
-                    && receipt.card.as_ref() == Some(&card.into())
+                    && receipt.card.as_ref() == Some(&stored_card)
         ));
+        assert!(matches!(
+            status.received_card_transfers.get(&transfer_id),
+            Some(ReceivedCardTransferState::Received {
+                source_card_id: Some(recorded_source_card_id),
+                card: recorded_card,
+            }) if *recorded_source_card_id == source_card_id && recorded_card == &stored_card
+        ));
+    }
+
+    #[test]
+    fn received_card_transfer_index_refines_legacy_identity_and_detects_conflicts() {
+        use golem_common::base_model::oplog::QueuedCardEventTransferReceived;
+
+        let card = test_card(golem_common::model::card::CardId::new());
+        let stored_card = golem_common::model::card::StoredCard::from(card);
+        let transfer_id = uuid::Uuid::new_v4();
+        let source_card_id = golem_common::model::card::CardId::new();
+        let legacy_receipt = QueuedCardEvent::TransferReceived(QueuedCardEventTransferReceived {
+            transfer_id,
+            source_card_id: None,
+            card_id: stored_card.card_id(),
+            card: Some(stored_card.clone()),
+        });
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            BTreeMap::from([(
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(legacy_receipt),
+            )]),
+            &RetryConfig::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            status.received_card_transfers.get(&transfer_id),
+            Some(ReceivedCardTransferState::Received {
+                source_card_id: None,
+                card,
+            }) if card == &stored_card
+        ));
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            status,
+            BTreeMap::from([(
+                OplogIndex::from_u64(2),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                    transfer_id,
+                    source_card_id,
+                    stored_card.clone(),
+                )),
+            )]),
+            &RetryConfig::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            status.received_card_transfers.get(&transfer_id),
+            Some(ReceivedCardTransferState::Received {
+                source_card_id: Some(recorded_source_card_id),
+                card,
+            }) if *recorded_source_card_id == source_card_id && card == &stored_card
+        ));
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            status,
+            BTreeMap::from([(
+                OplogIndex::from_u64(3),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                    transfer_id,
+                    golem_common::model::card::CardId::new(),
+                    stored_card,
+                )),
+            )]),
+            &RetryConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            status.received_card_transfers.get(&transfer_id),
+            Some(&ReceivedCardTransferState::Conflict)
+        );
+    }
+
+    #[test]
+    fn received_card_transfer_index_is_sticky_across_skipped_and_deleted_regions() {
+        let card = test_card(golem_common::model::card::CardId::new());
+        let source_card_id = golem_common::model::card::CardId::new();
+        let skipped_transfer_id = uuid::Uuid::new_v4();
+        let deleted_transfer_id = uuid::Uuid::new_v4();
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                    skipped_transfer_id,
+                    source_card_id,
+                    card.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::jump(OplogRegion {
+                    start: OplogIndex::from_u64(1),
+                    end: OplogIndex::from_u64(1),
+                }),
+            ),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                    deleted_transfer_id,
+                    source_card_id,
+                    card.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(4),
+                OplogEntry::revert(OplogRegion {
+                    start: OplogIndex::from_u64(3),
+                    end: OplogIndex::from_u64(3),
+                }),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        for transfer_id in [skipped_transfer_id, deleted_transfer_id] {
+            assert!(matches!(
+                status.received_card_transfers.get(&transfer_id),
+                Some(ReceivedCardTransferState::Received {
+                    source_card_id: Some(recorded_source_card_id),
+                    card: recorded_card,
+                }) if *recorded_source_card_id == source_card_id
+                    && recorded_card == &card.clone().into()
+            ));
+        }
     }
 
     #[test]

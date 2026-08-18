@@ -19,7 +19,8 @@ use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
     AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode,
     AgentStatus, AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, StringFilterComparator, Timestamp,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex,
+    ReceivedCardTransferState, StringFilterComparator, Timestamp,
 };
 use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
@@ -475,12 +476,16 @@ fn agent_filter_mode_protobuf_round_trip() {
 fn agent_status_record_agent_mode_is_not_serialized() {
     use crate::serialization::{deserialize, serialize};
 
+    let mut received_card_transfers = ReceivedCardTransferIndex::default();
+    received_card_transfers.insert(Uuid::new_v4(), ReceivedCardTransferState::Conflict);
+
     // `agent_mode` is `#[transient]`: it is excluded from the serialized status blob and stored
     // under a separate KV key instead. A record serialized with a non-default mode must therefore
     // deserialize back with the `Durable` default, while all other fields round-trip unchanged.
     let original = AgentStatusRecord {
         component_revision: ComponentRevision::new(7).unwrap(),
         component_size: 1234,
+        received_card_transfers,
         agent_mode: AgentMode::Ephemeral,
         ..AgentStatusRecord::default()
     };
