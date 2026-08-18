@@ -80,7 +80,7 @@ use http::Uri;
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::ops::Add;
@@ -485,22 +485,6 @@ impl RoutingTable {
             *counts.entry(pod).or_default() += 1;
         }
         counts
-    }
-
-    /// Which shard ids each pod owns, sorted.
-    ///
-    /// [`Self::shards_per_pod`] answers "how many", which is enough to see a
-    /// rebalance. Comparing the shard-manager's *intent* against what an
-    /// executor itself believes it owns needs the ids, because the failure that
-    /// matters — two executors claiming one shard — is invisible in the counts:
-    /// a duplicated shard and a correctly moved one both leave the totals
-    /// looking plausible.
-    pub fn shard_ids_per_pod(&self) -> HashMap<&Pod, BTreeSet<i64>> {
-        let mut by_pod: HashMap<&Pod, BTreeSet<i64>> = HashMap::new();
-        for (shard_id, pod) in &self.shard_assignments {
-            by_pod.entry(pod).or_default().insert(shard_id.value());
-        }
-        by_pod
     }
 }
 

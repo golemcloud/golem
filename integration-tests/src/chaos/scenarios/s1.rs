@@ -201,8 +201,8 @@ pub async fn run(
     } else if let Some(sample) = ownership.last() {
         info!(
             "S1: baseline assignment covers {} executors, {} shards unassigned",
-            sample.shard_ids_per_executor.len(),
-            sample.unassigned_shards.len()
+            sample.shards_per_executor.len(),
+            sample.unassigned_shards
         );
     }
 
@@ -289,8 +289,8 @@ pub async fn run(
     let settled = sample_ownership(deps, "after-settle", ownership.last(), true).await;
     info!(
         "S1: settled assignment covers {} executors, {} shards unassigned, {} findings",
-        settled.shard_ids_per_executor.len(),
-        settled.unassigned_shards.len(),
+        settled.shards_per_executor.len(),
+        settled.unassigned_shards,
         settled.findings.len()
     );
     ownership.push(settled);

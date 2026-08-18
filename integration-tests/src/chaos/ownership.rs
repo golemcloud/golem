@@ -35,13 +35,29 @@
 //! position to.
 //!
 //! What this module contributes is the context that makes such a finding
-//! readable: which shards moved, when, and whether the cluster ended up covering
-//! all of them. A duplicate execution with no reassignment anywhere near it is a
+//! readable: how much moved, when, and whether the cluster ended up covering
+//! every shard. A duplicate execution with no reassignment anywhere near it is a
 //! different bug from one that happened during a handover.
+//!
+//! ### Counts, not shard ids
+//!
+//! [`RoutingTable::shards_per_pod`] is the whole input. The shard ids behind
+//! those counts are not public, and asking for them would mean widening a shared
+//! library for context that is not load-bearing — the verdict comes from the
+//! probe either way.
+//!
+//! The cost is precise: counts cannot see a *symmetric* reshuffle, where two
+//! executors swap equal numbers of shards. Movement is therefore reported as a
+//! lower bound and labelled as one. For the fault this scenario injects that
+//! costs nothing real — a partitioned executor's shards move to the executors
+//! that stayed reachable, which always changes the counts.
 
-use golem_common::model::RoutingTable;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
 
 /// Something about the shard-manager's assignment worth an operator's
 /// attention.
@@ -102,16 +118,12 @@ pub struct OwnershipSample {
     /// fault aimed at it, and recorded rather than treated as an error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub number_of_shards: Option<usize>,
-    /// Which shards each executor is assigned.
-    ///
-    /// Kept in full rather than counted: the counts can be identical across a
-    /// complete reshuffle, and *which* shards moved is exactly what a later
-    /// finding has to be read against.
+    /// How many shards each executor is assigned.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub shard_ids_per_executor: BTreeMap<String, Vec<i64>>,
-    /// Shards the table assigns to nobody.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unassigned_shards: Vec<i64>,
+    pub shards_per_executor: BTreeMap<String, usize>,
+    /// How many shards the table assigns to nobody.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unassigned_shards: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable_reason: Option<String>,
     /// Whether this is the sample taken after the settling window — the one the
@@ -127,7 +139,7 @@ impl OwnershipSample {
     /// sample — what moved, and who joined or left.
     pub fn from_routing(
         at: &str,
-        routing: Option<&RoutingTable>,
+        routing: Option<&golem_common::model::RoutingTable>,
         previous: Option<&OwnershipSample>,
         settled: bool,
     ) -> Self {
@@ -136,8 +148,8 @@ impl OwnershipSample {
                 at: at.to_string(),
                 taken_at: chrono::Utc::now(),
                 number_of_shards: None,
-                shard_ids_per_executor: BTreeMap::new(),
-                unassigned_shards: Vec::new(),
+                shards_per_executor: BTreeMap::new(),
+                unassigned_shards: 0,
                 unavailable_reason: Some("shard-manager unreachable".to_string()),
                 settled,
                 findings: Vec::new(),
@@ -145,30 +157,23 @@ impl OwnershipSample {
         };
 
         let total = routing.number_of_shards.value;
-        let shard_ids_per_executor: BTreeMap<String, Vec<i64>> = routing
-            .shard_ids_per_pod()
+        let shards_per_executor: BTreeMap<String, usize> = routing
+            .shards_per_pod()
             .into_iter()
-            .map(|(pod, shards)| (pod.to_string(), shards.into_iter().collect()))
+            .map(|(pod, count)| (pod.to_string(), count))
             .collect();
 
-        let assigned: BTreeSet<i64> = shard_ids_per_executor
-            .values()
-            .flat_map(|shards| shards.iter().copied())
-            .collect();
-        let unassigned: Vec<i64> = (0..total as i64)
-            .filter(|shard| !assigned.contains(shard))
-            .collect();
+        let assigned: usize = shards_per_executor.values().sum();
+        let unassigned = total.saturating_sub(assigned);
 
         let mut findings = Vec::new();
-        if !unassigned.is_empty() {
+        if unassigned > 0 {
             findings.push(OwnershipFinding {
                 finding: Finding::UnassignedShards,
                 executors: Vec::new(),
                 detail: format!(
-                    "{} of {total} shards are assigned to no executor (first: {:?}) — agents on \
-                     them are unroutable until something takes them over",
-                    unassigned.len(),
-                    unassigned.iter().take(8).collect::<Vec<_>>()
+                    "{unassigned} of {total} shards are assigned to no executor — agents on them \
+                     are unroutable until something takes them over"
                 ),
             });
         }
@@ -177,7 +182,7 @@ impl OwnershipSample {
             at: at.to_string(),
             taken_at: chrono::Utc::now(),
             number_of_shards: Some(total),
-            shard_ids_per_executor,
+            shards_per_executor,
             unassigned_shards: unassigned,
             unavailable_reason: None,
             settled,
@@ -196,8 +201,8 @@ impl OwnershipSample {
             return self;
         }
 
-        let before: BTreeSet<&String> = previous.shard_ids_per_executor.keys().collect();
-        let after: BTreeSet<&String> = self.shard_ids_per_executor.keys().collect();
+        let before: BTreeSet<&String> = previous.shards_per_executor.keys().collect();
+        let after: BTreeSet<&String> = self.shards_per_executor.keys().collect();
         if before != after {
             let gone: Vec<String> = before.difference(&after).map(|p| (*p).clone()).collect();
             let joined: Vec<String> = after.difference(&before).map(|p| (*p).clone()).collect();
@@ -226,7 +231,7 @@ impl OwnershipSample {
                 finding: Finding::ShardsReassigned,
                 executors: Vec::new(),
                 detail: format!(
-                    "{moved} shards changed executor since {} — the handover any \
+                    "at least {moved} shards changed executor since {} — the handover any \
                      duplicate-execution finding has to be read against",
                     previous.at
                 ),
@@ -235,29 +240,25 @@ impl OwnershipSample {
         self
     }
 
-    /// How many shards are held by a different executor than in `previous`.
+    /// A lower bound on how many shards changed executor since `previous`.
+    ///
+    /// A lower bound, not a count, and the distinction is real: this is derived
+    /// from per-executor totals, so two executors swapping equal numbers of
+    /// shards is invisible. See the module docs for why that trade is worth
+    /// making. Every caller and every rendered string says "at least".
     pub fn shards_moved_since(&self, previous: &OwnershipSample) -> usize {
-        let owner_of = |sample: &OwnershipSample| -> BTreeMap<i64, String> {
-            sample
-                .shard_ids_per_executor
-                .iter()
-                .flat_map(|(pod, shards)| shards.iter().map(move |s| (*s, pod.clone())))
-                .collect()
-        };
-        let before = owner_of(previous);
-        let after = owner_of(self);
-        after
+        self.shards_per_executor
             .iter()
-            .filter(|(shard, pod)| before.get(shard).is_some_and(|was| was != *pod))
-            .count()
-    }
-
-    /// How many shards each executor holds, for a quick read of the spread.
-    pub fn shards_per_executor(&self) -> BTreeMap<String, usize> {
-        self.shard_ids_per_executor
-            .iter()
-            .map(|(pod, shards)| (pod.clone(), shards.len()))
-            .collect()
+            .map(|(pod, now)| match previous.shards_per_executor.get(pod) {
+                // An executor that gained shards gained them from somewhere.
+                Some(was) => now.saturating_sub(*was),
+                // An executor absent from the earlier sample holds nothing but
+                // shards that moved to it — the shape a rejoining executor
+                // takes, and the one a `get(pod)?` would silently score as
+                // zero movement.
+                None => *now,
+            })
+            .sum()
     }
 
     /// One-line summaries for the operator-facing attention list.
@@ -283,34 +284,26 @@ mod tests {
     use chrono::Utc;
     use test_r::test;
 
-    fn sample(at: &str, settled: bool, pods: &[(&str, &[i64])], total: usize) -> OwnershipSample {
-        let shard_ids_per_executor: BTreeMap<String, Vec<i64>> = pods
+    fn sample(at: &str, settled: bool, pods: &[(&str, usize)], total: usize) -> OwnershipSample {
+        let shards_per_executor: BTreeMap<String, usize> = pods
             .iter()
-            .map(|(pod, shards)| ((*pod).to_string(), shards.to_vec()))
+            .map(|(pod, n)| ((*pod).to_string(), *n))
             .collect();
-        let assigned: BTreeSet<i64> = shard_ids_per_executor
-            .values()
-            .flat_map(|s| s.iter().copied())
-            .collect();
-        let unassigned: Vec<i64> = (0..total as i64)
-            .filter(|s| !assigned.contains(s))
-            .collect();
+        let assigned: usize = shards_per_executor.values().sum();
+        let unassigned = total.saturating_sub(assigned);
         let mut findings = Vec::new();
-        if !unassigned.is_empty() {
+        if unassigned > 0 {
             findings.push(OwnershipFinding {
                 finding: Finding::UnassignedShards,
                 executors: Vec::new(),
-                detail: format!(
-                    "{} of {total} shards are assigned to no executor",
-                    unassigned.len()
-                ),
+                detail: format!("{unassigned} of {total} shards are assigned to no executor"),
             });
         }
         OwnershipSample {
             at: at.to_string(),
             taken_at: Utc::now(),
             number_of_shards: Some(total),
-            shard_ids_per_executor,
+            shards_per_executor,
             unassigned_shards: unassigned,
             unavailable_reason: None,
             settled,
@@ -320,8 +313,8 @@ mod tests {
 
     #[test]
     fn a_fully_covered_table_reports_nothing_to_attend_to() {
-        let s = sample("after-settle", true, &[("a", &[0, 1]), ("b", &[2, 3])], 4);
-        assert!(s.unassigned_shards.is_empty());
+        let s = sample("after-settle", true, &[("a", 2), ("b", 2)], 4);
+        assert_eq!(s.unassigned_shards, 0);
         assert!(s.attention_lines().is_empty());
     }
 
@@ -329,8 +322,8 @@ mod tests {
     /// settled. While the fault is active it is the fault working.
     #[test]
     fn a_gap_reaches_the_operator_only_from_the_settled_sample() {
-        let settled = sample("after-settle", true, &[("a", &[0, 1]), ("b", &[2])], 4);
-        assert_eq!(settled.unassigned_shards, vec![3]);
+        let settled = sample("after-settle", true, &[("a", 2), ("b", 1)], 4);
+        assert_eq!(settled.unassigned_shards, 1);
         assert_eq!(settled.attention_lines().len(), 1);
 
         let mid_fault = OwnershipSample {
@@ -340,19 +333,37 @@ mod tests {
         assert!(mid_fault.attention_lines().is_empty());
     }
 
-    /// Counts alone cannot see a reshuffle, which is exactly why the sample
-    /// keeps the shard ids rather than a tally.
+    /// Movement is a lower bound, and the report says so. A symmetric swap is
+    /// exactly the case counts cannot see — worth a test so nobody later reads
+    /// a `0` here as "nothing moved".
     #[test]
-    fn movement_is_measured_by_shard_not_by_count() {
-        let before = sample("before-fault", false, &[("a", &[0, 1]), ("b", &[2, 3])], 4);
-        let after = sample("after-settle", true, &[("a", &[2, 3]), ("b", &[0, 1])], 4);
-
+    fn a_rejoining_executors_shards_all_count_as_movement() {
+        let before = sample("before-fault", false, &[("a", 4)], 4);
+        let after = sample("after-settle", true, &[("a", 2), ("b", 2)], 4);
         assert_eq!(
-            before.shards_per_executor(),
-            after.shards_per_executor(),
-            "the counts are identical across a total reshuffle"
+            after.shards_moved_since(&before),
+            2,
+            "an executor absent from the earlier sample holds only shards that moved to it"
         );
-        assert_eq!(after.shards_moved_since(&before), 4);
+    }
+
+    #[test]
+    fn movement_is_a_lower_bound_and_a_symmetric_swap_is_invisible() {
+        let before = sample("before-fault", false, &[("a", 2), ("b", 2)], 4);
+        let swapped = sample("after-settle", true, &[("a", 2), ("b", 2)], 4);
+        assert_eq!(
+            swapped.shards_moved_since(&before),
+            0,
+            "equal counts cannot reveal a swap — the probe is what catches the harm"
+        );
+
+        let drained = sample("before-fault", false, &[("a", 4), ("b", 0)], 4);
+        let rebalanced = sample("after-settle", true, &[("a", 1), ("b", 3)], 4);
+        assert_eq!(
+            rebalanced.shards_moved_since(&drained),
+            3,
+            "the shape a partition actually produces is visible in the counts"
+        );
     }
 
     /// Reassignment after a fault is recovery working. It is recorded, because
@@ -360,8 +371,8 @@ mod tests {
     /// it, but it is not something to wave at an operator.
     #[test]
     fn reassignment_is_recorded_without_reaching_the_attention_list() {
-        let before = sample("before-fault", false, &[("a", &[0, 1, 2, 3])], 4);
-        let after = sample("after-settle", true, &[("a", &[0, 1]), ("b", &[2, 3])], 4)
+        let before = sample("before-fault", false, &[("a", 4)], 4);
+        let after = sample("after-settle", true, &[("a", 2), ("b", 2)], 4)
             .with_movement_since(Some(&before));
 
         let kinds: Vec<Finding> = after.findings.iter().map(|f| f.finding).collect();
@@ -405,7 +416,7 @@ mod tests {
     /// against the one before it.
     #[test]
     fn an_unavailable_sample_is_not_compared_against_its_predecessor() {
-        let before = sample("before-fault", false, &[("a", &[0, 1, 2, 3])], 4);
+        let before = sample("before-fault", false, &[("a", 4)], 4);
         let during = OwnershipSample::from_routing("during-fault", None, Some(&before), false);
         assert!(during.findings.is_empty());
     }
