@@ -38,7 +38,9 @@ service WorkerService {
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
   rpc CompletePromise (CompletePromiseRequest) returns (CompletePromiseResponse);
   rpc InvokeAgent (InvokeAgentRequest) returns (InvokeAgentResponse);
-  rpc InvokeAgentSession (stream golem.worker.InvocationFrame) returns (stream golem.worker.InvocationFrame);
+  // Internal executor-routing endpoint. Public clients use the authenticated
+  // agent-session WebSocket and its PublicInvocationRequest envelope.
+  rpc InvokeAgentSession (stream golem.worker.InvocationRequest) returns (stream golem.worker.InvocationResponse);
   rpc CancelInvocation (CancelInvocationRequest) returns (CancelInvocationResponse);
   rpc ProcessOplogEntries (ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
 }

@@ -37,25 +37,22 @@ use crate::services::{
     worker_fork,
 };
 use crate::worker::Worker;
+use crate::worker::invocation::validate_agent_method_invocation;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use futures::StreamExt;
+use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::{
-    InvocationFrame as LiveInvocationFrame, InvocationProtocolFailure as LiveInvocationFailure,
-    InvocationSessionFinished, InvocationStart as LiveInvocationStart,
-    invocation_cancel as live_invocation_cancel, invocation_frame as live_invocation_frame,
-    invocation_protocol_failure as live_invocation_failure, invocation_result,
-    invocation_session_finished,
-};
-use golem_api_grpc::{
-    InvocationResponseState as LiveInvocationResponseState,
-    invocation_cancel_frame as live_invocation_cancel_frame,
+    InvocationFailure, InvocationFailureKind, InvocationRejected, InvocationRejectionReason,
+    InvocationRequest, InvocationStart, invocation_request, invocation_response,
+    invocation_session_completion, invocation_session_result,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentInvocationMode, AgentPrincipal, InvocationFreshnessDisposition, Principal,
+    AgentInvocationMode, AgentPrincipal, InvocationFreshnessDisposition, ParsedAgentId, Principal,
 };
 use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -67,12 +64,28 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::future::Future;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::debug;
 use wasmtime_wasi_http::HttpConnectionPool;
+
+async fn method_validation_revision<F, Fut>(
+    freshness_disposition: InvocationFreshnessDisposition,
+    load_existing_revision: F,
+) -> Option<ComponentRevision>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Option<ComponentRevision>>,
+{
+    if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+        None
+    } else {
+        load_existing_revision().await
+    }
+}
 
 #[async_trait]
 pub trait Rpc: Send + Sync {
@@ -142,40 +155,32 @@ pub trait Rpc: Send + Sync {
 
 struct RemoteLiveRequestGuard {
     session: LiveValueSession,
-    frames: Option<mpsc::Sender<LiveInvocationFrame>>,
+    requests: Option<mpsc::Sender<InvocationRequest>>,
 }
 
 impl RemoteLiveRequestGuard {
-    fn new(session: LiveValueSession, frames: mpsc::Sender<LiveInvocationFrame>) -> Self {
+    fn new(session: LiveValueSession, requests: mpsc::Sender<InvocationRequest>) -> Self {
         Self {
             session,
-            frames: Some(frames),
+            requests: Some(requests),
         }
     }
 
     fn disarm(&mut self) {
-        self.frames = None;
+        self.requests = None;
     }
 }
 
 impl Drop for RemoteLiveRequestGuard {
     fn drop(&mut self) {
-        let Some(frames) = self.frames.take() else {
+        let Some(requests) = self.requests.take() else {
             return;
         };
         if self.session.is_cancelled() {
             return;
         }
         self.session.cancel();
-        let frame = live_invocation_cancel_frame(live_invocation_cancel::Kind::Semantic, None);
-        match frames.try_send(frame) {
-            Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
-            Err(mpsc::error::TrySendError::Full(frame)) => {
-                tokio::spawn(async move {
-                    let _ = frames.send(frame).await;
-                });
-            }
-        }
+        drop(requests);
     }
 }
 
@@ -316,13 +321,27 @@ pub trait RpcDemand: Send + Sync {
 pub struct RemoteInvocationRpc {
     worker_proxy: Arc<dyn WorkerProxy>,
     _shard_service: Arc<dyn ShardService>,
+    stream_capacity: usize,
 }
 
 impl RemoteInvocationRpc {
     pub fn new(worker_proxy: Arc<dyn WorkerProxy>, shard_service: Arc<dyn ShardService>) -> Self {
+        Self::new_with_stream_capacity(worker_proxy, shard_service, 32)
+    }
+
+    pub fn new_with_stream_capacity(
+        worker_proxy: Arc<dyn WorkerProxy>,
+        shard_service: Arc<dyn ShardService>,
+        stream_capacity: usize,
+    ) -> Self {
+        assert!(
+            stream_capacity > 0,
+            "live stream bus capacity must be non-zero"
+        );
         Self {
             worker_proxy,
             _shard_service: shard_service,
+            stream_capacity,
         }
     }
 }
@@ -465,14 +484,33 @@ impl Rpc for RemoteInvocationRpc {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<SchemaValue, RpcError> {
-        let (frames, receiver) = mpsc::channel(32);
-        let session = LiveValueSession::new(1, frames.clone());
-        let input = session
-            .encode(&method_parameters)
+        let state = Arc::new(tokio::sync::Mutex::new(InvocationSessionState::default()));
+        let (requests, mut request_rx) = mpsc::channel(32);
+        let (wire_requests, receiver) = mpsc::channel(32);
+        let request_state = state.clone();
+        tokio::spawn(async move {
+            while let Some(request) = request_rx.recv().await {
+                if request_state
+                    .lock()
+                    .await
+                    .validate_trusted_request(&request)
+                    .is_err()
+                {
+                    return;
+                }
+                if wire_requests.send(request).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let session =
+            LiveValueSession::new_client_with_capacity(requests.clone(), self.stream_capacity);
+        let (input, input_stream_ids) = session
+            .encode_pending(&method_parameters)
             .map_err(|details| RpcError::ProtocolError { details })?;
-        frames
-            .send(LiveInvocationFrame {
-                frame: Some(live_invocation_frame::Frame::Start(LiveInvocationStart {
+        requests
+            .send(InvocationRequest {
+                request: Some(invocation_request::Request::Start(InvocationStart {
                     agent_id: Some(owned_agent_id.agent_id().into()),
                     method_name: Some(method_name),
                     input: Some(input),
@@ -497,7 +535,7 @@ impl Rpc for RemoteInvocationRpc {
             .map_err(|_| RpcError::ProtocolError {
                 details: "live invocation request ended before start".to_string(),
             })?;
-        let mut cancel_on_drop = RemoteLiveRequestGuard::new(session.clone(), frames.clone());
+        let mut cancel_on_drop = RemoteLiveRequestGuard::new(session.clone(), requests.clone());
         let mut inbound = match self
             .worker_proxy
             .invoke_agent_session(Box::pin(ReceiverStream::new(receiver)))
@@ -509,94 +547,78 @@ impl Rpc for RemoteInvocationRpc {
                 return Err(error.into());
             }
         };
-        let mut response_state = LiveInvocationResponseState::default();
 
-        while let Some(frame) = inbound.next().await {
-            let frame = match frame {
-                Ok(frame) => frame,
+        while let Some(response) = inbound.next().await {
+            let response = match response {
+                Ok(response) => response,
                 Err(error) => {
                     let details = error.to_string();
-                    fail_live_response_transport(
-                        &session,
-                        &frames,
-                        live_invocation_cancel::Kind::Transport,
-                        details,
-                    )
-                    .await;
+                    fail_live_response_transport(&session, details).await;
                     return Err(error.into());
                 }
             };
-            if let Err(details) = response_state.validate(&frame) {
-                fail_live_response_transport(
-                    &session,
-                    &frames,
-                    live_invocation_cancel::Kind::Protocol,
-                    details.clone(),
-                )
-                .await;
+            if let Err(details) = state.lock().await.validate_response(&response) {
+                fail_live_response_transport(&session, details.clone()).await;
                 return Err(RpcError::ProtocolError { details });
             }
-            match frame.frame {
-                Some(live_invocation_frame::Frame::Result(result)) => {
+            match response.response {
+                Some(invocation_response::Response::Accepted(_)) => {
+                    session.activate_exported_streams(&input_stream_ids);
+                }
+                Some(invocation_response::Response::Rejected(rejected)) => {
+                    if let Err(error) =
+                        confirm_terminal_response_is_last(&mut inbound, &state).await
+                    {
+                        session.fail(error.to_string());
+                        return Err(error);
+                    }
+                    let error = rpc_error_from_rejection(rejected);
+                    session.fail(error.to_string());
+                    return Err(error);
+                }
+                Some(invocation_response::Response::Result(result)) => {
                     let output = match result.result {
-                        Some(invocation_result::Result::MethodResult(output)) => {
+                        Some(invocation_session_result::Result::MethodResult(output)) => {
                             match session.decode(output).await {
                                 Ok(output) => output,
                                 Err(details) => {
-                                    fail_live_response_transport(
-                                        &session,
-                                        &frames,
-                                        live_invocation_cancel::Kind::Protocol,
-                                        details.clone(),
-                                    )
-                                    .await;
+                                    fail_live_response_transport(&session, details.clone()).await;
                                     return Err(RpcError::ProtocolError { details });
                                 }
                             }
                         }
-                        Some(invocation_result::Result::NoResult(_)) | None => {
+                        Some(invocation_session_result::Result::NoResult(_)) | None => {
                             let details =
                                 "streaming agent invocation returned no method result".to_string();
-                            fail_live_response_transport(
-                                &session,
-                                &frames,
-                                live_invocation_cancel::Kind::Protocol,
-                                details.clone(),
-                            )
-                            .await;
+                            fail_live_response_transport(&session, details.clone()).await;
                             return Err(RpcError::ProtocolError { details });
                         }
                     };
-                    spawn_live_response_router(session, inbound, frames, response_state);
+                    spawn_live_response_router(session, inbound, requests, state);
                     cancel_on_drop.disarm();
                     return Ok(output);
                 }
-                Some(live_invocation_frame::Frame::Finished(finished)) => {
+                Some(invocation_response::Response::Finished(finished)) => {
+                    if let Err(error) =
+                        confirm_terminal_response_is_last(&mut inbound, &state).await
+                    {
+                        session.fail(error.to_string());
+                        return Err(error);
+                    }
                     let error = rpc_error_from_invocation_finished(finished);
                     session.fail(error.to_string());
                     return Err(error);
                 }
-                Some(frame) => match session.route_stream_frame(frame).await {
+                Some(response) => match session.route_response(response).await {
                     Ok(true) => {}
                     Ok(false) => {
-                        let details = "unexpected frame before the invocation result".to_string();
-                        fail_live_response_transport(
-                            &session,
-                            &frames,
-                            live_invocation_cancel::Kind::Protocol,
-                            details.clone(),
-                        )
-                        .await;
+                        let details =
+                            "unexpected response before the invocation result".to_string();
+                        fail_live_response_transport(&session, details.clone()).await;
                         return Err(RpcError::ProtocolError { details });
                     }
                     Err(details) => {
-                        fail_live_response_transport(
-                            &session,
-                            &frames,
-                            live_invocation_cancel::Kind::Protocol,
-                            details.clone(),
-                        )
-                        .await;
+                        fail_live_response_transport(&session, details.clone()).await;
                         return Err(RpcError::ProtocolError { details });
                     }
                 },
@@ -604,13 +626,7 @@ impl Rpc for RemoteInvocationRpc {
             }
         }
         let details = "invocation response ended before publishing a result".to_string();
-        fail_live_response_transport(
-            &session,
-            &frames,
-            live_invocation_cancel::Kind::Transport,
-            details.clone(),
-        )
-        .await;
+        fail_live_response_transport(&session, details.clone()).await;
         Err(RpcError::ProtocolError { details })
     }
 
@@ -656,89 +672,62 @@ impl Rpc for RemoteInvocationRpc {
 fn spawn_live_response_router(
     session: LiveValueSession,
     mut inbound: InvocationResponseStream,
-    frames: mpsc::Sender<LiveInvocationFrame>,
-    mut response_state: LiveInvocationResponseState,
+    requests: mpsc::Sender<InvocationRequest>,
+    state: Arc<tokio::sync::Mutex<InvocationSessionState>>,
 ) {
     tokio::spawn(async move {
-        while let Some(frame) = inbound.next().await {
-            let frame = match frame {
-                Ok(frame) => frame,
+        let _requests = requests;
+        while let Some(response) = inbound.next().await {
+            let response = match response {
+                Ok(response) => response,
                 Err(error) => {
-                    fail_live_response_transport(
-                        &session,
-                        &frames,
-                        live_invocation_cancel::Kind::Transport,
-                        error.to_string(),
-                    )
-                    .await;
+                    fail_live_response_transport(&session, error.to_string()).await;
                     return;
                 }
             };
-            if let Err(details) = response_state.validate(&frame) {
-                fail_live_response_transport(
-                    &session,
-                    &frames,
-                    live_invocation_cancel::Kind::Protocol,
-                    details,
-                )
-                .await;
+            if let Err(details) = state.lock().await.validate_response(&response) {
+                fail_live_response_transport(&session, details).await;
                 return;
             }
-            match frame.frame {
-                Some(live_invocation_frame::Frame::Finished(finished)) => {
+            match response.response {
+                Some(invocation_response::Response::Finished(finished)) => {
+                    if let Err(error) =
+                        confirm_terminal_response_is_last(&mut inbound, &state).await
+                    {
+                        session.fail(error.to_string());
+                        return;
+                    }
                     match finished.outcome {
-                        Some(invocation_session_finished::Outcome::Success(_)) => {
+                        Some(invocation_session_completion::Outcome::Success(_)) => {
                             if let Err(details) = session.finish_invocation().await {
-                                let _ = frames
-                                    .send(live_invocation_cancel_frame(
-                                        live_invocation_cancel::Kind::Protocol,
-                                        Some(details),
-                                    ))
-                                    .await;
+                                session.fail(details);
                             }
                         }
-                        Some(invocation_session_finished::Outcome::Failure(failure)) => {
-                            session.fail(worker_failure_details(failure));
-                        }
-                        Some(invocation_session_finished::Outcome::ProtocolFailure(failure)) => {
-                            session.fail(failure.details);
+                        Some(invocation_session_completion::Outcome::Failure(failure)) => {
+                            session.fail(rpc_error_from_failure(failure).to_string());
                         }
                         None => session.fail("invocation completion has no outcome".to_string()),
                     }
                     return;
                 }
-                Some(frame) => match session.route_stream_frame(frame).await {
+                Some(response) => match session.route_response(response).await {
                     Ok(true) => {}
                     Ok(false) => {
-                        let details = "unexpected frame after the invocation result".to_string();
-                        fail_live_response_transport(
-                            &session,
-                            &frames,
-                            live_invocation_cancel::Kind::Protocol,
-                            details,
-                        )
-                        .await;
+                        let details = "unexpected response after the invocation result".to_string();
+                        fail_live_response_transport(&session, details).await;
                         return;
                     }
                     Err(details) => {
-                        fail_live_response_transport(
-                            &session,
-                            &frames,
-                            live_invocation_cancel::Kind::Protocol,
-                            details,
-                        )
-                        .await;
+                        fail_live_response_transport(&session, details).await;
                         return;
                     }
                 },
                 None => unreachable!("response state validation rejects empty frames"),
             }
         }
-        if !response_state.is_complete() {
+        if !state.lock().await.is_complete() {
             fail_live_response_transport(
                 &session,
-                &frames,
-                live_invocation_cancel::Kind::Transport,
                 "invocation response ended before completion".to_string(),
             )
             .await;
@@ -746,63 +735,76 @@ fn spawn_live_response_router(
     });
 }
 
-async fn fail_live_response_transport(
-    session: &LiveValueSession,
-    frames: &mpsc::Sender<LiveInvocationFrame>,
-    kind: live_invocation_cancel::Kind,
-    details: String,
-) {
-    let _ = frames
-        .send(live_invocation_cancel_frame(kind, Some(details.clone())))
-        .await;
+async fn confirm_terminal_response_is_last(
+    inbound: &mut InvocationResponseStream,
+    state: &Arc<tokio::sync::Mutex<InvocationSessionState>>,
+) -> Result<(), RpcError> {
+    match inbound.next().await {
+        None => Ok(()),
+        Some(Err(error)) => Err(error.into()),
+        Some(Ok(response)) => {
+            let details = state.lock().await.validate_response(&response).unwrap_err();
+            Err(RpcError::ProtocolError { details })
+        }
+    }
+}
+
+async fn fail_live_response_transport(session: &LiveValueSession, details: String) {
     session.fail(details);
 }
 
-fn rpc_error_from_live_failure(failure: LiveInvocationFailure) -> RpcError {
-    match live_invocation_failure::Kind::try_from(failure.kind)
-        .unwrap_or(live_invocation_failure::Kind::RemoteInternal)
+fn rpc_error_from_rejection(rejected: InvocationRejected) -> RpcError {
+    match InvocationRejectionReason::try_from(rejected.reason)
+        .unwrap_or(InvocationRejectionReason::Internal)
     {
-        live_invocation_failure::Kind::Protocol => RpcError::ProtocolError {
-            details: failure.details,
+        InvocationRejectionReason::Unauthorized => RpcError::Denied {
+            details: rejected.error,
         },
-        live_invocation_failure::Kind::Denied => RpcError::Denied {
-            details: failure.details,
+        InvocationRejectionReason::NotFound => RpcError::NotFound {
+            details: rejected.error,
         },
-        live_invocation_failure::Kind::NotFound => RpcError::NotFound {
-            details: failure.details,
+        InvocationRejectionReason::Internal => RpcError::RemoteInternalError {
+            details: rejected.error,
         },
-        live_invocation_failure::Kind::RemoteInternal => RpcError::RemoteInternalError {
-            details: failure.details,
-        },
-        live_invocation_failure::Kind::Transport => RpcError::ProtocolError {
-            details: format!("live invocation transport failed: {}", failure.details),
+        _ => RpcError::ProtocolError {
+            details: rejected.error,
         },
     }
 }
 
-fn worker_failure_details(
-    failure: golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError,
-) -> String {
-    let result: Result<WorkerExecutorError, _> = failure.try_into();
-    result
-        .map(|error| error.to_string())
-        .unwrap_or_else(|error| format!("failed to decode worker execution error: {error}"))
+fn rpc_error_from_failure(failure: InvocationFailure) -> RpcError {
+    if let Some(worker_error) = failure.worker_error {
+        return WorkerExecutorError::try_from(worker_error)
+            .map(Into::into)
+            .unwrap_or_else(|error| RpcError::RemoteInternalError {
+                details: format!("failed to decode worker execution error: {error}"),
+            });
+    }
+    match InvocationFailureKind::try_from(failure.kind).unwrap_or(InvocationFailureKind::Internal) {
+        InvocationFailureKind::Protocol | InvocationFailureKind::Transport => {
+            RpcError::ProtocolError {
+                details: failure.message,
+            }
+        }
+        InvocationFailureKind::Execution | InvocationFailureKind::Internal => {
+            RpcError::RemoteInternalError {
+                details: failure.message,
+            }
+        }
+        InvocationFailureKind::Unspecified => RpcError::ProtocolError {
+            details: failure.message,
+        },
+    }
 }
 
-fn rpc_error_from_invocation_finished(finished: InvocationSessionFinished) -> RpcError {
+fn rpc_error_from_invocation_finished(
+    finished: golem_api_grpc::proto::golem::worker::InvocationSessionCompletion,
+) -> RpcError {
     match finished.outcome {
-        Some(invocation_session_finished::Outcome::Failure(failure)) => {
-            let result: Result<WorkerExecutorError, _> = failure.try_into();
-            result
-                .map(Into::into)
-                .unwrap_or_else(|error| RpcError::RemoteInternalError {
-                    details: format!("failed to decode worker execution error: {error}"),
-                })
+        Some(invocation_session_completion::Outcome::Failure(failure)) => {
+            rpc_error_from_failure(failure)
         }
-        Some(invocation_session_finished::Outcome::ProtocolFailure(failure)) => {
-            rpc_error_from_live_failure(failure)
-        }
-        Some(invocation_session_finished::Outcome::Success(_)) => RpcError::ProtocolError {
+        Some(invocation_session_completion::Outcome::Success(_)) => RpcError::ProtocolError {
             details: "invocation completed successfully before publishing a result".to_string(),
         },
         None => RpcError::ProtocolError {
@@ -1206,6 +1208,35 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             &owned_agent_id.agent_id,
         ))
     }
+
+    async fn validate_method_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        method_name: &str,
+        method_parameters: &SchemaValue,
+        freshness_disposition: InvocationFreshnessDisposition,
+    ) -> Result<bool, RpcError> {
+        let component_revision = method_validation_revision(freshness_disposition, || async {
+            Worker::<Ctx>::get_latest_metadata(self, owned_agent_id)
+                .await
+                .map(|metadata| metadata.last_known_status.component_revision)
+        })
+        .await;
+        let component = self
+            .component_service()
+            .get_metadata(owned_agent_id.component_id(), component_revision)
+            .await?;
+        let parsed_agent_id =
+            ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
+                .map_err(|details| RpcError::ProtocolError { details })?;
+        validate_agent_method_invocation(
+            &component.metadata,
+            Some(&parsed_agent_id),
+            method_name,
+            method_parameters,
+        )
+        .map_err(Into::into)
+    }
 }
 
 #[async_trait]
@@ -1314,6 +1345,20 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await?;
 
+            if self
+                .validate_method_invocation(
+                    owned_agent_id,
+                    &method_name,
+                    &method_parameters,
+                    freshness_disposition,
+                )
+                .await?
+            {
+                return Err(RpcError::ProtocolError {
+                    details: "live streams require the attached streaming RPC".to_string(),
+                });
+            }
+
             let principal = caller_agent_principal(self_agent_id);
             let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
             Worker::<Ctx>::validate_invocation_freshness(
@@ -1418,6 +1463,13 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 auth_ctx,
             )
             .await?;
+        self.validate_method_invocation(
+            owned_agent_id,
+            &method_name,
+            &method_parameters,
+            InvocationFreshnessDisposition::MayExist,
+        )
+        .await?;
         let principal = caller_agent_principal(self_agent_id);
         let worker = Worker::get_or_create_suspended(
             self,
@@ -1485,6 +1537,21 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await?;
 
+            if self
+                .validate_method_invocation(
+                    owned_agent_id,
+                    &method_name,
+                    &method_parameters,
+                    freshness_disposition,
+                )
+                .await?
+            {
+                return Err(RpcError::ProtocolError {
+                    details: "live streams cannot be used in fire-and-forget invocations"
+                        .to_string(),
+                });
+            }
+
             let principal = caller_agent_principal(self_agent_id);
             let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
             Worker::<Ctx>::validate_invocation_freshness(
@@ -1545,25 +1612,75 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
 #[cfg(test)]
 mod protocol_tests {
-    use super::RemoteLiveRequestGuard;
+    use super::{
+        RemoteLiveRequestGuard, RpcError, method_validation_revision, rpc_error_from_failure,
+    };
     use crate::durable_host::stream_session::LiveValueSession;
-    use golem_api_grpc::proto::golem::worker::{invocation_cancel, invocation_frame};
+    use golem_api_grpc::proto::golem::worker::{InvocationFailure, InvocationFailureKind};
+    use golem_common::model::agent::InvocationFreshnessDisposition;
+    use golem_common::model::component::ComponentRevision;
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use std::cell::Cell;
     use test_r::test;
     use tokio::sync::mpsc;
 
     #[test]
-    async fn dropped_remote_request_sends_semantic_cancellation() {
+    async fn known_fresh_method_validation_uses_selected_revision_without_metadata_probe() {
+        let probed_existing_worker = Cell::new(false);
+        let revision =
+            method_validation_revision(InvocationFreshnessDisposition::KnownFresh, || async {
+                probed_existing_worker.set(true);
+                Some(ComponentRevision::INITIAL)
+            })
+            .await;
+
+        assert_eq!(revision, None);
+        assert!(!probed_existing_worker.get());
+    }
+
+    #[test]
+    async fn may_exist_method_validation_uses_existing_worker_revision() {
+        let probed_existing_worker = Cell::new(false);
+        let existing_revision = ComponentRevision::new(7).unwrap();
+        let revision =
+            method_validation_revision(InvocationFreshnessDisposition::MayExist, || async {
+                probed_existing_worker.set(true);
+                Some(existing_revision)
+            })
+            .await;
+
+        assert_eq!(revision, Some(existing_revision));
+        assert!(probed_existing_worker.get());
+    }
+
+    #[test]
+    fn typed_worker_failure_preserves_rpc_error_category() {
+        let worker_error = WorkerExecutorError::invalid_request("bad invocation");
+        let error = rpc_error_from_failure(InvocationFailure {
+            kind: InvocationFailureKind::Execution as i32,
+            code: "worker-execution".to_string(),
+            message: worker_error.to_string(),
+            worker_error: Some(worker_error.into()),
+        });
+
+        assert_eq!(
+            error,
+            RpcError::ProtocolError {
+                details: "bad invocation".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    async fn dropped_remote_request_cancels_the_session_and_closes_requests() {
         let (frames, mut frame_rx) = mpsc::channel(4);
-        let session = LiveValueSession::new(1, frames.clone());
-        let guard = RemoteLiveRequestGuard::new(session, frames);
+        let session = LiveValueSession::new_client(frames.clone());
+        let guard = RemoteLiveRequestGuard::new(session.clone(), frames);
 
         drop(guard);
 
-        let frame = frame_rx.recv().await.unwrap().frame.unwrap();
-        assert!(matches!(
-            frame,
-            invocation_frame::Frame::Cancel(cancel)
-                if cancel.kind == invocation_cancel::Kind::Semantic as i32
-        ));
+        assert!(session.is_cancelled());
+        drop(session);
+        assert!(frame_rx.recv().await.is_none());
     }
 }

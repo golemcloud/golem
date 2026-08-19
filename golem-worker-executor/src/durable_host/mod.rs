@@ -36,6 +36,7 @@ pub(crate) mod schema_value_stream;
 mod secrets;
 pub use schema_value_stream::CoreTypesHost;
 mod sockets;
+pub(crate) mod stream_bus;
 pub(crate) mod stream_session;
 pub(crate) mod stream_transport;
 mod suspendable_wait;
@@ -3329,6 +3330,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub(crate) fn live_stream_tracker(&self) -> Option<Arc<stream_transport::LiveStreamTracker>> {
         self.live_stream_tracker.clone()
+    }
+
+    pub(crate) fn live_stream_event_capacity(&self) -> usize {
+        self.state
+            .config
+            .limits
+            .live_stream_event_broadcast_capacity
+            .get()
     }
 
     pub(crate) fn is_live_streaming_invocation(&self) -> bool {

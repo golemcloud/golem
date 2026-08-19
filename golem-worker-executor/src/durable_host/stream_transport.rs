@@ -13,34 +13,44 @@
 // limitations under the License.
 
 use crate::durable_host::schema_value_stream::StoreValueResolver;
+use crate::durable_host::stream_bus::{
+    LiveStreamEventPayload, LiveStreamPublishError, LiveStreamPublisher, LiveStreamReceiveError,
+    PrimaryLiveStreamSubscriber, ReservedPrimaryLiveStreamSubscriber, live_input_stream_bus,
+    live_output_stream_bus,
+};
 use crate::workerctx::WorkerCtx;
 use golem_schema::schema::wit::wire::SchemaValueTree;
 use golem_schema::schema::wit::{decode_value_with, encode_value_with_streams};
 use golem_schema::schema::{SchemaValue, SchemaValueStream};
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use tokio::sync::mpsc;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{Destination, Source, StreamConsumer, StreamProducer, StreamResult};
 
 /// Tracks source endpoints created by one live streaming invocation. The
 /// invocation keeps its Store event loop running until every source has
-/// reached end-of-stream or the downstream reader has detached.
+/// published its terminal or its primary reader has been lost.
 #[derive(Debug)]
 pub(crate) struct LiveStreamTracker {
     pub(super) active: AtomicUsize,
-    changed: tokio::sync::Notify,
-    cancelled: tokio_util::sync::CancellationToken,
+    changed: Notify,
+    cancelled: CancellationToken,
+    capacity: usize,
 }
 
 impl LiveStreamTracker {
-    pub(crate) fn new(cancelled: tokio_util::sync::CancellationToken) -> Self {
+    pub(crate) fn new(cancelled: CancellationToken, capacity: usize) -> Self {
+        assert!(capacity > 0, "live stream bus capacity must be non-zero");
         Self {
             active: AtomicUsize::new(0),
-            changed: tokio::sync::Notify::new(),
+            changed: Notify::new(),
             cancelled,
+            capacity,
         }
     }
 
@@ -69,20 +79,33 @@ impl LiveStreamTracker {
         self.cancelled.cancelled().await;
     }
 
-    pub(crate) fn cancellation_token(&self) -> tokio_util::sync::CancellationToken {
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
         self.cancelled.clone()
+    }
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.capacity
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct SourceLifecycle {
     pub(super) finished: AtomicBool,
-    finished_notify: tokio::sync::Notify,
+    finished_notify: Notify,
     trackers: Mutex<Vec<Arc<LiveStreamTracker>>>,
-    cancelled: tokio_util::sync::CancellationToken,
+    cancelled: CancellationToken,
 }
 
 impl SourceLifecycle {
+    fn new(cancelled: CancellationToken) -> Self {
+        Self {
+            finished: AtomicBool::new(false),
+            finished_notify: Notify::new(),
+            trackers: Mutex::new(Vec::new()),
+            cancelled,
+        }
+    }
+
     fn attach(self: &Arc<Self>, tracker: Arc<LiveStreamTracker>) {
         let mut trackers = self
             .trackers
@@ -119,7 +142,7 @@ impl SourceLifecycle {
         }
     }
 
-    fn finish(&self) {
+    pub(super) fn finish(&self) {
         if self.finished.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -136,112 +159,177 @@ impl SourceLifecycle {
     }
 }
 
-pub(super) struct RelayReceiver {
-    pub(super) demand_tx: mpsc::Sender<()>,
-    pub(super) item_rx: mpsc::Receiver<Result<SchemaValue, String>>,
+pub(super) struct LiveStreamEndpoint {
+    primary: Option<ReservedPrimaryLiveStreamSubscriber<SchemaValue>>,
+    publisher: LiveStreamPublisher<SchemaValue>,
     lifecycle: Arc<SourceLifecycle>,
 }
 
-impl RelayReceiver {
+impl LiveStreamEndpoint {
     pub(super) fn attach(&self, tracker: Arc<LiveStreamTracker>) {
         self.lifecycle.attach(tracker);
     }
 
-    pub(super) async fn next(&mut self) -> Result<Option<SchemaValue>, String> {
-        tokio::select! {
-            result = self.demand_tx.send(()) => {
-                if result.is_err() {
-                    return match self.item_rx.recv().await {
-                        Some(Ok(value)) => Ok(Some(value)),
-                        Some(Err(error)) => Err(error),
-                        None => Ok(None),
-                    };
-                }
-            }
-            _ = self.lifecycle.cancelled.cancelled() => {
-                self.lifecycle.finish();
-                return Err("live streaming invocation was cancelled".to_string());
-            }
-        }
-        tokio::select! {
-            item = self.item_rx.recv() => match item {
-                Some(Ok(value)) => Ok(Some(value)),
-                Some(Err(error)) => Err(error),
-                None => Ok(None),
-            },
-            _ = self.lifecycle.cancelled.cancelled() => {
-                self.lifecycle.finish();
-                Err("live streaming invocation was cancelled".to_string())
-            }
-        }
+    pub(super) fn lifecycle(&self) -> Arc<SourceLifecycle> {
+        self.lifecycle.clone()
+    }
+
+    pub(super) fn publisher(&self) -> LiveStreamPublisher<SchemaValue> {
+        self.publisher.clone()
+    }
+
+    pub(super) fn activate(mut self) -> PrimaryLiveStreamSubscriber<SchemaValue> {
+        self.primary
+            .take()
+            .expect("live stream primary subscriber already activated")
+            .activate()
     }
 }
 
-impl Drop for RelayReceiver {
+impl Drop for LiveStreamEndpoint {
     fn drop(&mut self) {
-        self.lifecycle.finish();
+        if self.primary.is_some() {
+            self.lifecycle.finish();
+        }
     }
 }
 
-pub(super) struct RelayConsumer {
-    demand_rx: mpsc::Receiver<()>,
-    item_tx: mpsc::Sender<Result<SchemaValue, String>>,
-    lifecycle: Arc<SourceLifecycle>,
-    has_demand: bool,
-}
-
-pub(super) struct RelayPeer {
-    pub(super) demand_rx: mpsc::Receiver<()>,
-    pub(super) item_tx: mpsc::Sender<Result<SchemaValue, String>>,
+#[derive(Clone)]
+pub(super) struct LiveStreamPeer {
+    pub(super) publisher: LiveStreamPublisher<SchemaValue>,
+    pub(super) primary_dropped: Arc<Notify>,
     pub(super) lifecycle: Arc<SourceLifecycle>,
 }
 
-impl Drop for RelayConsumer {
-    fn drop(&mut self) {
-        self.lifecycle.finish();
-    }
-}
-
-pub(super) fn relay_pair(
-    tracker: Option<Arc<LiveStreamTracker>>,
-) -> (RelayConsumer, SchemaValueStream) {
-    let (peer, stream) = relay_endpoint_pair(tracker);
-    (
-        RelayConsumer {
-            demand_rx: peer.demand_rx,
-            item_tx: peer.item_tx,
-            lifecycle: peer.lifecycle,
-            has_demand: false,
-        },
-        stream,
-    )
-}
-
-pub(super) fn relay_endpoint_pair(
-    tracker: Option<Arc<LiveStreamTracker>>,
-) -> (RelayPeer, SchemaValueStream) {
-    let (demand_tx, demand_rx) = mpsc::channel(1);
-    let (item_tx, item_rx) = mpsc::channel(1);
-    let lifecycle = Arc::new(SourceLifecycle::default());
-    if let Some(tracker) = tracker {
-        lifecycle.attach(tracker);
-    }
-    let receiver = RelayReceiver {
-        demand_tx,
-        item_rx,
+pub(super) fn input_stream_pair(
+    capacity: usize,
+    invocation_cancellation: &CancellationToken,
+) -> Result<(LiveStreamPeer, SchemaValueStream), String> {
+    let stream_cancellation = invocation_cancellation.child_token();
+    let primary_dropped = Arc::new(Notify::new());
+    let lifecycle = Arc::new(SourceLifecycle::new(stream_cancellation.clone()));
+    let (publisher, primary) =
+        live_input_stream_bus(capacity, stream_cancellation, primary_dropped.clone())
+            .map_err(|error| format!("failed to create live input stream bus: {error:?}"))?;
+    let endpoint = LiveStreamEndpoint {
+        primary: Some(primary),
+        publisher: publisher.clone(),
         lifecycle: lifecycle.clone(),
     };
-    (
-        RelayPeer {
-            demand_rx,
-            item_tx,
-            lifecycle: lifecycle.clone(),
+    Ok((
+        LiveStreamPeer {
+            publisher,
+            primary_dropped,
+            lifecycle,
         },
-        SchemaValueStream::from_host_endpoint(receiver),
-    )
+        SchemaValueStream::from_host_endpoint(endpoint),
+    ))
 }
 
-impl<Ctx: WorkerCtx> StreamConsumer<Ctx> for RelayConsumer {
+pub(super) fn output_stream_pair(
+    tracker: Option<Arc<LiveStreamTracker>>,
+    capacity: usize,
+) -> Result<(LiveOutputConsumer, SchemaValueStream), String> {
+    let cancellation = tracker
+        .as_ref()
+        .map(|tracker| tracker.cancellation_token())
+        .unwrap_or_default();
+    let lifecycle = Arc::new(SourceLifecycle::new(cancellation.clone()));
+    if let Some(tracker) = tracker {
+        debug_assert_eq!(capacity, tracker.capacity());
+        lifecycle.attach(tracker);
+    }
+    let (publisher, primary) = live_output_stream_bus(capacity, cancellation)
+        .map_err(|error| format!("failed to create live output stream bus: {error:?}"))?;
+    let endpoint = LiveStreamEndpoint {
+        primary: Some(primary),
+        publisher: publisher.clone(),
+        lifecycle: lifecycle.clone(),
+    };
+    Ok((
+        LiveOutputConsumer {
+            publisher,
+            lifecycle,
+            pending: None,
+            pending_failure: None,
+            terminal_requested: false,
+        },
+        SchemaValueStream::from_host_endpoint(endpoint),
+    ))
+}
+
+type PublicationFuture =
+    Pin<Box<dyn Future<Output = Result<u64, LiveStreamPublishError>> + Send + 'static>>;
+
+pub(super) struct LiveOutputConsumer {
+    publisher: LiveStreamPublisher<SchemaValue>,
+    lifecycle: Arc<SourceLifecycle>,
+    pending: Option<PublicationFuture>,
+    pending_failure: Option<String>,
+    terminal_requested: bool,
+}
+
+impl LiveOutputConsumer {
+    fn begin_terminal_publication(&mut self) {
+        self.terminal_requested = true;
+        let publisher = self.publisher.clone();
+        self.pending = Some(Box::pin(async move { publisher.publish_end().await }));
+    }
+
+    fn poll_pending(&mut self, cx: &mut Context<'_>) -> Poll<wasmtime::Result<StreamResult>> {
+        let result = match self.pending.as_mut() {
+            Some(pending) => match pending.as_mut().poll(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(result) => result,
+            },
+            None => return Poll::Ready(Ok(StreamResult::Completed)),
+        };
+        self.pending = None;
+        match result {
+            Ok(_) => match self.pending_failure.take() {
+                Some(_) => {
+                    self.lifecycle.finish();
+                    Poll::Ready(Ok(StreamResult::Dropped))
+                }
+                None if self.terminal_requested => {
+                    self.lifecycle.finish();
+                    Poll::Ready(Ok(StreamResult::Cancelled))
+                }
+                None => Poll::Ready(Ok(StreamResult::Completed)),
+            },
+            Err(LiveStreamPublishError::Closed) => {
+                self.lifecycle.finish();
+                Poll::Ready(Ok(StreamResult::Dropped))
+            }
+            Err(error) => {
+                self.lifecycle.finish();
+                Poll::Ready(Err(wasmtime::Error::msg(format!(
+                    "failed to publish live output stream event: {error:?}"
+                ))))
+            }
+        }
+    }
+}
+
+impl Drop for LiveOutputConsumer {
+    fn drop(&mut self) {
+        let pending = self.pending.take();
+        let terminal_requested = self.terminal_requested;
+        let publisher = self.publisher.clone();
+        let lifecycle = self.lifecycle.clone();
+        tokio::spawn(async move {
+            if let Some(pending) = pending {
+                let _ = pending.await;
+            }
+            if !terminal_requested {
+                let _ = publisher.publish_end().await;
+            }
+            lifecycle.finish();
+        });
+    }
+}
+
+impl<Ctx: WorkerCtx> StreamConsumer<Ctx> for LiveOutputConsumer {
     type Item = SchemaValueTree;
 
     fn poll_consume(
@@ -251,24 +339,12 @@ impl<Ctx: WorkerCtx> StreamConsumer<Ctx> for RelayConsumer {
         mut source: Source<'_, Self::Item>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
-        if finish || self.item_tx.is_closed() {
-            self.lifecycle.finish();
-            return Poll::Ready(Ok(if finish {
-                StreamResult::Cancelled
-            } else {
-                StreamResult::Dropped
-            }));
+        if self.pending.is_some() {
+            return self.poll_pending(cx);
         }
-
-        if !self.has_demand {
-            match self.demand_rx.poll_recv(cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Some(())) => self.has_demand = true,
-                Poll::Ready(None) => {
-                    self.lifecycle.finish();
-                    return Poll::Ready(Ok(StreamResult::Dropped));
-                }
-            }
+        if finish {
+            self.begin_terminal_publication();
+            return self.poll_pending(cx);
         }
 
         let mut item = None;
@@ -281,37 +357,85 @@ impl<Ctx: WorkerCtx> StreamConsumer<Ctx> for RelayConsumer {
             let mut resolver = StoreValueResolver::new(&mut store);
             decode_value_with(item, &mut resolver).map_err(|error| error.to_string())
         };
-        self.has_demand = false;
-        match self.item_tx.try_send(decoded) {
-            Ok(()) => Poll::Ready(Ok(StreamResult::Completed)),
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                self.lifecycle.finish();
-                Poll::Ready(Ok(StreamResult::Dropped))
+        let publisher = self.publisher.clone();
+        match decoded {
+            Ok(value) => {
+                self.pending = Some(Box::pin(async move { publisher.publish_item(value).await }));
             }
-            Err(mpsc::error::TrySendError::Full(_)) => Poll::Ready(Err(wasmtime::Error::msg(
-                "schema value stream relay accepted an item without matching demand",
-            ))),
+            Err(error) => {
+                self.pending_failure = Some(error.clone());
+                self.terminal_requested = true;
+                self.pending = Some(Box::pin(
+                    async move { publisher.publish_error(error).await },
+                ));
+            }
         }
+        self.poll_pending(cx)
     }
 }
 
-pub(super) struct RelayProducer {
-    receiver: RelayReceiver,
-    demand_pending: bool,
+type ReceiveFuture = Pin<
+    Box<
+        dyn Future<
+                Output = (
+                    PrimaryLiveStreamSubscriber<SchemaValue>,
+                    Option<
+                        Result<
+                            crate::durable_host::stream_bus::LiveStreamEvent<SchemaValue>,
+                            LiveStreamReceiveError,
+                        >,
+                    >,
+                ),
+            > + Send
+            + 'static,
+    >,
+>;
+
+async fn receive_input_event(
+    mut subscriber: PrimaryLiveStreamSubscriber<SchemaValue>,
+    cancelled: CancellationToken,
+) -> (
+    PrimaryLiveStreamSubscriber<SchemaValue>,
+    Option<
+        Result<
+            crate::durable_host::stream_bus::LiveStreamEvent<SchemaValue>,
+            LiveStreamReceiveError,
+        >,
+    >,
+) {
+    let event = tokio::select! {
+        event = subscriber.recv() => Some(event),
+        _ = cancelled.cancelled() => None,
+    };
+    (subscriber, event)
+}
+
+pub(super) struct LiveInputProducer {
+    subscriber: Option<PrimaryLiveStreamSubscriber<SchemaValue>>,
+    pending: Option<ReceiveFuture>,
+    lifecycle: Arc<SourceLifecycle>,
     finished: bool,
 }
 
-impl RelayProducer {
-    pub(super) fn new(receiver: RelayReceiver) -> Self {
+impl LiveInputProducer {
+    pub(super) fn new(endpoint: LiveStreamEndpoint) -> Self {
+        let lifecycle = endpoint.lifecycle.clone();
         Self {
-            receiver,
-            demand_pending: false,
+            subscriber: Some(endpoint.activate()),
+            pending: None,
+            lifecycle,
             finished: false,
         }
     }
 }
 
-impl<Ctx: WorkerCtx> StreamProducer<Ctx> for RelayProducer {
+impl Drop for LiveInputProducer {
+    fn drop(&mut self) {
+        self.lifecycle.finish();
+    }
+}
+
+impl<Ctx: WorkerCtx> StreamProducer<Ctx> for LiveInputProducer {
     type Item = SchemaValueTree;
     type Buffer = Option<SchemaValueTree>;
 
@@ -327,44 +451,129 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for RelayProducer {
         }
         if finish {
             self.finished = true;
-            self.receiver.lifecycle.finish();
+            self.pending = None;
+            self.subscriber = None;
+            self.lifecycle.finish();
             return Poll::Ready(Ok(StreamResult::Cancelled));
         }
 
-        if !self.demand_pending {
-            match self.receiver.demand_tx.try_send(()) {
-                Ok(()) => self.demand_pending = true,
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    self.finished = true;
-                    self.receiver.lifecycle.finish();
-                    return Poll::Ready(Ok(StreamResult::Dropped));
-                }
-                Err(mpsc::error::TrySendError::Full(_)) => self.demand_pending = true,
-            }
+        if self.pending.is_none() {
+            let subscriber = self
+                .subscriber
+                .take()
+                .expect("live input stream subscriber is missing");
+            let cancelled = self.lifecycle.cancelled.clone();
+            self.pending = Some(Box::pin(receive_input_event(subscriber, cancelled)));
         }
+        let (subscriber, event) = match self.pending.as_mut().unwrap().as_mut().poll(cx) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(result) => result,
+        };
+        self.pending = None;
+        self.subscriber = Some(subscriber);
 
-        match self.receiver.item_rx.poll_recv(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(None) => {
+        match event {
+            Some(Ok(event)) => match event.payload {
+                LiveStreamEventPayload::Item(value) => {
+                    let encoded = {
+                        let mut resolver = StoreValueResolver::new(&mut store);
+                        encode_value_with_streams(&value, &mut resolver)
+                            .map_err(|error| wasmtime::Error::msg(error.to_string()))?
+                    };
+                    destination.set_buffer(Some(encoded));
+                    Poll::Ready(Ok(StreamResult::Completed))
+                }
+                LiveStreamEventPayload::End | LiveStreamEventPayload::Cancel(_) => {
+                    self.finished = true;
+                    self.lifecycle.finish();
+                    Poll::Ready(Ok(StreamResult::Dropped))
+                }
+                LiveStreamEventPayload::Error(error) => {
+                    self.finished = true;
+                    self.lifecycle.finish();
+                    Poll::Ready(Err(wasmtime::Error::msg(error)))
+                }
+            },
+            Some(Err(LiveStreamReceiveError::Closed)) => {
                 self.finished = true;
-                self.receiver.lifecycle.finish();
-                Poll::Ready(Ok(StreamResult::Dropped))
+                self.lifecycle.finish();
+                Poll::Ready(Err(wasmtime::Error::msg(
+                    "live input stream closed without a terminal event",
+                )))
             }
-            Poll::Ready(Some(Err(error))) => {
+            Some(Err(LiveStreamReceiveError::Lagged(missed))) => {
                 self.finished = true;
-                self.receiver.lifecycle.finish();
-                Poll::Ready(Err(wasmtime::Error::msg(error)))
+                self.lifecycle.finish();
+                Poll::Ready(Err(wasmtime::Error::msg(format!(
+                    "live input stream lost {missed} events"
+                ))))
             }
-            Poll::Ready(Some(Ok(value))) => {
-                self.demand_pending = false;
-                let encoded = {
-                    let mut resolver = StoreValueResolver::new(&mut store);
-                    encode_value_with_streams(&value, &mut resolver)
-                        .map_err(|error| wasmtime::Error::msg(error.to_string()))?
-                };
-                destination.set_buffer(Some(encoded));
-                Poll::Ready(Ok(StreamResult::Completed))
+            None => {
+                self.finished = true;
+                self.subscriber = None;
+                self.lifecycle.finish();
+                Poll::Ready(Err(wasmtime::Error::msg(
+                    "live streaming invocation was cancelled",
+                )))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("2s")]
+    async fn normal_output_finish_publishes_end_before_finishing_lifecycle() {
+        let tracker = Arc::new(LiveStreamTracker::new(CancellationToken::new(), 4));
+        let (mut consumer, stream) = output_stream_pair(Some(tracker.clone()), 4).unwrap();
+        let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
+        let mut primary = endpoint.activate();
+
+        consumer.begin_terminal_publication();
+        let result = std::future::poll_fn(|cx| consumer.poll_pending(cx))
+            .await
+            .unwrap();
+
+        assert!(matches!(result, StreamResult::Cancelled));
+        assert!(consumer.lifecycle.finished.load(Ordering::Acquire));
+        assert!(matches!(
+            primary.recv().await.unwrap(),
+            crate::durable_host::stream_bus::LiveStreamEvent {
+                offset: 0,
+                payload: LiveStreamEventPayload::End,
+            }
+        ));
+        tracker.wait_for_sources().await;
+    }
+
+    #[test]
+    #[timeout("2s")]
+    async fn invocation_cancellation_wakes_a_guest_blocked_on_input() {
+        let invocation_cancellation = CancellationToken::new();
+        let session_cancellation = CancellationToken::new();
+        let tracker = Arc::new(LiveStreamTracker::new(invocation_cancellation.clone(), 4));
+        let (peer, stream) = input_stream_pair(4, &session_cancellation).unwrap();
+        let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
+        endpoint.attach(tracker.clone());
+        let primary = endpoint.activate();
+        let blocked = tokio::spawn(receive_input_event(
+            primary,
+            peer.lifecycle.cancelled.clone(),
+        ));
+        tokio::task::yield_now().await;
+        assert!(!blocked.is_finished());
+
+        invocation_cancellation.cancel();
+
+        let (primary, event) = blocked.await.unwrap();
+        assert_eq!(event, None);
+        drop(primary);
+        peer.primary_dropped.notified().await;
+        tracker.wait_for_sources().await;
+        assert!(!session_cancellation.is_cancelled());
     }
 }

@@ -27,6 +27,8 @@ inherit_test_dep!(Tracing);
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
 use colored::Colorize;
+#[cfg(unix)]
+use expectrl::process::unix::{Signal, WaitStatus};
 use expectrl::{Eof, Expect};
 use golem_cli::app::build::task_result_marker::{
     ExtractComponentMetadataMarkerHash, TaskResultMarker,
@@ -51,7 +53,7 @@ use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
 use test_r::inherit_test_dep;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -121,6 +123,34 @@ pub struct Output {
     quiet: bool,
     status: ExitStatus,
     output: Vec<CommandOutput>,
+}
+
+struct RawOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl RawOutput {
+    fn success(&self) -> bool {
+        self.status.success()
+    }
+
+    fn exit_code(&self) -> Option<i32> {
+        self.status.code()
+    }
+
+    fn stdout(&self) -> &[u8] {
+        &self.stdout
+    }
+
+    fn stdout_text(&self) -> String {
+        String::from_utf8_lossy(&self.stdout).into_owned()
+    }
+
+    fn stderr_text(&self) -> String {
+        String::from_utf8_lossy(&self.stderr).into_owned()
+    }
 }
 
 impl Output {
@@ -487,6 +517,121 @@ impl TestContext {
             .unwrap()
     }
 
+    async fn cli_with_input<I, S>(&self, command_args: I, input: &[u8]) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        println!(
+            "{} {}",
+            "> working directory:".bold(),
+            working_dir.display()
+        );
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
+
+        let mut child = Command::new(&self.golem_cli_path)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&working_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        let input = input.to_vec();
+
+        let write_input = async move {
+            stdin.write_all(&input).await?;
+            stdin.shutdown().await
+        };
+        let read_stdout = async move {
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes).await?;
+            Ok::<_, std::io::Error>(bytes)
+        };
+        let read_stderr = async move {
+            let mut bytes = Vec::new();
+            stderr.read_to_end(&mut bytes).await?;
+            Ok::<_, std::io::Error>(bytes)
+        };
+
+        let (input_result, stdout, stderr) = tokio::join!(write_input, read_stdout, read_stderr);
+        input_result.unwrap();
+
+        RawOutput {
+            status: child.wait().await.unwrap(),
+            stdout: stdout.unwrap(),
+            stderr: stderr.unwrap(),
+        }
+    }
+
+    async fn cli_with_broken_stdout<I, S>(&self, command_args: I) -> RawOutput
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        println!(
+            "{} {}",
+            "> working directory:".bold(),
+            working_dir.display()
+        );
+        println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
+
+        let mut child = Command::new(&self.golem_cli_path)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&working_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        drop(child.stdout.take());
+        let mut stderr = child.stderr.take().unwrap();
+
+        let mut stderr_bytes = Vec::new();
+        stderr.read_to_end(&mut stderr_bytes).await.unwrap();
+
+        RawOutput {
+            status: child.wait().await.unwrap(),
+            stdout: Vec::new(),
+            stderr: stderr_bytes,
+        }
+    }
+
     async fn cli_interactive<I, S, F>(&self, args: I, session_fn: F)
     where
         I: IntoIterator<Item = S>,
@@ -545,6 +690,70 @@ impl TestContext {
         .expect("failed to start interactive golem-cli session")
         .context("interactive session failed")
         .unwrap()
+    }
+
+    #[cfg(unix)]
+    async fn cli_ctrl_c_after<I, S>(
+        &self,
+        command_args: I,
+        expected: &str,
+        pause_after_match: Duration,
+    ) -> i32
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rewrite_local_http_domain_ports();
+
+        let mut args = vec![
+            "--config-dir".to_string(),
+            self.config_dir.path().to_str().unwrap().to_string(),
+        ];
+        args.extend(
+            command_args
+                .into_iter()
+                .map(|arg| arg.as_ref().to_str().unwrap().to_string()),
+        );
+
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
+        let golem_cli_path = self.golem_cli_path.clone();
+        let env = self.env.clone();
+        let expected = expected.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let mut command = std::process::Command::new(golem_cli_path);
+            command
+                .current_dir(working_dir)
+                .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+                .envs(env)
+                .env("TERM", "xterm-256color")
+                .args(args);
+            let mut session = expectrl::Session::spawn(command)
+                .expect("failed to spawn interactive golem-cli session");
+            session.set_expect_timeout(Some(Duration::from_secs(30)));
+            session
+                .expect(expected.as_str())
+                .expect("failed to observe invocation acceptance before Ctrl-C");
+            std::thread::sleep(pause_after_match);
+            session
+                .get_process_mut()
+                .signal(Signal::SIGINT)
+                .expect("failed to send Ctrl-C");
+            session
+                .expect(Eof)
+                .expect("failed to observe EOF after Ctrl-C");
+
+            match session
+                .get_process()
+                .wait()
+                .expect("failed to wait for golem-cli exit status")
+            {
+                WaitStatus::Exited(_, code) => code,
+                status => panic!("golem-cli did not exit normally after Ctrl-C: {status:?}"),
+            }
+        })
+        .await
+        .expect("failed to run Ctrl-C CLI session")
     }
 
     async fn cli_interactive_repl_test<I, S, F>(&mut self, args: I, session_fn: F)

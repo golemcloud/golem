@@ -17,21 +17,24 @@ use crate::durable_host::stream_session::LiveValueSession;
 use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
 use crate::services::{HasAll, HasComponentService, HasSchedulerService, UsesAllDeps};
 use crate::worker::Worker;
-use crate::worker::invocation::agent_method_uses_streams;
+use crate::worker::invocation::validate_agent_method_invocation;
 use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
+use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem;
+use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::worker::{
-    InvocationFrame, InvocationProtocolFailure, InvocationResult, InvocationSessionFinished,
-    InvocationStart, invocation_cancel, invocation_frame, invocation_protocol_failure,
-    invocation_result, invocation_session_finished,
+    InvocationAccepted, InvocationFailure, InvocationFailureKind, InvocationRejected,
+    InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionCompletion,
+    InvocationSessionResult, InvocationStart, invocation_request, invocation_response,
+    invocation_session_completion, invocation_session_result,
 };
-use golem_api_grpc::{expect_invocation_start, validate_invocation_request_tail};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
 };
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
     InvocationStatus, ScheduledAction,
@@ -39,25 +42,26 @@ use golem_common::model::{
 use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::pin::Pin;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 pub(super) type InvocationSessionStream =
-    Pin<Box<dyn Stream<Item = Result<InvocationFrame, Status>> + Send + 'static>>;
+    Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
 
 pub(super) async fn invoke_agent_session<
     Ctx: WorkerCtx,
     Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static,
 >(
     executor: &WorkerExecutorImpl<Ctx, Svcs>,
-    request: Request<tonic::Streaming<InvocationFrame>>,
+    request: Request<tonic::Streaming<InvocationRequest>>,
 ) -> Result<Response<InvocationSessionStream>, Status> {
     let inbound = request.into_inner();
-    let (frames, receiver) = mpsc::channel(32);
+    let (responses, receiver) = mpsc::channel(32);
     let executor = (*executor).clone();
     tokio::spawn(async move {
-        executor.run_agent_session(inbound, frames).await;
+        executor.run_agent_session(inbound, responses).await;
     });
     Ok(Response::new(Box::pin(
         ReceiverStream::new(receiver).map(Ok),
@@ -72,6 +76,15 @@ fn decode_invocation_freshness_disposition(value: i32) -> InvocationFreshnessDis
     }
 }
 
+fn publish_acceptance(
+    accepted: tokio::sync::oneshot::Sender<Option<ComponentRevision>>,
+    component_revision: Option<ComponentRevision>,
+) -> Result<(), WorkerExecutorError> {
+    accepted
+        .send(component_revision)
+        .map_err(|_| WorkerExecutorError::runtime("invocation session ended before acceptance"))
+}
+
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
 {
@@ -80,6 +93,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: &InvocationStart,
         method_parameters: Option<SchemaValue>,
         cancellation: tokio_util::sync::CancellationToken,
+        accepted: tokio::sync::oneshot::Sender<Option<ComponentRevision>>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
@@ -127,6 +141,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 },
                 None => InvocationStatus::Unknown,
             };
+            publish_acceptance(accepted, None)?;
             return Ok(AgentInvocationOutput {
                 result: AgentInvocationResult::AgentInitialization,
                 consumed_fuel: None,
@@ -167,6 +182,39 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_agent_id =
             extract_owned_agent_id(request, |r| &r.agent_id, |r| &r.environment_id)?;
 
+        let existing_metadata =
+            if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+                None
+            } else {
+                Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await
+            };
+        let component_revision = existing_metadata
+            .as_ref()
+            .map(|metadata| metadata.last_known_status.component_revision);
+        let component = self
+            .component_service()
+            .get_metadata(owned_agent_id.component_id(), component_revision)
+            .await?;
+        let parsed_agent_id =
+            ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
+                .map_err(WorkerExecutorError::invalid_request)?;
+        let streaming = validate_agent_method_invocation(
+            &component.metadata,
+            Some(&parsed_agent_id),
+            &method_name,
+            &method_parameters,
+        )?;
+        if streaming
+            && matches!(
+                mode,
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule
+            )
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "live streams require an attached Await invocation session",
+            ));
+        }
+
         Worker::<Ctx>::validate_invocation_freshness(
             self,
             &owned_agent_id,
@@ -202,28 +250,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let worker = self
                     .get_or_create_pending_with_freshness(request, freshness_disposition)
                     .await?;
-                let component_revision = worker.get_last_known_status().await.component_revision;
-                let component = self
-                    .component_service()
-                    .get_metadata(owned_agent_id.component_id(), Some(component_revision))
-                    .await?;
-                let parsed_agent_id =
-                    ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
-                        .map_err(WorkerExecutorError::invalid_request)?;
-                let streaming = agent_method_uses_streams(
-                    &component.metadata,
-                    Some(&parsed_agent_id),
-                    &method_name,
-                    &method_parameters,
-                )?;
                 let mut invocation_output = if streaming {
                     let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+                    let invocation = worker
+                        .clone()
+                        .enqueue_live_streaming(invocation, cancellation)
+                        .await?;
+                    publish_acceptance(accepted, Some(component.revision))?;
                     AgentInvocationOutput {
                         result: AgentInvocationResult::AgentMethod {
-                            output: worker
-                                .clone()
-                                .invoke_live_streaming(invocation, cancellation)
-                                .await?,
+                            output: invocation.result().await?,
                         },
                         consumed_fuel: None,
                         invocation_status: None,
@@ -234,7 +270,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         agent_fingerprint: Some(fingerprint),
                     }
                 } else {
-                    worker.invoke_and_await(invocation).await?
+                    let result = worker.clone().invoke(invocation).await?;
+                    if let crate::worker::ResultOrSubscription::Finished(Err(error)) = &result {
+                        return Err(error.clone());
+                    }
+                    publish_acceptance(accepted, Some(component.revision))?;
+                    worker.await_invocation_result(ik.clone(), result).await?
                 };
                 invocation_output.agent_id = Some(final_agent_id);
                 invocation_output.idempotency_key = Some(ik);
@@ -243,15 +284,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
                 match schedule_at {
                     Some(scheduled_time) => {
-                        let component = self
-                            .component_service()
-                            .get_metadata(owned_agent_id.component_id(), None)
-                            .await?;
-                        let parsed_agent_id = ParsedAgentId::parse(
-                            &owned_agent_id.agent_id.agent_id,
-                            &component.metadata,
-                        )
-                        .map_err(WorkerExecutorError::invalid_request)?;
                         let agent_mode = component
                             .metadata
                             .find_agent_type_by_name_ref(&parsed_agent_id.agent_type)
@@ -291,6 +323,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         self.scheduler_service()
                             .schedule(scheduled_time, action)
                             .await;
+                        publish_acceptance(accepted, Some(component.revision))?;
                         Ok(AgentInvocationOutput {
                             result: AgentInvocationResult::AgentInitialization,
                             consumed_fuel: None,
@@ -306,9 +339,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         let worker = self
                             .get_or_create_pending_with_freshness(request, freshness_disposition)
                             .await?;
-                        match worker.clone().invoke(invocation).await? {
+                        let result = worker.clone().invoke(invocation).await?;
+                        if let crate::worker::ResultOrSubscription::Finished(Err(err)) = &result {
+                            return Err(err.clone());
+                        }
+                        publish_acceptance(accepted, Some(component.revision))?;
+                        match result {
                             crate::worker::ResultOrSubscription::Finished(Err(err)) => {
-                                return Err(err);
+                                unreachable!(
+                                    "finished errors are handled before acceptance: {err}"
+                                );
                             }
                             crate::worker::ResultOrSubscription::Finished(Ok(_)) => {}
                             crate::worker::ResultOrSubscription::Pending(_) => {
@@ -336,132 +376,196 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn run_agent_session(
         &self,
-        mut inbound: tonic::Streaming<InvocationFrame>,
-        frames: mpsc::Sender<InvocationFrame>,
+        mut inbound: tonic::Streaming<InvocationRequest>,
+        outward: mpsc::Sender<InvocationResponse>,
     ) {
-        let start = match inbound.message().await {
-            Ok(Some(frame)) => match expect_invocation_start(frame) {
-                Ok(start) => start,
-                Err(error) => {
-                    send_protocol_failure(
-                        &frames,
-                        invocation_protocol_failure::Kind::Protocol,
-                        error,
-                    )
-                    .await;
-                    return;
-                }
-            },
+        let mut state = InvocationSessionState::default();
+        let first = match inbound.message().await {
+            Ok(Some(request)) => request,
             Ok(None) => {
-                send_protocol_failure(
-                    &frames,
-                    invocation_protocol_failure::Kind::Transport,
+                send_unvalidated_rejection(
+                    &outward,
+                    InvocationRejectionReason::Protocol,
                     "invocation request transport closed before start".to_string(),
+                    None,
+                    None,
                 )
                 .await;
                 return;
             }
             Err(error) => {
-                send_protocol_failure(
-                    &frames,
-                    invocation_protocol_failure::Kind::Transport,
+                send_unvalidated_rejection(
+                    &outward,
+                    InvocationRejectionReason::Protocol,
                     error.to_string(),
+                    None,
+                    None,
                 )
                 .await;
                 return;
             }
         };
+        if let Err(error) = state.validate_trusted_request(&first) {
+            send_unvalidated_rejection(
+                &outward,
+                InvocationRejectionReason::Protocol,
+                error,
+                request_idempotency_key(&first),
+                request_agent_id(&first),
+            )
+            .await;
+            return;
+        }
+        let first = first.request.expect("validated request has a payload");
+        let start = match first {
+            invocation_request::Request::Start(start) => start,
+            invocation_request::Request::ResumeAttach(resume) => {
+                let rejection = InvocationResponse {
+                    response: Some(invocation_response::Response::Rejected(
+                        InvocationRejected {
+                            reason: InvocationRejectionReason::ResumeUnsupported as i32,
+                            error: "resume-attach is not supported by live sessions".to_string(),
+                            idempotency_key: resume.idempotency_key,
+                            agent_id: None,
+                            component_revision: None,
+                        },
+                    )),
+                };
+                if state.validate_response(&rejection).is_ok() {
+                    let _ = outward.send(rejection).await;
+                }
+                return;
+            }
+            _ => unreachable!("the session validator requires start or resume-attach first"),
+        };
 
-        let session = LiveValueSession::new(2, frames.clone());
+        let state = Arc::new(tokio::sync::Mutex::new(state));
+        let (responses, mut response_rx) = mpsc::channel(32);
+        let response_state = state.clone();
+        let outward_forwarder = outward.clone();
+        let forwarder = tokio::spawn(async move {
+            while let Some(response) = response_rx.recv().await {
+                if response_state
+                    .lock()
+                    .await
+                    .validate_response(&response)
+                    .is_err()
+                {
+                    return;
+                }
+                if outward_forwarder.send(response).await.is_err() {
+                    return;
+                }
+            }
+        });
+
+        let session = LiveValueSession::new_server_with_capacity(
+            responses.clone(),
+            self.services
+                .config()
+                .limits
+                .live_stream_event_broadcast_capacity
+                .get(),
+        );
         let input =
             if start.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup {
                 Ok(None)
             } else {
                 match start.input.clone() {
-                    Some(input) => session.decode(input).await.map(Some),
+                    Some(input) => session.decode_start(input).await.map(Some),
                     None => Err("invocation start has no input".to_string()),
                 }
             };
         let input = match input {
             Ok(input) => input,
             Err(error) => {
-                send_protocol_failure(&frames, invocation_protocol_failure::Kind::Protocol, error)
-                    .await;
+                send_rejection(
+                    &responses,
+                    InvocationRejectionReason::Protocol,
+                    error,
+                    &start,
+                )
+                .await;
                 session.cancel();
+                drop(session);
+                drop(responses);
+                let _ = forwarder.await;
                 return;
             }
         };
 
         let cancellation = tokio_util::sync::CancellationToken::new();
         let _cancel_on_drop = cancellation.clone().drop_guard();
-        let invocation = self.invoke_agent_internal(&start, input, cancellation);
+        let (accepted_tx, mut accepted_rx) = tokio::sync::oneshot::channel();
+        let invocation = self.invoke_agent_internal(&start, input, cancellation, accepted_tx);
         tokio::pin!(invocation);
-        let output = loop {
+        let mut early_output = None;
+        let accepted_revision = loop {
             tokio::select! {
-                result = &mut invocation => break result,
-                frame = inbound.message() => match frame {
-                    Ok(Some(frame)) => {
-                        if !route_live_request_frame(&session, &frames, frame).await {
-                            return;
-                        }
-                    }
-                    Ok(None) => {
-                        fail_session_transport(
-                            &session,
-                            &frames,
-                            "invocation request transport closed before the result".to_string(),
-                        )
-                        .await;
+                biased;
+                accepted = &mut accepted_rx => match accepted {
+                    Ok(revision) => break revision,
+                    Err(_) => {
+                        send_rejection(
+                            &responses,
+                            InvocationRejectionReason::Internal,
+                            "invocation ended without reaching acceptance".to_string(),
+                            &start,
+                        ).await;
+                        session.cancel();
                         return;
                     }
-                    Err(error) => {
-                        fail_session_transport(&session, &frames, error.to_string()).await;
-                        return;
+                },
+                result = &mut invocation => {
+                    if let Ok(revision) = accepted_rx.try_recv() {
+                        early_output = Some(result);
+                        break revision;
                     }
+                    let (reason, error) = match result {
+                        Ok(_) => (
+                            InvocationRejectionReason::Internal,
+                            "invocation completed before acceptance".to_string(),
+                        ),
+                        Err(error) => (
+                            pre_acceptance_rejection_reason(&error),
+                            error.to_string(),
+                        ),
+                    };
+                    send_rejection(&responses, reason, error, &start).await;
+                    session.cancel();
+                    return;
+                }
+                request = inbound.message() => {
+                    let error = match request {
+                        Ok(Some(request)) => state
+                            .lock()
+                            .await
+                            .validate_trusted_request(&request)
+                            .unwrap_err(),
+                        Ok(None) => "invocation request transport closed before acceptance".to_string(),
+                        Err(error) => error.to_string(),
+                    };
+                    send_rejection(
+                        &responses,
+                        InvocationRejectionReason::Protocol,
+                        error,
+                        &start,
+                    ).await;
+                    session.cancel();
+                    return;
                 }
             }
         };
 
-        let output = match output {
-            Ok(output) => output,
-            Err(error) => {
-                send_worker_failure(&frames, error).await;
-                session.cancel();
-                return;
-            }
-        };
-        let result = match &output.result {
-            AgentInvocationResult::AgentMethod { output } => match session.encode(output) {
-                Ok(output) => Some(invocation_result::Result::MethodResult(output)),
-                Err(error) => {
-                    send_protocol_failure(
-                        &frames,
-                        invocation_protocol_failure::Kind::Protocol,
-                        error,
-                    )
-                    .await;
-                    session.cancel();
-                    return;
-                }
-            },
-            _ => Some(invocation_result::Result::NoResult(golem::common::Empty {})),
-        };
-        if frames
-            .send(InvocationFrame {
-                frame: Some(invocation_frame::Frame::Result(InvocationResult {
-                    result,
-                    fuel_consumed: output.consumed_fuel,
-                    component_revision: output.component_revision.map(|revision| revision.get()),
-                    status: output.invocation_status.map(|status| {
-                        golem_api_grpc::proto::golem::worker::InvocationStatus::from(status) as i32
-                    }),
-                    oplog_index: output.oplog_index.map(u64::from),
-                    agent_fingerprint: output
-                        .agent_fingerprint
-                        .map(|fingerprint| fingerprint.0.into()),
-                    agent_id: output.agent_id.map(Into::into),
-                    idempotency_key: output.idempotency_key.map(Into::into),
-                })),
+        if responses
+            .send(InvocationResponse {
+                response: Some(invocation_response::Response::Accepted(
+                    InvocationAccepted {
+                        agent_id: start.agent_id.clone(),
+                        idempotency_key: start.idempotency_key.clone(),
+                        component_revision: accepted_revision.map(|revision| revision.get()),
+                    },
+                )),
             })
             .await
             .is_err()
@@ -470,15 +574,110 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return;
         }
 
+        let output = match early_output {
+            Some(output) => output,
+            None => loop {
+                tokio::select! {
+                    result = &mut invocation => break result,
+                    request = inbound.message() => match request {
+                        Ok(Some(request)) => {
+                            if !route_live_request(
+                                &session,
+                                &responses,
+                                &state,
+                                request,
+                            ).await {
+                                return;
+                            }
+                        }
+                        Ok(None) => {
+                            fail_session_transport(
+                                &session,
+                                &responses,
+                                "invocation request transport closed before the result".to_string(),
+                            )
+                            .await;
+                            return;
+                        }
+                        Err(error) => {
+                            fail_session_transport(&session, &responses, error.to_string()).await;
+                            return;
+                        }
+                    }
+                }
+            },
+        };
+
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                session.terminate_for_failure(&error.to_string()).await;
+                send_worker_failure(&responses, error).await;
+                return;
+            }
+        };
+        let (result, output_stream_ids) = match &output.result {
+            AgentInvocationResult::AgentMethod { output } => match session.encode_pending(output) {
+                Ok((output, stream_ids)) => (
+                    Some(invocation_session_result::Result::MethodResult(output)),
+                    stream_ids,
+                ),
+                Err(error) => {
+                    session.terminate_for_failure(&error).await;
+                    send_protocol_failure(&responses, error).await;
+                    return;
+                }
+            },
+            _ => (
+                Some(invocation_session_result::Result::NoResult(
+                    golem::common::Empty {},
+                )),
+                Vec::new(),
+            ),
+        };
+        if responses
+            .send(InvocationResponse {
+                response: Some(invocation_response::Response::Result(
+                    InvocationSessionResult {
+                        result,
+                        component_revision: output
+                            .component_revision
+                            .map(|revision| revision.get()),
+                        agent_id: output.agent_id.map(Into::into),
+                        idempotency_key: output.idempotency_key.map(Into::into),
+                        fuel_consumed: output.consumed_fuel,
+                        status: output.invocation_status.map(|status| {
+                            golem_api_grpc::proto::golem::worker::InvocationStatus::from(status)
+                                as i32
+                        }),
+                        oplog_index: output.oplog_index.map(u64::from),
+                        agent_fingerprint: output
+                            .agent_fingerprint
+                            .map(|fingerprint| fingerprint.0.into()),
+                    },
+                )),
+            })
+            .await
+            .is_err()
+        {
+            session.cancel();
+            return;
+        }
+        session.activate_exported_streams(&output_stream_ids);
+
         let idle = session.wait_idle();
         tokio::pin!(idle);
         loop {
             tokio::select! {
                 () = &mut idle => {
-                    let _ = frames.send(InvocationFrame {
-                        frame: Some(invocation_frame::Frame::Finished(
-                            InvocationSessionFinished {
-                                outcome: Some(invocation_session_finished::Outcome::Success(
+                    if let Err(details) = session.finish_invocation().await {
+                        send_protocol_failure(&responses, details).await;
+                        return;
+                    }
+                    let _ = responses.send(InvocationResponse {
+                        response: Some(invocation_response::Response::Finished(
+                            InvocationSessionCompletion {
+                                outcome: Some(invocation_session_completion::Outcome::Success(
                                     golem::common::Empty {},
                                 )),
                             },
@@ -486,23 +685,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     }).await;
                     return;
                 }
-                frame = inbound.message() => match frame {
-                    Ok(Some(frame)) => {
-                        if !route_live_request_frame(&session, &frames, frame).await {
+                request = inbound.message() => match request {
+                    Ok(Some(request)) => {
+                        if !route_live_request(
+                            &session,
+                            &responses,
+                            &state,
+                            request,
+                        ).await {
                             return;
                         }
                     }
                     Ok(None) => {
                         fail_session_transport(
                             &session,
-                            &frames,
+                            &responses,
                             "invocation request transport closed before completion".to_string(),
                         )
                         .await;
                         return;
                     }
                     Err(error) => {
-                        fail_session_transport(&session, &frames, error.to_string()).await;
+                        fail_session_transport(&session, &responses, error.to_string()).await;
                         return;
                     }
                 }
@@ -511,19 +715,94 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     }
 }
 
-async fn send_protocol_failure(
-    frames: &mpsc::Sender<InvocationFrame>,
-    kind: invocation_protocol_failure::Kind,
-    details: String,
+fn request_idempotency_key(
+    request: &InvocationRequest,
+) -> Option<golem_api_grpc::proto::golem::worker::IdempotencyKey> {
+    match request.request.as_ref() {
+        Some(invocation_request::Request::Start(start)) => start.idempotency_key.clone(),
+        Some(invocation_request::Request::ResumeAttach(resume)) => resume.idempotency_key.clone(),
+        _ => None,
+    }
+}
+
+fn request_agent_id(
+    request: &InvocationRequest,
+) -> Option<golem_api_grpc::proto::golem::worker::AgentId> {
+    match request.request.as_ref() {
+        Some(invocation_request::Request::Start(start)) => start.agent_id.clone(),
+        _ => None,
+    }
+}
+
+fn pre_acceptance_rejection_reason(error: &WorkerExecutorError) -> InvocationRejectionReason {
+    match error {
+        WorkerExecutorError::InvalidRequest { .. }
+        | WorkerExecutorError::ParamTypeMismatch { .. }
+        | WorkerExecutorError::NoValueInMessage
+        | WorkerExecutorError::ValueMismatch { .. } => InvocationRejectionReason::Validation,
+        WorkerExecutorError::AgentNotFound { .. }
+        | WorkerExecutorError::ComponentNotFound { .. }
+        | WorkerExecutorError::PromiseNotFound { .. } => InvocationRejectionReason::NotFound,
+        WorkerExecutorError::InvalidAccount => InvocationRejectionReason::Unauthorized,
+        _ => InvocationRejectionReason::Internal,
+    }
+}
+
+async fn send_unvalidated_rejection(
+    responses: &mpsc::Sender<InvocationResponse>,
+    reason: InvocationRejectionReason,
+    error: String,
+    idempotency_key: Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+    agent_id: Option<golem_api_grpc::proto::golem::worker::AgentId>,
 ) {
-    let _ = frames
-        .send(InvocationFrame {
-            frame: Some(invocation_frame::Frame::Finished(
-                InvocationSessionFinished {
-                    outcome: Some(invocation_session_finished::Outcome::ProtocolFailure(
-                        InvocationProtocolFailure {
+    let _ = responses
+        .send(InvocationResponse {
+            response: Some(invocation_response::Response::Rejected(
+                InvocationRejected {
+                    reason: reason as i32,
+                    error,
+                    idempotency_key,
+                    agent_id,
+                    component_revision: None,
+                },
+            )),
+        })
+        .await;
+}
+
+async fn send_rejection(
+    responses: &mpsc::Sender<InvocationResponse>,
+    reason: InvocationRejectionReason,
+    error: String,
+    start: &InvocationStart,
+) {
+    send_unvalidated_rejection(
+        responses,
+        reason,
+        error,
+        start.idempotency_key.clone(),
+        start.agent_id.clone(),
+    )
+    .await;
+}
+
+async fn send_failure(
+    responses: &mpsc::Sender<InvocationResponse>,
+    kind: InvocationFailureKind,
+    code: &str,
+    message: String,
+    worker_error: Option<WorkerExecutionError>,
+) {
+    let _ = responses
+        .send(InvocationResponse {
+            response: Some(invocation_response::Response::Finished(
+                InvocationSessionCompletion {
+                    outcome: Some(invocation_session_completion::Outcome::Failure(
+                        InvocationFailure {
                             kind: kind as i32,
-                            details,
+                            code: code.to_string(),
+                            message,
+                            worker_error,
                         },
                     )),
                 },
@@ -532,101 +811,77 @@ async fn send_protocol_failure(
         .await;
 }
 
-async fn send_worker_failure(frames: &mpsc::Sender<InvocationFrame>, error: WorkerExecutorError) {
-    let _ = frames
-        .send(InvocationFrame {
-            frame: Some(invocation_frame::Frame::Finished(
-                InvocationSessionFinished {
-                    outcome: Some(invocation_session_finished::Outcome::Failure(error.into())),
-                },
-            )),
-        })
-        .await;
-}
-
-async fn fail_session_transport(
-    session: &LiveValueSession,
-    frames: &mpsc::Sender<InvocationFrame>,
-    details: String,
-) {
-    session.fail(details.clone());
-    send_protocol_failure(
-        frames,
-        invocation_protocol_failure::Kind::Transport,
+async fn send_protocol_failure(responses: &mpsc::Sender<InvocationResponse>, details: String) {
+    send_failure(
+        responses,
+        InvocationFailureKind::Protocol,
+        "protocol",
         details,
+        None,
     )
     .await;
 }
 
-async fn route_live_request_frame(
+async fn send_worker_failure(
+    responses: &mpsc::Sender<InvocationResponse>,
+    error: WorkerExecutorError,
+) {
+    let message = error.to_string();
+    send_failure(
+        responses,
+        InvocationFailureKind::Execution,
+        "worker-execution",
+        message,
+        Some(error.into()),
+    )
+    .await;
+}
+
+async fn fail_session_transport(
     session: &LiveValueSession,
-    frames: &mpsc::Sender<InvocationFrame>,
-    frame: InvocationFrame,
+    responses: &mpsc::Sender<InvocationResponse>,
+    details: String,
+) {
+    session.terminate_for_failure(&details).await;
+    send_failure(
+        responses,
+        InvocationFailureKind::Transport,
+        "transport",
+        details,
+        None,
+    )
+    .await;
+}
+
+async fn route_live_request(
+    session: &LiveValueSession,
+    responses: &mpsc::Sender<InvocationResponse>,
+    state: &Arc<tokio::sync::Mutex<InvocationSessionState>>,
+    request: InvocationRequest,
 ) -> bool {
-    let frame = match validate_invocation_request_tail(frame) {
-        Ok(frame) => frame.frame.expect("validated request frame has a payload"),
+    let request = match state.lock().await.validate_trusted_request(&request) {
+        Ok(()) => request
+            .request
+            .expect("validated invocation request has a payload"),
         Err(details) => {
-            session.fail(details.clone());
-            send_protocol_failure(frames, invocation_protocol_failure::Kind::Protocol, details)
-                .await;
+            session.terminate_for_failure(&details).await;
+            send_protocol_failure(responses, details).await;
             return false;
         }
     };
-    match frame {
-        invocation_frame::Frame::Cancel(cancel) => {
-            let kind = match invocation_cancel::Kind::try_from(cancel.kind) {
-                Ok(kind) => kind,
-                Err(_) => {
-                    let details = format!("invalid invocation cancellation kind {}", cancel.kind);
-                    session.fail(details.clone());
-                    send_protocol_failure(
-                        frames,
-                        invocation_protocol_failure::Kind::Protocol,
-                        details,
-                    )
-                    .await;
-                    return false;
-                }
-            };
-            match kind {
-                invocation_cancel::Kind::Semantic => session.cancel(),
-                invocation_cancel::Kind::Transport => {
-                    let details = cancel
-                        .details
-                        .unwrap_or_else(|| "invocation request transport failed".to_string());
-                    fail_session_transport(session, frames, details).await;
-                }
-                invocation_cancel::Kind::Protocol => {
-                    let details = cancel
-                        .details
-                        .unwrap_or_else(|| "invalid invocation request frame".to_string());
-                    session.fail(details.clone());
-                    send_protocol_failure(
-                        frames,
-                        invocation_protocol_failure::Kind::Protocol,
-                        details,
-                    )
-                    .await;
-                }
-            }
+    match session.route_request(request).await {
+        Ok(true) => true,
+        Ok(false) => {
+            let details = "unexpected message on invocation request stream".to_string();
+            session.terminate_for_failure(&details).await;
+            send_protocol_failure(responses, details).await;
             false
         }
-        frame => match session.route_stream_frame(frame).await {
-            Ok(true) => true,
-            Ok(false) => {
-                let details = "unexpected frame on invocation request stream".to_string();
-                session.fail(details.clone());
-                send_protocol_failure(frames, invocation_protocol_failure::Kind::Protocol, details)
-                    .await;
-                false
-            }
-            Err(details) => {
-                session.fail(details.clone());
-                send_protocol_failure(frames, invocation_protocol_failure::Kind::Protocol, details)
-                    .await;
-                false
-            }
-        },
+        Err(details) => {
+            session.terminate_for_failure(&details).await;
+            send_protocol_failure(responses, details).await;
+            false
+        }
     }
 }
 
@@ -657,86 +912,5 @@ mod freshness_tests {
             ),
             InvocationFreshnessDisposition::KnownFresh
         );
-    }
-}
-
-#[cfg(test)]
-mod protocol_tests {
-    use super::route_live_request_frame;
-    use crate::durable_host::stream_session::LiveValueSession;
-    use golem_api_grpc::invocation_cancel_frame;
-    use golem_api_grpc::proto::golem::worker::invocation_session_finished::Outcome;
-    use golem_api_grpc::proto::golem::worker::{
-        InvocationSessionFinished, invocation_cancel, invocation_frame, invocation_protocol_failure,
-    };
-    use test_r::test;
-    use tokio::sync::mpsc;
-
-    #[test]
-    async fn semantic_cancellation_does_not_report_transport_failure() {
-        let (frames, mut frame_rx) = mpsc::channel(4);
-        let session = LiveValueSession::new(2, frames.clone());
-
-        assert!(
-            !route_live_request_frame(
-                &session,
-                &frames,
-                invocation_cancel_frame(invocation_cancel::Kind::Semantic, None),
-            )
-            .await
-        );
-        assert!(frame_rx.try_recv().is_err());
-    }
-
-    #[test]
-    async fn transport_cancellation_reports_typed_failure() {
-        let (frames, mut frame_rx) = mpsc::channel(4);
-        let session = LiveValueSession::new(2, frames.clone());
-
-        assert!(
-            !route_live_request_frame(
-                &session,
-                &frames,
-                invocation_cancel_frame(
-                    invocation_cancel::Kind::Transport,
-                    Some("connection lost".to_string()),
-                ),
-            )
-            .await
-        );
-        let frame = frame_rx.recv().await.unwrap().frame.unwrap();
-        assert!(matches!(
-            frame,
-            invocation_frame::Frame::Finished(InvocationSessionFinished {
-                outcome: Some(Outcome::ProtocolFailure(failure)),
-            }) if failure.kind == invocation_protocol_failure::Kind::Transport as i32
-                && failure.details == "connection lost"
-        ));
-    }
-
-    #[test]
-    async fn protocol_cancellation_reports_typed_failure() {
-        let (frames, mut frame_rx) = mpsc::channel(4);
-        let session = LiveValueSession::new(2, frames.clone());
-
-        assert!(
-            !route_live_request_frame(
-                &session,
-                &frames,
-                invocation_cancel_frame(
-                    invocation_cancel::Kind::Protocol,
-                    Some("duplicate start".to_string()),
-                ),
-            )
-            .await
-        );
-        let frame = frame_rx.recv().await.unwrap().frame.unwrap();
-        assert!(matches!(
-            frame,
-            invocation_frame::Frame::Finished(InvocationSessionFinished {
-                outcome: Some(Outcome::ProtocolFailure(failure)),
-            }) if failure.kind == invocation_protocol_failure::Kind::Protocol as i32
-                && failure.details == "duplicate start"
-        ));
     }
 }

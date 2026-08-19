@@ -24,6 +24,7 @@ use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
 use crate::schema::schema_type::{NamedFieldType, SchemaType, SecretSpec, VariantCaseType};
 use crate::schema::schema_value::{SchemaValue, SecretValuePayload, VariantValuePayload};
+use crate::schema::stream::SchemaValueStream;
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;
@@ -728,6 +729,61 @@ fn stream_classification_ignores_definitions_unreachable_from_the_method() {
         &graph,
         &SchemaType::ref_to(TypeId::new("UnrelatedStream"))
     ));
+    assert!(!method.uses_streams(&graph));
+}
+
+#[test]
+fn method_stream_classification_follows_input_and_output_refs() {
+    let graph = registry(vec![
+        proj_def(
+            "Input",
+            SchemaType::record(vec![proj_field(
+                "items",
+                SchemaType::stream(Some(SchemaType::string())),
+            )]),
+        ),
+        proj_def(
+            "Output",
+            SchemaType::option(SchemaType::stream(Some(SchemaType::u8()))),
+        ),
+    ]);
+    let input_method = method(
+        "input",
+        vec![NamedField::user_supplied(
+            "input",
+            SchemaType::ref_to(TypeId::new("Input")),
+        )],
+        OutputSchema::Unit,
+    );
+    let output_method = method(
+        "output",
+        vec![],
+        OutputSchema::Single(Box::new(SchemaType::ref_to(TypeId::new("Output")))),
+    );
+
+    assert!(input_method.uses_streams(&graph));
+    assert!(output_method.uses_streams(&graph));
+}
+
+#[test]
+fn method_input_validation_accepts_a_live_stream_handle() {
+    let method = method(
+        "consume",
+        vec![NamedField::user_supplied(
+            "input",
+            SchemaType::stream(Some(SchemaType::u32())),
+        )],
+        OutputSchema::Unit,
+    );
+    let input = SchemaValue::Record {
+        fields: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+            (),
+        ))],
+    };
+
+    method
+        .validate_input(&SchemaGraph::empty(), &input)
+        .unwrap();
 }
 
 #[test]

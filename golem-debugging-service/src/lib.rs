@@ -33,7 +33,7 @@ use async_trait::async_trait;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::storage::blob::BlobStorage;
 pub use golem_worker_executor::RunDetails;
-use golem_worker_executor::durable_host::DurableWorkerCtx;
+use golem_worker_executor::durable_host::{CoreTypesHost, DurableWorkerCtx};
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
@@ -251,9 +251,13 @@ pub async fn create_debugging_service_services(
 
     // When it comes to fork, we need the original oplog service
     let worker_fork = Arc::new(DefaultWorkerFork::new(
-        Arc::new(RemoteInvocationRpc::new(
+        Arc::new(RemoteInvocationRpc::new_with_stream_capacity(
             worker_proxy.clone(),
             shard_service.clone(),
+            golem_config
+                .limits
+                .live_stream_event_broadcast_capacity
+                .get(),
         )),
         active_workers.clone(),
         engine.clone(),
@@ -293,9 +297,13 @@ pub async fn create_debugging_service_services(
     ));
 
     let rpc = Arc::new(DirectWorkerInvocationRpc::new(
-        Arc::new(RemoteInvocationRpc::new(
+        Arc::new(RemoteInvocationRpc::new_with_stream_capacity(
             worker_proxy.clone(),
             shard_service.clone(),
+            golem_config
+                .limits
+                .live_stream_event_broadcast_capacity
+                .get(),
         )),
         direct_invocation_auth_service,
         active_workers.clone(),
@@ -487,7 +495,7 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
         _,
         HasSelf<DurableWorkerCtx<DebugContext>>,
     >(&mut linker, get_durable_ctx)?;
-    golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+    golem_schema::schema::wit::wire::add_to_linker::<_, CoreTypesHost<DebugContext>>(
         &mut linker,
         get_durable_ctx,
     )?;

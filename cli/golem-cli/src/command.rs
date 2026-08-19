@@ -1262,13 +1262,25 @@ pub mod worker {
     };
     use crate::model::worker::{AgentListMode, AgentUpdateMode};
     use chrono::{DateTime, Utc};
-    use clap::Subcommand;
+    use clap::{Subcommand, ValueEnum};
     use golem_client::model::ScanCursor;
     use golem_common::model::IdempotencyKey;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::{ComponentName, ComponentRevision};
     use golem_common::model::worker::AgentConfigEntryDto;
     use uuid::Uuid;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+    pub enum InvocationStdinFormat {
+        Value,
+        Raw,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+    pub enum InvocationStdoutFormat {
+        Value,
+        Raw,
+    }
 
     #[derive(Debug, Subcommand)]
     pub enum AgentSubcommand {
@@ -1324,6 +1336,15 @@ pub mod worker {
             no_stream: bool,
             #[command(flatten)]
             stream_args: StreamArgs,
+            /// Framing used when `-` binds stdin to a direct stream parameter.
+            /// `value` parses one source-language value per line; `raw` accepts
+            /// only stream<binary> or stream<u8>.
+            #[arg(long, value_enum, default_value = "value")]
+            stdin_format: InvocationStdinFormat,
+            /// Rendering used for invocation result streams. `raw` writes only
+            /// bytes and requires one direct stream<binary> or stream<u8> result.
+            #[arg(long, value_enum, default_value = "value")]
+            stdout_format: InvocationStdoutFormat,
             #[command(flatten)]
             post_deploy_args: Option<PostDeployArgs>,
             /// Schedule the invocation at a specific time (ISO 8601 / RFC 3339 format, e.g. 2026-03-15T10:30:00Z)

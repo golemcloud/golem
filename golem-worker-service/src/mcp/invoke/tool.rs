@@ -697,6 +697,21 @@ mod tests {
 
     #[test]
     async fn invoke_tool_auto_generates_phantom_for_ephemeral_agents() {
+        let constructor = AgentConstructorSchema {
+            name: None,
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![]),
+        };
+        let method = AgentMethodSchema {
+            name: "run".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        };
         let harness = InvocationHarness::new_with_agent_mode(
             AgentInvocationOutput {
                 result: golem_common::model::AgentInvocationResult::AgentInitialization,
@@ -709,6 +724,8 @@ mod tests {
                 agent_fingerprint: None,
             },
             AgentMode::Ephemeral,
+            constructor.clone(),
+            vec![method.clone()],
         );
         let tool = AgentMcpTool {
             tool: Tool {
@@ -726,21 +743,8 @@ mod tests {
             account_id: harness.account_id,
             schema_graph: Arc::new(SchemaGraph::empty()),
             account_email: golem_common::model::account::AccountEmail::new("mcp@golem"),
-            constructor: AgentConstructorSchema {
-                name: None,
-                description: String::new(),
-                prompt_hint: None,
-                input_schema: InputSchema::Parameters(vec![]),
-            },
-            method: AgentMethodSchema {
-                name: "run".to_string(),
-                description: String::new(),
-                prompt_hint: None,
-                input_schema: InputSchema::Parameters(vec![]),
-                output_schema: OutputSchema::Unit,
-                http_endpoint: vec![],
-                read_only: None,
-            },
+            constructor,
+            method,
             component_id: harness.component_id,
             agent_type_name: AgentTypeName("mcp-agent".to_string()),
             agent_mode: AgentMode::Ephemeral,
@@ -761,18 +765,43 @@ mod tests {
         // `method_id`. The invoke path must translate those advertised names
         // back and route each value to the correct side (different types make
         // a swap observable: constructor = string, method = u32).
-        let harness = InvocationHarness::new(AgentInvocationOutput {
-            result: golem_common::model::AgentInvocationResult::AgentMethod {
-                output: SchemaValue::Tuple { elements: vec![] },
+        let constructor = AgentConstructorSchema {
+            name: None,
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![NamedField::user_supplied(
+                "id",
+                SchemaType::string(),
+            )]),
+        };
+        let method = AgentMethodSchema {
+            name: "run".to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![NamedField::user_supplied(
+                "id",
+                SchemaType::u32(),
+            )]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        };
+        let harness = InvocationHarness::new(
+            AgentInvocationOutput {
+                result: golem_common::model::AgentInvocationResult::AgentMethod {
+                    output: SchemaValue::Tuple { elements: vec![] },
+                },
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: None,
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
             },
-            consumed_fuel: None,
-            invocation_status: None,
-            component_revision: None,
-            agent_id: None,
-            idempotency_key: None,
-            oplog_index: None,
-            agent_fingerprint: None,
-        });
+            constructor.clone(),
+            vec![method.clone()],
+        );
         let tool = AgentMcpTool {
             tool: Tool {
                 name: Cow::Borrowed("mcp-agent-run"),
@@ -789,27 +818,8 @@ mod tests {
             account_id: harness.account_id,
             account_email: harness.account_email.clone(),
             schema_graph: Arc::new(SchemaGraph::empty()),
-            constructor: AgentConstructorSchema {
-                name: None,
-                description: String::new(),
-                prompt_hint: None,
-                input_schema: InputSchema::Parameters(vec![NamedField::user_supplied(
-                    "id",
-                    SchemaType::string(),
-                )]),
-            },
-            method: AgentMethodSchema {
-                name: "run".to_string(),
-                description: String::new(),
-                prompt_hint: None,
-                input_schema: InputSchema::Parameters(vec![NamedField::user_supplied(
-                    "id",
-                    SchemaType::u32(),
-                )]),
-                output_schema: OutputSchema::Unit,
-                http_endpoint: vec![],
-                read_only: None,
-            },
+            constructor,
+            method,
             component_id: harness.component_id,
             agent_type_name: AgentTypeName("mcp-agent".to_string()),
             agent_mode: AgentMode::Ephemeral,

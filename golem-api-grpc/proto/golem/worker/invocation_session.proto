@@ -33,91 +33,182 @@ message InvocationStart {
   InvocationFreshnessDisposition freshness_disposition = 13;
 }
 
+message PublicInvocationStart {
+  string application_name = 1;
+  string environment_name = 2;
+  string agent_type_name = 3;
+  golem.schema.SchemaValue constructor_parameters = 4;
+  optional golem.common.UUID phantom_id = 5;
+  repeated golem.worker.AgentConfigEntryDto config = 6;
+  string method_name = 7;
+  golem.schema.SchemaValue method_parameters = 8;
+  golem.worker.IdempotencyKey idempotency_key = 9;
+}
+
+message ResumeAttach {
+  golem.worker.IdempotencyKey idempotency_key = 1;
+}
+
 enum InvocationFreshnessDisposition {
   INVOCATION_FRESHNESS_DISPOSITION_MAY_EXIST = 0;
   INVOCATION_FRESHNESS_DISPOSITION_KNOWN_FRESH = 1;
 }
 
-message InvocationResult {
+message InputStreamItem {
+  uint64 stream_id = 1;
+  uint64 sequence = 2;
+  oneof payload {
+    golem.schema.SchemaValue value = 3;
+    bytes packed_u8 = 4;
+  }
+}
+
+message InputStreamEnd {
+  uint64 stream_id = 1;
+  uint64 offset = 2;
+}
+
+message OutputStreamItem {
+  uint64 stream_id = 1;
+  uint64 offset = 2;
+  golem.schema.SchemaValue value = 3;
+}
+
+message OutputStreamEnd {
+  uint64 stream_id = 1;
+  uint64 offset = 2;
+}
+
+message OutputStreamError {
+  uint64 stream_id = 1;
+  uint64 offset = 2;
+  string details = 3;
+}
+
+enum StreamCancelRole {
+  STREAM_CANCEL_ROLE_UNSPECIFIED = 0;
+  STREAM_CANCEL_ROLE_INPUT_PRODUCER = 1;
+  STREAM_CANCEL_ROLE_INPUT_CONSUMER = 2;
+  STREAM_CANCEL_ROLE_OUTPUT_PRODUCER = 3;
+  STREAM_CANCEL_ROLE_OUTPUT_CONSUMER = 4;
+}
+
+enum StreamCancelReason {
+  STREAM_CANCEL_REASON_UNSPECIFIED = 0;
+  STREAM_CANCEL_REASON_CANCELLED = 1;
+  STREAM_CANCEL_REASON_TRANSPORT = 2;
+  STREAM_CANCEL_REASON_PROTOCOL = 3;
+}
+
+message StreamCancel {
+  uint64 stream_id = 1;
+  uint64 offset = 2;
+  StreamCancelRole role = 3;
+  StreamCancelReason reason = 4;
+  optional string details = 5;
+}
+
+message InputStreamAck {
+  uint64 stream_id = 1;
+  uint64 sequence = 2;
+  uint64 logical_item_count = 3;
+}
+
+message InvocationAccepted {
+  golem.worker.AgentId agent_id = 1;
+  golem.worker.IdempotencyKey idempotency_key = 2;
+  optional uint64 component_revision = 3;
+}
+
+message InvocationSessionResult {
   oneof result {
     golem.schema.SchemaValue method_result = 1;
     golem.common.Empty no_result = 2;
   }
-  optional uint64 fuel_consumed = 3;
-  optional uint64 component_revision = 4;
-  optional golem.worker.InvocationStatus status = 5;
-  optional uint64 oplog_index = 6;
-  optional golem.common.UUID agent_fingerprint = 7;
-  optional golem.worker.AgentId agent_id = 8;
-  optional golem.worker.IdempotencyKey idempotency_key = 9;
+  optional uint64 component_revision = 3;
+  golem.worker.AgentId agent_id = 4;
+  golem.worker.IdempotencyKey idempotency_key = 5;
+  optional uint64 fuel_consumed = 6;
+  optional golem.worker.InvocationStatus status = 7;
+  optional uint64 oplog_index = 8;
+  optional golem.common.UUID agent_fingerprint = 9;
 }
 
-message StreamDemand {
-  uint64 stream_id = 1;
+enum InvocationRejectionReason {
+  INVOCATION_REJECTION_REASON_UNSPECIFIED = 0;
+  INVOCATION_REJECTION_REASON_VALIDATION = 1;
+  INVOCATION_REJECTION_REASON_UNAUTHORIZED = 2;
+  INVOCATION_REJECTION_REASON_NOT_FOUND = 3;
+  INVOCATION_REJECTION_REASON_RESUME_UNSUPPORTED = 4;
+  INVOCATION_REJECTION_REASON_PROTOCOL = 5;
+  INVOCATION_REJECTION_REASON_INTERNAL = 6;
 }
 
-message StreamItem {
-  uint64 stream_id = 1;
-  golem.schema.SchemaValue value = 2;
+message InvocationRejected {
+  InvocationRejectionReason reason = 1;
+  string error = 2;
+  golem.worker.IdempotencyKey idempotency_key = 3;
+  golem.worker.AgentId agent_id = 4;
+  optional uint64 component_revision = 5;
 }
 
-message StreamEnd {
-  uint64 stream_id = 1;
+message AttachmentRevoked {
+  string details = 1;
 }
 
-message StreamError {
-  uint64 stream_id = 1;
-  string details = 2;
+enum InvocationFailureKind {
+  INVOCATION_FAILURE_KIND_UNSPECIFIED = 0;
+  INVOCATION_FAILURE_KIND_EXECUTION = 1;
+  INVOCATION_FAILURE_KIND_PROTOCOL = 2;
+  INVOCATION_FAILURE_KIND_INTERNAL = 3;
+  INVOCATION_FAILURE_KIND_TRANSPORT = 4;
 }
 
-message StreamDetach {
-  uint64 stream_id = 1;
+message InvocationFailure {
+  InvocationFailureKind kind = 1;
+  string code = 2;
+  string message = 3;
+  optional golem.worker.v1.WorkerExecutionError worker_error = 4;
 }
 
-message InvocationProtocolFailure {
-  enum Kind {
-    PROTOCOL = 0;
-    DENIED = 1;
-    NOT_FOUND = 2;
-    REMOTE_INTERNAL = 3;
-    TRANSPORT = 4;
-  }
-
-  Kind kind = 1;
-  string details = 2;
-}
-
-message InvocationCancel {
-  enum Kind {
-    SEMANTIC = 0;
-    TRANSPORT = 1;
-    PROTOCOL = 2;
-  }
-
-  Kind kind = 1;
-  optional string details = 2;
-}
-
-message InvocationSessionFinished {
+message InvocationSessionCompletion {
   oneof outcome {
     golem.common.Empty success = 1;
-    golem.worker.v1.WorkerExecutionError failure = 2;
-    InvocationProtocolFailure protocol_failure = 3;
+    InvocationFailure failure = 2;
   }
 }
 
-message InvocationFrame {
-  reserved 2 to 4;
+message PublicInvocationRequest {
+  oneof request {
+    PublicInvocationStart start = 1;
+    ResumeAttach resume_attach = 2;
+    InputStreamItem input_item = 3;
+    InputStreamEnd input_end = 4;
+    StreamCancel stream_cancel = 5;
+  }
+}
 
-  oneof frame {
+message InvocationRequest {
+  oneof request {
     InvocationStart start = 1;
-    InvocationResult result = 5;
-    StreamDemand demand = 6;
-    StreamItem item = 7;
-    StreamEnd end = 8;
-    StreamError stream_error = 9;
-    StreamDetach detach = 10;
-    InvocationCancel cancel = 11;
-    InvocationSessionFinished finished = 12;
+    ResumeAttach resume_attach = 2;
+    InputStreamItem input_item = 3;
+    InputStreamEnd input_end = 4;
+    StreamCancel stream_cancel = 5;
+  }
+}
+
+message InvocationResponse {
+  oneof response {
+    InvocationAccepted accepted = 1;
+    InvocationRejected rejected = 2;
+    InvocationSessionResult result = 3;
+    OutputStreamItem output_item = 4;
+    OutputStreamEnd output_end = 5;
+    OutputStreamError output_error = 6;
+    InputStreamAck input_ack = 7;
+    StreamCancel stream_cancel = 8;
+    AttachmentRevoked attachment_revoked = 9;
+    InvocationSessionCompletion finished = 10;
   }
 }

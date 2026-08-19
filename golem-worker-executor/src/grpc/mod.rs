@@ -36,7 +36,7 @@ use crate::workerctx::WorkerCtx;
 use futures::Stream;
 use futures::StreamExt;
 use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::worker::{Cursor, InvocationFrame, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{Cursor, InvocationRequest, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
@@ -2921,7 +2921,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn invoke_agent_session(
         &self,
-        request: Request<tonic::Streaming<InvocationFrame>>,
+        request: Request<tonic::Streaming<InvocationRequest>>,
     ) -> ResponseResult<Self::InvokeAgentSessionStream> {
         invocation_session::invoke_agent_session(self, request).await
     }

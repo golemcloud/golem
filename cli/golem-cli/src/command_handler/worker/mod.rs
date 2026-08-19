@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod invocation_session;
 mod stream;
 mod stream_output;
 
 use crate::command::shared_args::{
     AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
 };
-use crate::command::worker::AgentSubcommand;
+use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
 use crate::command_handler::worker::stream::WorkerConnection;
 use crate::context::Context;
@@ -26,8 +27,8 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    LogColorize, LogIndent, log_action, log_error, log_error_action, log_failed_to, log_warn,
-    log_warn_action, logln,
+    LogColorize, LogIndent, LogOutput, Output as LogOutputTarget, log_action, log_error,
+    log_error_action, log_failed_to, log_warn, log_warn_action, logln,
 };
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
@@ -125,6 +126,8 @@ impl WorkerCommandHandler {
                     idempotency_key,
                     no_stream,
                     stream_args,
+                    stdin_format,
+                    stdout_format,
                     post_deploy_args,
                     schedule_at,
                 } => {
@@ -136,6 +139,8 @@ impl WorkerCommandHandler {
                         idempotency_key,
                         no_stream,
                         stream_args,
+                        stdin_format,
+                        stdout_format,
                         post_deploy_args,
                         schedule_at,
                     )
@@ -340,9 +345,13 @@ impl WorkerCommandHandler {
         idempotency_key: Option<IdempotencyKey>,
         no_stream: bool,
         stream_args: StreamArgs,
+        stdin_format: InvocationStdinFormat,
+        stdout_format: InvocationStdoutFormat,
         post_deploy_args: Option<PostDeployArgs>,
         schedule_at: Option<DateTime<Utc>>,
     ) -> anyhow::Result<()> {
+        let _raw_output_guard = (stdout_format == InvocationStdoutFormat::Raw)
+            .then(|| LogOutput::new(LogOutputTarget::None));
         self.ctx.silence_app_context_init().await;
 
         fn new_idempotency_key() -> IdempotencyKey {
@@ -483,6 +492,66 @@ impl WorkerCommandHandler {
             );
             AgentInvocationMode::Await
         };
+
+        let method_uses_streams = agent_type
+            .methods
+            .iter()
+            .find(|method| method.name == method_name)
+            .is_some_and(|method| method.uses_streams(&agent_type.schema));
+        if !method_uses_streams && stdin_format == InvocationStdinFormat::Raw {
+            bail!("--stdin-format raw requires a direct stream<binary> or stream<u8> parameter");
+        }
+        if !method_uses_streams && stdout_format == InvocationStdoutFormat::Raw {
+            bail!("--stdout-format raw requires a direct stream<binary> or stream<u8> result");
+        }
+
+        if trigger && method_uses_streams {
+            bail!("Streaming agent methods require an attached invocation session");
+        }
+
+        if method_uses_streams {
+            let mut connect_handle = if !no_stream && stdout_format == InvocationStdoutFormat::Value
+            {
+                let connection = WorkerConnection::new(
+                    self.ctx.worker_service_url().clone(),
+                    self.ctx.auth_token().await?,
+                    &component.id,
+                    stream_agent_id.to_string(),
+                    stream_args.into(),
+                    self.ctx.allow_insecure(),
+                    self.ctx.format(),
+                    Some(idempotency_key.clone()),
+                )
+                .await?;
+                Some(tokio::spawn(async move { connection.run_forever().await }))
+            } else {
+                None
+            };
+
+            let result = invocation_session::invoke(
+                self.ctx.clone(),
+                invocation_session::InvocationSessionArgs {
+                    application_name: agent_name_match.environment.application_name.to_string(),
+                    environment_name: agent_name_match.environment.environment_name.to_string(),
+                    agent_type,
+                    parsed_agent_id: stream_agent_id,
+                    method_name,
+                    arguments,
+                    config: Vec::new(),
+                    idempotency_key,
+                    stdin_format,
+                    stdout_format,
+                },
+            )
+            .await;
+
+            if let Some(mut handle) = connect_handle.take()
+                && timeout(Duration::from_secs(3), &mut handle).await.is_err()
+            {
+                handle.abort();
+            }
+            return result;
+        }
 
         let source_language = SourceLanguage::from(agent_type.source_language.as_str());
         let method_parameters = parse_method_parameters_with_error_table(
@@ -2923,7 +2992,7 @@ fn parse_method_parameters_with_error_table(
     Ok(SchemaValue::Record { fields: values })
 }
 
-fn parse_method_argument_schema_value(
+pub(super) fn parse_method_argument_schema_value(
     value: &str,
     graph: &SchemaGraph,
     schema: &SchemaType,

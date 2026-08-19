@@ -429,6 +429,7 @@ name = "golem-rust"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "ctor",
  "golem-rust-macro",
  "golem-schema",
@@ -463,6 +464,7 @@ dependencies = [
  "bigdecimal",
  "bit-vec",
  "blake3",
+ "bytes",
  "chrono",
  "combine",
  "golem-schema-derive",
@@ -494,6 +496,7 @@ dependencies = [
 name = "golem_it_agent_rpc_rust"
 version = "0.0.1"
 dependencies = [
+ "bytes",
  "golem-rust",
  "log",
  "serde",

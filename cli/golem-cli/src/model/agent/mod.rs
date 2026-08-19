@@ -13,5 +13,6 @@
 // limitations under the License.
 
 pub mod extraction;
+pub mod invocation_session;
 pub mod stream;
 pub mod view;

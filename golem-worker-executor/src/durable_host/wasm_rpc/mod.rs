@@ -399,6 +399,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             "golem::rpc::wasm-rpc::invoke-and-await",
             method_name,
             input,
+            true,
         )? {
             Ok(prepared) => prepared,
             Err(err) => return Ok(Err(err)),
@@ -507,16 +508,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             "golem::rpc::wasm-rpc::invoke",
             method_name,
             input,
+            false,
         )? {
             Ok(prepared) => prepared,
             Err(err) => return Ok(Err(err)),
         };
-
-        if prepared.is_streaming() {
-            return Ok(Err(RpcError::ProtocolError(
-                "live streams require invoke-and-await".to_string(),
-            )));
-        }
 
         let begun = CallHandle::<GolemRpcWasmRpcInvoke, NotCancellable>::begin(
             self,
@@ -607,15 +603,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             ));
         }
 
-        // Check the per-invocation RPC call limit before initiating the call.
-        self.state
-            .check_and_increment_rpc_call_count()
-            .map_err(wasmtime::Error::from)?;
-
-        // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
-        // which maps to RetryDecision::TryStop — suspending the worker.
-        self.record_monthly_rpc_call()?;
-
         // Resolve the method and lift the input before opening any durability. Failures here are
         // deterministic functions of the cached remote agent type and the guest payload, so they
         // are baked into the future's result and surfaced on the first `get` — without opening a
@@ -658,7 +645,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
             };
         let method = find_agent_method(&remote_agent_type, &method_name)?;
-        if method_uses_streams(&remote_agent_type, method, &input_value) {
+        let streaming = method_uses_streams(&remote_agent_type, method, &input_value);
+
+        // Account for the call only after deterministic schema and mode classification has
+        // succeeded. Rejected calls must not consume per-invocation or monthly RPC budget.
+        self.state
+            .check_and_increment_rpc_call_count()
+            .map_err(wasmtime::Error::from)?;
+        self.record_monthly_rpc_call()?;
+
+        if streaming {
             if !self.state.is_live() {
                 let oplog_index = self.state.oplog.current_oplog_index().await;
                 let idempotency_key = self.derive_idempotency_key(oplog_index);
@@ -963,6 +959,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let input_value = decode_value_with(input, self)
             .map_err(|err| anyhow::anyhow!("Invalid RPC input: {err}"))?;
         let method = find_agent_method(&remote_agent_type, &method_name)?;
+        method
+            .validate_input(&remote_agent_type.schema, &input_value)
+            .map_err(|error| anyhow::anyhow!("Invalid RPC input: {error}"))?;
         if method_uses_streams(&remote_agent_type, method, &input_value) {
             return Err(anyhow::anyhow!(
                 "live streams cannot be used in scheduled invocations"
@@ -1164,6 +1163,7 @@ fn prepare_rpc_invocation<Ctx: WorkerCtx>(
     host_function_name: &str,
     method_name: String,
     input: core_wire::SchemaValueTree,
+    streaming_allowed: bool,
 ) -> anyhow::Result<Result<PreparedRpcInvocation, RpcError>> {
     ctx.check_read_only_allows(host_function_name)
         .map_err(wasmtime::Error::from)?;
@@ -1190,11 +1190,6 @@ fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         )
     };
 
-    ctx.state
-        .check_and_increment_rpc_call_count()
-        .map_err(wasmtime::Error::from)?;
-    ctx.record_monthly_rpc_call()?;
-
     let input_value =
         match resolve_method_and_lift_input(&remote_agent_type, &method_name, input, ctx) {
             Ok(input_value) => input_value,
@@ -1207,11 +1202,24 @@ fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         .expect("method existence was checked while decoding RPC input");
     let streaming = method_uses_streams(&remote_agent_type, method, &input_value);
 
+    if streaming && !streaming_allowed {
+        return Ok(Err(RpcError::ProtocolError(
+            "live streams require invoke-and-await".to_string(),
+        )));
+    }
+
     if ephemeral_logical_agent_id.is_none() && logical_remote_agent_id == own_agent_id {
         return Err(anyhow::anyhow!(
             "RPC calls to the same agent are not supported"
         ));
     }
+
+    // Account for the call only after deterministic method, input, and stream
+    // classification has succeeded and before any remote or durable work.
+    ctx.state
+        .check_and_increment_rpc_call_count()
+        .map_err(wasmtime::Error::from)?;
+    ctx.record_monthly_rpc_call()?;
 
     Ok(Ok(PreparedRpcInvocation {
         logical_remote_agent_id,
@@ -2931,7 +2939,7 @@ fn find_agent_method<'a>(
     agent_type: &'a AgentTypeSchema,
     method_name: &str,
 ) -> anyhow::Result<&'a AgentMethodSchema> {
-    agent_type
+    let method = agent_type
         .methods
         .iter()
         .find(|m| m.name == method_name)
@@ -2940,7 +2948,8 @@ fn find_agent_method<'a>(
                 "Method '{method_name}' not found on agent type '{}'",
                 agent_type.type_name
             )
-        })
+        })?;
+    Ok(method)
 }
 
 /// Resolve and lift the guest-side input value tree into the schema-native
@@ -2975,7 +2984,7 @@ fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
         decode_value_with(input, resolver).map_err(|err| InternalRpcError::ProtocolError {
             details: format!("Invalid RPC input for method '{method_name}': {err}"),
         })?;
-    agent_type
+    let method = agent_type
         .methods
         .iter()
         .find(|m| m.name == method_name)
@@ -2984,6 +2993,11 @@ fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
                 "Method '{method_name}' not found on agent type '{}'",
                 agent_type.type_name
             ),
+        })?;
+    method
+        .validate_input(&agent_type.schema, &input_value)
+        .map_err(|error| InternalRpcError::ProtocolError {
+            details: format!("Invalid RPC input for method '{method_name}': {error}"),
         })?;
     Ok(input_value)
 }

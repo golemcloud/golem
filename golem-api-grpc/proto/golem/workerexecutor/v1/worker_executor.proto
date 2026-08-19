@@ -57,7 +57,7 @@ service WorkerExecutor {
   rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
   rpc DeactivatePlugin(DeactivatePluginRequest) returns (DeactivatePluginResponse);
 
-  rpc InvokeAgentSession(stream golem.worker.InvocationFrame) returns (stream golem.worker.InvocationFrame);
+  rpc InvokeAgentSession(stream golem.worker.InvocationRequest) returns (stream golem.worker.InvocationResponse);
 
   rpc ProcessOplogEntries(ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
 }

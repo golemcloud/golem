@@ -419,7 +419,7 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwait"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.CancellationToken"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeValue"));
-    assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.decodeValue"));
+    assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.decodeResultAsync"));
     assert!(!client_source.contains("Bridge.createAgent"));
     assert!(!client_source.contains("golem.bridge.runtime"));
 

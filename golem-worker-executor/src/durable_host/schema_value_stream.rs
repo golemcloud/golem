@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::stream_transport::{RelayProducer, RelayReceiver, relay_pair};
+use crate::durable_host::stream_transport::{
+    LiveInputProducer, LiveStreamEndpoint, output_stream_pair,
+};
 use crate::workerctx::WorkerCtx;
 use golem_schema::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
 use golem_schema::schema::wit::wire::{
@@ -131,7 +133,7 @@ impl<Ctx: WorkerCtx> SchemaValueStreamResolver for StoreValueResolver<'_, '_, Ct
     ) -> Result<Resource<SchemaValueStreamHandleRep>, Self::Error> {
         if let Some(tracker) = self.store.data().durable_ctx().live_stream_tracker() {
             stream
-                .with_host_endpoint::<RelayReceiver, _>(|receiver| receiver.attach(tracker))
+                .with_host_endpoint::<LiveStreamEndpoint, _>(|endpoint| endpoint.attach(tracker))
                 .map_err(WorkerExecutorError::runtime)?;
         }
         self.store
@@ -182,7 +184,7 @@ impl<Ctx: WorkerCtx> SchemaValueStreamResolver for DurableWorkerCtx<Ctx> {
     ) -> Result<Resource<SchemaValueStreamHandleRep>, Self::Error> {
         if let Some(tracker) = self.live_stream_tracker() {
             stream
-                .with_host_endpoint::<RelayReceiver, _>(|receiver| receiver.attach(tracker))
+                .with_host_endpoint::<LiveStreamEndpoint, _>(|endpoint| endpoint.attach(tracker))
                 .map_err(WorkerExecutorError::runtime)?;
         }
         self.table()
@@ -229,7 +231,9 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
         accessor
             .with(|mut access| -> wasmtime::Result<_> {
                 let tracker = access.get().live_stream_tracker();
-                let (consumer, stream) = relay_pair(tracker);
+                let capacity = access.get().live_stream_event_capacity();
+                let (consumer, stream) =
+                    output_stream_pair(tracker, capacity).map_err(wasmtime::Error::msg)?;
                 reader.pipe(&mut access, consumer)?;
                 access
                     .get()
@@ -252,10 +256,10 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                     .delete(value)
                     .map_err(|error| wasmtime::Error::msg(error.to_string()))
                     .map(SchemaValueStreamHandleRep::into_stream)?;
-                let receiver = stream
-                    .take_host_endpoint::<RelayReceiver>()
+                let endpoint = stream
+                    .take_host_endpoint::<LiveStreamEndpoint>()
                     .map_err(wasmtime::Error::msg)?;
-                StreamReader::new(&mut access, RelayProducer::new(receiver))
+                StreamReader::new(&mut access, LiveInputProducer::new(endpoint))
             })
             .map_err(|error| anyhow::anyhow!(error.to_string()))
     }

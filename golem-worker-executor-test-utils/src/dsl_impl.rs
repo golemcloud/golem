@@ -17,10 +17,11 @@ use crate::component_writer::CachedAnalysis;
 use anyhow::anyhow;
 use applying::Apply;
 use bytes::Bytes;
-use golem_api_grpc::InvocationResponseState;
-use golem_api_grpc::proto::golem::worker::invocation_session_finished::Outcome;
+use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+use golem_api_grpc::proto::golem::worker::invocation_session_completion::Outcome;
 use golem_api_grpc::proto::golem::worker::{
-    InvocationFrame, InvocationResult, InvocationStart, LogEvent, UpdateMode, invocation_frame,
+    InvocationRequest, InvocationSessionResult, InvocationStart, LogEvent, UpdateMode,
+    invocation_request, invocation_response,
 };
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -94,12 +95,17 @@ impl TestWorkerExecutor {
     pub async fn invoke_agent_session(
         &self,
         start: InvocationStart,
-    ) -> anyhow::Result<InvocationResult> {
+    ) -> anyhow::Result<InvocationSessionResult> {
         let (requests, receiver) = mpsc::channel(1);
+        let request = InvocationRequest {
+            request: Some(invocation_request::Request::Start(start)),
+        };
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&request)
+            .map_err(anyhow::Error::msg)?;
         requests
-            .send(InvocationFrame {
-                frame: Some(invocation_frame::Frame::Start(start)),
-            })
+            .send(request)
             .await
             .map_err(|_| anyhow!("invocation session request ended before start"))?;
         let mut responses = self
@@ -108,50 +114,58 @@ impl TestWorkerExecutor {
             .invoke_agent_session(ReceiverStream::new(receiver))
             .await?
             .into_inner();
-        let mut state = InvocationResponseState::default();
         let mut result = None;
+        let mut terminal = None;
 
-        while let Some(frame) = responses.message().await? {
-            state.validate(&frame).map_err(anyhow::Error::msg)?;
-            match frame.frame {
-                Some(invocation_frame::Frame::Result(invocation_result)) => {
+        while let Some(response) = responses.message().await? {
+            state
+                .validate_response(&response)
+                .map_err(anyhow::Error::msg)?;
+            match response.response {
+                Some(invocation_response::Response::Accepted(_)) => {}
+                Some(invocation_response::Response::Rejected(rejected)) => {
+                    terminal = Some(Err(anyhow!(
+                        "Agent invocation rejected: {}",
+                        rejected.error
+                    )));
+                }
+                Some(invocation_response::Response::Result(invocation_result)) => {
                     result = Some(invocation_result);
                 }
-                Some(invocation_frame::Frame::Finished(finished)) => {
-                    return match finished.outcome {
-                        Some(Outcome::Success(_)) => {
-                            result.ok_or_else(|| anyhow!("invocation completed without a result"))
-                        }
+                Some(invocation_response::Response::Finished(finished)) => {
+                    terminal = Some(match finished.outcome {
+                        Some(Outcome::Success(_)) => result
+                            .take()
+                            .ok_or_else(|| anyhow!("invocation completed without a result")),
                         Some(Outcome::Failure(failure)) => {
                             Err(anyhow!("Agent invocation failed: {failure:?}"))
                         }
-                        Some(Outcome::ProtocolFailure(failure)) => {
-                            Err(anyhow!("Invocation protocol failed: {}", failure.details))
-                        }
                         None => Err(anyhow!("invocation completion has no outcome")),
-                    };
+                    });
                 }
                 Some(
-                    invocation_frame::Frame::Demand(_)
-                    | invocation_frame::Frame::Item(_)
-                    | invocation_frame::Frame::End(_)
-                    | invocation_frame::Frame::StreamError(_)
-                    | invocation_frame::Frame::Detach(_),
+                    invocation_response::Response::OutputItem(_)
+                    | invocation_response::Response::OutputEnd(_)
+                    | invocation_response::Response::OutputError(_)
+                    | invocation_response::Response::InputAck(_)
+                    | invocation_response::Response::StreamCancel(_),
                 ) => {
                     return Err(anyhow!(
                         "non-streaming test invocation received a stream frame"
                     ));
                 }
-                Some(invocation_frame::Frame::Start(_) | invocation_frame::Frame::Cancel(_)) => {
-                    unreachable!("response validation rejects request frames")
+                Some(invocation_response::Response::AttachmentRevoked(_)) => {
+                    unreachable!("response validation rejects attachment revocation")
                 }
                 None => unreachable!("response validation rejects empty frames"),
             }
         }
 
-        Err(anyhow!(
-            "invocation session response ended before completion"
-        ))
+        terminal.unwrap_or_else(|| {
+            Err(anyhow!(
+                "invocation session response ended before completion"
+            ))
+        })
     }
 }
 
@@ -581,14 +595,12 @@ impl TestDsl for TestWorkerExecutor {
 
         let value = match result.result {
             Some(
-                golem_api_grpc::proto::golem::worker::invocation_result::Result::MethodResult(
-                    proto_value,
-                ),
+                golem_api_grpc::proto::golem::worker::invocation_session_result::Result::MethodResult(proto_value),
             ) => Some(
                 SchemaValue::try_from(proto_value)
                     .map_err(|err| anyhow!("SchemaValue conversion error: {err}"))?,
             ),
-            Some(golem_api_grpc::proto::golem::worker::invocation_result::Result::NoResult(_))
+            Some(golem_api_grpc::proto::golem::worker::invocation_session_result::Result::NoResult(_))
             | None => None,
         };
         Ok(AgentResult::new(value))

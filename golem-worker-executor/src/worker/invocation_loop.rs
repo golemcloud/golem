@@ -24,8 +24,9 @@ use crate::worker::invocation::{
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
-    FinalWorkerState, PendingWorkerInterrupt, QueuedWorkerInvocation, RetryDecision, RunningWorker,
-    Worker, WorkerCommand, WorkerInterruptState, WorkerTrace,
+    FinalWorkerState, PendingLiveInvocationDisposition, PendingWorkerInterrupt,
+    QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
+    WorkerInterruptState, WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use anyhow::anyhow;
@@ -364,7 +365,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
         self.parent
-            .stop_internal(true, None, FinalWorkerState::Unloaded { startup_failure })
+            .stop_internal(
+                true,
+                None,
+                FinalWorkerState::Unloaded { startup_failure },
+                PendingLiveInvocationDisposition::Fail,
+            )
             .await;
     }
 
@@ -438,6 +444,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             FinalWorkerState::Unloaded {
                                 startup_failure: Some(err),
                             },
+                            PendingLiveInvocationDisposition::Fail,
                         )
                         .await;
                     CreateInstanceResult::Failed
@@ -489,6 +496,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             FinalWorkerState::Unloaded {
                                 startup_failure: Some(err),
                             },
+                            PendingLiveInvocationDisposition::Fail,
                         )
                         .await;
                     Some(RetryDecision::None) // early return, we can't retry this
@@ -979,6 +987,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                             FinalWorkerState::Unloaded {
                                 startup_failure: Some(err),
                             },
+                            PendingLiveInvocationDisposition::Fail,
                         )
                         .await;
                     CommandOutcome::BreakOuterLoop

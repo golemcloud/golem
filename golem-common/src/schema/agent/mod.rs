@@ -375,6 +375,29 @@ pub struct AgentMethodSchema {
     pub read_only: Option<ReadOnlyConfig>,
 }
 
+impl AgentMethodSchema {
+    /// Validates the caller-supplied parameter record against this method's
+    /// input schema and the owning agent's graph.
+    pub fn validate_input(&self, graph: &SchemaGraph, input: &SchemaValue) -> Result<(), String> {
+        json_input_schema_value_to_typed_schema_value(input.clone(), graph, &self.input_schema)
+            .map(|_| ())
+    }
+
+    /// Returns whether a caller-supplied input or the output of this method can
+    /// contain a stream, following references through the owning agent's graph.
+    pub fn uses_streams(&self, graph: &SchemaGraph) -> bool {
+        self.input_schema
+            .fields()
+            .iter()
+            .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+            .any(|field| contains_stream_in_graph(graph, &field.schema))
+            || self
+                .output_schema
+                .schema()
+                .is_some_and(|output| contains_stream_in_graph(graph, output))
+    }
+}
+
 /// Dependent agent type, schema-layer form.
 ///
 /// Owns its own [`SchemaGraph`] — a dependent agent is independently

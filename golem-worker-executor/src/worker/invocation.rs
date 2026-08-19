@@ -29,13 +29,13 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
+#[cfg(test)]
+use golem_common::schema::agent::InputSchema;
 use golem_common::schema::agent::wit::decode_agent_error_rejecting_quota_with;
-use golem_common::schema::agent::{
-    AgentMethodSchema, AgentTypeSchema, FieldSource, InputSchema, contains_stream_in_graph,
-};
+use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
-use golem_common::schema::validation::value::{validate_record_fields, validate_value};
+use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{decode_value_with, encode_value_with, encode_value_with_streams};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -183,7 +183,8 @@ pub async fn invoke_live_streaming_rpc<Ctx: WorkerCtx>(
         publish_live_streaming_response(&response, Err(error.clone()));
         return Err(error);
     };
-    let tracker = Arc::new(LiveStreamTracker::new(cancellation));
+    let stream_capacity = store.data().durable_ctx().live_stream_event_capacity();
+    let tracker = Arc::new(LiveStreamTracker::new(cancellation, stream_capacity));
     let mut tracker_installed = false;
     let mut unpersisted_execution_active = false;
     let mut read_only_active = false;
@@ -758,14 +759,20 @@ fn decode_invoke_output<Ctx: WorkerCtx>(
                         "Failed to decode agent method output: {e}"
                     ))
                 })?;
-            if contains_stream(&output) {
-                Err(WorkerExecutorError::runtime(
-                    "Agent method output contains a live stream at a materializing invocation boundary",
-                ))
-            } else {
-                Ok(output)
-            }
+            reject_stream_at_materializing_boundary(output)
         }
+    }
+}
+
+fn reject_stream_at_materializing_boundary(
+    output: SchemaValue,
+) -> Result<SchemaValue, WorkerExecutorError> {
+    if contains_stream(&output) {
+        Err(WorkerExecutorError::runtime(
+            "Agent method output contains a live stream at a materializing invocation boundary",
+        ))
+    } else {
+        Ok(output)
     }
 }
 
@@ -1219,12 +1226,7 @@ pub fn lower_invocation(
                 })?;
 
             let read_only_method = method.read_only.is_some().then(|| method_name.clone());
-            validate_schema_input_against_method_schema(
-                &input,
-                agent_type,
-                &method.input_schema,
-                &method_name,
-            )?;
+            validate_method_invocation(agent_type, method, &input, &method_name)?;
 
             let expected_output = Box::new(ExpectedInvokeOutput {
                 graph: agent_type.schema.clone(),
@@ -1301,7 +1303,7 @@ pub fn lower_invocation(
     }
 }
 
-pub fn agent_method_uses_streams(
+pub fn validate_agent_method_invocation(
     component_metadata: &ComponentMetadata,
     agent_id: Option<&ParsedAgentId>,
     method_name: &str,
@@ -1319,7 +1321,7 @@ pub fn agent_method_uses_streams(
             ))
         })?;
 
-    Ok(method_uses_streams(agent_type, method, input))
+    validate_method_invocation(agent_type, method, input, method_name)
 }
 
 pub fn method_uses_streams(
@@ -1327,64 +1329,23 @@ pub fn method_uses_streams(
     method: &AgentMethodSchema,
     input: &SchemaValue,
 ) -> bool {
-    contains_stream(input)
-        || method
-            .input_schema
-            .fields()
-            .iter()
-            .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-            .any(|field| contains_stream_in_graph(&agent_type.schema, &field.schema))
-        || method
-            .output_schema
-            .schema()
-            .is_some_and(|output| contains_stream_in_graph(&agent_type.schema, output))
+    contains_stream(input) || method.uses_streams(&agent_type.schema)
 }
 
-fn validate_schema_input_against_method_schema(
-    input: &SchemaValue,
+pub fn validate_method_invocation(
     agent_type: &AgentTypeSchema,
-    input_schema: &InputSchema,
+    method: &AgentMethodSchema,
+    input: &SchemaValue,
     method_name: &str,
-) -> Result<(), WorkerExecutorError> {
-    let SchemaValue::Record { fields } = input else {
-        return Err(WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}': expected input parameter record"
-        )));
-    };
-
-    // Auto-injected fields (e.g. the principal) are supplied by the host to the
-    // guest export separately from the caller-provided input record, so they
-    // are excluded from both the parameter count and the value validation here.
-    let user_fields: Vec<_> = input_schema
-        .fields()
-        .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-        .collect();
-    if fields.len() != user_fields.len() {
-        return Err(WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}': expected {} parameters, got {}",
-            user_fields.len(),
-            fields.len()
-        )));
-    }
-
-    validate_record_fields(
-        &agent_type.schema,
-        user_fields
-            .iter()
-            .map(|field| (field.name.as_str(), &field.schema)),
-        fields,
-    )
-    .map_err(|errors| {
-        WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}': invalid input parameter value: {}",
-            errors
-                .into_iter()
-                .map(|error| error.to_string())
-                .collect::<Vec<_>>()
-                .join("; ")
-        ))
-    })
+) -> Result<bool, WorkerExecutorError> {
+    method
+        .validate_input(&agent_type.schema, input)
+        .map_err(|error| {
+            WorkerExecutorError::invalid_request(format!(
+                "Method '{method_name}': invalid input parameter value: {error}"
+            ))
+        })?;
+    Ok(method_uses_streams(agent_type, method, input))
 }
 
 /// Resolves the [`AgentTypeSchema`] an invocation targets: by name when an agent id
@@ -1564,7 +1525,7 @@ mod tests {
             panic!("non-record input must be rejected");
         };
         assert!(
-            err.to_string().contains("expected input parameter record"),
+            err.to_string().contains("expected record, found u32"),
             "unexpected error: {err}"
         );
     }
@@ -1582,7 +1543,7 @@ mod tests {
             panic!("arity mismatch must be rejected");
         };
         assert!(
-            err.to_string().contains("expected 2 parameters, got 1"),
+            err.to_string().contains("has 1 field(s), expected 2"),
             "unexpected error: {err}"
         );
     }
@@ -1626,6 +1587,66 @@ mod tests {
         if let Err(error) = result {
             panic!("unexpected error: {error}");
         }
+    }
+
+    #[test]
+    fn streaming_method_is_classified_while_stream_free_method_is_not() {
+        let streaming = metadata_with_method(AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(Vec::new()),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::stream(Some(
+                SchemaType::u32(),
+            )))),
+            http_endpoint: Vec::new(),
+            read_only: None,
+        });
+        let empty_input = SchemaValue::Record { fields: Vec::new() };
+
+        assert!(
+            validate_agent_method_invocation(
+                &streaming,
+                Some(&agent_id()),
+                METHOD_NAME,
+                &empty_input,
+            )
+            .unwrap()
+        );
+        assert!(
+            !validate_agent_method_invocation(
+                &metadata_with_method(AgentMethodSchema {
+                    name: METHOD_NAME.to_string(),
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::Parameters(Vec::new()),
+                    output_schema: OutputSchema::Unit,
+                    http_endpoint: Vec::new(),
+                    read_only: None,
+                }),
+                Some(&agent_id()),
+                METHOD_NAME,
+                &empty_input,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn materializing_boundary_rejects_a_real_stream_handle() {
+        let stream = golem_common::schema::stream::SchemaValueStream::from_host_endpoint(());
+        let output = SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(stream)],
+        };
+
+        let error = reject_stream_at_materializing_boundary(output)
+            .expect_err("a live stream reaching materialization is a contract violation");
+        assert!(
+            error
+                .to_string()
+                .contains("live stream at a materializing invocation boundary"),
+            "unexpected error: {error}"
+        );
     }
 
     // --- validate_invoke_output ---

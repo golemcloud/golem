@@ -28,7 +28,9 @@ use golem_api_grpc::proto::golem::worker::v1::{
     invoke_agent_response, launch_new_worker_response, process_oplog_entries_response,
     resume_worker_response, revert_worker_response, update_worker_response,
 };
-use golem_api_grpc::proto::golem::worker::{CompleteParameters, InvocationFrame, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{
+    CompleteParameters, InvocationRequest, InvocationResponse, UpdateMode,
+};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
 use golem_common::model::component::ComponentRevision;
@@ -57,16 +59,16 @@ use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::debug;
 
-pub type InvocationRequestStream = Pin<Box<dyn Stream<Item = InvocationFrame> + Send + 'static>>;
+pub type InvocationRequestStream = Pin<Box<dyn Stream<Item = InvocationRequest> + Send + 'static>>;
 pub type InvocationResponseStream =
-    Pin<Box<dyn Stream<Item = Result<InvocationFrame, Status>> + Send + 'static>>;
+    Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
 
 fn invoke_agent_session_once<'a>(
     client: &'a mut WorkerServiceClient<OtelGrpcService<Channel>>,
     request: Option<InvocationRequestStream>,
 ) -> Pin<
     Box<
-        dyn Future<Output = Result<tonic::Response<tonic::Streaming<InvocationFrame>>, Status>>
+        dyn Future<Output = Result<tonic::Response<tonic::Streaming<InvocationResponse>>, Status>>
             + Send
             + 'a,
     >,
@@ -835,7 +837,7 @@ mod tests {
     #[tonic::async_trait]
     impl WorkerService for FlakyWorkerService {
         type InvokeAgentSessionStream =
-            Pin<Box<dyn Stream<Item = Result<InvocationFrame, Status>> + Send + 'static>>;
+            Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
 
         unimplemented_rpc!(
             launch_new_worker,
@@ -864,7 +866,7 @@ mod tests {
 
         async fn invoke_agent_session(
             &self,
-            _request: Request<tonic::Streaming<InvocationFrame>>,
+            _request: Request<tonic::Streaming<InvocationRequest>>,
         ) -> Result<Response<Self::InvokeAgentSessionStream>, Status> {
             Err(Status::unimplemented("invoke_agent_session"))
         }
