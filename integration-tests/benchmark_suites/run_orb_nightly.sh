@@ -31,6 +31,7 @@ artifact_dir="$(realpath "$artifact_dir")"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 results="$artifact_dir/orb-benchmark-results-${timestamp}-${source_commit:0:12}.json"
 log="$artifact_dir/orb-benchmark-${timestamp}-${source_commit:0:12}.log"
+analysis="$artifact_dir/orb-benchmark-analysis-${timestamp}-${source_commit:0:12}.json"
 
 restore_generated_files() {
     git restore -- "${generated_files[@]}"
@@ -46,6 +47,7 @@ trap cleanup EXIT
 
 if [[ -n "${GOLEM_BENCHMARK_RESULTS_INPUT:-}" ]]; then
     results="$(realpath "$GOLEM_BENCHMARK_RESULTS_INPUT")"
+    analysis="$artifact_dir/orb-benchmark-analysis-retry-${source_commit:0:12}.json"
     echo "Using existing benchmark artifact $results"
 else
     amp orb services ensure
@@ -78,6 +80,7 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
     git status --short >&2
     exit 1
 fi
+run_timestamp="$(jq -er '.runs | select(length == 1) | .[0].timestamp' "$results")"
 
 if [[ -n "${BENCHMARK_RESULTS_TOKEN:-}" ]]; then
     authorization="$(printf 'x-access-token:%s' "$BENCHMARK_RESULTS_TOKEN" | base64 -w0)"
@@ -117,8 +120,16 @@ for attempt in 1 2 3; do
             echo "Published commit $published_commit is not on remote master" >&2
             exit 1
         fi
+        node "$publish_root/scripts/analyze-regressions.mjs" \
+            "$publish_root/results/results.json" \
+            --runner "$runner_id" \
+            --suite CI \
+            --timestamp "$run_timestamp" \
+            --output "$analysis"
+        jq -e '.status != "run-not-found" and .status != "no-runs"' "$analysis" >/dev/null
         echo "Published benchmark results at $published_commit"
         echo "Results: $results"
+        echo "Analysis: $analysis"
         [[ -f "$log" ]] && echo "Log: $log"
         exit 0
     fi
