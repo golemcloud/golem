@@ -14,8 +14,8 @@
 
 use crate::model::{ReadFileResult, TrapType};
 use crate::services::agent_filesystem::AgentFilesystem;
+use crate::services::agent_resource_billing::AgentResourceBilling;
 use crate::services::golem_config::SnapshotPolicy;
-use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
 use crate::services::{HasOplog, HasShardService, HasWorker};
 use crate::worker::invocation::{
@@ -51,6 +51,7 @@ use golem_common::model::agent::structural_format::format_structural_typed;
 use golem_common::related_span;
 use golem_common::tracing::TraceOrigin;
 use std::collections::VecDeque;
+use std::future::Future;
 use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -93,10 +94,11 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub oom_retry_count: u32,
     /// Concurrent-agent permit owned by this invocation loop task. Released
     /// (set to `None`) when the agent goes idle, re-acquired when it wakes up.
-    /// Only actively running agents hold a permit. Dropped automatically when
-    /// the task is aborted (e.g. `RunningWorker::stop()`).
-    pub concurrent_agent_permit: Option<crate::services::active_workers::ConcurrentAgentPermit>,
-    pub concurrent_agent_permit_held: Arc<AtomicBool>,
+    /// Only actively running agents hold a permit. Normal stops close the command
+    /// channel and await cooperative loop exit; this field's drop is only a fallback
+    /// for task cancellation or panic.
+    pub(super) permit_state:
+        ConcurrentAgentPermitState<crate::services::active_workers::ConcurrentAgentPermit>,
     pub idle_since_millis: Arc<AtomicU64>,
     /// `ResumeReplay` is not represented in the internal queue, so we track it
     /// explicitly to avoid evicting a worker that is blocked waking up for it.
@@ -104,6 +106,12 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub start_attempt: Uuid,
     /// What this worker's phase spans link back to, and the fields they carry.
     pub worker_trace: WorkerTrace,
+}
+
+impl<Ctx: WorkerCtx> Drop for InvocationLoop<Ctx> {
+    fn drop(&mut self) {
+        self.permit_state.release();
+    }
 }
 
 /// Outcome of creating the worker instance for one iteration of the invocation loop.
@@ -157,9 +165,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             if let Err(error) = self.parent.shard_service().check_worker(&agent_id) {
                 debug!(%agent_id, "Worker generation not started because its shard is not assigned");
                 self.parent.complete_startup(self.start_attempt, Err(error));
+                self.release_concurrent_agent_permit();
                 self.stop_unloaded(None).await;
                 break;
             }
+            self.acquire_concurrent_agent_permit().await;
             let (instance, store, filesystem) = match self.create_instance().await {
                 CreateInstanceResult::Created {
                     instance,
@@ -167,6 +177,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     filesystem,
                 } => (instance, store, *filesystem),
                 CreateInstanceResult::Interrupted(kind) => {
+                    self.release_concurrent_agent_permit();
                     let pending_interrupt = take_pending_interrupt(&self.interrupt_signal).await;
                     let kind = pending_interrupt
                         .map(|interrupt| interrupt.kind)
@@ -213,9 +224,32 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
                 CreateInstanceResult::Failed => {
                     // early return, can't retry a failed instance creation
+                    self.release_concurrent_agent_permit();
                     break;
                 }
             };
+            let resource_billing = store.lock().await.data().durable_ctx().resource_billing();
+            if let Err(error) = resource_billing.open(&filesystem.runtime()).await {
+                let error = WorkerExecutorError::runtime(format!(
+                    "Failed to open worker resource billing window: {error}"
+                ));
+                self.parent
+                    .complete_startup(self.start_attempt, Err(error.clone()));
+                self.release_concurrent_agent_permit();
+                filesystem.seal();
+                drop(store);
+                let cleanup_result = filesystem.close_and_delete().await;
+                match cleanup_result {
+                    Ok(()) => self.stop_unloaded(Some(error)).await,
+                    Err(cleanup) => {
+                        self.stop_cleanup_failed(WorkerExecutorError::runtime(format!(
+                            "{error}; {cleanup}"
+                        )))
+                        .await;
+                    }
+                }
+                break;
+            }
 
             let (mut final_decision, recovery_failure) = match self
                 .recover_instance_state(&instance, &store, &filesystem)
@@ -255,12 +289,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
 
             if final_decision.is_none() {
-                let linear_memory = store
-                    .lock()
-                    .await
-                    .data()
-                    .durable_ctx()
-                    .linear_memory_tracker();
+                let resource_billing = store.lock().await.data().durable_ctx().resource_billing();
                 let mut inner_loop = InnerInvocationLoop {
                     receiver: &mut self.receiver,
                     active: self.active.clone(),
@@ -271,11 +300,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     instance: &instance,
                     store: &store,
                     filesystem: &filesystem,
-                    linear_memory,
+                    resource_billing,
                     invocations_since_snapshot: 0,
                     idle_snapshot_task: None,
-                    concurrent_agent_permit: &mut self.concurrent_agent_permit,
-                    concurrent_agent_permit_held: self.concurrent_agent_permit_held.clone(),
+                    permit_state: &mut self.permit_state,
                     idle_since_millis: self.idle_since_millis.clone(),
                     resume_replay_pending: self.resume_replay_pending.clone(),
                     worker_trace: self.worker_trace.clone(),
@@ -294,6 +322,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
             }
 
+            let resource_close_error = self
+                .close_resource_window_and_release(&store, &filesystem)
+                .await
+                .err();
+            if let Some(error) = resource_close_error.as_ref() {
+                warn!(error = %error, "Resource-window close failed; reconstructing or unloading the worker");
+            }
+            final_decision =
+                decision_after_resource_close(final_decision, resource_close_error.is_some());
+
             self.suspend_worker(&store).await;
 
             if let Some(kind) = final_interrupt {
@@ -311,7 +349,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     );
                     self.stop_closed(
                         cleanup_error,
-                        recovery_failure.or_else(|| {
+                        recovery_failure.or(resource_close_error).or_else(|| {
                             cleanup_ephemeral_worker.then(super::inactive_ephemeral_agent_error)
                         }),
                     )
@@ -339,7 +377,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             %agent_id,
                             "Invocation queue loop notifying parent about being stopped"
                         );
-                        self.stop_closed(cleanup_error, None).await;
+                        self.stop_closed(cleanup_error, resource_close_error).await;
                         break;
                     }
                 }
@@ -352,6 +390,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     continue;
                 }
                 Some(RetryDecision::Delayed(delay)) => {
+                    debug_assert!(resource_close_error.is_none());
                     debug!(
                         %agent_id,
                         ?delay,
@@ -482,6 +521,49 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         self.interrupt_signal.lock().await.release_terminal_claim();
     }
 
+    async fn acquire_concurrent_agent_permit(&mut self) {
+        if self.permit_state.is_none() {
+            let agent_id = self.owned_agent_id.agent_id();
+            let permit = self
+                .parent
+                .registered_concurrent_account
+                .acquire(agent_id)
+                .instrument(agent_phase_span!(self, "acquire_concurrent_agent_permit"))
+                .await;
+            self.permit_state.install(permit);
+        }
+    }
+
+    fn release_concurrent_agent_permit(&mut self) {
+        self.permit_state.release();
+    }
+
+    async fn close_resource_window_and_release(
+        &mut self,
+        store: &Mutex<Store<Ctx>>,
+        filesystem: &AgentFilesystem,
+    ) -> Result<(), WorkerExecutorError> {
+        filesystem.seal();
+        let resource_billing = store.lock().await.data().durable_ctx().resource_billing();
+        if resource_billing.is_active() {
+            self.permit_state
+                .close_then_release(async {
+                    resource_billing
+                        .close(&filesystem.runtime())
+                        .await
+                        .map_err(|error| {
+                            WorkerExecutorError::runtime(format!(
+                                "Failed to close worker resource billing window: {error}"
+                            ))
+                        })
+                })
+                .await
+        } else {
+            self.release_concurrent_agent_permit();
+            Ok(())
+        }
+    }
+
     async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
         self.parent.complete_startup(
             self.start_attempt,
@@ -527,7 +609,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         runtime: &mut Option<(Instance, Mutex<Store<Ctx>>, AgentFilesystem)>,
     ) -> Option<WorkerExecutorError> {
         let (_instance, store, filesystem) = runtime.take()?;
-        filesystem.seal();
+        let resource_billing = store.lock().await.data().durable_ctx().resource_billing();
+        debug_assert!(!resource_billing.is_active());
         drop(store);
         filesystem.close_and_delete().await.err().map(|error| {
             error!(error = %error, "Failed to delete agent runtime filesystem");
@@ -696,14 +779,14 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
     filesystem: &'a AgentFilesystem,
-    linear_memory: LinearMemoryTracker,
+    resource_billing: AgentResourceBilling,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
     /// Mutable reference to the concurrent-agent permit held by the outer
     /// `InvocationLoop`. Set to `None` when entering idle (releasing the
     /// permit back to the semaphore pool) and re-acquired on wake.
-    concurrent_agent_permit: &'a mut Option<crate::services::active_workers::ConcurrentAgentPermit>,
-    concurrent_agent_permit_held: Arc<AtomicBool>,
+    permit_state:
+        &'a mut ConcurrentAgentPermitState<crate::services::active_workers::ConcurrentAgentPermit>,
     idle_since_millis: Arc<AtomicU64>,
     resume_replay_pending: Arc<AtomicBool>,
     deferred_wakeups: &'a mut VecDeque<WorkerCommand>,
@@ -737,14 +820,25 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         // Entering idle: release the concurrent-agent permit so other agents
         // from the same account can start without evicting this one.
         self.check_no_active_tail_work_on_idle().await;
-        self.release_concurrent_agent_permit();
+        if let Err(error) = self.release_concurrent_agent_permit().await {
+            error!(error = %error, "Failed to close worker resource billing window");
+            return InnerInvocationLoopResult {
+                retry_decision: Some(RetryDecision::Immediate),
+                final_interrupt: None,
+                cleanup_ephemeral_worker: false,
+            };
+        }
         mark_idle(&self.idle_since_millis);
         self.waiting_for_command.store(true, Ordering::Release);
         while let Some(cmd) = self.next_wakeup_or_initial().await {
             // Waking from idle: re-acquire the concurrent-agent permit before
             // processing any commands.
             self.waiting_for_command.store(false, Ordering::Release);
-            self.acquire_concurrent_agent_permit().await;
+            if let Err(error) = self.acquire_concurrent_agent_permit().await {
+                error!(error = %error, "Failed to open worker resource billing window");
+                final_decision = Some(RetryDecision::Immediate);
+                break;
+            }
             let outcome = match cmd {
                 WorkerCommand::WorkAvailable | WorkerCommand::InternalStatusChanged => {
                     loop {
@@ -807,7 +901,11 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
             // Returning to idle: release the concurrent-agent permit.
             self.check_no_active_tail_work_on_idle().await;
-            self.release_concurrent_agent_permit();
+            if let Err(error) = self.release_concurrent_agent_permit().await {
+                error!(error = %error, "Failed to close worker resource billing window");
+                final_decision = Some(RetryDecision::Immediate);
+                break;
+            }
             mark_idle(&self.idle_since_millis);
             self.waiting_for_command.store(true, Ordering::Release);
         }
@@ -860,22 +958,30 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
     /// Release the concurrent-agent permit back to the semaphore pool.
     /// Called when the agent enters idle state. No-op if already released.
-    fn release_concurrent_agent_permit(&mut self) {
-        if let Some(permit) = self.concurrent_agent_permit.take() {
-            self.linear_memory.pause(std::time::Instant::now());
+    async fn release_concurrent_agent_permit(&mut self) -> Result<(), WorkerExecutorError> {
+        if self.permit_state.is_some() {
             debug!(agent_id = %self.owned_agent_id.agent_id, "Releasing concurrent-agent permit (entering idle)");
-            drop(permit);
-            self.concurrent_agent_permit_held
-                .store(false, Ordering::Release);
+            let runtime = self.filesystem.runtime();
+            let result = self
+                .permit_state
+                .close_then_release(async {
+                    self.resource_billing
+                        .close(&runtime)
+                        .await
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+                })
+                .await;
+            return result;
         }
+        Ok(())
     }
 
     /// Re-acquire the concurrent-agent permit from the scheduler.
     /// Called when the agent wakes from idle to process a command.
     /// The scheduler ensures FIFO ordering within the account so that a worker
     /// that just finished goes to the back of the queue.
-    async fn acquire_concurrent_agent_permit(&mut self) {
-        if self.concurrent_agent_permit.is_none() {
+    async fn acquire_concurrent_agent_permit(&mut self) -> Result<(), WorkerExecutorError> {
+        if self.permit_state.is_none() {
             let span = agent_phase_span!(self, "acquire_concurrent_agent_permit");
             let agent_id = self.owned_agent_id.agent_id();
             let registered_concurrent_account = self.parent.registered_concurrent_account.clone();
@@ -885,11 +991,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             }
             .instrument(span)
             .await;
-            *self.concurrent_agent_permit = Some(permit);
-            self.concurrent_agent_permit_held
-                .store(true, Ordering::Release);
-            self.linear_memory.resume(std::time::Instant::now());
+            self.resource_billing
+                .open(&self.filesystem.runtime())
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            self.permit_state.install(permit);
         }
+        Ok(())
     }
 
     async fn next_wakeup(&mut self) -> Option<WorkerCommand> {
@@ -1167,6 +1275,66 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Performs an interrupt request
     async fn interrupt(&self, interrupt: PendingWorkerInterrupt) -> CommandOutcome {
         CommandOutcome::BreakInnerLoop(interrupt.retry_decision())
+    }
+}
+
+pub(super) struct ConcurrentAgentPermitState<T> {
+    permit: Option<T>,
+    held: Arc<AtomicBool>,
+}
+
+impl<T> ConcurrentAgentPermitState<T> {
+    pub(super) fn new(permit: Option<T>, held: Arc<AtomicBool>) -> Self {
+        held.store(permit.is_some(), Ordering::Release);
+        Self { permit, held }
+    }
+
+    fn is_some(&self) -> bool {
+        self.permit.is_some()
+    }
+
+    fn is_none(&self) -> bool {
+        self.permit.is_none()
+    }
+
+    fn install(&mut self, permit: T) {
+        debug_assert!(self.permit.is_none());
+        self.permit = Some(permit);
+        self.held.store(true, Ordering::Release);
+    }
+
+    fn release(&mut self) {
+        if let Some(permit) = self.permit.take() {
+            drop(permit);
+            self.held.store(false, Ordering::Release);
+        } else {
+            debug_assert!(!self.held.load(Ordering::Acquire));
+        }
+    }
+
+    async fn close_then_release<E>(
+        &mut self,
+        close: impl Future<Output = Result<(), E>>,
+    ) -> Result<(), E> {
+        let result = close.await;
+        self.release();
+        result
+    }
+}
+
+fn decision_after_resource_close(
+    decision: Option<RetryDecision>,
+    close_failed: bool,
+) -> Option<RetryDecision> {
+    if close_failed
+        && matches!(
+            decision,
+            Some(RetryDecision::Immediate | RetryDecision::Delayed(_))
+        )
+    {
+        Some(RetryDecision::Immediate)
+    } else {
+        decision
     }
 }
 
@@ -2006,7 +2174,8 @@ fn snapshot_action_at(
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandOutcome, PeriodicSnapshotAction, failed_agent_invocation_outcome,
+        CommandOutcome, ConcurrentAgentPermitState, PeriodicSnapshotAction,
+        decision_after_resource_close, failed_agent_invocation_outcome,
         periodic_snapshot_failure_outcome, snapshot_action_at, snapshot_baseline_timestamp,
         successful_agent_invocation_outcome,
     };
@@ -2017,8 +2186,96 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
     use test_r::test;
+
+    struct TestPermit {
+        held: Arc<AtomicBool>,
+        drops: Arc<AtomicUsize>,
+        held_while_dropping: Arc<AtomicBool>,
+    }
+
+    impl Drop for TestPermit {
+        fn drop(&mut self) {
+            self.held_while_dropping
+                .store(self.held.load(Ordering::Acquire), Ordering::Release);
+            self.drops.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    #[test]
+    fn permit_state_stays_conservative_through_release_and_reacquisition() {
+        let held = Arc::new(AtomicBool::new(false));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let held_while_dropping = Arc::new(AtomicBool::new(false));
+        let mut state = ConcurrentAgentPermitState::new(None, held.clone());
+
+        state.install(TestPermit {
+            held: held.clone(),
+            drops: drops.clone(),
+            held_while_dropping: held_while_dropping.clone(),
+        });
+        assert!(held.load(Ordering::Acquire));
+        assert!(state.is_some());
+
+        state.release();
+        assert!(state.is_none());
+        assert!(!held.load(Ordering::Acquire));
+        assert!(held_while_dropping.load(Ordering::Acquire));
+        assert_eq!(drops.load(Ordering::Acquire), 1);
+
+        state.install(TestPermit {
+            held: held.clone(),
+            drops: drops.clone(),
+            held_while_dropping,
+        });
+        assert!(held.load(Ordering::Acquire));
+        state.release();
+        assert_eq!(drops.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn close_failure_skips_delayed_sleep_and_reconstructs_immediately() {
+        assert_eq!(
+            decision_after_resource_close(
+                Some(RetryDecision::Delayed(Duration::from_secs(30))),
+                true,
+            ),
+            Some(RetryDecision::Immediate)
+        );
+        assert_eq!(
+            decision_after_resource_close(Some(RetryDecision::Immediate), true),
+            Some(RetryDecision::Immediate)
+        );
+        let timestamp = Timestamp::from(1_000);
+        assert_eq!(
+            decision_after_resource_close(Some(RetryDecision::TryStop(timestamp)), true),
+            Some(RetryDecision::TryStop(timestamp))
+        );
+    }
+
+    #[test]
+    async fn close_failure_still_releases_the_permit() {
+        let held = Arc::new(AtomicBool::new(false));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut state = ConcurrentAgentPermitState::new(None, held.clone());
+        state.install(TestPermit {
+            held: held.clone(),
+            drops: drops.clone(),
+            held_while_dropping: Arc::new(AtomicBool::new(false)),
+        });
+
+        let result = state
+            .close_then_release(async { Err::<(), _>("authoritative usage failed") })
+            .await;
+
+        assert_eq!(result, Err("authoritative usage failed"));
+        assert!(state.is_none());
+        assert!(!held.load(Ordering::Acquire));
+        assert_eq!(drops.load(Ordering::Acquire), 1);
+    }
 
     #[test]
     fn periodic_snapshot_uses_creation_time_until_the_first_snapshot() {

@@ -49,7 +49,7 @@ use crate::services::{
     HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
     HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
-use crate::worker::invocation_loop::InvocationLoop;
+use crate::worker::invocation_loop::{ConcurrentAgentPermitState, InvocationLoop};
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
@@ -4787,8 +4787,10 @@ impl RunningWorker {
             waiting_for_command,
             interrupt_signal,
             oom_retry_count,
-            concurrent_agent_permit: Some(concurrent_agent_permit),
-            concurrent_agent_permit_held,
+            permit_state: ConcurrentAgentPermitState::new(
+                Some(concurrent_agent_permit),
+                concurrent_agent_permit_held,
+            ),
             idle_since_millis,
             resume_replay_pending,
             start_attempt,

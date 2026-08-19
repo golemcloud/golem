@@ -267,9 +267,19 @@ run_privileged_test \
   services::agent_filesystem::tests::managed_xfs_owns_observes_and_cleans_project_filesystem
 
 run_privileged_test \
+  lib \
+  "${lib_test_binary}" \
+  services::agent_filesystem::tests::managed_xfs_allocated_bytes_flow_through_resource_billing
+
+run_privileged_test \
   integration \
   "${integration_test_binary}" \
   wasi::initial_file_p2_p3_parity_on_managed_xfs
+
+run_privileged_test \
+  integration \
+  "${integration_test_binary}" \
+  wasi::managed_xfs_resource_billing_survives_idle_and_replay
 
 run_privileged_test \
   integration \

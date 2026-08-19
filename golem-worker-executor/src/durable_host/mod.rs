@@ -51,6 +51,7 @@ use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
 use crate::services::active_workers::MemoryGrant;
+use crate::services::agent_resource_billing::AgentResourceBilling;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -342,6 +343,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
+    resource_billing: AgentResourceBilling,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
     agent_export_funcs: AgentExportFuncs,
@@ -379,9 +381,10 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
     fn drop(&mut self) {
-        self.linear_memory.stop(Instant::now());
+        self.filesystem_runtime.set_usage_observer(None);
+        self.resource_billing.abort();
         self.resource_limits
-            .unregister_memory_meter(&self.owned_agent_id, self.linear_memory.meter());
+            .unregister_resource_billing(&self.owned_agent_id, &self.resource_billing);
     }
 }
 
@@ -628,15 +631,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let retained_memory_grant = worker.linear_memory_grant();
         let canonical_startup_bytes = worker.startup_linear_memory_bytes();
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
+        let agent_mode = execution_status.read().unwrap().agent_mode();
         let linear_memory = LinearMemoryTracker::new(
             canonical_startup_bytes,
             admitted_startup_bytes,
-            execution_status.read().unwrap().agent_mode(),
+            agent_mode,
             true,
             resource_limits.clone(),
             retained_memory_grant,
             Instant::now(),
         );
+        let resource_billing = AgentResourceBilling::new(
+            agent_mode,
+            linear_memory.clone(),
+            resource_limits.clone(),
+            Instant::now(),
+        );
+        filesystem_runtime.set_usage_observer(Some(Arc::new(resource_billing.clone())));
         let weak_worker = Arc::downgrade(&worker);
         let memory_meter = linear_memory.meter().clone();
         linear_memory.set_limit_exceeded_callback(Arc::new(move || {
@@ -687,8 +698,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if state.is_live() {
             linear_memory.switch_to_live();
         }
-        resource_limits
-            .register_memory_meter(owned_agent_id.clone(), linear_memory.meter().clone());
+        resource_limits.register_resource_billing(owned_agent_id.clone(), resource_billing.clone());
 
         filesystem_runtime.set_retry_callback(Some({
             let worker = Arc::downgrade(&worker);
@@ -733,6 +743,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             execution_status,
             resource_limits,
             linear_memory,
+            resource_billing,
             agent_export_funcs: AgentExportFuncs::default(),
             _store_alive_guard: StoreAliveGuard::new(),
         })
@@ -1321,6 +1332,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn linear_memory_tracker(&self) -> LinearMemoryTracker {
         self.linear_memory.clone()
+    }
+
+    /// Returns an owned handle so callers can release the store lock before awaiting
+    /// resource-window transitions. Cloning only increments the handle's `Arc` count.
+    pub(crate) fn resource_billing(&self) -> AgentResourceBilling {
+        self.resource_billing.clone()
     }
 
     async fn switch_to_live(&self) {

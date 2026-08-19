@@ -1,4 +1,9 @@
 use super::*;
+use crate::services::active_workers::MemoryGrant;
+use crate::services::agent_resource_billing::{AgentResourceBilling, FilesystemUsageObserver};
+use crate::services::agent_storage_meter::FilesystemUsageObservation;
+use crate::services::linear_memory::LinearMemoryTracker;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::{AgentFilePath, AgentFilePermissions, ComponentId};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, OwnedAgentId};
@@ -8,6 +13,57 @@ use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use test_r::test;
+
+struct CountingUsageObserver {
+    active: AtomicBool,
+    begun: AtomicUsize,
+    completed: AtomicUsize,
+    failed: AtomicUsize,
+    reject_failures: AtomicBool,
+    completed_at: std::sync::Mutex<Option<Instant>>,
+}
+
+impl Default for CountingUsageObserver {
+    fn default() -> Self {
+        Self {
+            active: AtomicBool::new(true),
+            begun: AtomicUsize::new(0),
+            completed: AtomicUsize::new(0),
+            failed: AtomicUsize::new(0),
+            reject_failures: AtomicBool::new(false),
+            completed_at: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl FilesystemUsageObserver for CountingUsageObserver {
+    fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    fn begin_observation(&self) -> FilesystemUsageObservation {
+        let sequence = self.begun.fetch_add(1, Ordering::AcqRel) as u64 + 1;
+        FilesystemUsageObservation {
+            generation: 1,
+            sequence,
+        }
+    }
+
+    fn complete_observation(
+        &self,
+        _observation: FilesystemUsageObservation,
+        _usage: Option<AgentFilesystemUsage>,
+        now: Instant,
+    ) {
+        *self.completed_at.lock().unwrap() = Some(now);
+        self.completed.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn fail_observation(&self, _observation: FilesystemUsageObservation) -> bool {
+        self.failed.fetch_add(1, Ordering::AcqRel);
+        !self.reject_failures.load(Ordering::Acquire)
+    }
+}
 
 fn agent_id() -> OwnedAgentId {
     OwnedAgentId::new(
@@ -394,7 +450,7 @@ async fn quota_classification_uses_the_operation_relevant_limit() {
 #[cfg(target_os = "linux")]
 #[test]
 async fn storage_probe_failure_preserves_errno_when_effect_is_known() {
-    let runtime = AgentFilesystemRuntime::new_for_test_with_failed_observations();
+    let runtime = AgentFilesystemRuntime::new_for_test_with_capacity_observation_failure();
 
     assert_eq!(
         runtime
@@ -414,6 +470,115 @@ async fn storage_probe_failure_preserves_errno_when_effect_is_known() {
             .await,
         MutationDecision::Quota
     );
+    assert!(runtime.begin_effect().await.is_ok());
+}
+
+#[test]
+async fn proven_no_effect_guest_failure_does_not_observe_usage() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let observer = Arc::new(CountingUsageObserver::default());
+    runtime.set_usage_observer(Some(observer.clone()));
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::Guest("not-found"),
+                MutationEffect::ProvenNoEffect,
+            )
+            .await,
+        MutationDecision::PreserveGuest("not-found")
+    );
+    assert_eq!(observer.begun.load(Ordering::Acquire), 0);
+    assert_eq!(observer.completed.load(Ordering::Acquire), 0);
+    assert_eq!(observer.failed.load(Ordering::Acquire), 0);
+}
+
+#[test]
+async fn completed_prefix_is_observed_before_early_invalidation() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let observer = Arc::new(CountingUsageObserver::default());
+    let observed_at_invalidation = Arc::new(AtomicUsize::new(0));
+    runtime.set_usage_observer(Some(observer.clone()));
+    runtime.set_invalidation_callback(Some({
+        let observer = Arc::clone(&observer);
+        let observed_at_invalidation = Arc::clone(&observed_at_invalidation);
+        Arc::new(move || {
+            let completed = observer.completed.load(Ordering::Acquire);
+            let observed_at_invalidation = Arc::clone(&observed_at_invalidation);
+            Box::pin(async move {
+                observed_at_invalidation.store(completed, Ordering::Release);
+            })
+        })
+    }));
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::<()>::Infrastructure(std::io::Error::other(
+                    "terminal backend failure",
+                )),
+                MutationEffect::KnownCompletedPrefix { bytes: 3 },
+            )
+            .await,
+        MutationDecision::Invalidate
+    );
+    assert_eq!(observer.completed.load(Ordering::Acquire), 1);
+    assert_eq!(observed_at_invalidation.load(Ordering::Acquire), 1);
+    assert!(runtime.begin_effect().await.is_err());
+}
+
+#[test]
+async fn known_effect_preserves_classifier_behavior_without_billing_observer() {
+    let runtime = AgentFilesystemRuntime::new_for_test_with_failed_observations();
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::Guest("not-found"),
+                MutationEffect::KnownCompletedPrefix { bytes: 3 },
+            )
+            .await,
+        MutationDecision::PreserveGuest("not-found")
+    );
+    assert!(runtime.begin_effect().await.is_ok());
+}
+
+#[test]
+async fn billing_usage_failure_invalidates_before_classification() {
+    let runtime = AgentFilesystemRuntime::new_for_test_with_failed_observations();
+    let observer = Arc::new(CountingUsageObserver::default());
+    runtime.set_usage_observer(Some(observer.clone()));
+
+    assert_eq!(
+        runtime
+            .classify_mutation_failure(
+                MutationFailure::Guest("not-found"),
+                MutationEffect::KnownCompletedPrefix { bytes: 3 },
+            )
+            .await,
+        MutationDecision::Invalidate
+    );
+    assert_eq!(observer.completed.load(Ordering::Acquire), 0);
+    assert_eq!(observer.failed.load(Ordering::Acquire), 1);
+    assert!(runtime.begin_effect().await.is_err());
+}
+
+#[test]
+async fn successful_usage_is_installed_before_capacity_observation_failure() {
+    let runtime = AgentFilesystemRuntime::new_for_test_with_capacity_observation_failure();
+    let observer = Arc::new(CountingUsageObserver::default());
+    runtime.set_usage_observer(Some(observer.clone()));
+
+    let decision = runtime
+        .classify_mutation_failure(
+            MutationFailure::TransientGuest("busy"),
+            MutationEffect::ProvenNoEffect,
+        )
+        .await;
+
+    assert_eq!(decision, MutationDecision::PreserveGuest("busy"));
+    assert_eq!(observer.completed.load(Ordering::Acquire), 1);
+    assert_eq!(observer.failed.load(Ordering::Acquire), 0);
     assert!(runtime.begin_effect().await.is_ok());
 }
 
@@ -497,7 +662,7 @@ async fn pending_worker_interrupt_suppresses_mutation_retry() {
 #[cfg(target_os = "linux")]
 #[test]
 async fn failed_health_probe_suppresses_transient_retry() {
-    let runtime = AgentFilesystemRuntime::new_for_test_with_failed_observations();
+    let runtime = AgentFilesystemRuntime::new_for_test_with_capacity_observation_failure();
 
     assert_eq!(
         runtime
@@ -524,6 +689,250 @@ async fn unmanaged_runtime_observes_fresh_physical_capacity() {
     assert!(capacity.total_filesystem_objects > 0);
     assert!(capacity.available_filesystem_objects <= capacity.total_filesystem_objects);
     filesystem.close_and_delete().await.unwrap();
+}
+
+#[test]
+async fn short_effect_batch_is_observed_on_the_bounded_cadence() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let observer = Arc::new(CountingUsageObserver::default());
+    runtime.set_usage_observer(Some(observer.clone()));
+    let first = runtime.begin_effect().await.unwrap();
+    let second = runtime.begin_effect().await.unwrap();
+
+    drop(first);
+    drop(second);
+    runtime.drain().await;
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while observer.completed.load(Ordering::Acquire) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(observer.completed.load(Ordering::Acquire), 1);
+    assert_eq!(observer.begun.load(Ordering::Acquire), 1);
+}
+
+#[test]
+async fn short_effect_final_sample_is_debounced_from_drain() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let observer = Arc::new(CountingUsageObserver::default());
+    runtime.set_usage_observer(Some(observer.clone()));
+    // Start the sampler after the drain so scheduler load cannot race the debounce assertion.
+    runtime.inner.usage_sampling.store(true, Ordering::Release);
+    let effect = runtime.begin_effect().await.unwrap();
+
+    let drained_at = Instant::now();
+    drop(effect);
+    runtime.drain().await;
+    runtime.inner.usage_sampling.store(false, Ordering::Release);
+    runtime.inner.schedule_usage_sampling();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while observer.completed.load(Ordering::Acquire) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(observer.completed.load(Ordering::Acquire), 1);
+    assert!(
+        observer.completed_at.lock().unwrap().unwrap() - drained_at
+            >= std::time::Duration::from_millis(10)
+    );
+}
+
+#[test]
+async fn paused_effect_admission_drains_existing_effects_and_rejects_new_ones() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let effect = runtime.begin_effect().await.unwrap();
+    let admission_pause = runtime.pause_effect_admission();
+
+    assert!(runtime.begin_effect().await.is_err());
+    drop(effect);
+    runtime.drain().await;
+    drop(admission_pause);
+
+    assert!(runtime.begin_effect().await.is_ok());
+}
+
+#[test]
+async fn update_effect_waits_for_paused_admission_to_resume() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let admission_pause = runtime.pause_effect_admission();
+    let update = tokio::spawn({
+        let runtime = runtime.clone();
+        async move { runtime.begin_update_effect().await }
+    });
+
+    tokio::task::yield_now().await;
+    assert!(!update.is_finished());
+    drop(admission_pause);
+
+    assert!(update.await.unwrap().is_ok());
+}
+
+#[test]
+async fn sampler_exit_hands_off_to_an_effect_admitted_during_teardown() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let observer = Arc::new(CountingUsageObserver::default());
+    runtime.set_usage_observer(Some(observer.clone()));
+    runtime.inner.usage_sampling.store(true, Ordering::Release);
+    let effect = runtime.begin_effect().await.unwrap();
+
+    runtime.inner.finish_usage_sampling(0);
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while observer.completed.load(Ordering::Acquire) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    drop(effect);
+}
+
+#[test]
+async fn sampler_exit_does_not_restart_an_inactive_window() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let observer = Arc::new(CountingUsageObserver::default());
+    observer.active.store(false, Ordering::Release);
+    runtime.set_usage_observer(Some(observer.clone()));
+    runtime.inner.usage_sampling.store(true, Ordering::Release);
+    let effect = runtime.begin_effect().await.unwrap();
+
+    runtime.inner.finish_usage_sampling(0);
+
+    assert!(!runtime.inner.usage_sampling.load(Ordering::Acquire));
+    assert_eq!(observer.begun.load(Ordering::Acquire), 0);
+    drop(effect);
+}
+
+#[test]
+fn sampler_exit_does_not_restart_without_pending_effects() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let observer = Arc::new(CountingUsageObserver::default());
+    runtime.set_usage_observer(Some(observer.clone()));
+    runtime.inner.usage_sampling.store(true, Ordering::Release);
+
+    runtime.inner.finish_usage_sampling(0);
+
+    assert!(!runtime.inner.usage_sampling.load(Ordering::Acquire));
+    assert_eq!(observer.begun.load(Ordering::Acquire), 0);
+}
+
+#[test]
+async fn sustained_effects_use_a_slower_cadence_until_completion() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let observer = Arc::new(CountingUsageObserver::default());
+    runtime.set_usage_observer(Some(observer.clone()));
+    let effect = runtime.begin_effect().await.unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while observer.completed.load(Ordering::Acquire) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let first_sample_at = observer.completed_at.lock().unwrap().unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while observer.completed.load(Ordering::Acquire) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let second_sample_at = observer.completed_at.lock().unwrap().unwrap();
+    assert!(second_sample_at - first_sample_at >= std::time::Duration::from_millis(100));
+    assert!(runtime.has_active_effects());
+
+    let samples_before_completion = observer.completed.load(Ordering::Acquire);
+    drop(effect);
+    runtime.drain().await;
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while observer.completed.load(Ordering::Acquire) <= samples_before_completion {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[test]
+async fn failed_scheduled_usage_observation_invalidates_runtime() {
+    let runtime = AgentFilesystemRuntime::new_for_test_with_failed_observations();
+    let observer = Arc::new(CountingUsageObserver::default());
+    let invalidated = Arc::new(AtomicBool::new(false));
+    runtime.set_usage_observer(Some(observer.clone()));
+    runtime.set_invalidation_callback(Some({
+        let invalidated = Arc::clone(&invalidated);
+        Arc::new(move || {
+            let invalidated = Arc::clone(&invalidated);
+            Box::pin(async move {
+                invalidated.store(true, Ordering::Release);
+            })
+        })
+    }));
+    let effect = runtime.begin_effect().await.unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !invalidated.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(observer.failed.load(Ordering::Acquire), 1);
+    assert!(runtime.begin_effect().await.is_err());
+    drop(effect);
+}
+
+#[test]
+async fn rejected_scheduled_usage_failure_does_not_invalidate_runtime() {
+    let runtime = AgentFilesystemRuntime::new_for_test_with_failed_observations();
+    let observer = Arc::new(CountingUsageObserver::default());
+    observer.reject_failures.store(true, Ordering::Release);
+    let invalidated = Arc::new(AtomicBool::new(false));
+    runtime.set_usage_observer(Some(observer.clone()));
+    runtime.set_invalidation_callback(Some({
+        let invalidated = Arc::clone(&invalidated);
+        Arc::new(move || {
+            let invalidated = Arc::clone(&invalidated);
+            Box::pin(async move {
+                invalidated.store(true, Ordering::Release);
+            })
+        })
+    }));
+    let effect = runtime.begin_effect().await.unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while observer.failed.load(Ordering::Acquire) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    drop(effect);
+    runtime.drain().await;
+
+    assert!(!invalidated.load(Ordering::Acquire));
+    assert!(runtime.begin_effect().await.is_ok());
+}
+
+#[test]
+async fn rejected_forced_usage_failure_is_ignored() {
+    let runtime = AgentFilesystemRuntime::new_for_test_with_failed_observations();
+    let observer = Arc::new(CountingUsageObserver::default());
+    observer.reject_failures.store(true, Ordering::Release);
+    runtime.set_usage_observer(Some(observer.clone()));
+
+    runtime.observe_usage_for_billing().await.unwrap();
+
+    assert_eq!(observer.failed.load(Ordering::Acquire), 1);
+    assert!(runtime.begin_effect().await.is_ok());
 }
 
 #[test]
@@ -1139,6 +1548,87 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     assert!(released, "deferred managed project cleanup did not finish");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
+    use std::io::{Seek, SeekFrom, Write};
+
+    let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
+        .map(PathBuf::from)
+        .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
+    let filesystems = AgentFilesystems::new(&FilesystemStorageConfig {
+        managed_xfs_root_dir: Some(root),
+        ..FilesystemStorageConfig::default()
+    })
+    .unwrap();
+    let filesystem = filesystems.create_owned_empty(&agent_id()).await.unwrap();
+    let runtime = filesystem.runtime();
+    let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+    let now = Instant::now();
+    let memory = LinearMemoryTracker::new(
+        0,
+        0,
+        AgentMode::Durable,
+        false,
+        entry.clone(),
+        Arc::new(std::sync::Mutex::new(MemoryGrant::inert(0))),
+        now,
+    );
+    let meter = AgentResourceBilling::new(AgentMode::Durable, memory, entry.clone(), now);
+    runtime.set_usage_observer(Some(Arc::new(meter.clone())));
+    let opening_usage = runtime.usage().await.unwrap().unwrap();
+    let window_started = Instant::now();
+    meter.open(&runtime).await.unwrap();
+
+    let effect = runtime.begin_effect().await.unwrap();
+    let sparse_path = filesystem.path().join("billed-sparse-file");
+    let mut sparse = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&sparse_path)
+        .unwrap();
+    sparse.seek(SeekFrom::Start(64 * 1024 * 1024)).unwrap();
+    sparse.write_all(&[0x7d]).unwrap();
+    sparse.sync_all().unwrap();
+    drop((sparse, effect));
+    runtime.drain().await;
+
+    let logical_bytes = std::fs::metadata(&sparse_path).unwrap().len();
+    let usage = runtime.usage().await.unwrap().unwrap();
+    assert!(usage.allocated_bytes > 0);
+    assert!(usage.allocated_bytes < logical_bytes);
+    runtime.observe_usage_for_billing().await.unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    meter.close(&runtime).await.unwrap();
+    let elapsed = window_started.elapsed().as_secs_f64();
+    meter.flush(Instant::now());
+    let billed = entry.durable_byte_seconds_delta();
+    let minimum = ((usage.allocated_bytes as f64 * 0.1).floor() as i64).max(1);
+    let maximum_level = opening_usage.allocated_bytes.max(usage.allocated_bytes);
+    let maximum = (maximum_level as f64 * (elapsed + 0.25)).ceil() as i64;
+    assert!(
+        billed >= minimum,
+        "authoritative allocation produced too little billing: usage={usage:?}, billed={billed}"
+    );
+    assert!(
+        billed <= maximum,
+        "authoritative allocation produced too much billing: usage={usage:?}, elapsed={elapsed}, billed={billed}"
+    );
+    assert!(
+        billed < logical_bytes as i64,
+        "sparse logical length was billed instead of authoritative allocation"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    meter.flush(Instant::now());
+    assert_eq!(entry.durable_byte_seconds_delta(), billed);
+
+    runtime.set_usage_observer(None);
+    filesystem.close_and_delete().await.unwrap();
 }
 
 #[cfg(unix)]

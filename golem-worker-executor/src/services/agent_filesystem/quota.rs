@@ -258,6 +258,68 @@ impl AgentFilesystem {
 }
 
 impl AgentFilesystemRuntime {
+    pub(crate) async fn usage(
+        &self,
+    ) -> Result<Option<AgentFilesystemUsage>, FilesystemStorageError> {
+        #[cfg(test)]
+        if self.inner.usage_observation_fails.load(Ordering::Acquire) {
+            return Err(FilesystemStorageError::verification(
+                "observe test agent filesystem usage",
+                self.inner.materializer.root(),
+            ));
+        }
+        self.inner.materializer.usage().await
+    }
+
+    pub(crate) fn set_usage_observer(
+        &self,
+        observer: Option<Arc<dyn crate::services::agent_resource_billing::FilesystemUsageObserver>>,
+    ) {
+        *self
+            .inner
+            .usage_observer
+            .lock()
+            .expect("agent filesystem usage-observer lock poisoned") = observer;
+        if self.has_active_effects() {
+            self.inner.schedule_usage_sampling();
+        }
+    }
+
+    pub(super) fn usage_observer_is_active(&self) -> bool {
+        self.inner
+            .usage_observer
+            .lock()
+            .expect("agent filesystem usage-observer lock poisoned")
+            .as_ref()
+            .is_some_and(|observer| observer.is_active())
+    }
+
+    pub(super) async fn observe_usage_for_billing(&self) -> Result<(), FilesystemStorageError> {
+        let observer = self
+            .inner
+            .usage_observer
+            .lock()
+            .expect("agent filesystem usage-observer lock poisoned")
+            .clone();
+        let Some(observer) = observer else {
+            return Ok(());
+        };
+        let observation = observer.begin_observation();
+        match self.usage().await {
+            Ok(usage) => {
+                observer.complete_observation(observation, usage, Instant::now());
+                Ok(())
+            }
+            Err(error) => {
+                if observer.fail_observation(observation) {
+                    Err(error)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
     #[allow(
         dead_code,
         reason = "fresh physical capacity is part of the runtime filesystem interface"
@@ -280,6 +342,16 @@ impl AgentFilesystemRuntime {
         ),
         FilesystemStorageError,
     > {
+        let observer = self
+            .inner
+            .usage_observer
+            .lock()
+            .expect("agent filesystem usage-observer lock poisoned")
+            .clone();
+        let observation = observer
+            .as_ref()
+            .map(|observer| observer.begin_observation());
+
         #[cfg(test)]
         if let Some((usage, capacity)) = *self
             .inner
@@ -292,6 +364,9 @@ impl AgentFilesystemRuntime {
                 .applied_limits
                 .read()
                 .expect("agent filesystem applied-limit lock poisoned");
+            if let (Some(observer), Some(observation)) = (observer, observation) {
+                observer.complete_observation(observation, usage, Instant::now());
+            }
             return Ok((usage, limits, capacity));
         }
 
@@ -306,7 +381,18 @@ impl AgentFilesystemRuntime {
                 .failure_observations(installed_limits),
             self.capacity()
         );
-        let (usage, limits) = observations?;
+        let (usage, limits) = match observations {
+            Ok(observations) => observations,
+            Err(error) => {
+                if let (Some(observer), Some(observation)) = (&observer, observation) {
+                    let _ = observer.fail_observation(observation);
+                }
+                return Err(error);
+            }
+        };
+        if let (Some(observer), Some(observation)) = (&observer, observation) {
+            observer.complete_observation(observation, usage, Instant::now());
+        }
         let capacity = capacity?;
         Ok((usage, limits, capacity))
     }
@@ -436,10 +522,6 @@ impl AgentFilesystemMaterializer {
         }
     }
 
-    #[allow(
-        dead_code,
-        reason = "fresh project usage supports runtime mutation classification"
-    )]
     async fn usage(&self) -> Result<Option<AgentFilesystemUsage>, FilesystemStorageError> {
         match self {
             Self::Unmanaged { .. } => Ok(None),

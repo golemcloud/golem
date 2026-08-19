@@ -1019,6 +1019,110 @@ async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn managed_xfs_resource_billing_survives_idle_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let (executor, billing) = start_with_mutable_agent_storage_quota_on_managed_xfs(
+        deps,
+        &context,
+        1024 * 1024,
+        managed_xfs_test_root(),
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent = agent_id!("P3FileSystem", "managed-xfs-resource-billing");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let mutation = executor
+        .invoke_and_await_agent(&component, &agent, "run_writable", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected run_writable return value"))?;
+    assert_eq!(
+        schema_string_list(mutation),
+        vec![
+            "p2_write_p3_read=p2-to-p3".to_string(),
+            "p3_write_p2_read=p3-to-p2".to_string(),
+        ]
+    );
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    let after_mutation = billing.flush_durable_storage_byte_seconds();
+    let mut after_active_window = after_mutation;
+    for _ in 0..32 {
+        assert_reconstructed_writable_file(&executor, &component, &agent).await?;
+        executor
+            .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+            .await?;
+        after_active_window = billing.flush_durable_storage_byte_seconds();
+        if after_active_window > after_mutation {
+            break;
+        }
+    }
+    assert!(
+        after_active_window > after_mutation,
+        "authoritative managed-XFS allocation remained zero-billed across active windows"
+    );
+
+    let mut idle_start = billing.flush_durable_storage_byte_seconds();
+    let mut stable_samples = 0;
+    while stable_samples < 3 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let current = billing.flush_durable_storage_byte_seconds();
+        if current == idle_start {
+            stable_samples += 1;
+        } else {
+            idle_start = current;
+            stable_samples = 0;
+        }
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let idle_end = billing.flush_durable_storage_byte_seconds();
+    assert_eq!(
+        idle_end, idle_start,
+        "loaded-idle managed-XFS storage continued billing"
+    );
+
+    executor.simulated_crash(&worker_id).await?;
+    assert_reconstructed_writable_file(&executor, &component, &agent).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    let after_replay = billing.flush_durable_storage_byte_seconds();
+    assert!(
+        after_replay > idle_end,
+        "replay and its following invocation produced no managed-XFS storage billing"
+    );
+
+    let before_delete = billing.flush_durable_storage_byte_seconds();
+    executor.delete_worker(&worker_id).await?;
+    let after_delete = billing.flush_durable_storage_byte_seconds();
+    assert!(after_delete >= before_delete);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        billing.flush_durable_storage_byte_seconds(),
+        after_delete,
+        "deleted managed-XFS storage continued billing"
+    );
+    Ok(())
+}
+
 async fn initial_file_p3_parity_with_backend(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1640,6 +1744,15 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_with_backend(
     executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_eviction_class(&owned_agent_id).await
+            != Some(golem_worker_executor::worker::EvictionClass::LoadedIdle)
+        {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("worker did not become loaded-idle after its billing window closed"))?;
     assert!(executor.stop_worker_if_idle(&owned_agent_id).await?);
     assert!(!executor.worker_is_loaded(&owned_agent_id).await);
     assert_reconstructed_writable_file(&executor, &component, &agent_id).await?;

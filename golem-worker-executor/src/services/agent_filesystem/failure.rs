@@ -105,6 +105,11 @@ impl AgentFilesystemRuntime {
         failure: MutationFailure<G>,
         effect: MutationEffect,
     ) -> MutationDecision<G> {
+        if effect != MutationEffect::ProvenNoEffect
+            && self.observe_usage_for_billing().await.is_err()
+        {
+            return self.invalidate().await;
+        }
         if effect == MutationEffect::Unknown {
             return self.invalidate().await;
         }

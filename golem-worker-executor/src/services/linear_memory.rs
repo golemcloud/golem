@@ -46,7 +46,7 @@ struct Inner {
     retained_growth_grant: Arc<Mutex<MemoryGrant>>,
     reconciling: AtomicBool,
     replaying: AtomicBool,
-    transitions: Mutex<()>,
+    transitions: Arc<Mutex<()>>,
     resource_entry: Arc<AtomicResourceEntry>,
     meter: AgentMemoryMeter,
 }
@@ -73,9 +73,9 @@ impl LinearMemoryTracker {
                 retained_growth_grant,
                 reconciling: AtomicBool::new(true),
                 replaying: AtomicBool::new(replaying),
-                transitions: Mutex::new(()),
+                transitions: Arc::new(Mutex::new(())),
                 resource_entry: resource_entry.clone(),
-                meter: AgentMemoryMeter::new(mode, bytes, true, resource_entry, now),
+                meter: AgentMemoryMeter::new(mode, bytes, false, resource_entry, now),
             }),
         };
         tracker
@@ -247,19 +247,12 @@ impl LinearMemoryTracker {
             .store(true, Ordering::Release);
     }
 
-    pub fn resume(&self, now: Instant) {
-        let _transition = self.inner.transitions.lock().unwrap();
-        self.inner.meter.resume(self.current_bytes(), now);
+    pub(crate) fn resource_transition(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.inner.transitions)
     }
 
-    pub fn pause(&self, now: Instant) {
-        let _transition = self.inner.transitions.lock().unwrap();
-        self.inner.meter.pause(now);
-    }
-
-    pub fn stop(&self, now: Instant) {
-        let _transition = self.inner.transitions.lock().unwrap();
-        self.inner.meter.stop(now);
+    pub(crate) fn enforce_resource_memory_limit(&self, limit: u64) {
+        self.inner.meter.enforce_limit(limit);
     }
 
     pub fn meter(&self) -> &AgentMemoryMeter {

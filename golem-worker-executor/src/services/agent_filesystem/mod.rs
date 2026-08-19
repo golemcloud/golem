@@ -30,6 +30,8 @@ use std::num::NonZeroU32;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::Instant;
@@ -120,6 +122,10 @@ impl FilesystemStorageError {
             source: None,
             cleanup_failed: false,
         }
+    }
+
+    pub(crate) fn resource_billing_transition(operation: &'static str) -> Self {
+        Self::verification(operation, Path::new("<resource-meter>"))
     }
 
     fn cleanup_io(operation: &'static str, path: &Path, source: std::io::Error) -> Self {
@@ -825,6 +831,8 @@ impl Drop for AgentFilesystem {
 }
 
 #[derive(Clone)]
+/// Cloneable handle to the synchronization and backend state shared by filesystem
+/// adapters, completion tasks, quota enforcement, and usage sampling.
 pub struct AgentFilesystemRuntime {
     inner: Arc<AgentFilesystemRuntimeInner>,
 }
@@ -839,8 +847,11 @@ impl std::fmt::Debug for AgentFilesystemRuntime {
 
 struct AgentFilesystemRuntimeInner {
     state: AtomicUsize,
+    usage_sampling: AtomicBool,
+    usage_effect_epoch: std::sync::atomic::AtomicU64,
     last_effect_completion_millis: std::sync::atomic::AtomicU64,
     drained: tokio::sync::Notify,
+    admission_resumed: tokio::sync::Notify,
     append: Arc<Mutex<()>>,
     namespace: Arc<Mutex<()>>,
     operations: Arc<tokio::sync::RwLock<()>>,
@@ -862,11 +873,18 @@ struct AgentFilesystemRuntimeInner {
     invalidated: std::sync::Mutex<Option<failure::AgentFilesystemInvalidationCallback>>,
     retry_permitted: std::sync::Mutex<Option<failure::AgentFilesystemRetryCallback>>,
     pressure_recovery: std::sync::Mutex<Option<failure::AgentFilesystemPressureRecoveryCallback>>,
+    usage_observer: std::sync::Mutex<
+        Option<Arc<dyn crate::services::agent_resource_billing::FilesystemUsageObserver>>,
+    >,
     #[cfg(test)]
     failure_observations:
         std::sync::RwLock<Option<(Option<AgentFilesystemUsage>, FilesystemCapacity)>>,
+    #[cfg(test)]
+    usage_observation_fails: AtomicBool,
 }
 
+/// Backend identity used for filesystem materialization and authoritative observations.
+/// Unmanaged filesystems deliberately have no authoritative per-agent usage source.
 enum AgentFilesystemMaterializer {
     Unmanaged {
         root: PathBuf,
@@ -888,8 +906,11 @@ impl AgentFilesystemRuntime {
         Self {
             inner: Arc::new(AgentFilesystemRuntimeInner {
                 state: AtomicUsize::new(0),
+                usage_sampling: AtomicBool::new(false),
+                usage_effect_epoch: std::sync::atomic::AtomicU64::new(0),
                 last_effect_completion_millis: std::sync::atomic::AtomicU64::new(0),
                 drained: tokio::sync::Notify::new(),
+                admission_resumed: tokio::sync::Notify::new(),
                 append: Arc::new(Mutex::new(())),
                 namespace: Arc::new(Mutex::new(())),
                 operations: Arc::new(tokio::sync::RwLock::new(())),
@@ -903,8 +924,11 @@ impl AgentFilesystemRuntime {
                 invalidated: std::sync::Mutex::new(None),
                 retry_permitted: std::sync::Mutex::new(None),
                 pressure_recovery: std::sync::Mutex::new(None),
+                usage_observer: std::sync::Mutex::new(None),
                 #[cfg(test)]
                 failure_observations: std::sync::RwLock::new(None),
+                #[cfg(test)]
+                usage_observation_fails: AtomicBool::new(false),
             }),
         }
     }
@@ -957,6 +981,16 @@ impl AgentFilesystemRuntime {
 
     #[cfg(test)]
     pub(crate) fn new_for_test_with_failed_observations() -> Self {
+        let runtime = Self::new_for_test_with_capacity_observation_failure();
+        runtime
+            .inner
+            .usage_observation_fails
+            .store(true, Ordering::Release);
+        runtime
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test_with_capacity_observation_failure() -> Self {
         Self::new(
             AgentFilesystemMaterializer::Unmanaged {
                 root: PathBuf::from("<missing-test-filesystem>"),

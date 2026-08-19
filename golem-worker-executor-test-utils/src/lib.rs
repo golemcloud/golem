@@ -2366,6 +2366,10 @@ impl MutableFilesystemStorageQuota {
                 anyhow::anyhow!("failed to apply filesystem limit to agent {agent_id}: {error}")
             })
     }
+
+    pub fn flush_durable_storage_byte_seconds(&self) -> i64 {
+        self.entry.flush_durable_storage_byte_seconds_for_test()
+    }
 }
 
 struct MutableFilesystemStorageQuotaResourceLimits {
