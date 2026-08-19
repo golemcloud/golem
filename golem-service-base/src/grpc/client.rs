@@ -136,7 +136,7 @@ impl<T: Clone> GrpcClient<T> {
             retries.start_attempt();
             // A failed connection attempt goes through the same retry path as a
             // failed call, so `retries_on_unavailable` still governs it.
-            let mut entry = match self.get().await {
+            let mut entry = match self.connected_client().await {
                 Ok(entry) => entry,
                 Err(e) => {
                     if !retries.failed_attempt().await {
@@ -190,7 +190,12 @@ impl<T: Clone> GrpcClient<T> {
         }
     }
 
-    async fn get(&self) -> Result<GrpcClientConnection<T>, Status> {
+    /// Returns a connected client, establishing the connection if there is not
+    /// one yet. This performs I/O — bounded by `connect_timeout` — in the same
+    /// spirit as `RedisLabelledApi::ensure_connected`: nothing connects at
+    /// construction, and the first user to need a connection makes it while
+    /// everyone else waits on that same attempt.
+    async fn connected_client(&self) -> Result<GrpcClientConnection<T>, Status> {
         if let Some(connection) = self.client.lock().await.clone() {
             return Ok(connection);
         }
@@ -273,7 +278,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             retries.start_attempt();
             // A failed connection attempt goes through the same retry path as a
             // failed call, so `retries_on_unavailable` still governs it.
-            let mut entry = match self.get(endpoint.clone()).await {
+            let mut entry = match self.connected_client(endpoint.clone()).await {
                 Ok(entry) => entry,
                 Err(e) => {
                     if !retries.failed_attempt().await {
@@ -331,7 +336,12 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         self.config.tls_enabled()
     }
 
-    async fn get(&self, endpoint: Uri) -> Result<GrpcClientConnection<T>, Status> {
+    /// Returns a connected client for `endpoint`, establishing the connection if
+    /// there is not one yet. This performs I/O — bounded by `connect_timeout` —
+    /// in the same spirit as `RedisLabelledApi::ensure_connected`: nothing
+    /// connects at construction, and the first caller to need a connection to a
+    /// given target makes it while everyone else waits on that same attempt.
+    async fn connected_client(&self, endpoint: Uri) -> Result<GrpcClientConnection<T>, Status> {
         if let Some(existing) = self.clients.get_async(&endpoint).await {
             return Ok(existing.get().clone());
         }
