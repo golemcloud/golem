@@ -1555,7 +1555,35 @@ if ${registry_http_port_empty}
     registry_http_port = set "18081"
 end
 
-exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- --primary-only suite --save-to-json ${results} integration-tests/benchmark_suites/ci.yaml spawned --registry-service-http-port ${registry_http_port}
+runner_id = get_env GOLEM_BENCHMARK_RUNNER_ID
+runner_id_empty = is_empty ${runner_id}
+if ${runner_id_empty}
+    runner_id = set "amp-orb-a1.xxlarge"
+end
+
+runner_label = get_env GOLEM_BENCHMARK_RUNNER_LABEL
+runner_label_empty = is_empty ${runner_label}
+if ${runner_label_empty}
+    runner_label = set "Amp orb (a1.xxlarge)"
+end
+
+source_commit_result = exec git rev-parse HEAD
+source_commit_ok = eq ${source_commit_result.code} 0
+if not ${source_commit_ok}
+    echo ${source_commit_result.stderr}
+    trigger_error "Failed to determine source commit"
+end
+source_commit = trim ${source_commit_result.stdout}
+
+source_ref_result = exec git rev-parse --symbolic-full-name HEAD
+source_ref_ok = eq ${source_ref_result.code} 0
+if not ${source_ref_ok}
+    echo ${source_ref_result.stderr}
+    trigger_error "Failed to determine source ref"
+end
+source_ref = trim ${source_ref_result.stdout}
+
+exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- --primary-only suite --save-to-json ${results} --runner-id ${runner_id} --runner-label ${runner_label} --source-repository golemcloud/golem --source-commit-sha ${source_commit} --source-ref ${source_ref} integration-tests/benchmark_suites/ci.yaml spawned --registry-service-http-port ${registry_http_port}
 '''
 
 [tasks.clean-test-components]
