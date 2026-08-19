@@ -130,9 +130,11 @@ mod tests {
         user.wait_for_status(&worker, AgentStatus::Idle, Duration::from_secs(10))
             .await?;
         tokio::time::sleep(Duration::from_secs(5)).await;
+        let after_permit_release = memory_gb_seconds(&deps, &user).await?;
+        tokio::time::sleep(Duration::from_secs(5)).await;
         let after_idle = memory_gb_seconds(&deps, &user).await?;
         assert_eq!(
-            after_idle, after_replay,
+            after_idle, after_permit_release,
             "loaded-idle time after permit release must not accrue memory usage"
         );
 

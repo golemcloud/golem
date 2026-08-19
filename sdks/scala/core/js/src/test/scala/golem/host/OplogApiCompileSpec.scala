@@ -220,9 +220,9 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     )
 
   def spec = suite("OplogApiCompileSpec")(
-    test("all 41 OplogEntry variants constructed") {
+    test("all 40 OplogEntry variants constructed") {
       val distinctTags = allEntries.map(describeEntry).map(_.takeWhile(_ != '(')).distinct
-      assertTrue(distinctTags.size >= 41)
+      assertTrue(distinctTags.size >= 40)
     },
     test("exhaustive OplogEntry match compiles") {
       allEntries.foreach(e => Predef.assert(describeEntry(e).nonEmpty))

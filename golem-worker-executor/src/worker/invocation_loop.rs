@@ -201,10 +201,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 );
                                 continue;
                             } else {
-                                self.parent.complete_startup(
-                                    self.start_attempt,
-                                    Err(WorkerExecutorError::Interrupted { kind }),
-                                );
+                                self.parent.complete_startup(self.start_attempt, Ok(()));
                                 self.stop_unloaded(None).await;
                                 break;
                             }
@@ -831,6 +828,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         mark_idle(&self.idle_since_millis);
         self.waiting_for_command.store(true, Ordering::Release);
         while let Some(cmd) = self.next_wakeup_or_initial().await {
+            if matches!(cmd, WorkerCommand::InternalStatusChanged)
+                && !self.internal_status_change_requires_permit().await
+            {
+                continue;
+            }
+
             // Waking from idle: re-acquire the concurrent-agent permit before
             // processing any commands.
             self.waiting_for_command.store(false, Ordering::Release);
@@ -919,6 +922,22 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             final_interrupt,
             cleanup_ephemeral_worker,
         }
+    }
+
+    async fn internal_status_change_requires_permit(&self) -> bool {
+        if !self.active.read().await.is_empty()
+            || self.interrupt_signal.lock().await.has_interrupt()
+        {
+            return true;
+        }
+
+        let status = self.parent.get_non_detached_last_known_status().await;
+        !status.pending_updates.is_empty()
+            || !status.pending_invocations.is_empty()
+            || !matches!(
+                self.periodic_snapshot_action(&status),
+                PeriodicSnapshotAction::NotNeeded
+            )
     }
 
     async fn next_wakeup_or_initial(&mut self) -> Option<WorkerCommand> {
@@ -1517,6 +1536,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
             let component_metadata = self.store.data().component_metadata().metadata.clone();
 
+            let invocation_for_lowering = invocation.clone();
+            let lowered = lower_invocation(
+                invocation_for_lowering,
+                &component_metadata,
+                self.parent.parsed_agent_id.as_ref(),
+            )?;
+
             Self::extend_invocation_context(
                 &mut invocation_context,
                 &idempotency_key,
@@ -1539,13 +1565,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .store_invocation_resuming(&idempotency_key)
                     .await;
             }
-
-            let invocation_for_lowering = invocation.clone();
-            let lowered = lower_invocation(
-                invocation_for_lowering,
-                &component_metadata,
-                self.parent.parsed_agent_id.as_ref(),
-            )?;
 
             Ok::<_, WorkerExecutorError>((lowered, local_span_ids, inherited_span_ids))
         }
@@ -1643,6 +1662,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 self.parent.agent_mode(),
             )),
         };
+        let invalid_request = matches!(
+            &trap_type,
+            Some(TrapType::Error {
+                error: AgentError::InvalidRequest(_),
+                ..
+            })
+        );
         let decision = match trap_type {
             Some(trap_type) => {
                 self.store
@@ -1653,7 +1679,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             None => RetryDecision::None,
         };
 
-        failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
+        if invalid_request && self.parent.agent_mode() == AgentMode::Durable {
+            CommandOutcome::Continue
+        } else {
+            failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
+        }
     }
 
     /// Try to perform the save-snapshot step of a manual update on the worker
