@@ -53,17 +53,19 @@
 use crate::chaos::history::{OperationHistory, Outcome, Stream};
 use crate::chaos::prep::ChaosPrepManifest;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
-use crate::chaos::scenarios::{OutputPaths, ScenarioOutcome, build_result, write_outputs};
+use crate::chaos::scenarios::{
+    OutputPaths, ScenarioOutcome, build_result, snapshot_routing, write_outputs,
+};
 use crate::chaos::signal::{BaselineReady, FaultSignals};
 use crate::chaos::summary::{ChaosSummary, TerminationReason};
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
 use chrono::Utc;
-use golem_test_framework::config::BenchmarkTestDependencies;
+use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
 use std::collections::BTreeMap;
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Agent populations to cold-start, in order.
 ///
@@ -83,6 +85,19 @@ const ROUND_INDEX_STRIDE: u32 = 1000;
 /// Note the previous round's agents keep holding their tokens — that is
 /// deliberate, since a real deployment accumulates quota holders too.
 const ROUND_SETTLE_SECS: u64 = 60;
+
+/// How long to wait for the routing table to cover every shard before the first
+/// round.
+///
+/// A cluster that has just scaled up is still converging, and a measurement
+/// taken against it cannot distinguish "the executor was slow" from "the shard
+/// was not routable yet". Waiting removes that doubt rather than leaving it to
+/// be argued about afterwards. Not a correctness gate: on expiry the rounds run
+/// anyway and the snapshot says what the table looked like.
+const ROUTING_SETTLE_TIMEOUT_SECS: u64 = 180;
+
+/// How often to re-read the routing table while waiting.
+const ROUTING_POLL_SECS: u64 = 3;
 
 pub async fn run(
     config: &ScenarioConfig,
@@ -131,10 +146,14 @@ pub async fn run(
         fault_target: None,
     })?;
 
+    let mut routing_snapshots = Vec::new();
+    let settled = wait_for_settled_routing(deps, &mut routing_snapshots).await;
+
     let mut attention: Vec<String> = vec![
         "S888 is a prototype measurement, not an assertion. Nothing is injected \
          and nothing fails the run."
             .to_string(),
+        settled,
     ];
 
     for (round, &population) in ROUNDS.iter().enumerate() {
@@ -168,7 +187,7 @@ pub async fn run(
         recovery: Vec::new(),
         readback: Vec::new(),
         streams_without_readback: Vec::new(),
-        routing_snapshots: Vec::new(),
+        routing_snapshots,
         exactly_once: None,
         ownership: Vec::new(),
         attention,
@@ -199,6 +218,54 @@ pub async fn run(
 
     write_outputs(&result, &history, outputs)?;
     Ok(result)
+}
+
+/// Blocks until the routing table covers every shard, or the timeout lapses.
+///
+/// Returns the line to record, so the result says which of the two happened
+/// rather than leaving a reader to infer it from timings.
+async fn wait_for_settled_routing(
+    deps: &BenchmarkTestDependencies,
+    snapshots: &mut Vec<crate::chaos::summary::RoutingSnapshot>,
+) -> String {
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(ROUTING_SETTLE_TIMEOUT_SECS);
+    let mut last = String::from("routing table never became readable");
+
+    loop {
+        match deps.shard_manager().get_routing_table().await {
+            Ok(table) => {
+                let total = table.number_of_shards.value;
+                let per_pod = table.shards_per_pod();
+                let assigned: usize = per_pod.values().sum();
+                let executors = per_pod.len();
+                last = format!(
+                    "routing at round 1: {assigned}/{total} shards across {executors} executor(s)"
+                );
+                if assigned == total && executors > 0 {
+                    snapshots.push(snapshot_routing(deps, "settled-before-round-1").await);
+                    info!("S888: {last} — settled");
+                    return format!("S888 {last} (settled before measuring)");
+                }
+                info!("S888: {last} — waiting for the table to cover every shard");
+            }
+            Err(e) => {
+                last = format!("routing table unavailable: {e:#}");
+                warn!("S888: {last}");
+            }
+        }
+
+        if std::time::Instant::now() >= deadline {
+            snapshots.push(snapshot_routing(deps, "unsettled-before-round-1").await);
+            warn!("S888: {last} — proceeding anyway after {ROUTING_SETTLE_TIMEOUT_SECS}s");
+            return format!(
+                "S888 WARNING: measured against an unsettled cluster — {last}. \
+                 Round 1 numbers may reflect routing convergence rather than the \
+                 platform."
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(ROUTING_POLL_SECS)).await;
+    }
 }
 
 /// Invokes `reserve_and_increment` once on `population` fresh agents, all at
