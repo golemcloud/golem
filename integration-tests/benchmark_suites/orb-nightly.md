@@ -8,8 +8,8 @@ cargo make run-and-publish-benchmark-suite-orb
 
 It builds and runs all primary benchmarks in `ci.yaml`, keeps timestamped result, analysis, and log
 artifacts under `tmp/`, and then uses the validated publisher from `golemcloud/benchmark-results`
-to append and push exactly that run. The analysis compares the run only with prior runs from the
-same runner and suite.
+to append and push exactly that run. The analysis compares the run with the immediately preceding
+run from the same runner and suite.
 Failed or partial runs are never published. Publishing is idempotent, and non-fast-forward races
 are retried from a fresh `benchmark-results` checkout.
 
@@ -33,16 +33,15 @@ The Amp schedule is intentionally only a trigger. Its durable prompt is:
 
 The generated analysis has one of these statuses:
 
-- `insufficient-baseline`: report how many baseline runs exist, but do not alert.
+- `no-previous-run`: report that comparison starts with the next run, but do not alert.
 - `no-candidates`: report that no suspicious regression was found, but do not alert.
 - `candidates-found`: inspect the listed measurements and investigate the Golem commits between
-  `previous.commitSha` and `latest.commitSha` before deciding whether to alert.
+  `previous.commitSha` and `latest.commitSha`, then send one consolidated warning.
 
 For each candidate, inspect the commit subjects and diffs for changes on the benchmark's execution
 path. Distinguish direct evidence from inference, consider whether infrastructure-wide movement or
 a benchmark definition change better explains the result, and avoid naming a commit solely because
-it falls in the commit range. Send a warning only when the benchmark-level movement remains
-suspicious after that review. Do not send the same run timestamp twice from this scheduled thread.
+it falls in the commit range. Do not send the same run timestamp twice from this scheduled thread.
 
 Send warnings to `#golem-dev-internal` through `SLACK_BENCHMARK_WEBHOOK_URL`. Include the affected
 benchmarks and percentage changes, links to the previous and latest Golem commits, the suspected
