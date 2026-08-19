@@ -80,7 +80,17 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
     git status --short >&2
     exit 1
 fi
-run_timestamp="$(jq -er '.runs | select(length == 1) | .[0].timestamp' "$results")"
+run_timestamp="$(jq -er \
+    --arg runner "$runner_id" \
+    --arg commit "$source_commit" \
+    --arg ref "$source_ref" \
+    '.runs | select(length == 1) | .[0]
+        | select(.suite == "CI")
+        | select(.runner.id == $runner)
+        | select(.source.repository == "golemcloud/golem")
+        | select(.source.commitSha == $commit and .source.ref == $ref)
+        | .timestamp' \
+    "$results")"
 
 if [[ -n "${BENCHMARK_RESULTS_TOKEN:-}" ]]; then
     authorization="$(printf 'x-access-token:%s' "$BENCHMARK_RESULTS_TOKEN" | base64 -w0)"
