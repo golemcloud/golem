@@ -79,12 +79,6 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
     exit 1
 fi
 
-python3 integration-tests/benchmark_suites/validate_orb_results.py \
-    "$results" \
-    --commit "$source_commit" \
-    --ref "$source_ref" \
-    --runner "$runner_id"
-
 if [[ -n "${BENCHMARK_RESULTS_TOKEN:-}" ]]; then
     authorization="$(printf 'x-access-token:%s' "$BENCHMARK_RESULTS_TOKEN" | base64 -w0)"
     export GIT_CONFIG_COUNT=1

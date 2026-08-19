@@ -7,8 +7,8 @@ cargo make run-and-publish-benchmark-suite-orb
 ```
 
 It builds and runs all primary benchmarks in `ci.yaml`, keeps timestamped JSON and log artifacts
-under `tmp/`, validates that the run is complete and belongs to the checked-out Golem commit, and
-then uses the publisher from `golemcloud/benchmark-results` to append and push exactly that run.
+under `tmp/`, and then uses the validated publisher from `golemcloud/benchmark-results` to append
+and push exactly that run.
 Failed or partial runs are never published. Publishing is idempotent, and non-fast-forward races
 are retried from a fresh `benchmark-results` checkout.
 
