@@ -16,7 +16,7 @@
 
 package golem.host
 
-import golem.HostApi
+import golem.{HostApi, Uuid}
 import golem.host.js._
 import golem.host.js.schema.JsTypedSchemaValue
 import golem.runtime.rpc.host.AgentHostApi
@@ -72,6 +72,8 @@ object OplogApi {
     timestamp: ContextApi.DateTime,
     parentStartIndex: Option[OplogIndex],
     functionName: String,
+    invocationId: Option[Uuid],
+    observationalOwner: Option[OplogIndex],
     request: Option[TypedSchemaValue],
     wrappedFunctionType: DurabilityApi.DurableFunctionType
   )
@@ -303,11 +305,6 @@ object OplogApi {
     value: ContextApi.AttributeValue
   )
 
-  final case class ChangePersistenceLevelParameters(
-    timestamp: ContextApi.DateTime,
-    persistenceLevel: HostApi.PersistenceLevel
-  )
-
   final case class BeginRemoteTransactionParameters(
     timestamp: ContextApi.DateTime,
     transactionId: String
@@ -435,9 +432,6 @@ object OplogApi {
     final case class SetSpanAttribute(params: SetSpanAttributeParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
-    final case class ChangePersistenceLevel(params: ChangePersistenceLevelParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
     final case class BeginRemoteTransaction(params: BeginRemoteTransactionParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
@@ -537,10 +531,6 @@ object OplogApi {
         case "finish-span"        => FinishSpan(parseFinishSpanParameters(v.asInstanceOf[JsFinishSpanParameters]))
         case "set-span-attribute" =>
           SetSpanAttribute(parseSetSpanAttributeParameters(v.asInstanceOf[JsSetSpanAttributeParameters]))
-        case "change-persistence-level" =>
-          ChangePersistenceLevel(
-            parseChangePersistenceLevelParameters(v.asInstanceOf[JsChangePersistenceLevelParameters])
-          )
         case "begin-remote-transaction" =>
           BeginRemoteTransaction(
             parseBeginRemoteTransactionParameters(v.asInstanceOf[JsBeginRemoteTransactionParameters])
@@ -632,6 +622,9 @@ object OplogApi {
       timestamp = parseDateTime(raw.timestamp),
       parentStartIndex = raw.parentStartIndex.toOption.map(index => BigInt(index.toString)),
       functionName = raw.functionName,
+      invocationId =
+        raw.invocationId.toOption.map(id => Uuid(BigInt(id.highBits.toString), BigInt(id.lowBits.toString))),
+      observationalOwner = raw.observationalOwner.toOption.map(index => BigInt(index.toString)),
       request = raw.request.toOption.map(typedFromJs),
       wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
     )
@@ -975,14 +968,6 @@ object OplogApi {
       spanId = raw.spanId,
       key = raw.key,
       value = ContextApi.AttributeValue.fromJs(raw.value)
-    )
-
-  private def parseChangePersistenceLevelParameters(
-    raw: JsChangePersistenceLevelParameters
-  ): ChangePersistenceLevelParameters =
-    ChangePersistenceLevelParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      persistenceLevel = HostApi.PersistenceLevel.fromTag(raw.persistenceLevel.tag)
     )
 
   private def parseBeginRemoteTransactionParameters(

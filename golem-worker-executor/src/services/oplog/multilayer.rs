@@ -31,7 +31,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
-    AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
+    AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, RawOplogPayload,
 };
 use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
@@ -1252,10 +1252,6 @@ impl Oplog for MultiLayerOplog {
         self.primary
             .download_raw_payload(payload_id, md5_hash)
             .await
-    }
-
-    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
-        self.primary.switch_persistence_level(mode).await;
     }
 
     async fn add_pair(

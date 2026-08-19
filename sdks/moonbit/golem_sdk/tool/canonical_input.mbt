@@ -161,27 +161,22 @@ pub fn ToolDef::canonical_input_fields(
       body_names[tail.name] = ()
     }
     for option in body.options {
-      add_surface_names(body_names, option.long, option.aliases, option.short)
+      add_identity_names(body_names, option.long, option.aliases)
     }
     for flag in body.flags {
-      add_surface_names(body_names, flag.long, flag.aliases, flag.short)
+      add_identity_names(body_names, flag.long, flag.aliases)
     }
   }
   let fields : Array[CanonicalInputField] = []
   for index in path {
     let node = self.commands[index]
     for option in node.globals.options {
-      if !surface_collides(
-          body_names,
-          option.long,
-          option.aliases,
-          option.short,
-        ) {
+      if !identity_collides(body_names, option.long, option.aliases) {
         fields.push(option.canonical_field())
       }
     }
     for flag in node.globals.flags {
-      if !surface_collides(body_names, flag.long, flag.aliases, flag.short) {
+      if !identity_collides(body_names, flag.long, flag.aliases) {
         fields.push(flag.canonical_field())
       }
     }
@@ -212,44 +207,27 @@ pub fn ToolDef::canonical_input_fields(
 }
 
 ///|
-fn add_surface_names(
+fn add_identity_names(
   names : Map[String, Unit],
   name : String,
   aliases : Array[String],
-  short : Char?,
 ) -> Unit {
   names[name] = ()
   for surface_alias in aliases {
     names[surface_alias] = ()
   }
-  if short is Some(short) {
-    names[short.to_string()] = ()
-  }
 }
 
 ///|
-fn surface_collides(
+fn identity_collides(
   names : Map[String, Unit],
   name : String,
   aliases : Array[String],
-  short : Char?,
 ) -> Bool {
   if names.contains(name) {
     return true
   }
-  if aliases.any(surface_alias => names.contains(surface_alias)) {
-    return true
-  }
-  short is Some(short) && names.contains(short.to_string())
-}
-
-///|
-fn canonical_aliases(aliases : Array[String], short : Char?) -> Array[String] {
-  let result = aliases.copy()
-  if short is Some(short) && !result.contains(short.to_string()) {
-    result.push(short.to_string())
-  }
-  result
+  aliases.any(surface_alias => names.contains(surface_alias))
 }
 
 ///|
@@ -259,11 +237,7 @@ fn OptionSpecDef::canonical_field(self : OptionSpecDef) -> CanonicalInputField {
     RepeatableList(shape) => list_graph(shape.item_type)
     RepeatableMap(shape) => shape.map_type
   }
-  {
-    name: self.long,
-    aliases: canonical_aliases(self.aliases, self.short),
-    type_,
-  }
+  { name: self.long, aliases: self.aliases, type_ }
 }
 
 ///|
@@ -276,11 +250,7 @@ fn @toolCommon.FlagSpec::canonical_field(
     @toolCommon.FlagShape::CountFlag(_) =>
       @model.schema_type(@model.SchemaTypeBody::U32(None))
   }
-  {
-    name: self.long,
-    aliases: canonical_aliases(self.aliases, self.short),
-    type_: { defs: [], root },
-  }
+  { name: self.long, aliases: self.aliases, type_: { defs: [], root } }
 }
 
 ///|
@@ -546,11 +516,8 @@ pub fn forward_canonical_input(
   for target in model.fields {
     let mut found : CanonicalInputValue? = None
     for candidate in fields {
-      if candidate.name == target.name {
-        found = Some(candidate)
-        break
-      }
-      if candidate.aliases.contains(target.name) ||
+      if candidate.name == target.name ||
+        candidate.aliases.contains(target.name) ||
         target.aliases.contains(candidate.name) ||
         target.aliases.any(surface_alias => {
           candidate.aliases.contains(surface_alias)

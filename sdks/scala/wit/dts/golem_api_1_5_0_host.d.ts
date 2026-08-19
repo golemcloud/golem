@@ -52,15 +52,6 @@ declare module 'golem:api/host@1.5.0' {
    */
   export function trap(reason: string): void;
   /**
-   * Gets the agent's current persistence level.
-   */
-  export function getOplogPersistenceLevel(): PersistenceLevel;
-  /**
-   * Sets the agent's current persistence level. This can increase the performance of execution in cases where durable
-   * execution is not required.
-   */
-  export function setOplogPersistenceLevel(newPersistenceLevel: PersistenceLevel): void;
-  /**
    * Gets the current idempotence mode. See `set-idempotence-mode` for details.
    */
   export function getIdempotenceMode(): boolean;
@@ -174,19 +165,6 @@ declare module 'golem:api/host@1.5.0' {
    */
   export type EnvironmentId = {
     uuid: Uuid;
-  };
-  /**
-   * Configurable persistence level for agents
-   */
-  export type PersistenceLevel =
-  {
-    tag: 'persist-nothing'
-  } |
-  {
-    tag: 'persist-remote-side-effects'
-  } |
-  {
-    tag: 'smart'
   };
   /**
    * Describes how to update an agent to a different component version

@@ -63,7 +63,6 @@ pub fn register_subtool_def_invoker(
   tool : ToolDef,
   invoker : ToolInvoker,
 ) -> Unit raise ToolBuildError {
-  let _wire = tool.to_tool()
   let name = match tool.tool_name() {
     Ok(name) => name
     Err(error) => raise error

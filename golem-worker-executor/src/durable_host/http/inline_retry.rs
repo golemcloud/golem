@@ -129,8 +129,8 @@ pub enum InlineRetryIneligible {
     NotLive,
     /// Worker is executing host operations without persistence.
     UnpersistedExecution,
-    /// Persistence level is PersistNothing — no oplog data to reconstruct from.
-    PersistNothing,
+    /// Worker is executing a snapshot load/save function.
+    Snapshotting,
     /// Worker is inside a user-defined atomic region; a failure must escalate
     /// to trap+replay so the whole region re-executes.
     InAtomicRegion,
@@ -168,7 +168,7 @@ impl From<HttpRetryDisallowedReason> for InlineRetryIneligible {
             HttpRetryDisallowedReason::UnpersistedExecution => {
                 InlineRetryIneligible::UnpersistedExecution
             }
-            HttpRetryDisallowedReason::PersistNothing => InlineRetryIneligible::PersistNothing,
+            HttpRetryDisallowedReason::Snapshotting => InlineRetryIneligible::Snapshotting,
             HttpRetryDisallowedReason::InAtomicRegion => InlineRetryIneligible::InAtomicRegion,
             HttpRetryDisallowedReason::NotIdempotent => InlineRetryIneligible::NotIdempotent,
         }
@@ -1560,7 +1560,7 @@ pub(crate) enum StatusRetryOutcome {
 /// This is invoked from `HostFutureIncomingResponse::get` *after* the response has
 /// arrived (so its status is known) but *before* the response is exposed to guest
 /// code or persisted. Behavior:
-/// - In replay mode, unpersisted execution, `PersistNothing`, or inside an atomic region
+/// - In replay mode, unpersisted execution, snapshotting, or inside an atomic region
 ///   the function is a no-op (`NoRetry`) — by design (atomic-region semantics: skip
 ///   in v1, the user-land throw triggers atomic-region replay).
 /// - Otherwise eligibility is checked using the same rules as
@@ -1823,7 +1823,6 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::oplog::PersistenceLevel;
     use golem_common::model::oplog::types::SerializableHttpMethod;
     use golem_common::model::{Predicate, RetryPolicy};
     use test_r::test;
@@ -1831,7 +1830,7 @@ mod tests {
     fn make_exec_state() -> DurableExecutionState {
         DurableExecutionState {
             is_live: true,
-            persistence_level: PersistenceLevel::PersistRemoteSideEffects,
+            snapshotting_mode: false,
             is_unpersisted_execution: false,
             assume_idempotence: true,
             max_in_function_retry_delay: Duration::from_secs(1),
@@ -2124,17 +2123,6 @@ mod tests {
         assert_eq!(
             is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false),
             Err(InlineRetryIneligible::NotLive)
-        );
-    }
-
-    #[test]
-    fn test_persist_nothing_disqualifies() {
-        let mut exec = make_exec_state();
-        exec.persistence_level = PersistenceLevel::PersistNothing;
-        let req = make_request_state();
-        assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse, false),
-            Err(InlineRetryIneligible::PersistNothing)
         );
     }
 }

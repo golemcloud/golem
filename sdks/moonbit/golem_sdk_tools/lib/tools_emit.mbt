@@ -57,28 +57,34 @@ priv struct ProjectedToolArg {
 }
 
 ///|
-fn argument_surface_names(
-  canonical : String,
-  aliases : Array[String],
-  short : Char?,
-) -> Array[String] {
-  let result = [canonical].concat(aliases)
-  if short is Some(short) {
-    result.push(short.to_string())
-  }
-  result
+priv struct InheritedArgSurfaces {
+  names : Array[String]
+  shorts : Array[Char]
 }
 
 ///|
-fn projected_arg_surface_names(arg : ProjectedToolArg) -> Array[String] {
+fn argument_identity_names(
+  canonical : String,
+  aliases : Array[String],
+) -> Array[String] {
+  [canonical].concat(aliases)
+}
+
+///|
+fn projected_arg_identity_names(arg : ProjectedToolArg) -> Array[String] {
   if arg.placement is Hidden(_) {
     []
   } else {
-    argument_surface_names(
-      arg.canonical,
-      arg.aliases,
-      arg.info.flat_map(info => info.short),
-    )
+    argument_identity_names(arg.canonical, arg.aliases)
+  }
+}
+
+///|
+fn projected_arg_short(arg : ProjectedToolArg) -> Char? {
+  if arg.placement is Hidden(_) {
+    None
+  } else {
+    arg.info.flat_map(info => info.short)
   }
 }
 
@@ -441,7 +447,7 @@ fn project_command(
   force_globals : Bool,
 ) -> Array[ProjectedToolArg] raise ToolEmitError {
   let projected : Array[ProjectedToolArg] = []
-  let surfaces : Map[String, String] = {}
+  let names : Map[String, String] = {}
   let mut optional_positional = false
   let mut saw_tail = false
   if is_unit(command.success_type) && command.result is Some(_) {
@@ -691,16 +697,11 @@ fn project_command(
             )
           }
         }
-        for
-          surface in argument_surface_names(
-            canonical,
-            aliases,
-            info.flat_map(i => i.short),
-          ) {
-          if surfaces.get(surface) is Some(previous) {
+        for name in argument_identity_names(canonical, aliases) {
+          if names.get(name) is Some(previous) {
             emit_fail(
               "Duplicate tool argument surface name '" +
-              surface +
+              name +
               "' on '" +
               previous +
               "' and '" +
@@ -708,7 +709,7 @@ fn project_command(
               "'",
             )
           }
-          surfaces[surface] = source
+          names[name] = source
         }
         let required_by_default = placement is Positional
         let required = !optional &&
@@ -1285,6 +1286,11 @@ fn raw_descriptor_name(tool : ToolInfo) -> String {
 }
 
 ///|
+fn prepared_descriptor_name(tool : ToolInfo) -> String {
+  "__golem_tool_def_prepare_" + tool.source_name
+}
+
+///|
 fn subtree_target_name(target : String) -> String {
   let normalized = target.replace(old="::", new=".")
   let mut result = normalized
@@ -1381,14 +1387,14 @@ fn validate_sibling_commands(
 }
 
 ///|
-fn projected_surfaces(args : Array[ProjectedToolArg]) -> Array[String] {
-  let surfaces : Array[String] = []
+fn projected_identity_names(args : Array[ProjectedToolArg]) -> Array[String] {
+  let names : Array[String] = []
   for arg in args {
-    for surface in projected_arg_surface_names(arg) {
-      surfaces.push(surface)
+    for name in projected_arg_identity_names(arg) {
+      names.push(name)
     }
   }
-  surfaces
+  names
 }
 
 ///|
@@ -1396,10 +1402,10 @@ fn inherited_canonical_name(
   arg : ProjectedToolArg,
   inherited : Array[ProjectedToolArg],
 ) -> String {
-  let surfaces = projected_arg_surface_names(arg)
+  let identities = projected_arg_identity_names(arg)
   for inherited_arg in inherited {
-    if projected_arg_surface_names(inherited_arg).any(surface => {
-        surfaces.contains(surface)
+    if projected_arg_identity_names(inherited_arg).any(name => {
+        identities.contains(name)
       }) {
       return inherited_arg.canonical
     }
@@ -1411,38 +1417,48 @@ fn inherited_canonical_name(
 fn validate_inherited_arg_surfaces(
   command : ToolCommandInfo,
   args : Array[ProjectedToolArg],
-  inherited : Array[String],
+  inherited : InheritedArgSurfaces,
 ) -> Unit raise ToolEmitError {
+  let effective_shorts = inherited.shorts.copy()
   for arg in args {
-    if arg.placement is GlobalOption || arg.placement is GlobalFlag {
+    let identities = projected_arg_identity_names(arg)
+    if identities.any(name => inherited.names.contains(name)) {
       continue
     }
-    for surface in projected_surfaces([arg]) {
-      if inherited.contains(surface) {
+    if projected_arg_short(arg) is Some(short) {
+      if effective_shorts.contains(short) {
         emit_fail(
-          "Argument surface '" +
-          surface +
+          "Argument short form '" +
+          short.to_string() +
           "' on command '" +
           command.source_name +
-          "' conflicts with an inherited global argument",
+          "' conflicts with another effective argument",
         )
       }
+      effective_shorts.push(short)
     }
   }
 }
 
 ///|
 fn extend_inherited_global_surfaces(
-  inherited : Array[String],
+  inherited : InheritedArgSurfaces,
   args : Array[ProjectedToolArg],
-) -> Array[String] {
-  let result = inherited.copy()
+) -> InheritedArgSurfaces {
+  let result : InheritedArgSurfaces = {
+    names: inherited.names.copy(),
+    shorts: inherited.shorts.copy(),
+  }
   for arg in args {
     if arg.placement is GlobalOption || arg.placement is GlobalFlag {
-      let surfaces = projected_arg_surface_names(arg)
-      if !surfaces.any(surface => result.contains(surface)) {
-        for surface in surfaces {
-          result.push(surface)
+      let identities = projected_arg_identity_names(arg)
+      if !identities.any(name => result.names.contains(name)) {
+        for name in identities {
+          result.names.push(name)
+        }
+        if projected_arg_short(arg) is Some(short) &&
+          !result.shorts.contains(short) {
+          result.shorts.push(short)
         }
       }
     }
@@ -1454,7 +1470,7 @@ fn extend_inherited_global_surfaces(
 fn validate_tool_inherited_surfaces(
   tools : Array[ToolInfo],
   tool : ToolInfo,
-  inherited : Array[String],
+  inherited : InheritedArgSurfaces,
 ) -> Unit raise ToolEmitError {
   let plans : Array[Array[ProjectedToolArg]] = []
   for command in tool.commands {
@@ -1464,6 +1480,7 @@ fn validate_tool_inherited_surfaces(
   let root_args = root.map(index => plans[index]).unwrap_or([])
   if root is Some(index) {
     validate_inherited_arg_surfaces(tool.commands[index], root_args, inherited)
+    validate_constraint_refs(tool.commands[index], root_args, inherited.names)
   }
   let inherited_here = extend_inherited_global_surfaces(inherited, root_args)
   for index, command in tool.commands {
@@ -1471,6 +1488,7 @@ fn validate_tool_inherited_surfaces(
       continue
     }
     validate_inherited_arg_surfaces(command, plans[index], inherited_here)
+    validate_constraint_refs(command, plans[index], inherited_here.names)
     if command.subtree is Some(target) {
       validate_tool_inherited_surfaces(
         tools,
@@ -1488,7 +1506,7 @@ fn validate_inherited_surfaces(
   let subtree_sources = subtree_tool_sources(tools)
   for tool in tools {
     if !subtree_sources.contains(tool.source_name) {
-      validate_tool_inherited_surfaces(tools, tool, [])
+      validate_tool_inherited_surfaces(tools, tool, { names: [], shorts: [] })
     }
   }
 }
@@ -1515,12 +1533,12 @@ fn constraint_ref_names(constraint : ToolConstraintInfo) -> Array[String] {
 fn validate_constraint_refs(
   command : ToolCommandInfo,
   args : Array[ProjectedToolArg],
-  inherited : Array[ProjectedToolArg],
+  inherited_names : Array[String],
 ) -> Unit raise ToolEmitError {
-  let surfaces = projected_surfaces(args).concat(projected_surfaces(inherited))
+  let names = projected_identity_names(args).concat(inherited_names)
   for constraint in command.constraints {
     for name in constraint_ref_names(constraint) {
-      if !surfaces.contains(name) {
+      if !names.contains(name) {
         emit_fail(
           "Constraint reference '" +
           name +
@@ -1543,6 +1561,82 @@ fn emit_globals(args : Array[ProjectedToolArg]) -> String {
 }
 
 ///|
+fn emit_descriptor_plumbing(buf : StringBuilder) -> Unit {
+  buf.write_string(
+    (
+      #|///|
+      #|fn[T] __golem_tool_concat_array(left : Array[T], right : Array[T]) -> Array[T] {
+      #|  let result = left.copy()
+      #|  for value in right {
+      #|    result.push(value)
+      #|  }
+      #|  result
+      #|}
+      #|
+      #|///|
+      #|fn __golem_tool_concat_globals(
+      #|  left : @tool.GlobalsDef,
+      #|  right : @tool.GlobalsDef,
+      #|) -> @tool.GlobalsDef {
+      #|  {
+      #|    options: __golem_tool_concat_array(left.options, right.options),
+      #|    flags: __golem_tool_concat_array(left.flags, right.flags),
+      #|  }
+      #|}
+      #|
+      #|///|
+      #|fn __golem_tool_rebase_node(
+      #|  node : @tool.CommandNodeDef,
+      #|  offset : Int,
+      #|) -> @tool.CommandNodeDef {
+      #|  {
+      #|    name: node.name,
+      #|    aliases: node.aliases,
+      #|    doc: node.doc,
+      #|    globals: node.globals,
+      #|    subcommands: node.subcommands.map(index => index + offset),
+      #|    body: node.body,
+      #|  }
+      #|}
+      #|
+      #|///|
+      #|fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
+      #|  {
+      #|    version: def.version,
+      #|    commands: def.commands[1:].map(node => {
+      #|      __golem_tool_rebase_node(node, -1)
+      #|    }),
+      #|  }
+      #|}
+      #|
+      #|///|
+      #|fn __golem_tool_append_prepared(
+      #|  def : @tool.ToolDef,
+      #|  child : @tool.ToolDef,
+      #|) -> @tool.ToolDef {
+      #|  let offset = def.commands.length()
+      #|  let commands = def.commands.copy()
+      #|  let root = commands[0]
+      #|  commands[0] = {
+      #|    name: root.name,
+      #|    aliases: root.aliases,
+      #|    doc: root.doc,
+      #|    globals: root.globals,
+      #|    subcommands: __golem_tool_concat_array(root.subcommands, [offset]),
+      #|    body: root.body,
+      #|  }
+      #|  for node in child.commands {
+      #|    commands.push(__golem_tool_rebase_node(node, offset))
+      #|  }
+      #|  { version: def.version, commands }
+      #|}
+      #|
+      #|
+    ),
+  )
+}
+
+///|
 fn emit_descriptor(
   buf : StringBuilder,
   tool : ToolInfo,
@@ -1561,20 +1655,6 @@ fn emit_descriptor(
   )
   let root = tool.root_command
   let root_args = root.map(i => plans[i]).unwrap_or([])
-  let inherited_root_args = root_args.filter(arg => {
-    arg.placement is GlobalOption || arg.placement is GlobalFlag
-  })
-  for index, command in tool.commands {
-    validate_constraint_refs(
-      command,
-      plans[index],
-      if Some(index) == root {
-        []
-      } else {
-        inherited_root_args
-      },
-    )
-  }
   let globals_options = root_args
     .filter(a => a.placement is GlobalOption)
     .map(emit_option)
@@ -1630,7 +1710,24 @@ fn emit_descriptor(
       " },\n",
     )
   }
-  buf.write_string("  ] }\n")
+  let has_subtrees = tool.commands.any(command => command.subtree is Some(_))
+  buf.write_string(
+    "  ] }\n    def\n  } catch { error => abort(\"invalid generated raw tool definition: \" + repr(error)) }\n}\n\n///|\nfn " +
+    prepared_descriptor_name(tool) +
+    "(strict_ancestors : @tool.GlobalsDef, parent_globals : @tool.GlobalsDef, override_name : String?, override_doc : @toolCommon.Doc?, override_aliases : Array[String]?) -> @tool.ToolDef {\n  try {\n    let carrier : @tool.ToolDef = { version: \"" +
+    escape_string_lit(tool.version.unwrap_or("0.0.0")) +
+    "\", commands: [{ name: \"__golem_ancestry\", aliases: [], doc: { summary: \"\", description: \"\", examples: [] }, globals: strict_ancestors, subcommands: [], body: None }] }\n    let prepared = __golem_tool_extract_prepared(carrier.graft_subtree(" +
+    raw_descriptor_name(tool) +
+    "(), \"" +
+    escape_string_lit(tool.name) +
+    "\", parent_globals, override_name, override_doc, override_aliases))\n",
+  )
+  if has_subtrees {
+    buf.write_string(
+      "    let descendant_ancestors = __golem_tool_concat_globals(strict_ancestors, prepared.commands[0].globals)\n",
+    )
+  }
+  buf.write_string("    let def = prepared\n")
   for i, command in tool.commands {
     if command.subtree is Some(target) {
       let child = resolve_subtree_tool(tools, target)
@@ -1650,11 +1747,9 @@ fn emit_descriptor(
         "Some(" + emit_strings(command.aliases) + ")"
       }
       buf.write_string(
-        "  let def = def.graft_subtree(" +
-        raw_descriptor_name(child) +
-        "(), \"" +
-        escape_string_lit(command.name) +
-        "\", " +
+        "    let child = " +
+        prepared_descriptor_name(child) +
+        "(descendant_ancestors, " +
         emit_globals(plans[i]) +
         ", " +
         override_name +
@@ -1662,16 +1757,16 @@ fn emit_descriptor(
         override_doc +
         ", " +
         override_aliases +
-        ")\n",
+        ")\n    let def = __golem_tool_append_prepared(def, child)\n",
       )
     }
   }
   buf.write_string(
-    "    def\n  } catch { error => abort(\"invalid generated raw tool definition: \" + repr(error)) }\n}\n\n///|\nfn " +
+    "    def\n  } catch { error => abort(\"invalid generated prepared tool definition: \" + repr(error)) }\n}\n\n///|\nfn " +
     descriptor_name(tool) +
     "() -> @tool.ToolDef {\n  try {\n    " +
-    raw_descriptor_name(tool) +
-    "().normalize_inherited_globals()\n  } catch { error => abort(\"invalid generated tool definition: \" + repr(error)) }\n}\n\n",
+    prepared_descriptor_name(tool) +
+    "({ options: [], flags: [] }, { options: [], flags: [] }, None, None, None).normalize_inherited_globals()\n  } catch { error => abort(\"invalid generated tool definition: \" + repr(error)) }\n}\n\n",
   )
   emit_invoker(buf, tool, tools, plans, leaves)
 }
@@ -2033,6 +2128,9 @@ pub fn generate_tool_registration(
   }
   let buf = StringBuilder::new()
   emit_tool_error_schemas(buf, tools)
+  if tools.length() > 0 {
+    emit_descriptor_plumbing(buf)
+  }
   for tool in tools {
     emit_descriptor(buf, tool, tools)
   }
@@ -2065,18 +2163,18 @@ fn client_args(
   inherited : Array[ProjectedToolArg],
 ) -> Array[ProjectedToolArg] {
   let result : Array[ProjectedToolArg] = []
-  let inherited_surfaces : Map[String, Unit] = {}
+  let inherited_identities : Map[String, Unit] = {}
   for arg in inherited {
-    for surface in projected_arg_surface_names(arg) {
-      inherited_surfaces[surface] = ()
+    for name in projected_arg_identity_names(arg) {
+      inherited_identities[name] = ()
     }
     if !(arg.placement is Hidden(_)) {
       result.push(arg)
     }
   }
   for arg in own {
-    if !projected_arg_surface_names(arg).any(surface => {
-        inherited_surfaces.contains(surface)
+    if !projected_arg_identity_names(arg).any(name => {
+        inherited_identities.contains(name)
       }) &&
       !(arg.placement is Hidden(Principal | OutputStream)) {
       result.push(arg)
@@ -2091,7 +2189,7 @@ fn without_captured_args(
   captured : Array[String],
 ) -> Array[ProjectedToolArg] {
   args.filter(arg => {
-    !projected_arg_surface_names(arg).any(name => captured.contains(name))
+    !projected_arg_identity_names(arg).any(name => captured.contains(name))
   })
 }
 
@@ -2102,7 +2200,7 @@ fn extend_captured(
 ) -> Array[String] {
   let result = captured.copy()
   for arg in args {
-    for name in projected_arg_surface_names(arg) {
+    for name in projected_arg_identity_names(arg) {
       if !result.contains(name) {
         result.push(name)
       }

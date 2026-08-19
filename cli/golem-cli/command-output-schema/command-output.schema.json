@@ -61,6 +61,9 @@
       "$ref": "#/definitions/agent.delete"
     },
     {
+      "$ref": "#/definitions/agent.delete-all"
+    },
+    {
       "$ref": "#/definitions/agent.file-contents"
     },
     {
@@ -1353,7 +1356,7 @@
       "required": [
         "$type",
         "canceled",
-        "agent",
+        "agentId",
         "idempotencyKey"
       ],
       "properties": {
@@ -1363,7 +1366,7 @@
         "canceled": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         },
         "idempotencyKey": {
@@ -1380,7 +1383,7 @@
       "required": [
         "$type",
         "deleted",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1389,8 +1392,34 @@
         "deleted": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.delete-all": {
+      "type": "object",
+      "description": "Single structured output document emitted by `golem deploy` when it deletes all existing agents (e.g. `--reset`).",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "deploy",
+      "required": [
+        "$type",
+        "deleted",
+        "agents"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.delete-all"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentDeletionMeta"
+          }
         }
       },
       "additionalProperties": false
@@ -1403,7 +1432,7 @@
       "required": [
         "$type",
         "saved",
-        "agent",
+        "agentId",
         "path",
         "outputPath",
         "bytes"
@@ -1415,7 +1444,7 @@
         "saved": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         },
         "path": {
@@ -1484,7 +1513,7 @@
       "required": [
         "$type",
         "interrupted",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1493,7 +1522,7 @@
         "interrupted": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         }
       },
@@ -1626,7 +1655,8 @@
       "x-golem-command": "agent new",
       "required": [
         "$type",
-        "componentName"
+        "componentName",
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1635,8 +1665,8 @@
         "componentName": {
           "type": "string"
         },
-        "agentName": {
-          "type": ["string", "null"]
+        "agentId": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -1673,7 +1703,7 @@
       "required": [
         "$type",
         "activated",
-        "agent",
+        "agentId",
         "plugin",
         "priority"
       ],
@@ -1684,7 +1714,7 @@
         "activated": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         },
         "plugin": {
@@ -1705,7 +1735,7 @@
       "required": [
         "$type",
         "redeployed",
-        "components"
+        "agents"
       ],
       "properties": {
         "$type": {
@@ -1714,10 +1744,10 @@
         "redeployed": {
           "type": "boolean"
         },
-        "components": {
+        "agents": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/AgentRedeploymentMeta"
           }
         }
       },
@@ -1731,7 +1761,7 @@
       "required": [
         "$type",
         "resumed",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1740,7 +1770,7 @@
         "resumed": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         }
       },
@@ -1754,7 +1784,7 @@
       "required": [
         "$type",
         "reverted",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1763,7 +1793,7 @@
         "reverted": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         },
         "lastOplogIndex": {
@@ -1785,7 +1815,7 @@
       "required": [
         "$type",
         "simulated",
-        "agent"
+        "agentId"
       ],
       "properties": {
         "$type": {
@@ -1794,7 +1824,7 @@
         "simulated": {
           "type": "boolean"
         },
-        "agent": {
+        "agentId": {
           "type": "string"
         }
       },
@@ -1856,23 +1886,23 @@
       "x-golem-commands": ["agent update","update-agents","component update-agents"],
       "required": [
         "$type",
-        "triggered",
-        "failed"
+        "agents",
+        "errors"
       ],
       "properties": {
         "$type": {
           "const": "agent.update"
         },
-        "triggered": {
+        "agents": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/WorkerUpdateAttempt"
+            "$ref": "#/definitions/AgentUpdateMeta"
           }
         },
-        "failed": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/WorkerUpdateAttempt"
+        "errors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
           }
         }
       },
@@ -2044,7 +2074,8 @@
         "$type",
         "deleted",
         "domain",
-        "id"
+        "id",
+        "environmentId"
       ],
       "properties": {
         "$type": {
@@ -2057,6 +2088,9 @@
           "type": "string"
         },
         "id": {
+          "type": "string"
+        },
+        "environmentId": {
           "type": "string"
         }
       },
@@ -2285,25 +2319,21 @@
       "x-golem-command": "api security-scheme delete",
       "required": [
         "$type",
+        "deleted",
         "id",
-        "revision",
         "name",
         "environmentId",
-        "providerType",
-        "clientId",
-        "redirectUrl",
-        "scopes"
+        "revision"
       ],
       "properties": {
         "$type": {
           "const": "api.security-scheme.delete"
         },
+        "deleted": {
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
-        },
-        "revision": {
-          "type": "integer",
-          "minimum": 0
         },
         "name": {
           "type": "string"
@@ -2311,20 +2341,9 @@
         "environmentId": {
           "type": "string"
         },
-        "providerType": {
-          "$ref": "#/definitions/SecuritySchemeProvider"
-        },
-        "clientId": {
-          "type": "string"
-        },
-        "redirectUrl": {
-          "type": "string"
-        },
-        "scopes": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+        "revision": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "additionalProperties": false
@@ -2736,7 +2755,8 @@
         "environmentId",
         "exports",
         "agentTypes",
-        "agentTypeProvisionConfigs"
+        "agentTypeProvisionConfigs",
+        "tools"
       ],
       "properties": {
         "$type": {
@@ -2780,6 +2800,10 @@
           "additionalProperties": {
             "$ref": "#/definitions/AgentTypeProvisionConfig"
           }
+        },
+        "tools": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolDeploymentMetadata" }
         }
       },
       "additionalProperties": false
@@ -3546,7 +3570,8 @@
         "environmentId",
         "exports",
         "agentTypes",
-        "agentTypeProvisionConfigs"
+        "agentTypeProvisionConfigs",
+        "tools"
       ],
       "properties": {
         "componentName": { "type": "string" },
@@ -3558,9 +3583,446 @@
         "environmentId": { "type": "string" },
         "exports": { "type": "array", "items": { "type": "string" } },
         "agentTypes": { "type": "array", "items": { "$ref": "#/definitions/AgentType" } },
-        "agentTypeProvisionConfigs": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfig" } }
+        "agentTypeProvisionConfigs": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfig" } },
+        "tools": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolDeploymentMetadata" }
+        }
       },
       "additionalProperties": false
+    },
+    "ToolDeploymentMetadata": {
+      "type": "object",
+      "required": ["definition", "provision", "environmentBinding", "agentBindings"],
+      "properties": {
+        "definition": { "$ref": "#/definitions/Tool" },
+        "provision": { "$ref": "#/definitions/ToolProvisionConfig" },
+        "environmentBinding": {
+          "oneOf": [
+            { "$ref": "#/definitions/ToolBindingInput" },
+            { "type": "null" }
+          ]
+        },
+        "agentBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolBindingInput" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Tool": {
+      "type": "object",
+      "required": ["version", "commands", "schema"],
+      "properties": {
+        "version": { "type": "string" },
+        "commands": { "$ref": "#/definitions/CommandTree" },
+        "schema": { "$ref": "#/definitions/SchemaGraph" }
+      },
+      "additionalProperties": false
+    },
+    "CommandTree": {
+      "type": "object",
+      "required": ["nodes"],
+      "properties": {
+        "nodes": { "type": "array", "items": { "$ref": "#/definitions/CommandNode" } }
+      },
+      "additionalProperties": false
+    },
+    "CommandNode": {
+      "type": "object",
+      "required": ["name", "aliases", "doc", "globals", "subcommands", "body"],
+      "properties": {
+        "name": { "type": "string" },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "globals": { "$ref": "#/definitions/ToolGlobals" },
+        "subcommands": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 }
+        },
+        "body": { "oneOf": [{ "$ref": "#/definitions/CommandBody" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "ToolGlobals": {
+      "type": "object",
+      "required": ["options", "flags"],
+      "properties": {
+        "options": { "type": "array", "items": { "$ref": "#/definitions/ToolOptionSpec" } },
+        "flags": { "type": "array", "items": { "$ref": "#/definitions/ToolFlagSpec" } }
+      },
+      "additionalProperties": false
+    },
+    "CommandBody": {
+      "type": "object",
+      "required": ["positionals", "options", "flags", "constraints", "stdin", "stdout", "result", "errors", "annotations"],
+      "properties": {
+        "positionals": { "$ref": "#/definitions/ToolPositionals" },
+        "options": { "type": "array", "items": { "$ref": "#/definitions/ToolOptionSpec" } },
+        "flags": { "type": "array", "items": { "$ref": "#/definitions/ToolFlagSpec" } },
+        "constraints": { "type": "array", "items": { "$ref": "#/definitions/ToolConstraint" } },
+        "stdin": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
+        "stdout": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
+        "result": { "oneOf": [{ "$ref": "#/definitions/ToolResultSpec" }, { "type": "null" }] },
+        "errors": { "type": "array", "items": { "$ref": "#/definitions/ToolErrorCase" } },
+        "annotations": { "oneOf": [{ "$ref": "#/definitions/CommandAnnotations" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "CommandAnnotations": {
+      "type": "object",
+      "required": ["read_only", "destructive", "idempotent", "open_world"],
+      "properties": {
+        "read_only": { "type": "boolean" },
+        "destructive": { "type": "boolean" },
+        "idempotent": { "type": "boolean" },
+        "open_world": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "ToolPositionals": {
+      "type": "object",
+      "required": ["fixed", "tail"],
+      "properties": {
+        "fixed": { "type": "array", "items": { "$ref": "#/definitions/ToolPositional" } },
+        "tail": { "oneOf": [{ "$ref": "#/definitions/ToolTailPositional" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "ToolPositional": {
+      "type": "object",
+      "required": ["name", "doc", "value_name", "type_", "default", "required", "accepts_stdio"],
+      "properties": {
+        "name": { "type": "string" },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "value_name": { "type": ["string", "null"] },
+        "type_": { "$ref": "#/definitions/SchemaType" },
+        "default": { "oneOf": [{ "$ref": "#/definitions/SchemaValue" }, { "type": "null" }] },
+        "required": { "type": "boolean" },
+        "accepts_stdio": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "ToolTailPositional": {
+      "type": "object",
+      "required": ["name", "doc", "value_name", "item_type", "min", "max", "separator", "verbatim", "accepts_stdio"],
+      "properties": {
+        "name": { "type": "string" },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "value_name": { "type": ["string", "null"] },
+        "item_type": { "$ref": "#/definitions/SchemaType" },
+        "min": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "max": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295 },
+        "separator": { "type": ["string", "null"] },
+        "verbatim": { "type": "boolean" },
+        "accepts_stdio": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "ToolOptionSpec": {
+      "type": "object",
+      "required": ["long", "short", "aliases", "doc", "value_name", "shape", "default", "required", "env_var"],
+      "properties": {
+        "long": { "type": "string" },
+        "short": { "type": ["string", "null"], "minLength": 1, "maxLength": 1 },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "value_name": { "type": ["string", "null"] },
+        "shape": { "$ref": "#/definitions/ToolOptionShape" },
+        "default": { "oneOf": [{ "$ref": "#/definitions/SchemaValue" }, { "type": "null" }] },
+        "required": { "type": "boolean" },
+        "env_var": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "ToolOptionShape": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "enum": ["scalar", "optional-scalar"] }, "value": { "$ref": "#/definitions/SchemaType" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "repeatable-list" }, "value": { "$ref": "#/definitions/RepeatableListShape" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "repeatable-map" }, "value": { "$ref": "#/definitions/RepeatableMapShape" } },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RepeatableListShape": {
+      "type": "object",
+      "required": ["repetition", "item_type"],
+      "properties": {
+        "repetition": { "$ref": "#/definitions/ToolRepetition" },
+        "item_type": { "$ref": "#/definitions/SchemaType" }
+      },
+      "additionalProperties": false
+    },
+    "RepeatableMapShape": {
+      "type": "object",
+      "required": ["repetition", "map_type", "duplicate_key_policy"],
+      "properties": {
+        "repetition": { "$ref": "#/definitions/ToolRepetition" },
+        "map_type": { "$ref": "#/definitions/SchemaType" },
+        "duplicate_key_policy": { "enum": ["reject", "last-wins"] }
+      },
+      "additionalProperties": false
+    },
+    "ToolRepetition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "repeated" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "enum": ["delimited", "either"] },
+            "value": { "type": "string", "minLength": 1, "maxLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ToolFlagSpec": {
+      "type": "object",
+      "required": ["long", "short", "aliases", "doc", "shape", "env_var"],
+      "properties": {
+        "long": { "type": "string" },
+        "short": { "type": ["string", "null"], "minLength": 1, "maxLength": 1 },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "shape": { "$ref": "#/definitions/ToolFlagShape" },
+        "env_var": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "ToolFlagShape": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "bool-flag" }, "value": { "$ref": "#/definitions/BoolFlagShape" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "count-flag" },
+            "value": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "BoolFlagShape": {
+      "type": "object",
+      "required": ["default", "negatable"],
+      "properties": { "default": { "type": "boolean" }, "negatable": { "type": "boolean" } },
+      "additionalProperties": false
+    },
+    "ToolRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "present" }, "value": { "type": "string" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "value-is" }, "value": { "$ref": "#/definitions/ValueIsRef" } },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ValueIsRef": {
+      "type": "object",
+      "required": ["name", "value"],
+      "properties": { "name": { "type": "string" }, "value": { "$ref": "#/definitions/SchemaValue" } },
+      "additionalProperties": false
+    },
+    "ToolConstraint": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "enum": ["requires-all", "all-or-none", "requires-any"] },
+            "value": { "type": "array", "items": { "$ref": "#/definitions/ToolRef" } }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "mutex-groups" },
+            "value": { "type": "array", "items": { "$ref": "#/definitions/RefGroup" } }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "implies" }, "value": { "$ref": "#/definitions/ImpliesConstraint" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": { "kind": { "const": "forbids" }, "value": { "$ref": "#/definitions/ForbidsConstraint" } },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RefGroup": {
+      "type": "object",
+      "required": ["refs"],
+      "properties": { "refs": { "type": "array", "items": { "$ref": "#/definitions/ToolRef" } } },
+      "additionalProperties": false
+    },
+    "ImpliesConstraint": {
+      "type": "object",
+      "required": ["lhs_quant", "lhs", "rhs_quant", "rhs"],
+      "properties": {
+        "lhs_quant": { "$ref": "#/definitions/ToolQuantifier" },
+        "lhs": { "type": "array", "items": { "$ref": "#/definitions/ToolRef" } },
+        "rhs_quant": { "$ref": "#/definitions/ToolQuantifier" },
+        "rhs": { "type": "array", "items": { "$ref": "#/definitions/ToolRef" } }
+      },
+      "additionalProperties": false
+    },
+    "ForbidsConstraint": {
+      "type": "object",
+      "required": ["lhs_quant", "lhs", "rhs"],
+      "properties": {
+        "lhs_quant": { "$ref": "#/definitions/ToolQuantifier" },
+        "lhs": { "type": "array", "items": { "$ref": "#/definitions/ToolRef" } },
+        "rhs": { "type": "array", "items": { "$ref": "#/definitions/ToolRef" } }
+      },
+      "additionalProperties": false
+    },
+    "ToolQuantifier": { "type": "string", "enum": ["all", "any"] },
+    "ToolStreamSpec": {
+      "type": "object",
+      "required": ["doc", "mime", "required"],
+      "properties": {
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "mime": { "type": "array", "items": { "type": "string" } },
+        "required": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "ToolResultSpec": {
+      "type": "object",
+      "required": ["type_", "doc", "formatters", "default_formatter"],
+      "properties": {
+        "type_": { "$ref": "#/definitions/SchemaType" },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "formatters": { "type": "array", "items": { "$ref": "#/definitions/ToolFormatter" } },
+        "default_formatter": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ToolFormatter": {
+      "type": "object",
+      "required": ["name", "doc"],
+      "properties": { "name": { "type": "string" }, "doc": { "$ref": "#/definitions/ToolDoc" } },
+      "additionalProperties": false
+    },
+    "ToolErrorCase": {
+      "type": "object",
+      "required": ["name", "doc", "kind", "exit_code", "payload"],
+      "properties": {
+        "name": { "type": "string" },
+        "doc": { "$ref": "#/definitions/ToolDoc" },
+        "kind": { "enum": ["usage-error", "runtime-error"] },
+        "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "payload": { "oneOf": [{ "$ref": "#/definitions/SchemaType" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "ToolDoc": {
+      "type": "object",
+      "required": ["summary", "description", "examples"],
+      "properties": {
+        "summary": { "type": "string" },
+        "description": { "type": "string" },
+        "examples": { "type": "array", "items": { "$ref": "#/definitions/ToolExample" } }
+      },
+      "additionalProperties": false
+    },
+    "ToolExample": {
+      "type": "object",
+      "required": ["title", "body"],
+      "properties": { "title": { "type": "string" }, "body": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "ToolProvisionConfig": {
+      "type": "object",
+      "required": ["config", "env", "plugins", "files"],
+      "properties": {
+        "config": {},
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "plugins": { "type": "array", "items": { "$ref": "#/definitions/InstalledPlugin" } },
+        "files": { "type": "array", "items": { "$ref": "#/definitions/InitialAgentFile" } }
+      },
+      "additionalProperties": false
+    },
+    "ToolBindingInput": {
+      "type": "object",
+      "required": [
+        "version",
+        "parameters",
+        "account",
+        "secretKeysReadable",
+        "secretKeysRevealable"
+      ],
+      "properties": {
+        "version": { "type": ["string", "null"] },
+        "parameters": {},
+        "account": { "type": ["string", "null"] },
+        "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
+        "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" }
+      },
+      "additionalProperties": false
+    },
+    "SecretKeyScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "all" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "keys"],
+          "properties": {
+            "kind": { "const": "keys" },
+            "keys": {
+              "type": "array",
+              "items": { "type": "array", "items": { "type": "string" } },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "AgentTypeProvisionConfig": {
       "type": "object",
@@ -3831,7 +4293,7 @@
       "type": "object",
       "required": [
         "componentName",
-        "agentName",
+        "agentId",
         "createdBy",
         "environmentId",
         "env",
@@ -3850,7 +4312,7 @@
       ],
       "properties": {
         "componentName": { "type": "string" },
-        "agentName": { "type": "string" },
+        "agentId": { "type": "string" },
         "createdBy": { "type": "string" },
         "environmentId": { "type": "string" },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
@@ -3957,7 +4419,6 @@
         { "$ref": "#/definitions/PublicOplogEntryStartSpan" },
         { "$ref": "#/definitions/PublicOplogEntryFinishSpan" },
         { "$ref": "#/definitions/PublicOplogEntrySetSpanAttribute" },
-        { "$ref": "#/definitions/PublicOplogEntryChangePersistenceLevel" },
         { "$ref": "#/definitions/PublicOplogEntryBeginRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntryPreCommitRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntryPreRollbackRemoteTransaction" },
@@ -4023,12 +4484,14 @@
     },
     "PublicOplogEntryStart": {
       "type": "object",
-      "required": ["type", "timestamp", "parentStartIndex", "functionName", "request", "durableFunctionType"],
+      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "request", "durableFunctionType"],
       "properties": {
         "type": { "const": "Start" },
         "timestamp": { "type": "string" },
         "parentStartIndex": { "type": ["integer", "null"], "minimum": 0 },
         "functionName": { "type": "string" },
+        "invocationId": { "type": ["string", "null"] },
+        "observationalOwner": { "type": ["integer", "null"], "minimum": 0 },
         "request": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
         "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" }
       },
@@ -4216,12 +4679,6 @@
       "properties": { "type": { "const": "SetSpanAttribute" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" }, "key": { "type": "string" }, "value": { "$ref": "#/definitions/PublicAttributeValue" } },
       "additionalProperties": false
     },
-    "PublicOplogEntryChangePersistenceLevel": {
-      "type": "object",
-      "required": ["type", "timestamp", "persistenceLevel"],
-      "properties": { "type": { "const": "ChangePersistenceLevel" }, "timestamp": { "type": "string" }, "persistenceLevel": { "$ref": "#/definitions/PersistenceLevel" } },
-      "additionalProperties": false
-    },
     "PublicOplogEntryBeginRemoteTransaction": {
       "type": "object",
       "required": ["type", "timestamp", "transactionId"],
@@ -4343,7 +4800,6 @@
       ]
     },
     "LogLevel": { "type": "string", "enum": ["Stdout", "Stderr", "Trace", "Debug", "Info", "Warn", "Error", "Critical"] },
-    "PersistenceLevel": { "type": "string", "enum": ["PersistNothing", "PersistRemoteSideEffects", "Smart"] },
     "PublicSnapshotData": {
       "oneOf": [
         { "type": "object", "required": ["type", "data", "mimeType"], "properties": { "type": { "const": "Raw" }, "data": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } }, "mimeType": { "type": "string" } }, "additionalProperties": false },
@@ -4405,14 +4861,38 @@
         "finished"
       ]
     },
-    "WorkerUpdateAttempt": {
+    "AgentDeletionMeta": {
       "type": "object",
-      "required": ["componentName", "targetRevision", "agentName"],
+      "required": ["componentName", "agentId"],
       "properties": {
         "componentName": { "type": "string" },
-        "targetRevision": { "type": "integer", "minimum": 0 },
-        "agentName": { "type": "string" },
-        "error": { "type": "string" }
+        "agentId": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "AgentUpdateMeta": {
+      "type": "object",
+      "required": ["componentName", "agentId", "fromRevision", "revision"],
+      "properties": {
+        "componentName": { "type": "string" },
+        "agentId": { "type": "string" },
+        "fromRevision": { "type": "integer", "minimum": 0 },
+        "revision": { "type": "integer", "minimum": 0 },
+        "fromVersion": { "type": "string" },
+        "version": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "AgentRedeploymentMeta": {
+      "type": "object",
+      "required": ["componentName", "agentId", "fromRevision", "revision"],
+      "properties": {
+        "componentName": { "type": "string" },
+        "agentId": { "type": "string" },
+        "fromRevision": { "type": "integer", "minimum": 0 },
+        "revision": { "type": "integer", "minimum": 0 },
+        "fromVersion": { "type": "string" },
+        "version": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -5609,27 +6089,21 @@
       "x-golem-command": "resource delete",
       "required": [
         "$type",
+        "deleted",
         "id",
         "revision",
         "environmentId",
-        "name",
-        "limit",
-        "enforcementAction",
-        "unit",
-        "units"
+        "name"
       ],
       "properties": {
         "$type": {
           "const": "resource.delete"
         },
+        "deleted": { "type": "boolean" },
         "id": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
         "environmentId": { "type": "string" },
-        "name": { "type": "string" },
-        "limit": { "$ref": "#/definitions/ResourceLimit" },
-        "enforcementAction": { "$ref": "#/definitions/EnforcementAction" },
-        "unit": { "type": "string" },
-        "units": { "type": "string" }
+        "name": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -5807,25 +6281,21 @@
       "x-golem-command": "retry-policy delete",
       "required": [
         "$type",
+        "deleted",
         "id",
         "environmentId",
         "name",
-        "revision",
-        "priority",
-        "predicate",
-        "policy"
+        "revision"
       ],
       "properties": {
         "$type": {
           "const": "retry-policy.delete"
         },
+        "deleted": { "type": "boolean" },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
         "name": { "type": "string" },
-        "revision": { "type": "integer", "minimum": 0 },
-        "priority": { "type": "integer", "minimum": 0 },
-        "predicate": { "$ref": "#/definitions/ApiPredicate" },
-        "policy": { "$ref": "#/definitions/ApiRetryPolicy" }
+        "revision": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6736,27 +7206,21 @@
       "x-golem-command": "secret delete",
       "required": [
         "$type",
+        "deleted",
         "id",
         "environmentId",
         "path",
-        "revision",
-        "secretType"
+        "revision"
       ],
       "properties": {
         "$type": {
           "const": "secret.delete"
         },
+        "deleted": { "type": "boolean" },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
         "path": { "type": "array", "items": { "type": "string" } },
-        "revision": { "type": "integer", "minimum": 0 },
-        "secretType": { "$ref": "#/definitions/SchemaGraph" },
-        "secretValue": {
-          "oneOf": [
-            { "$ref": "#/definitions/SchemaValue" },
-            { "type": "null" }
-          ]
-        }
+        "revision": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6884,7 +7348,7 @@
   "x-golem-cli-output-types": [
     {
       "type": "account.delete",
-      "rustType": "AccountDeleteResult"
+      "rustType": "AccountDeleteView"
     },
     {
       "type": "account.get",
@@ -6900,7 +7364,7 @@
     },
     {
       "type": "account.permission-share.delete",
-      "rustType": "PermissionShareDeleteResult"
+      "rustType": "PermissionShareDeleteView"
     },
     {
       "type": "account.permission-share.get",
@@ -6940,7 +7404,7 @@
     },
     {
       "type": "card.revoke",
-      "rustType": "CardRevokeResult"
+      "rustType": "CardRevokeView"
     },
     {
       "type": "agent-type.get",
@@ -6956,7 +7420,11 @@
     },
     {
       "type": "agent.delete",
-      "rustType": "AgentDeleteResult"
+      "rustType": "AgentDeleteView"
+    },
+    {
+      "type": "agent.delete-all",
+      "rustType": "AgentDeleteAllView"
     },
     {
       "type": "agent.file-contents",
@@ -6964,11 +7432,11 @@
     },
     {
       "type": "agent.files",
-      "rustType": "WorkerFilesView"
+      "rustType": "AgentFilesView"
     },
     {
       "type": "agent.get",
-      "rustType": "WorkerGetView"
+      "rustType": "AgentGetView"
     },
     {
       "type": "agent.interrupt",
@@ -6988,7 +7456,7 @@
     },
     {
       "type": "agent.new",
-      "rustType": "WorkerCreateView"
+      "rustType": "AgentCreateView"
     },
     {
       "type": "agent.oplog",
@@ -7020,11 +7488,11 @@
     },
     {
       "type": "agent.update",
-      "rustType": "TryUpdateAllWorkersResult"
+      "rustType": "TryUpdateAllWorkersView"
     },
     {
       "type": "api-token.delete",
-      "rustType": "TokenDeleteResult"
+      "rustType": "TokenDeleteView"
     },
     {
       "type": "api-token.list",
@@ -7044,7 +7512,7 @@
     },
     {
       "type": "api.domain.delete",
-      "rustType": "DomainRegistrationDeleteResult"
+      "rustType": "DomainRegistrationDeleteView"
     },
     {
       "type": "api.domain.list",
@@ -7152,7 +7620,7 @@
     },
     {
       "type": "plugin.unregister",
-      "rustType": "PluginUnregisterResult"
+      "rustType": "PluginUnregisterView"
     },
     {
       "type": "profile.config.set-format",
@@ -7160,7 +7628,7 @@
     },
     {
       "type": "profile.delete",
-      "rustType": "ProfileDeleteResult"
+      "rustType": "ProfileDeleteView"
     },
     {
       "type": "profile.get",

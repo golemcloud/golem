@@ -25,7 +25,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
-    PayloadId, PersistenceLevel, RawOplogPayload, UpdateDescription,
+    PayloadId, RawOplogPayload, UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
@@ -507,9 +507,6 @@ pub trait Oplog: Any + Debug + Send + Sync {
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
     ) -> Result<OrderedOplogStart, String>;
 
-    /// Switched to a different persistence level. This can be used as an optimization hint in the implementations.
-    async fn switch_persistence_level(&self, mode: PersistenceLevel);
-
     /// Atomically appends a `Start` entry and a second entry (its `End` or
     /// `Cancelled`) that references the `Start`'s `OplogIndex`.
     ///
@@ -673,6 +670,8 @@ pub trait OplogOps: Oplog {
             timestamp: now,
             parent_start_index,
             function_name,
+            invocation_id: None,
+            observational_owner: None,
             request: Some(request_payload),
             durable_function_type: function_type,
         };

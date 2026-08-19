@@ -298,10 +298,7 @@ export function schemaGraphToWit(graph: SchemaGraph): WitSchemaGraph {
   return new GraphEncoder(graph.defs).encodeGraphRoot(graph.root);
 }
 
-/**
- * Decode a Component Model carrier. Generated static JSON uses the separate
- * trusted-format decoder `schemaGraphFromJson`.
- */
+/** Decode a Component Model carrier into the recursive SDK model. */
 export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
   const nodes = wit.typeNodes;
   const witDefs = wit.defs;

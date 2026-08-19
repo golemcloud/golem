@@ -3,15 +3,20 @@ syntax = "proto3";
 package golem.component;
 
 import "golem/component/agent.proto";
+import "golem/component/agent_files.proto";
+import "golem/component/plugin.proto";
 import "golem/component/producers.proto";
 import "golem/component/linear_memory.proto";
+import "golem/common/empty.proto";
 import "golem/schema/agent.proto";
+import "golem/tool/tool.proto";
 
 message KnownExports {
   optional string agent_guest_interface = 1;
   optional string save_snapshot_interface = 2;
   optional string load_snapshot_interface = 3;
   optional string oplog_processor_interface = 4;
+  optional string tool_guest_interface = 5;
 }
 
 message ComponentMetadata {
@@ -22,4 +27,42 @@ message ComponentMetadata {
   optional string root_package_version = 7;
   repeated golem.schema.AgentTypeSchema agent_types = 8;
   map<string, golem.component.AgentTypeProvisionConfig> agent_type_provision_configs = 9;
+  map<string, ToolDeploymentMetadata> tools = 11;
+}
+
+message ToolDeploymentMetadata {
+  golem.tool.Tool definition = 1;
+  ToolProvisionConfig provision = 2;
+  optional ToolBindingInput environment_binding = 3;
+  map<string, ToolBindingInput> agent_bindings = 4;
+}
+
+message ToolProvisionConfig {
+  string config_json = 1;
+  map<string, string> env = 2;
+  repeated golem.component.PluginInstallation plugins = 3;
+  repeated golem.component.InitialAgentFile files = 4;
+}
+
+message ToolBindingInput {
+  optional string version = 1;
+  string parameters_json = 2;
+  optional string account = 3;
+  SecretKeyScope secret_keys_readable = 4;
+  SecretKeyScope secret_keys_revealable = 5;
+}
+
+message SecretKeyScope {
+  oneof value {
+    golem.common.Empty all = 1;
+    SecretKeyPaths keys = 2;
+  }
+}
+
+message SecretKeyPaths {
+  repeated SecretKeyPath paths = 1;
+}
+
+message SecretKeyPath {
+  repeated string segments = 1;
 }

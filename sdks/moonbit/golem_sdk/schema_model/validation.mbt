@@ -423,12 +423,12 @@ fn validate_union(
     for j in (i + 1)..<branches.length() {
       let a = branches[i]
       let b = branches[j]
-      match discriminators_overlap(a.discriminator, b.discriminator) {
-        Some(reason) =>
+      match classify_discriminator_pair(a.discriminator, b.discriminator) {
+        Reject(reason) =>
           errors.push(
             UnionAmbiguousDiscriminators(tag_a=a.tag, tag_b=b.tag, reason~),
           )
-        None => ()
+        Disjoint | Indeterminate => ()
       }
     }
   }
@@ -527,7 +527,7 @@ fn resolved_shape(
         None => OtherShape
       }
     }
-    String | Text(_) | Url(_) | Path(_) => StringShape
+    String | Url(_) | Path(_) => StringShape
     Record(fields) => RecordShape(fields.map(f => (f.name, f.body)))
     _ => OtherShape
   }
@@ -561,111 +561,278 @@ fn field_present(fields : Array[(String, SchemaType)], name : String) -> Bool {
 // ============================================================
 
 ///|
-/// Returns `Some(reason)` if rules `a` and `b` can structurally overlap on at
-/// least one value, `None` otherwise. Regex overlap is undecidable in general;
-/// only byte-equal patterns are reported. Mirrors Rust `discriminators_overlap`.
-fn discriminators_overlap(
+priv enum DiscriminatorPairClassification {
+  Reject(String)
+  Disjoint
+  Indeterminate
+} derive(Eq, Debug)
+
+///|
+fn classify_discriminator_pair(
   a : @types.DiscriminatorRule,
   b : @types.DiscriminatorRule,
-) -> String? {
+) -> DiscriminatorPairClassification {
   match (a, b) {
     (@types.Prefix(pa), @types.Prefix(pb)) =>
-      if pa.is_empty() && pb.is_empty() {
-        Some("both prefixes are empty")
-      } else if pa.is_empty() {
-        Some("empty prefix overlaps any other prefix `\{pb}`")
-      } else if pb.is_empty() {
-        Some("empty prefix overlaps any other prefix `\{pa}`")
-      } else if pa.has_prefix(pb) || pb.has_prefix(pa) {
-        Some("prefix `\{pa}` and prefix `\{pb}` overlap")
+      if pa.has_prefix(pb) || pb.has_prefix(pa) {
+        Reject("prefix `\{pa}` and prefix `\{pb}` overlap")
       } else {
-        None
+        Disjoint
       }
     (@types.Suffix(sa), @types.Suffix(sb)) =>
-      if sa.is_empty() && sb.is_empty() {
-        Some("both suffixes are empty")
-      } else if sa.is_empty() {
-        Some("empty suffix overlaps any other suffix `\{sb}`")
-      } else if sb.is_empty() {
-        Some("empty suffix overlaps any other suffix `\{sa}`")
-      } else if sa.has_suffix(sb) || sb.has_suffix(sa) {
-        Some("suffix `\{sa}` and suffix `\{sb}` overlap")
+      if sa.has_suffix(sb) || sb.has_suffix(sa) {
+        Reject("suffix `\{sa}` and suffix `\{sb}` overlap")
       } else {
-        None
+        Disjoint
       }
+    (@types.Prefix(prefix), @types.Suffix(suffix))
+    | (@types.Suffix(suffix), @types.Prefix(prefix)) =>
+      Reject("prefix `\{prefix}` and suffix `\{suffix}` overlap")
+    (@types.Prefix(prefix), @types.Contains(substring))
+    | (@types.Contains(substring), @types.Prefix(prefix)) =>
+      Reject("prefix `\{prefix}` and contains `\{substring}` overlap")
+    (@types.Suffix(suffix), @types.Contains(substring))
+    | (@types.Contains(substring), @types.Suffix(suffix)) =>
+      Reject("suffix `\{suffix}` and contains `\{substring}` overlap")
     (@types.Contains(ca), @types.Contains(cb)) =>
-      if ca.is_empty() || cb.is_empty() {
-        Some("empty contains substring matches every string")
-      } else {
-        None
-      }
+      Reject("contains `\{ca}` and contains `\{cb}` overlap")
     (@types.Regex(ra), @types.Regex(rb)) =>
       if ra == rb {
-        Some("both branches share regex `\{ra}`")
+        Reject("both branches share regex `\{ra}`")
       } else {
-        None
+        Indeterminate
       }
+    (@types.Regex(_), @types.Prefix(_) | @types.Suffix(_) | @types.Contains(_))
+    | (@types.Prefix(_) | @types.Suffix(_) | @types.Contains(_), @types.Regex(_)
+    ) => Indeterminate
+    (
+      @types.Prefix(_)
+      | @types.Suffix(_)
+      | @types.Contains(_)
+      | @types.Regex(_),
+      @types.FieldEquals(_)
+      | @types.FieldAbsent(_),
+    )
+    | (
+      @types.FieldEquals(_)
+      | @types.FieldAbsent(_),
+      @types.Prefix(_)
+      | @types.Suffix(_)
+      | @types.Contains(_)
+      | @types.Regex(_),
+    ) => Disjoint
     (@types.FieldEquals(fa), @types.FieldEquals(fb)) =>
       if fa.field_name != fb.field_name {
-        None
+        Reject(
+          "field-equals on `\{fa.field_name}` and `\{fb.field_name}` can match the same object",
+        )
       } else {
         match (fa.literal, fb.literal) {
           (None, _) | (_, None) =>
-            Some(
+            Reject(
               "field-equals on `\{fa.field_name}` without literal overlaps another field-equals on the same field",
             )
           (Some(la), Some(lb)) =>
             if la == lb {
-              Some(
+              Reject(
                 "two field-equals on `\{fa.field_name}` share literal `\{la}`",
               )
             } else {
-              None
+              Disjoint
             }
         }
       }
     (@types.FieldAbsent(fa), @types.FieldAbsent(fb)) =>
-      if fa == fb {
-        Some("two field-absent rules share field `\{fa}`")
+      Reject("field-absent on `\{fa}` and `\{fb}` can match the same object")
+    (@types.FieldEquals(field_equals), @types.FieldAbsent(field_absent))
+    | (@types.FieldAbsent(field_absent), @types.FieldEquals(field_equals)) =>
+      if field_equals.field_name == field_absent {
+        Disjoint
       } else {
-        None
-      }
-    // Mixed pairs: an empty prefix/suffix/contains on either side matches every
-    // string and therefore overlaps any other rule. Checked prefix→suffix→
-    // contains to mirror the Rust arm order.
-    _ =>
-      if is_empty_prefix(a) || is_empty_prefix(b) {
-        Some("empty prefix matches every string")
-      } else if is_empty_suffix(a) || is_empty_suffix(b) {
-        Some("empty suffix matches every string")
-      } else if is_empty_contains(a) || is_empty_contains(b) {
-        Some("empty contains substring matches every string")
-      } else {
-        None
+        Reject(
+          "field-equals on `\{field_equals.field_name}` and field-absent on `\{field_absent}` can match the same object",
+        )
       }
   }
 }
 
 ///|
-fn is_empty_prefix(r : @types.DiscriminatorRule) -> Bool {
-  match r {
-    @types.Prefix(p) => p.is_empty()
-    _ => false
+fn discriminator_classification_kind(
+  value : DiscriminatorPairClassification,
+) -> Int {
+  match value {
+    Reject(_) => 0
+    Disjoint => 1
+    Indeterminate => 2
   }
 }
 
 ///|
-fn is_empty_suffix(r : @types.DiscriminatorRule) -> Bool {
-  match r {
-    @types.Suffix(s) => s.is_empty()
-    _ => false
-  }
-}
-
-///|
-fn is_empty_contains(r : @types.DiscriminatorRule) -> Bool {
-  match r {
-    @types.Contains(c) => c.is_empty()
-    _ => false
+test "discriminator_pair_classification_matches_portable_matrix" {
+  let fe = (name, literal) => @types.FieldEquals({ field_name: name, literal })
+  let cases : Array[
+    (String, @types.DiscriminatorRule, @types.DiscriminatorRule, Int),
+  ] = [
+    ("prefix_prefix_nested_reject", @types.Prefix("a"), @types.Prefix("ab"), 0),
+    ("prefix_prefix_disjoint", @types.Prefix("a"), @types.Prefix("b"), 1),
+    ("empty_prefix_prefix_reject", @types.Prefix(""), @types.Prefix("a"), 0),
+    (
+      "suffix_suffix_nested_reject",
+      @types.Suffix("ing"),
+      @types.Suffix("ng"),
+      0,
+    ),
+    ("suffix_suffix_disjoint", @types.Suffix("a"), @types.Suffix("b"), 1),
+    ("empty_suffix_suffix_reject", @types.Suffix(""), @types.Suffix("a"), 0),
+    ("prefix_suffix_reject", @types.Prefix("a"), @types.Suffix("b"), 0),
+    ("prefix_contains_reject", @types.Prefix("a"), @types.Contains("b"), 0),
+    ("suffix_contains_reject", @types.Suffix("a"), @types.Contains("b"), 0),
+    ("contains_contains_reject", @types.Contains("a"), @types.Contains("b"), 0),
+    (
+      "regex_regex_identical_reject",
+      @types.Regex("a.*"),
+      @types.Regex("a.*"),
+      0,
+    ),
+    (
+      "regex_regex_distinct_indeterminate",
+      @types.Regex("a.*"),
+      @types.Regex(".*a"),
+      2,
+    ),
+    ("regex_prefix_indeterminate", @types.Regex("^a"), @types.Prefix("a"), 2),
+    (
+      "regex_empty_prefix_indeterminate",
+      @types.Regex("^a"),
+      @types.Prefix(""),
+      2,
+    ),
+    ("regex_suffix_indeterminate", @types.Regex("a$"), @types.Suffix("a"), 2),
+    (
+      "regex_empty_suffix_indeterminate",
+      @types.Regex("a$"),
+      @types.Suffix(""),
+      2,
+    ),
+    ("regex_contains_indeterminate", @types.Regex("a"), @types.Contains("a"), 2),
+    (
+      "regex_empty_contains_indeterminate",
+      @types.Regex("a"),
+      @types.Contains(""),
+      2,
+    ),
+    (
+      "prefix_field_equals_disjoint",
+      @types.Prefix("a"),
+      fe("kind", Some("a")),
+      1,
+    ),
+    (
+      "prefix_field_absent_disjoint",
+      @types.Prefix("a"),
+      @types.FieldAbsent("kind"),
+      1,
+    ),
+    (
+      "suffix_field_equals_disjoint",
+      @types.Suffix("a"),
+      fe("kind", Some("a")),
+      1,
+    ),
+    (
+      "suffix_field_absent_disjoint",
+      @types.Suffix("a"),
+      @types.FieldAbsent("kind"),
+      1,
+    ),
+    (
+      "contains_field_equals_disjoint",
+      @types.Contains("a"),
+      fe("kind", Some("a")),
+      1,
+    ),
+    (
+      "contains_field_absent_disjoint",
+      @types.Contains("a"),
+      @types.FieldAbsent("kind"),
+      1,
+    ),
+    ("regex_field_equals_disjoint", @types.Regex("a"), fe("kind", Some("a")), 1),
+    (
+      "regex_field_absent_disjoint",
+      @types.Regex("a"),
+      @types.FieldAbsent("kind"),
+      1,
+    ),
+    (
+      "field_equals_same_field_different_literals_disjoint",
+      fe("kind", Some("a")),
+      fe("kind", Some("b")),
+      1,
+    ),
+    (
+      "field_equals_same_field_same_literal_reject",
+      fe("kind", Some("a")),
+      fe("kind", Some("a")),
+      0,
+    ),
+    (
+      "field_equals_same_field_one_literal_absent_reject",
+      fe("kind", None),
+      fe("kind", Some("a")),
+      0,
+    ),
+    (
+      "field_equals_same_field_both_literals_absent_reject",
+      fe("kind", None),
+      fe("kind", None),
+      0,
+    ),
+    (
+      "field_equals_different_fields_reject",
+      fe("left", Some("a")),
+      fe("right", Some("b")),
+      0,
+    ),
+    (
+      "field_absent_same_field_reject",
+      @types.FieldAbsent("kind"),
+      @types.FieldAbsent("kind"),
+      0,
+    ),
+    (
+      "field_absent_different_fields_reject",
+      @types.FieldAbsent("left"),
+      @types.FieldAbsent("right"),
+      0,
+    ),
+    (
+      "field_equals_field_absent_same_field_disjoint",
+      fe("kind", Some("a")),
+      @types.FieldAbsent("kind"),
+      1,
+    ),
+    (
+      "field_equals_field_absent_different_fields_reject",
+      fe("left", Some("a")),
+      @types.FieldAbsent("right"),
+      0,
+    ),
+  ]
+  for case in cases {
+    assert_eq(
+      discriminator_classification_kind(
+        classify_discriminator_pair(case.1, case.2),
+      ),
+      case.3,
+      msg="\{case.0} forward",
+    )
+    assert_eq(
+      discriminator_classification_kind(
+        classify_discriminator_pair(case.2, case.1),
+      ),
+      case.3,
+      msg="\{case.0} reverse",
+    )
   }
 }

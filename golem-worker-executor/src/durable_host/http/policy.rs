@@ -27,8 +27,8 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::durability::DurableExecutionState;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::invocation_context::SpanId;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::types::SerializableHttpMethod;
-use golem_common::model::oplog::{OplogIndex, PersistenceLevel};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
@@ -67,8 +67,8 @@ pub(crate) enum HttpRetryDisallowedReason {
     NotLive,
     /// Worker is executing host operations without persistence.
     UnpersistedExecution,
-    /// Persistence level is PersistNothing — no oplog data to reconstruct from.
-    PersistNothing,
+    /// Worker is executing a snapshot load/save function.
+    Snapshotting,
     /// Worker is inside a user-defined atomic region; a failure must escalate
     /// to trap+replay so the whole region re-executes.
     InAtomicRegion,
@@ -90,8 +90,8 @@ pub(crate) fn http_worker_state_allows_retry(
     if exec_state.is_unpersisted_execution {
         return Err(HttpRetryDisallowedReason::UnpersistedExecution);
     }
-    if exec_state.persistence_level == PersistenceLevel::PersistNothing {
-        return Err(HttpRetryDisallowedReason::PersistNothing);
+    if exec_state.snapshotting_mode {
+        return Err(HttpRetryDisallowedReason::Snapshotting);
     }
     if in_atomic_region {
         return Err(HttpRetryDisallowedReason::InAtomicRegion);
@@ -301,7 +301,7 @@ mod tests {
     fn live_exec_state() -> DurableExecutionState {
         DurableExecutionState {
             is_live: true,
-            persistence_level: PersistenceLevel::Smart,
+            snapshotting_mode: false,
             is_unpersisted_execution: false,
             assume_idempotence: false,
             max_in_function_retry_delay: std::time::Duration::from_secs(1),
@@ -337,12 +337,12 @@ mod tests {
         assert_eq!(
             http_worker_state_allows_retry(
                 &DurableExecutionState {
-                    persistence_level: PersistenceLevel::PersistNothing,
+                    snapshotting_mode: true,
                     ..live_exec_state()
                 },
                 false
             ),
-            Err(HttpRetryDisallowedReason::PersistNothing)
+            Err(HttpRetryDisallowedReason::Snapshotting)
         );
         assert_eq!(
             http_worker_state_allows_retry(&live_exec_state(), true),

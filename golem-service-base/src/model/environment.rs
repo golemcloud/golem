@@ -17,6 +17,7 @@ use super::agent_secret::AgentSecret;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::retry_policy::NamedRetryPolicy;
+use golem_common::model::tool::ToolDeploymentState;
 use std::collections::HashMap;
 
 // The current, mutable state of the environment.
@@ -26,6 +27,7 @@ pub struct EnvironmentState {
     pub agent_deployment_details: HashMap<AgentTypeName, AgentDeploymentDetails>,
     pub agent_secrets: HashMap<CanonicalAgentSecretPath, AgentSecret>,
     pub retry_policies: Vec<NamedRetryPolicy>,
+    pub tool_deployment: Option<ToolDeploymentState>,
 }
 
 impl TryFrom<EnvironmentState> for golem_api_grpc::proto::golem::registry::EnvironmentState {
@@ -44,6 +46,7 @@ impl TryFrom<EnvironmentState> for golem_api_grpc::proto::golem::registry::Envir
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
             retry_policies: value.retry_policies.into_iter().map(Into::into).collect(),
+            tool_deployment: value.tool_deployment.map(Into::into),
         })
     }
 }
@@ -74,6 +77,35 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::EnvironmentState> for Envir
                 .collect(),
             agent_secrets,
             retry_policies,
+            tool_deployment: value.tool_deployment.map(TryInto::try_into).transpose()?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::deployment::DeploymentRevision;
+    use std::collections::BTreeMap;
+    use test_r::test;
+
+    #[test]
+    fn environment_state_proto_roundtrip_preserves_tool_snapshot() {
+        let tool_deployment = ToolDeploymentState {
+            deployment_revision: DeploymentRevision::try_from(3_u64).unwrap(),
+            registered_tools: BTreeMap::new(),
+            agent_tool_bindings: BTreeMap::new(),
+        };
+        let state = EnvironmentState {
+            agent_deployment_details: HashMap::new(),
+            agent_secrets: HashMap::new(),
+            retry_policies: Vec::new(),
+            tool_deployment: Some(tool_deployment.clone()),
+        };
+
+        let proto: golem_api_grpc::proto::golem::registry::EnvironmentState = state.into();
+        let decoded = EnvironmentState::try_from(proto).unwrap();
+
+        assert_eq!(decoded.tool_deployment, Some(tool_deployment));
     }
 }

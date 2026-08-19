@@ -162,7 +162,7 @@ pub mod load_snapshot {
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
-            "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
+            "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
@@ -204,7 +204,7 @@ pub mod save_snapshot {
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
-            "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
+            "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
@@ -250,7 +250,7 @@ pub mod golem_agentic {
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
-            "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
+            "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
@@ -308,7 +308,7 @@ pub mod oplog_processor {
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
-            "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
+            "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
@@ -349,8 +349,8 @@ mod transaction;
 use std::future::Future;
 
 use bindings::golem::api::host::{
-    self as host_api, get_idempotence_mode, get_oplog_persistence_level, mark_begin_operation,
-    mark_end_operation, set_idempotence_mode, set_oplog_persistence_level,
+    self as host_api, get_idempotence_mode, mark_begin_operation, mark_end_operation,
+    set_idempotence_mode,
 };
 
 pub type OplogIndex = u64;
@@ -439,33 +439,6 @@ fn schema_environment_id_to_host(value: EnvironmentId) -> host_api::EnvironmentI
 fn host_environment_id_to_schema(value: host_api::EnvironmentId) -> EnvironmentId {
     EnvironmentId {
         uuid: wire_uuid_to_schema(value.uuid),
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
-pub enum PersistenceLevel {
-    PersistNothing,
-    PersistRemoteSideEffects,
-    Smart,
-}
-
-impl From<host_api::PersistenceLevel> for PersistenceLevel {
-    fn from(value: host_api::PersistenceLevel) -> Self {
-        match value {
-            host_api::PersistenceLevel::PersistNothing => Self::PersistNothing,
-            host_api::PersistenceLevel::PersistRemoteSideEffects => Self::PersistRemoteSideEffects,
-            host_api::PersistenceLevel::Smart => Self::Smart,
-        }
-    }
-}
-
-impl From<PersistenceLevel> for host_api::PersistenceLevel {
-    fn from(value: PersistenceLevel) -> Self {
-        match value {
-            PersistenceLevel::PersistNothing => Self::PersistNothing,
-            PersistenceLevel::PersistRemoteSideEffects => Self::PersistRemoteSideEffects,
-            PersistenceLevel::Smart => Self::Smart,
-        }
     }
 }
 
@@ -1057,41 +1030,6 @@ pub fn blocking_await_promise(promise_id: &PromiseId) -> Vec<u8> {
 pub async fn await_promise(promise_id: &PromiseId) -> Vec<u8> {
     let promise = get_promise(promise_id);
     promise.get().await
-}
-
-pub struct PersistenceLevelGuard {
-    original_level: host_api::PersistenceLevel,
-}
-
-impl Drop for PersistenceLevelGuard {
-    fn drop(&mut self) {
-        set_oplog_persistence_level(self.original_level);
-    }
-}
-
-/// Temporarily sets the oplog persistence level to the given value.
-///
-/// When the returned guard is dropped, the original persistence level is restored.
-#[must_use]
-pub fn use_persistence_level(level: PersistenceLevel) -> PersistenceLevelGuard {
-    let original_level = get_oplog_persistence_level();
-    set_oplog_persistence_level(Into::into(level));
-    PersistenceLevelGuard { original_level }
-}
-
-/// Executes the given function with the oplog persistence level set to the given value.
-pub fn with_persistence_level<R>(level: PersistenceLevel, f: impl FnOnce() -> R) -> R {
-    let _guard = use_persistence_level(level);
-    f()
-}
-
-/// Executes the given async function with the oplog persistence level set to the given value.
-pub async fn with_persistence_level_async<R, F: Future<Output = R>>(
-    level: PersistenceLevel,
-    f: impl FnOnce() -> F,
-) -> R {
-    let _guard = use_persistence_level(level);
-    f().await
 }
 
 pub struct IdempotenceModeGuard {

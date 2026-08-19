@@ -32,7 +32,7 @@ use golem_common::model::oplog::types::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse,
-    HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, PersistenceLevel,
+    HostResponseHttpFutureTrailersGet, HostResponseHttpResponse,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::{HeaderName, HeaderValue};
@@ -1205,11 +1205,6 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             }
 
             response
-        } else if durable_execution_state.persistence_level == PersistenceLevel::PersistNothing {
-            Err(WorkerExecutorError::runtime(
-                "Trying to replay an http request in a PersistNothing block",
-            )
-            .into())
         } else {
             // Propagate WorkerExecutorError via `?` (From) so the downcast
             // survives the wasmtime::Error chain — TrapType::from_error

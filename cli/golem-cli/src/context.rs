@@ -33,12 +33,12 @@ use crate::model::app_raw::{
     AppVersionSource, BuiltinServer, CustomServerAuth, DeploymentOptions, Environment, Marker,
     Server,
 };
+use crate::model::config::server::ToFormattedServerContext;
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
 use crate::model::masking::MaskingConfig;
+use crate::model::plugin::PluginNameAndVersion;
 use crate::model::repl::ReplLanguage;
-use crate::model::text::plugin::PluginNameAndVersion;
-use crate::model::text::server::ToFormattedServerContext;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
 use golem_client::model::EnvironmentPluginGrantWithDetails;
@@ -54,6 +54,7 @@ use golem_common::model::http_api_deployment::{
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{Level, debug, enabled};
 use url::Url;
 
@@ -74,6 +75,7 @@ pub struct Context {
     app_context_config: Option<ApplicationContextConfig>,
     http_batch_size: u64,
     http_parallelism: usize,
+    agent_stream_ping_interval: Duration,
     auth_token_override: Option<String>,
     server_config: ResolvedServerConfig,
     yes: bool,
@@ -337,6 +339,7 @@ impl Context {
             app_context_config,
             http_batch_size: global_flags.http_batch_size(),
             http_parallelism: global_flags.http_parallelism(),
+            agent_stream_ping_interval: global_flags.agent_stream_ping_interval(),
             auth_token_override: global_flags.auth_token,
             environment_reference,
             manifest_environment,
@@ -450,6 +453,10 @@ impl Context {
 
     pub fn http_parallelism(&self) -> usize {
         self.http_parallelism
+    }
+
+    pub fn agent_stream_ping_interval(&self) -> Duration {
+        self.agent_stream_ping_interval
     }
 
     pub async fn golem_clients(&self) -> anyhow::Result<&GolemClients> {
@@ -1029,6 +1036,8 @@ mod test {
                 cli: None,
                 deployment: None,
                 version: None,
+                tools_merge_mode: None,
+                tools: None,
             },
         }
     }

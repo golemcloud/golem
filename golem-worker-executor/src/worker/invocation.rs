@@ -43,7 +43,7 @@ use std::any::Any;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::{Instrument, Level, debug, span};
-use wasmtime::component::Accessor;
+use wasmtime::component::{Accessor, AccessorTask};
 use wasmtime::{AsContextMut, StoreContextMut};
 
 /// Describes how an invocation is being executed with respect to the oplog.
@@ -244,7 +244,11 @@ pub async fn invoke_live_streaming_rpc<Ctx: WorkerCtx>(
                     validate_invoke_output(&validation_name, &expected_output, &output)
                         .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
                     if publish_live_streaming_response(&response_for_call, Ok(output)) {
-                        tracker_for_call.wait_for_sources().await;
+                        accessor
+                            .spawn(WaitForLiveStreamSources {
+                                tracker: tracker_for_call.clone(),
+                            })
+                            .await;
                     }
                     Ok(true)
                 }
@@ -311,6 +315,17 @@ pub async fn invoke_live_streaming_rpc<Ctx: WorkerCtx>(
         publish_live_streaming_response(&response, Err(error.clone()));
     }
     result
+}
+
+struct WaitForLiveStreamSources {
+    tracker: Arc<LiveStreamTracker>,
+}
+
+impl<Ctx: WorkerCtx> AccessorTask<Ctx> for WaitForLiveStreamSources {
+    async fn run(self, _accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
+        self.tracker.wait_for_sources().await;
+        Ok(())
+    }
 }
 
 /// Invokes a worker and calls the appropriate hooks to observe the invocation

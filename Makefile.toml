@@ -734,6 +734,34 @@ description = "Runs all CLI integration tests with dev-release golem and golem-c
 env = { "GOLEM_CLI_TEST_BIN_PROFILE" = "dev-release" }
 run_task = "cli-integration-tests"
 
+# it-cli CI shards, split by module-level test-r tag (see the it-cli matrix in ci.yaml).
+[tasks.cli-integration-tests-agents]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'agents' shard (app::agents)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-bridge]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'bridge' shard (bridge_gen)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:bridge_gen" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-core]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'core' shard (everything not tagged agents/bridge_gen)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
 [tasks.cli-integration-tests-update-golden-files]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "UPDATE_GOLDENFILES" = "1" }
@@ -1489,10 +1517,45 @@ rm -rf build-out
 
 [tasks.build-benchmark-components]
 description = "Builds only the benchmark test WASM components"
-dependencies = ["build", "build-sdk-ts"]
+dependencies = ["wit", "build-sdk-ts"]
+script_runner = "@duckscript"
 script = '''
+golem_cli = get_env GOLEM_CLI
+golem_cli_empty = is_empty ${golem_cli}
+if ${golem_cli_empty}
+    exec --fail-on-error cargo build --release -p golem-cli --bin golem-cli
+    golem_cli = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/release/golem-cli"
+    set_env GOLEM_CLI ${golem_cli}
+end
 cd test-components
-./build-components.sh benchmarks
+exec --fail-on-error ./build-components.sh benchmarks
+'''
+
+[tasks.run-benchmark-suite-orb]
+description = "Builds and runs the nightly spawned benchmark suite in an Amp orb"
+script_runner = "@duckscript"
+env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.1" }
+script = '''
+exec --fail-on-error docker info
+exec --fail-on-error cargo make --profile ci build-release
+golem_cli = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/release/golem-cli"
+set_env GOLEM_CLI ${golem_cli}
+exec --fail-on-error cargo make build-benchmark-components
+
+results = get_env GOLEM_BENCHMARK_RESULTS_PATH
+results_empty = is_empty ${results}
+if ${results_empty}
+    mkdir tmp
+    results = set "tmp/orb-benchmark-results.json"
+end
+
+registry_http_port = get_env GOLEM_BENCHMARK_REGISTRY_HTTP_PORT
+registry_http_port_empty = is_empty ${registry_http_port}
+if ${registry_http_port_empty}
+    registry_http_port = set "18081"
+end
+
+exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- --primary-only suite --save-to-json ${results} integration-tests/benchmark_suites/ci.yaml spawned --registry-service-http-port ${registry_http_port}
 '''
 
 [tasks.clean-test-components]

@@ -316,17 +316,16 @@ test "subtree invoker uses the child tool wire name" {
   assert_true(
     generated.contains(
       (
-        #|      __golem_tool_def_raw_Child(),
-        #|      "child",
+        #|    let child = __golem_tool_def_prepare_Child(
+        #|      descendant_ancestors,
         #|      { options: [], flags: [] },
         #|      Some("child"),
       ),
     ),
   )
   assert_true(
-    generated.contains(
-      "__golem_tool_def_raw_Child().normalize_inherited_globals()",
-    ),
+    generated.contains("__golem_tool_def_prepare_Child(") &&
+    generated.contains(".normalize_inherited_globals()"),
   )
 }
 
@@ -371,7 +370,7 @@ test "grafted child root aliases cannot shadow parent commands" {
 }
 
 ///|
-test "typed subtree client omits a child global captured by short name" {
+test "distinct subtree globals cannot share only a short form" {
   let source =
     #|#derive.tool
     #|struct Parent {}
@@ -382,16 +381,11 @@ test "typed subtree client omits a child global captured by short name" {
     #|struct Child {}
     #|#derive.arg("child_verbose", scope="global", short="v", kind="flag")
     #|pub fn Child::child(child_verbose : Bool) -> Unit { () }
-  let generated = @formatter.impls_to_string(
-    @lib.generate_tool_client_code(@lib.parse_tools([("subtree.mbt", source)])),
-  )
-  assert_true(generated.contains("ParentClient::child"))
-  assert_true(generated.contains("parent_verbose : Bool"))
-  assert_false(generated.contains("child_verbose : Bool"))
+  expect_tool_emit_error(source, "short form 'v'")
 }
 
 ///|
-test "typed leaf client uses an inherited global captured by short name" {
+test "distinct leaf globals cannot share only a short form" {
   let source =
     #|#derive.tool
     #|struct Root {}
@@ -399,15 +393,7 @@ test "typed leaf client uses an inherited global captured by short name" {
     #|pub fn Root::root(root_verbose : Bool) -> Unit { () }
     #|#derive.arg("leaf_verbose", scope="global", short="v", kind="flag")
     #|pub fn Root::run(leaf_verbose : Bool) -> Unit { () }
-  let generated = @formatter.impls_to_string(
-    @lib.generate_tool_client_code(@lib.parse_tools([("short.mbt", source)])),
-  )
-  assert_true(generated.contains("RootClient::run"))
-  assert_true(generated.contains("root_verbose : Bool"))
-  assert_true(
-    generated.contains("(\"root-verbose\", @schema.to_value_as(root_verbose))"),
-  )
-  assert_false(generated.contains("leaf_verbose"))
+  expect_tool_emit_error(source, "short form 'v'")
 }
 
 ///|
@@ -434,7 +420,7 @@ test "invoker decodes a reverse-alias global through the inherited canonical nam
 }
 
 ///|
-test "bug finder short-deprojected child root global does not shadow leaf input" {
+test "nested subtree globals cannot deproject by short form" {
   let source =
     #|#derive.tool
     #|struct Parent {}
@@ -447,24 +433,43 @@ test "bug finder short-deprojected child root global does not shadow leaf input"
     #|pub fn Child::child(format : String) -> Unit { () }
     #|#derive.arg("format", scope="option")
     #|pub fn Child::run(format : String) -> Unit { () }
-  let tools = @lib.parse_tools([("subtree.mbt", source)])
-  let registration = @formatter.impls_to_string(
-    @lib.generate_tool_registration(tools),
-  ) catch {
-    @lib.ToolEmitError(message) =>
-      fail("valid grafted tool was rejected: " + message)
-  }
-  let clients = @formatter.impls_to_string(
-    @lib.generate_tool_client_code(tools),
-  ) catch {
-    @lib.ToolEmitError(message) =>
-      fail("valid grafted client was rejected: " + message)
-  }
-  assert_true(registration.contains("@tool.register_subtool_def_invoker"))
-  assert_true(clients.contains("ParentClient::child"))
-  assert_true(clients.contains("count : String"))
-  assert_true(clients.contains("ParentChildClient::run"))
-  assert_true(clients.contains("format : String"))
+  expect_tool_emit_error(source, "short form 'f'")
+}
+
+///|
+test "nested subtree preparation carries complete strict ancestry" {
+  let source =
+    #|#derive.tool
+    #|struct Outer {}
+    #|#derive.arg("tenant", scope="global", alias="profile")
+    #|pub fn Outer::outer(tenant : String) -> Unit { () }
+    #|#derive.command(subtree="Middle")
+    #|pub fn Outer::middle() -> Unit { () }
+    #|#derive.tool
+    #|struct Middle {}
+    #|#derive.arg("profile", scope="global", alias="config")
+    #|pub fn Middle::middle(profile : String) -> Unit { () }
+    #|#derive.command(subtree="Leaf")
+    #|pub fn Middle::leaf() -> Unit { () }
+    #|#derive.tool
+    #|struct Leaf {}
+    #|#derive.arg("config", scope="global")
+    #|pub fn Leaf::leaf(config : String) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("nested.mbt", source)])),
+  )
+  assert_true(generated.contains("fn __golem_tool_def_prepare_Outer("))
+  assert_true(
+    generated.contains("let child = __golem_tool_def_prepare_Middle("),
+  )
+  assert_true(generated.contains("let child = __golem_tool_def_prepare_Leaf("))
+  assert_true(generated.split("descendant_ancestors,").count() - 1 >= 2)
+  assert_true(generated.contains("let descendant_ancestors ="))
+  assert_true(generated.contains("__golem_tool_concat_globals("))
+  assert_true(generated.contains("strict_ancestors"))
+  assert_true(generated.contains("prepared.commands[0].globals"))
+  assert_true(generated.contains("__golem_tool_append_prepared(def, child)"))
+  assert_eq(generated.split(".normalize_inherited_globals()").count() - 1, 3)
 }
 
 ///|
@@ -1201,15 +1206,129 @@ test "all emitted contract identifiers use lower-kebab-case" {
 }
 
 ///|
-test "child argument surfaces cannot shadow inherited globals" {
+test "compatible child options and flags deproject onto inherited identities" {
   let source =
     #|#derive.tool("runner")
     #|struct Runner {}
     #|#derive.arg("global_value", scope="global", name="token")
-    #|pub fn Runner::runner(global_value : String) -> Unit { () }
+    #|#derive.arg("global_verbose", scope="global", name="verbose", kind="flag")
+    #|pub fn Runner::runner(global_value : String, global_verbose : Bool) -> Unit { () }
     #|#derive.arg("local_value", scope="option", name="token")
-    #|pub fn Runner::run(local_value : String) -> Unit { () }
-  expect_tool_emit_error(source, "token")
+    #|#derive.arg("local_verbose", scope="flag", name="verbose", kind="flag")
+    #|pub fn Runner::run(local_value : String, local_verbose : Bool) -> Unit { () }
+  let tools = @lib.parse_tools([("compatible.mbt", source)])
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools),
+  )
+  assert_true(registration.contains("let local_value :String = try"))
+  assert_true(registration.contains("let local_verbose :Bool = try"))
+  let clients = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(tools),
+  )
+  assert_true(clients.contains("global_value : String"))
+  assert_true(clients.contains("global_verbose : Bool"))
+  assert_false(clients.contains("local_value : String"))
+  assert_false(clients.contains("local_verbose : Bool"))
+}
+
+///|
+test "compatible child positional and tail deproject onto inherited identities" {
+  let source =
+    #|#derive.tool("runner")
+    #|struct Runner {}
+    #|#derive.arg("global_value", scope="global", name="token")
+    #|#derive.arg("global_items", scope="global", name="items")
+    #|pub fn Runner::runner(global_value : String, global_items : Array[String]) -> Unit { () }
+    #|#derive.arg("local_value", scope="positional", name="token")
+    #|#derive.arg("local_items", scope="tail", name="items")
+    #|pub fn Runner::run(local_value : String, local_items : Array[String]) -> Unit { () }
+  let tools = @lib.parse_tools([("compatible.mbt", source)])
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools),
+  )
+  assert_true(registration.contains("let local_value :String = try"))
+  assert_true(registration.contains("let local_items :Array[String] = try"))
+  let clients = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(tools),
+  )
+  assert_true(clients.contains("global_value : String"))
+  assert_true(clients.contains("global_items : Array[String]"))
+  assert_false(clients.contains("local_value : String"))
+  assert_false(clients.contains("local_items : Array[String]"))
+}
+
+///|
+test "authored string aliases and short forms use separate namespaces" {
+  let source =
+    #|#derive.tool("alias-first")
+    #|struct AliasFirst {}
+    #|#derive.arg("format", scope="global", alias="f")
+    #|pub fn AliasFirst::alias_first(format : String) -> Unit { () }
+    #|#derive.arg("file", scope="option", short="f")
+    #|pub fn AliasFirst::run(file : String) -> Unit { () }
+    #|#derive.tool("short-first")
+    #|struct ShortFirst {}
+    #|#derive.arg("format", scope="global", short="f")
+    #|pub fn ShortFirst::short_first(format : String) -> Unit { () }
+    #|#derive.arg("file", scope="option", alias="f")
+    #|pub fn ShortFirst::run(file : String) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(
+      @lib.parse_tools([("separate_namespaces.mbt", source)]),
+    ),
+  )
+  assert_true(generated.contains("fn __golem_tool_def_AliasFirst"))
+  assert_true(generated.contains("fn __golem_tool_def_ShortFirst"))
+}
+
+///|
+test "constraints resolve authored aliases but not short forms" {
+  let short_only =
+    #|#derive.tool
+    #|struct ShortOnly {}
+    #|#derive.arg("format", scope="global", short="f")
+    #|pub fn ShortOnly::short_only(format : String) -> Unit { () }
+    #|#derive.arg("output", scope="option")
+    #|#derive.constraint("requires_all", value_is="f=json")
+    #|pub fn ShortOnly::run(output : String) -> Unit { () }
+  expect_tool_emit_error(short_only, "Constraint reference 'f'")
+  let authored_alias =
+    #|#derive.tool
+    #|struct AuthoredAlias {}
+    #|#derive.arg("format", scope="global", alias="f")
+    #|pub fn AuthoredAlias::authored_alias(format : String) -> Unit { () }
+    #|#derive.arg("output", scope="option")
+    #|#derive.constraint("requires_all", value_is="f=json")
+    #|pub fn AuthoredAlias::run(output : String) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(
+      @lib.parse_tools([("authored_alias.mbt", authored_alias)]),
+    ),
+  )
+  assert_true(generated.contains("@tool.RefDef::ValueIs"))
+}
+
+///|
+test "discarded identity short does not collide with a surviving local short" {
+  let source =
+    #|#derive.tool("runner")
+    #|struct Runner {}
+    #|#derive.arg("global_token", scope="global", name="token", short="t")
+    #|pub fn Runner::runner(global_token : String) -> Unit { () }
+    #|#derive.arg("local_token", scope="option", name="token", short="x")
+    #|#derive.arg("other", scope="option", short="x")
+    #|pub fn Runner::run(local_token : String, other : String) -> Unit { () }
+  let tools = @lib.parse_tools([("discarded_short.mbt", source)])
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools),
+  )
+  assert_true(registration.contains("let local_token :String = try"))
+  let clients = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(tools),
+  )
+  assert_true(clients.contains("global_token : String"))
+  assert_true(clients.contains("other : String"))
+  assert_false(clients.contains("local_token : String"))
 }
 
 ///|
@@ -1304,4 +1423,24 @@ test "canonical MoonBit tools preserve the shared Rust and Scala contract" {
   assert_true(clients.contains("pub(all) struct CanonicalGitStashClient"))
   assert_false(clients.contains("pub fn RemoteClient::new()"))
   assert_false(clients.contains("pub fn StashClient::new()"))
+}
+
+///|
+test "child constraint resolves parent subtree global" {
+  let source =
+    #|#derive.tool
+    #|struct Parent {}
+    #|#derive.command(subtree="Child")
+    #|#derive.arg("format", scope="global")
+    #|pub fn Parent::child(format : String) -> Unit { () }
+    #|#derive.tool
+    #|struct Child {}
+    #|#derive.constraint("requires_all", value_is="format=json")
+    #|pub fn Child::run(name : String) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(
+      @lib.parse_tools([("ancestor_constraint.mbt", source)]),
+    ),
+  )
+  assert_true(generated.contains("@tool.RefDef::ValueIs"))
 }

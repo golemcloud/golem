@@ -16,9 +16,10 @@
 
 package golem.host
 
-import golem.HostApi
 import golem.schema.{IntoSchema, SchemaValue, TypedSchemaValue}
 import zio.test._
+
+import scala.concurrent.{ExecutionContext, Future}
 
 object DurabilityApiCompileSpec extends ZIOSpecDefault {
   import DurabilityApi._
@@ -43,9 +44,6 @@ object DurabilityApiCompileSpec extends ZIOSpecDefault {
     case DurableFunctionType.WriteRemoteTransaction(b) => s"write-remote-transaction($b,${ft.tag})"
   }
 
-  private val state: DurableExecutionState =
-    DurableExecutionState(isLive = true, persistenceLevel = HostApi.PersistenceLevel.Smart)
-
   private val entryVersions: List[OplogEntryVersion] =
     List(OplogEntryVersion.V1, OplogEntryVersion.V2)
 
@@ -59,6 +57,24 @@ object DurabilityApiCompileSpec extends ZIOSpecDefault {
     entryVersion = OplogEntryVersion.V1
   )
 
+  private implicit val executionContext: ExecutionContext = ExecutionContext.global
+
+  private def durableSyncExample(request: String): String =
+    DurabilityApi.durable(
+      "test",
+      "sync",
+      DurableFunctionType.WriteRemote,
+      request
+    )("response")
+
+  private def durableAsyncExample(request: String): Future[String] =
+    DurabilityApi.durableAsync(
+      "test",
+      "async",
+      DurableFunctionType.WriteRemote,
+      request
+    )(Future.successful("response"))
+
   def spec = suite("DurabilityApiCompileSpec")(
     test("all DurableFunctionType variants constructed") {
       assertTrue(allFunctionTypes.size == 8)
@@ -66,12 +82,6 @@ object DurabilityApiCompileSpec extends ZIOSpecDefault {
     test("exhaustive DurableFunctionType match compiles") {
       allFunctionTypes.foreach(ft => assertTrue(describeFunctionType(ft).nonEmpty))
       assertTrue(true)
-    },
-    test("DurableExecutionState construction") {
-      assertTrue(
-        state.isLive,
-        state.persistenceLevel == HostApi.PersistenceLevel.Smart
-      )
     },
     test("OplogEntryVersion exhaustive") {
       entryVersions.foreach {

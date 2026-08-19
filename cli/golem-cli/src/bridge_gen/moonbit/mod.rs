@@ -99,6 +99,7 @@ const RESERVED_PARAM_NAMES: &[&str] = &[
     "configuration",
     "parameters",
     "response",
+    "decoded",
     "result",
     "value",
     "v",
@@ -1071,23 +1072,25 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
 
         self.write_guest_constructors(writer, &client, &agent_type_name)?;
 
-        writer.line(format!(
-            "pub fn {client}::get_agent_id(self : {client}) -> String raise @common.AgentError {{"
-        ));
-        writer.indent();
-        writer.line("self.client.get_agent_id()");
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
+        if self.agent_type.mode == AgentMode::Durable {
+            writer.line(format!(
+                "pub fn {client}::get_agent_id(self : {client}) -> String raise @common.AgentError {{"
+            ));
+            writer.indent();
+            writer.line("self.client.get_agent_id()");
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
 
-        writer.line(format!(
-            "pub fn {client}::phantom_id(self : {client}) -> @types.Uuid? {{"
-        ));
-        writer.indent();
-        writer.line("self.client.phantom_id()");
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
+            writer.line(format!(
+                "pub fn {client}::phantom_id(self : {client}) -> @types.Uuid? {{"
+            ));
+            writer.indent();
+            writer.line("self.client.phantom_id()");
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+        }
 
         writer.line(format!("pub fn {client}::drop(self : {client}) -> Unit {{"));
         writer.indent();
@@ -1179,16 +1182,18 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             None,
             None,
         )?;
-        self.write_guest_constructor(
-            writer,
-            client,
-            agent_type_name,
-            "get_phantom",
-            &append_param("phantom_id : @types.Uuid", &param_decls),
-            &input,
-            Some("phantom_id"),
-            None,
-        )?;
+        if self.agent_type.mode == AgentMode::Durable {
+            self.write_guest_constructor(
+                writer,
+                client,
+                agent_type_name,
+                "get_phantom",
+                &append_param("phantom_id : @types.Uuid", &param_decls),
+                &input,
+                Some("phantom_id"),
+                None,
+            )?;
+        }
 
         let configs = self.local_configs();
         if configs.is_empty() {
@@ -1234,19 +1239,21 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             None,
             Some((&configs, &config_names)),
         )?;
-        self.write_guest_constructor(
-            writer,
-            client,
-            agent_type_name,
-            "get_phantom_with_config",
-            &append_param(
-                &config_decls,
-                &append_param("phantom_id : @types.Uuid", &param_decls),
-            ),
-            &input,
-            Some("phantom_id"),
-            Some((&configs, &config_names)),
-        )?;
+        if self.agent_type.mode == AgentMode::Durable {
+            self.write_guest_constructor(
+                writer,
+                client,
+                agent_type_name,
+                "get_phantom_with_config",
+                &append_param(
+                    &config_decls,
+                    &append_param("phantom_id : @types.Uuid", &param_decls),
+                ),
+                &input,
+                Some("phantom_id"),
+                Some((&configs, &config_names)),
+            )?;
+        }
         Ok(())
     }
 
@@ -1277,8 +1284,13 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         if configs.is_some() {
             args.push("agent_config".to_string());
         }
+        let runtime_constructor = match (self.agent_type.mode, name) {
+            (AgentMode::Ephemeral, "new_phantom") => "ephemeral",
+            (AgentMode::Ephemeral, "new_phantom_with_config") => "ephemeral_with_config",
+            _ => name,
+        };
         writer.line(format!(
-            "let client = @rpc.AgentClient::{name}({})",
+            "let client = @rpc.AgentClient::{runtime_constructor}({})",
             args.join(", ")
         ));
         writer.line("{ client, }");
@@ -1401,20 +1413,39 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let self_decls = prepend_self_decl(client, &param_decls);
         let (ret_ty, decode) = self.output_return(&method.output_schema)?;
         let decode = decode.map(guest_codec_source);
+        let ephemeral = self.agent_type.mode == AgentMode::Ephemeral;
+        let await_ret_ty = if ephemeral {
+            format!("@rpc.InvocationResult[{ret_ty}]")
+        } else {
+            ret_ty.clone()
+        };
 
         writer.line(format!(
-            "pub async fn {client}::{base}(self : {self_decls}) -> {ret_ty} {{"
+            "pub async fn {client}::{base}(self : {self_decls}) -> {await_ret_ty} {{"
         ));
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
         match decode {
+            None if ephemeral => {
+                writer.line(format!(
+                    "let response = self.client.invoke_and_await({method_name}, input)"
+                ));
+                writer.line("{ metadata: response.metadata, value: () }");
+            }
             None => writer.line(format!(
                 "let _ = self.client.invoke_and_await({method_name}, input)"
             )),
             Some(decode) => {
-                writer.line(format!(
-                    "match self.client.invoke_and_await({method_name}, input).value {{"
-                ));
+                if ephemeral {
+                    writer.line(format!(
+                        "let response = self.client.invoke_and_await({method_name}, input)"
+                    ));
+                    writer.line("match response.value {");
+                } else {
+                    writer.line(format!(
+                        "match self.client.invoke_and_await({method_name}, input).value {{"
+                    ));
+                }
                 writer.indent();
                 writer.line("Some(tree) => {");
                 writer.indent();
@@ -1426,7 +1457,11 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 ));
                 writer.dedent();
                 writer.line("}");
-                writer.line(format!("{decode} catch {{"));
+                if ephemeral {
+                    writer.line(format!("let decoded = {decode} catch {{"));
+                } else {
+                    writer.line(format!("{decode} catch {{"));
+                }
                 writer.indent();
                 writer.line(format!(
                     "error => raise @common.AgentError::InvalidType({} + repr(error))",
@@ -1434,6 +1469,9 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 ));
                 writer.dedent();
                 writer.line("}");
+                if ephemeral {
+                    writer.line("{ metadata: response.metadata, value: decoded }");
+                }
                 writer.dedent();
                 writer.line("}");
                 writer.line(format!(
@@ -1448,38 +1486,69 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         writer.line("}");
         writer.blank();
 
+        let trigger_ret_ty = if ephemeral {
+            "@rpc.InvocationMetadata"
+        } else {
+            "Unit"
+        };
         writer.line(format!(
-            "pub fn {client}::trigger_{base}(self : {self_decls}) -> Unit raise @common.AgentError {{"
+            "pub fn {client}::trigger_{base}(self : {self_decls}) -> {trigger_ret_ty} raise @common.AgentError {{"
         ));
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
-        writer.line(format!("let _ = self.client.invoke({method_name}, input)"));
+        if ephemeral {
+            writer.line(format!("self.client.invoke({method_name}, input)"));
+        } else {
+            writer.line(format!("let _ = self.client.invoke({method_name}, input)"));
+        }
         writer.dedent();
         writer.line("}");
         writer.blank();
 
         let schedule_decls = prepend_param("scheduled_at : @systemClock.Instant", &param_decls);
         let schedule_self_decls = prepend_self_decl(client, &schedule_decls);
+        let schedule_ret_ty = if ephemeral {
+            "@rpc.ScheduledInvocationReceipt"
+        } else {
+            "Unit"
+        };
         writer.line(format!(
-            "pub fn {client}::schedule_{base}(self : {schedule_self_decls}) -> Unit raise @common.AgentError {{"
+            "pub fn {client}::schedule_{base}(self : {schedule_self_decls}) -> {schedule_ret_ty} raise @common.AgentError {{"
         ));
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
-        writer.line(format!(
-            "let _ = self.client.schedule_invocation(scheduled_at, {method_name}, input)"
-        ));
+        if ephemeral {
+            writer.line(format!(
+                "self.client.schedule_invocation(scheduled_at, {method_name}, input)"
+            ));
+        } else {
+            writer.line(format!(
+                "let _ = self.client.schedule_invocation(scheduled_at, {method_name}, input)"
+            ));
+        }
         writer.dedent();
         writer.line("}");
         writer.blank();
 
+        let schedule_cancelable_ret_ty = if ephemeral {
+            "@rpc.CancelableScheduledInvocationReceipt"
+        } else {
+            "@agentHost.CancellationToken"
+        };
         writer.line(format!(
-            "pub fn {client}::schedule_cancelable_{base}(self : {schedule_self_decls}) -> @agentHost.CancellationToken raise @common.AgentError {{"
+            "pub fn {client}::schedule_cancelable_{base}(self : {schedule_self_decls}) -> {schedule_cancelable_ret_ty} raise @common.AgentError {{"
         ));
         writer.indent();
         self.write_guest_invocation_input(writer, &method.input_schema, "input", &method.name)?;
-        writer.line(format!(
-            "self.client.schedule_cancelable_invocation(scheduled_at, {method_name}, input).cancellation_token"
-        ));
+        if ephemeral {
+            writer.line(format!(
+                "self.client.schedule_cancelable_invocation(scheduled_at, {method_name}, input)"
+            ));
+        } else {
+            writer.line(format!(
+                "self.client.schedule_cancelable_invocation(scheduled_at, {method_name}, input).cancellation_token"
+            ));
+        }
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -2144,18 +2213,21 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             if self.agent_type.mode == AgentMode::Ephemeral {
                 used.remove("get");
                 used.remove("get_with_config");
+                used.remove("get_phantom");
+                used.remove("get_phantom_with_config");
             }
             if self.local_configs().is_empty() {
                 used.remove("get_with_config");
                 used.remove("get_phantom_with_config");
                 used.remove("new_phantom_with_config");
             }
-            used.extend(
-                ["drop", "get_agent_id", "phantom_id"]
-                    .into_iter()
-                    .map(str::to_string),
-            );
+            used.insert("drop".to_string());
             if self.agent_type.mode == AgentMode::Durable {
+                used.extend(
+                    ["get_agent_id", "phantom_id"]
+                        .into_iter()
+                        .map(str::to_string),
+                );
                 used.insert("scoped".to_string());
             }
         }

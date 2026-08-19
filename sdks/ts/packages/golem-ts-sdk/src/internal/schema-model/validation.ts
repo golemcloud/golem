@@ -565,15 +565,15 @@ function checkUnion(
   }
   for (let left = 0; left < branches.length; left += 1) {
     for (let right = left + 1; right < branches.length; right += 1) {
-      const reason = discriminatorsOverlap(
+      const classification = classifyDiscriminatorPair(
         branches[left].discriminator,
         branches[right].discriminator,
       );
-      if (reason) {
+      if (classification.tag === 'reject') {
         issue(
           errors,
           'union-ambiguous-discriminators',
-          `union branches \`${branches[left].tag}\` and \`${branches[right].tag}\` have overlapping discriminators (${reason})`,
+          `union branches \`${branches[left].tag}\` and \`${branches[right].tag}\` have overlapping discriminators (${classification.reason})`,
         );
       }
     }
@@ -674,7 +674,6 @@ function resolvedShape(graph: SchemaGraph, type: SchemaType): BodyShape {
   if (resolved.tag !== 'concrete') return { tag: 'unresolved' };
   switch (resolved.type.body.tag) {
     case 'string':
-    case 'text':
     case 'url':
     case 'path':
       return { tag: 'string' };
@@ -685,56 +684,120 @@ function resolvedShape(graph: SchemaGraph, type: SchemaType): BodyShape {
   }
 }
 
-function discriminatorsOverlap(
+export type DiscriminatorPairClassification =
+  | { readonly tag: 'reject'; readonly reason: string }
+  | { readonly tag: 'disjoint' }
+  | { readonly tag: 'indeterminate' };
+
+export function classifyDiscriminatorPair(
   left: DiscriminatorRule,
   right: DiscriminatorRule,
-): string | undefined {
+): DiscriminatorPairClassification {
   if (left.tag === 'prefix' && right.tag === 'prefix') {
-    if (!left.val && !right.val) return 'both prefixes are empty';
-    if (!left.val) return `empty prefix overlaps any other prefix \`${right.val}\``;
-    if (!right.val) return `empty prefix overlaps any other prefix \`${left.val}\``;
     return left.val.startsWith(right.val) || right.val.startsWith(left.val)
-      ? `prefix \`${left.val}\` and prefix \`${right.val}\` overlap`
-      : undefined;
+      ? { tag: 'reject', reason: `prefix \`${left.val}\` and prefix \`${right.val}\` overlap` }
+      : { tag: 'disjoint' };
   }
   if (left.tag === 'suffix' && right.tag === 'suffix') {
-    if (!left.val && !right.val) return 'both suffixes are empty';
-    if (!left.val) return `empty suffix overlaps any other suffix \`${right.val}\``;
-    if (!right.val) return `empty suffix overlaps any other suffix \`${left.val}\``;
     return left.val.endsWith(right.val) || right.val.endsWith(left.val)
-      ? `suffix \`${left.val}\` and suffix \`${right.val}\` overlap`
-      : undefined;
+      ? { tag: 'reject', reason: `suffix \`${left.val}\` and suffix \`${right.val}\` overlap` }
+      : { tag: 'disjoint' };
+  }
+  if (
+    (left.tag === 'prefix' && right.tag === 'suffix') ||
+    (left.tag === 'suffix' && right.tag === 'prefix')
+  ) {
+    const prefix = left.tag === 'prefix' ? left.val : right.val;
+    const suffix = left.tag === 'suffix' ? left.val : right.val;
+    return { tag: 'reject', reason: `prefix \`${prefix}\` and suffix \`${suffix}\` overlap` };
+  }
+  if (
+    (left.tag === 'prefix' && right.tag === 'contains') ||
+    (left.tag === 'contains' && right.tag === 'prefix')
+  ) {
+    const prefix = left.tag === 'prefix' ? left.val : right.val;
+    const contains = left.tag === 'contains' ? left.val : right.val;
+    return { tag: 'reject', reason: `prefix \`${prefix}\` and contains \`${contains}\` overlap` };
+  }
+  if (
+    (left.tag === 'suffix' && right.tag === 'contains') ||
+    (left.tag === 'contains' && right.tag === 'suffix')
+  ) {
+    const suffix = left.tag === 'suffix' ? left.val : right.val;
+    const contains = left.tag === 'contains' ? left.val : right.val;
+    return { tag: 'reject', reason: `suffix \`${suffix}\` and contains \`${contains}\` overlap` };
   }
   if (left.tag === 'contains' && right.tag === 'contains') {
-    return !left.val || !right.val ? 'empty contains substring matches every string' : undefined;
-  }
-  if ((left.tag === 'prefix' && !left.val) || (right.tag === 'prefix' && !right.val)) {
-    return 'empty prefix matches every string';
-  }
-  if ((left.tag === 'suffix' && !left.val) || (right.tag === 'suffix' && !right.val)) {
-    return 'empty suffix matches every string';
-  }
-  if ((left.tag === 'contains' && !left.val) || (right.tag === 'contains' && !right.val)) {
-    return 'empty contains substring matches every string';
+    return {
+      tag: 'reject',
+      reason: `contains \`${left.val}\` and contains \`${right.val}\` overlap`,
+    };
   }
   if (left.tag === 'regex' && right.tag === 'regex') {
-    return left.val === right.val ? `both branches share regex \`${left.val}\`` : undefined;
+    return left.val === right.val
+      ? { tag: 'reject', reason: `both branches share regex \`${left.val}\`` }
+      : { tag: 'indeterminate' };
+  }
+  const stringPattern = (rule: DiscriminatorRule) =>
+    rule.tag === 'prefix' || rule.tag === 'suffix' || rule.tag === 'contains';
+  if (
+    (left.tag === 'regex' && stringPattern(right)) ||
+    (right.tag === 'regex' && stringPattern(left))
+  ) {
+    return { tag: 'indeterminate' };
+  }
+  const stringShaped = (rule: DiscriminatorRule) => stringPattern(rule) || rule.tag === 'regex';
+  const recordShaped = (rule: DiscriminatorRule) =>
+    rule.tag === 'field-equals' || rule.tag === 'field-absent';
+  if ((stringShaped(left) && recordShaped(right)) || (recordShaped(left) && stringShaped(right))) {
+    return { tag: 'disjoint' };
   }
   if (left.tag === 'field-equals' && right.tag === 'field-equals') {
-    if (left.val.fieldName !== right.val.fieldName) return undefined;
+    if (left.val.fieldName !== right.val.fieldName) {
+      return {
+        tag: 'reject',
+        reason: `field-equals on \`${left.val.fieldName}\` and \`${right.val.fieldName}\` can match the same object`,
+      };
+    }
     if (left.val.literal === undefined || right.val.literal === undefined) {
-      return `field-equals on \`${left.val.fieldName}\` without literal overlaps another field-equals on the same field`;
+      return {
+        tag: 'reject',
+        reason: `field-equals on \`${left.val.fieldName}\` without literal overlaps another field-equals on the same field`,
+      };
     }
     return left.val.literal === right.val.literal
-      ? `two field-equals on \`${left.val.fieldName}\` share literal \`${left.val.literal}\``
-      : undefined;
+      ? {
+          tag: 'reject',
+          reason: `two field-equals on \`${left.val.fieldName}\` share literal \`${left.val.literal}\``,
+        }
+      : { tag: 'disjoint' };
   }
   if (left.tag === 'field-absent' && right.tag === 'field-absent') {
-    return left.val === right.val
-      ? `two field-absent rules share field \`${left.val}\``
-      : undefined;
+    return {
+      tag: 'reject',
+      reason: `field-absent on \`${left.val}\` and \`${right.val}\` can match the same object`,
+    };
   }
-  return undefined;
+  if (
+    (left.tag === 'field-equals' && right.tag === 'field-absent') ||
+    (left.tag === 'field-absent' && right.tag === 'field-equals')
+  ) {
+    const fieldEquals =
+      left.tag === 'field-equals'
+        ? left.val
+        : (right as Extract<DiscriminatorRule, { tag: 'field-equals' }>).val;
+    const fieldAbsent =
+      left.tag === 'field-absent'
+        ? left.val
+        : (right as Extract<DiscriminatorRule, { tag: 'field-absent' }>).val;
+    return fieldEquals.fieldName === fieldAbsent
+      ? { tag: 'disjoint' }
+      : {
+          tag: 'reject',
+          reason: `field-equals on \`${fieldEquals.fieldName}\` and field-absent on \`${fieldAbsent}\` can match the same object`,
+        };
+  }
+  return { tag: 'indeterminate' };
 }
 
 function errorMessage(error: unknown): string {

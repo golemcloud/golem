@@ -165,11 +165,6 @@ pub(all) struct CardRevokedParameters {
   card_id : @types.CardId
 } derive(Eq, Show)
 
-pub(all) struct ChangePersistenceLevelParameters {
-  timestamp : @system-clock.Instant
-  persistence_level : @host.PersistenceLevel
-} derive(Eq, Show)
-
 pub(all) struct CompletionDiscardedParameters {
   timestamp : @system-clock.Instant
   start_index : UInt64
@@ -379,7 +374,6 @@ pub(all) enum OplogEntry {
   StartSpan(StartSpanParameters)
   FinishSpan(FinishSpanParameters)
   SetSpanAttribute(SetSpanAttributeParameters)
-  ChangePersistenceLevel(ChangePersistenceLevelParameters)
   BeginRemoteTransaction(RawBeginRemoteTransactionParameters)
   PreCommitRemoteTransaction(RemoteTransactionParameters)
   PreRollbackRemoteTransaction(RemoteTransactionParameters)
@@ -482,7 +476,6 @@ pub(all) enum PublicOplogEntry {
   StartSpan(StartSpanParameters)
   FinishSpan(FinishSpanParameters)
   SetSpanAttribute(SetSpanAttributeParameters)
-  ChangePersistenceLevel(ChangePersistenceLevelParameters)
   BeginRemoteTransaction(BeginRemoteTransactionParameters)
   PreCommitRemoteTransaction(RemoteTransactionParameters)
   PreRollbackRemoteTransaction(RemoteTransactionParameters)
@@ -659,6 +652,8 @@ pub(all) struct RawStartParameters {
   timestamp : @system-clock.Instant
   parent_start_index : UInt64?
   function_name : String
+  invocation_id : @types.Uuid?
+  observational_owner : UInt64?
   request : OplogPayload?
   durable_function_type : WrappedFunctionType
 } derive(Eq, Show)
@@ -744,6 +739,8 @@ pub(all) struct StartParameters {
   timestamp : @system-clock.Instant
   parent_start_index : UInt64?
   function_name : String
+  invocation_id : @types.Uuid?
+  observational_owner : UInt64?
   request : @types.TypedSchemaValue?
   durable_function_type : WrappedFunctionType
 } derive(Eq, Show)

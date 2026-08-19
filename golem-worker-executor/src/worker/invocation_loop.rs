@@ -1673,11 +1673,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return CommandOutcome::Continue;
         }
 
+        let idempotency_key = IdempotencyKey::fresh();
+        self.store
+            .data_mut()
+            .set_current_idempotency_key(idempotency_key.clone())
+            .await;
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
-        let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
-            idempotency_key: IdempotencyKey::fresh(),
-        };
+        let save_snapshot_invocation = AgentInvocation::SaveSnapshot { idempotency_key };
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,

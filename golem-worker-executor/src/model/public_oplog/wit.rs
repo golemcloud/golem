@@ -20,18 +20,18 @@ use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CompletionDiscardedParams, CreateParams,
-    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
-    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams,
-    FinishSpanParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
-    LogParams, ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
-    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
-    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
+    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
+    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters,
+    NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PluginInstallationDescription, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
+    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StringAttributeValue,
+    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
     WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
@@ -240,12 +240,16 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp,
                 parent_start_index,
                 function_name,
+                invocation_id,
+                observational_owner,
                 request,
                 durable_function_type: wrapped_function_type,
             }) => Self::Start(oplog::StartParameters {
                 timestamp: timestamp.into(),
                 parent_start_index: parent_start_index.map(|c| c.into()),
                 function_name,
+                invocation_id: invocation_id.map(Into::into),
+                observational_owner: observational_owner.map(|i| i.into()),
                 request: request.map(encode_public_typed_schema_value).transpose()?,
                 durable_function_type: wrapped_function_type.into(),
             }),
@@ -489,13 +493,6 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 span_id: span_id.to_string(),
                 key,
                 value: value.into(),
-            }),
-            PublicOplogEntry::ChangePersistenceLevel(ChangePersistenceLevelParams {
-                timestamp,
-                persistence_level,
-            }) => Self::ChangePersistenceLevel(oplog::ChangePersistenceLevelParameters {
-                timestamp: timestamp.into(),
-                persistence_level: persistence_level.into(),
             }),
             PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
                 timestamp,
@@ -1037,8 +1034,6 @@ impl TryFrom<oplog::SpanData> for golem_common::model::oplog::SpanData {
 }
 
 // Note: From<oplog::AttributeValue> for AttributeValue is provided in invocation_context_api.rs
-// Note: From<oplog::PersistenceLevel> for PersistenceLevel is provided in model/mod.rs
-
 impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
     type Error = String;
 
@@ -1097,6 +1092,12 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     golem_common::model::oplog::payload::host_functions::HostFunctionName::from(
                         params.function_name.as_str(),
                     ),
+                invocation_id: params
+                    .invocation_id
+                    .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),
+                observational_owner: params
+                    .observational_owner
+                    .map(golem_common::base_model::OplogIndex::from_u64),
                 request: params.request.map(oplog_payload_from_wit),
                 durable_function_type: params.durable_function_type.into(),
             }),
@@ -1335,10 +1336,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     value,
                 })
             }
-            oplog::OplogEntry::ChangePersistenceLevel(params) => Ok(Self::ChangePersistenceLevel {
-                timestamp: timestamp_from_datetime(params.timestamp),
-                persistence_level: params.persistence_level.into(),
-            }),
             oplog::OplogEntry::BeginRemoteTransaction(params) => Ok(Self::BeginRemoteTransaction {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 transaction_id: golem_common::model::TransactionId::from(params.transaction_id),
@@ -1809,12 +1806,16 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 timestamp,
                 parent_start_index,
                 function_name,
+                invocation_id,
+                observational_owner,
                 request,
                 durable_function_type,
             } => Ok(Self::Start(oplog::RawStartParameters {
                 timestamp: timestamp.into(),
                 parent_start_index: parent_start_index.map(|i| i.into()),
                 function_name: function_name.to_string(),
+                invocation_id: invocation_id.map(Into::into),
+                observational_owner: observational_owner.map(|i| i.into()),
                 request: request.map(oplog_payload_to_wit).transpose()?,
                 durable_function_type: durable_function_type.into(),
             })),
@@ -2132,15 +2133,6 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 key,
                 value: value.into(),
             })),
-            M::ChangePersistenceLevel {
-                timestamp,
-                persistence_level,
-            } => Ok(Self::ChangePersistenceLevel(
-                oplog::ChangePersistenceLevelParameters {
-                    timestamp: timestamp.into(),
-                    persistence_level: persistence_level.into(),
-                },
-            )),
             M::BeginRemoteTransaction {
                 timestamp,
                 transaction_id,

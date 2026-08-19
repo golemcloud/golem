@@ -1,5 +1,6 @@
 use crate::raw_http;
 use crate::raw_http::Method;
+use golem_rust::bindings::golem::tool::host as tool_host;
 use golem_rust::retry::{
     CountBoxConfig, NamedRetryPolicy, PolicyNode, PredicateNode, RetryPolicy, RetryPredicate,
     get_retry_policies, get_retry_policy_by_name, remove_retry_policy, set_retry_policy,
@@ -9,13 +10,12 @@ use golem_rust::wasip3::http::{client, types};
 use golem_rust::wasip3::{wit_future, wit_stream};
 use golem_rust::{
     AgentAnyFilter, AgentId, AgentMetadata, Card, CardId, Checkpoint, CheckpointResultExt,
-    ComponentId, ForkResult, FromSchema, GetAgents, IntoSchema, PersistenceLevel, PromiseId,
-    Schema, Transaction, UpdateMode, Uuid, agent_definition, agent_implementation, atomically,
-    atomically_async, derive_card, fallible_transaction, fork, generate_idempotency_key,
-    get_agent_metadata, get_oplog_index, get_promise, get_self_metadata, golem_operation,
-    infallible_transaction, install_card, oplog_commit, resolve_agent_id, resolve_agent_id_strict,
-    resolve_component_id, self_card, set_oplog_index, update_agent, use_idempotence_mode,
-    with_persistence_level, with_persistence_level_async,
+    ComponentId, ForkResult, FromSchema, GetAgents, IntoSchema, PromiseId, Schema, Transaction,
+    UpdateMode, Uuid, agent_definition, agent_implementation, atomically, atomically_async,
+    derive_card, fallible_transaction, fork, generate_idempotency_key, get_agent_metadata,
+    get_oplog_index, get_promise, get_self_metadata, golem_operation, infallible_transaction,
+    install_card, oplog_commit, resolve_agent_id, resolve_agent_id_strict, resolve_component_id,
+    self_card, set_oplog_index, update_agent, use_idempotence_mode,
 };
 use serde::{Deserialize, Serialize};
 use std::future::poll_fn;
@@ -43,6 +43,8 @@ pub struct MidInvocationCardRevocationResult {
     pub derive_succeeded: bool,
 }
 
+type ToolSummary = (String, String, String, Vec<String>, u64, u64);
+
 #[agent_definition()]
 pub trait GolemHostApi {
     fn new(name: String) -> Self;
@@ -56,8 +58,6 @@ pub trait GolemHostApi {
     fn atomic_region(&self);
     async fn atomic_region_async(&self);
     fn idempotence_flag(&self, enabled: bool);
-    fn persist_nothing(&self);
-    async fn persist_nothing_async(&self);
     async fn fallible_transaction_test(&self) -> u64;
     async fn infallible_transaction_test(&self) -> u64;
     fn fork_test(&self, input: String) -> String;
@@ -90,16 +90,75 @@ pub trait GolemHostApi {
     fn set_simple_count_retry_policy(&self, name: String, priority: u32, max_retries: u32);
     fn remove_named_retry_policy(&self, name: String);
     fn has_retry_policy(&self, name: String) -> bool;
+
+    fn get_all_tools(&self) -> Vec<ToolSummary>;
+    fn get_tool(&self, name: String) -> Option<ToolSummary>;
+    fn record_all_tools(&mut self) -> Vec<ToolSummary>;
+    fn get_recorded_tools(&self) -> Vec<ToolSummary>;
 }
 
 pub struct GolemHostApiImpl {
     _name: String,
+    recorded_tools: Option<Vec<ToolSummary>>,
+}
+
+fn summarize_tool(tool: tool_host::RegisteredTool) -> ToolSummary {
+    let (name, summary, aliases) = tool
+        .definition
+        .commands
+        .nodes
+        .first()
+        .map(|node| {
+            (
+                node.name.clone(),
+                node.doc.summary.clone(),
+                node.aliases.clone(),
+            )
+        })
+        .unwrap_or_default();
+    let uuid = tool.implemented_by.uuid;
+    (
+        name,
+        tool.definition.version,
+        summary,
+        aliases,
+        uuid.high_bits,
+        uuid.low_bits,
+    )
+}
+
+#[agent_definition()]
+pub trait ToolDiscoveryOther {
+    fn new(name: String) -> Self;
+
+    fn get_all_tools(&self) -> Vec<ToolSummary>;
+}
+
+pub struct ToolDiscoveryOtherImpl {
+    _name: String,
+}
+
+#[agent_implementation]
+impl ToolDiscoveryOther for ToolDiscoveryOtherImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name }
+    }
+
+    fn get_all_tools(&self) -> Vec<ToolSummary> {
+        tool_host::get_all_tools()
+            .into_iter()
+            .map(summarize_tool)
+            .collect()
+    }
 }
 
 #[agent_implementation]
 impl GolemHostApi for GolemHostApiImpl {
     fn new(name: String) -> Self {
-        Self { _name: name }
+        Self {
+            _name: name,
+            recorded_tools: None,
+        }
     }
 
     fn resolve_component(&self) -> ResolveComponentResult {
@@ -330,46 +389,6 @@ impl GolemHostApi for GolemHostApiImpl {
                 String::from_utf8(body).unwrap()
             );
         });
-    }
-
-    fn persist_nothing(&self) {
-        remote_side_effect("1");
-
-        with_persistence_level(PersistenceLevel::PersistNothing, || {
-            remote_side_effect("2");
-        });
-
-        remote_side_effect("3");
-
-        atomically(|| {
-            let decision = remote_call(1);
-            if decision {
-                panic!("crash 1");
-            }
-        });
-
-        remote_side_effect("4");
-    }
-
-    async fn persist_nothing_async(&self) {
-        remote_side_effect("1");
-
-        with_persistence_level_async(PersistenceLevel::PersistNothing, || async {
-            remote_side_effect("2");
-        })
-        .await;
-
-        remote_side_effect("3");
-
-        atomically_async(|| async {
-            let decision = remote_call(1);
-            if decision {
-                panic!("crash 1");
-            }
-        })
-        .await;
-
-        remote_side_effect("4");
     }
 
     async fn fallible_transaction_test(&self) -> u64 {
@@ -638,6 +657,29 @@ impl GolemHostApi for GolemHostApiImpl {
 
     fn has_retry_policy(&self, name: String) -> bool {
         get_retry_policy_by_name(&name).is_some()
+    }
+
+    fn get_all_tools(&self) -> Vec<ToolSummary> {
+        tool_host::get_all_tools()
+            .into_iter()
+            .map(summarize_tool)
+            .collect()
+    }
+
+    fn get_tool(&self, name: String) -> Option<ToolSummary> {
+        tool_host::get_tool(&name).map(summarize_tool)
+    }
+
+    fn record_all_tools(&mut self) -> Vec<ToolSummary> {
+        let tools = self.get_all_tools();
+        self.recorded_tools = Some(tools.clone());
+        tools
+    }
+
+    fn get_recorded_tools(&self) -> Vec<ToolSummary> {
+        self.recorded_tools
+            .clone()
+            .expect("record_all_tools must be called before get_recorded_tools")
     }
 }
 

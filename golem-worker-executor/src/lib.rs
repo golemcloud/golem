@@ -55,7 +55,7 @@ use crate::services::card::{CardService, CardServiceDefault};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{
-    EngineConfig, GolemConfig, HttpClientConfig, IndexedStorageConfig, KeyValueStorageConfig,
+    GolemConfig, HttpClientConfig, IndexedStorageConfig, KeyValueStorageConfig,
     KeyValueStorageInnerConfig, SchedulerStorageConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
@@ -135,8 +135,8 @@ use tonic::transport::Server;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{Instrument, info};
+use wasmtime::Engine;
 use wasmtime::component::{HasSelf, Linker};
-use wasmtime::{Config, Engine, WasmBacktraceDetails};
 
 pub struct RunDetails {
     pub http_port: u16,
@@ -469,34 +469,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             additional_deps,
             leak_sentinel,
         ))
-    }
-
-    /// Can be overridden to customize the wasmtime configuration
-    fn create_wasmtime_config(&self, engine_config: &EngineConfig) -> Config {
-        let mut config = Config::default();
-
-        config.wasm_multi_value(true);
-        config.wasm_component_model(true);
-        // Required for WASI p3: enables the async ABI (stream<T>, future<T>,
-        // async lift/lower, error-context). Without this, components that use
-        // any p3 async builtins fail to instantiate.
-        config.wasm_component_model_async(true);
-        config.wasm_component_model_error_context(true);
-        // Golem does not expose wasi-threads or a durable shared-memory runtime.
-        config.wasm_threads(false);
-        config.shared_memory(false);
-        config.epoch_interruption(true);
-        config.consume_fuel(true);
-        config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
-
-        if engine_config.enable_fs_cache {
-            config.cache(Some(
-                wasmtime::Cache::new(wasmtime::CacheConfig::new())
-                    .expect("Failed to initialize cache"),
-            ));
-        }
-
-        config
     }
 
     /// This method is responsible for linking all the host function implementations the worker
@@ -861,7 +833,8 @@ pub async fn create_worker_executor_impl<
         shutdown_token.clone(),
     );
 
-    let config = bootstrap.create_wasmtime_config(&golem_config.engine);
+    let config =
+        golem_common::wasmtime_config::create_wasmtime_config(golem_config.engine.enable_fs_cache);
     let engine = Arc::new(Engine::new(&config)?);
     let linker = bootstrap.create_wasmtime_linker(&engine)?;
 

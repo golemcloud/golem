@@ -402,15 +402,15 @@ each is registered in the single generated `fn init {}`.
 
 ### Durability
 
-The durability system (host imports in `interface/golem/durability/durability/`) provides
-`current_durable_execution_state()`, `begin_durable_function`, `end_durable_function`,
-`persist_durable_function_invocation` (+ typed variant), and `read_persisted_durable_function_invocation`
-(+ typed variant). The pattern for wrapping a side-effecting call:
-1. `begin_durable_function` to get the oplog position.
-2. Check `is_live` from `current_durable_execution_state()`.
-3. If live: execute the real operation, then `persist_*` the result.
-4. If replaying: `read_persisted_*` to get the cached result.
-5. `end_durable_function`.
+The raw durability system in `interface/golem/durability/durability/` opens a custom durable
+invocation with a typed request. A live invocation returns an affine resource whose `finish` method
+consumes it and persists the typed response; a completed invocation returns its persisted response
+for replay. Dropping an unfinished live resource leaves the invocation incomplete so recovery
+re-executes its whole body.
+
+SDK and library code should normally use `@api.durable` or `@api.durable_async`. These combinators
+own the live resource, run the body only for a live invocation, finish it after the body completes,
+and decode the recorded response during replay.
 
 ## Current State & What Works
 

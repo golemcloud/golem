@@ -63,10 +63,14 @@ final class HostApiExplorerImpl(@unused private val name: String) extends HostAp
   }
 
   private def exploreDurabilitySync(): String = {
-    val sb    = new StringBuilder
-    val state = golem.host.DurabilityApi.currentDurableExecutionState()
-    sb.append(s"DurabilityApi.currentDurableExecutionState() = $state\n")
-    sb.append(s"  isLive=${state.isLive}, persistenceLevel=${state.persistenceLevel}\n")
+    val sb     = new StringBuilder
+    val result = golem.host.DurabilityApi.durable(
+      "host-api-explorer",
+      "durability",
+      golem.host.DurabilityApi.DurableFunctionType.ReadLocal,
+      ()
+    )("durable-result")
+    sb.append(s"DurabilityApi.durable() = $result\n")
     sb.toString()
   }
 
