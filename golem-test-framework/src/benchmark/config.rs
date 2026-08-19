@@ -181,6 +181,16 @@ pub enum BenchmarkConfig {
         #[arg(long, value_enum)]
         scenario: Option<ChaosScenarioArg>,
 
+        /// Run a scenario the suite YAML marks `enabled: false`.
+        ///
+        /// `enabled` means "part of the default suite", and the workflow is what
+        /// enforces it. This flag exists so a prototype scenario can be off for
+        /// every ordinary run and still runnable on demand, without the two
+        /// gates disagreeing — the workflow passes it exactly when an operator
+        /// named a disabled scenario explicitly.
+        #[arg(long, default_value_t = false)]
+        allow_disabled: bool,
+
         /// Path to the chaos suite YAML holding the scenario's configuration.
         /// Required for `--action scenario`; the entry whose `code` matches
         /// `--scenario` supplies the fault, phase and workload settings.
@@ -228,6 +238,9 @@ pub enum ChaosScenarioArg {
     S8,
     /// Shard-manager pod restart under mixed workload.
     S12,
+    /// **Prototype.** Quota agent cold-start latency at increasing population.
+    /// Injects nothing.
+    S888,
 }
 
 /// Density subcommand action.

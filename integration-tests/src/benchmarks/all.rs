@@ -334,6 +334,7 @@ async fn main() {
             signal_dir,
             save_to_json,
             save_history_to_json,
+            allow_disabled,
             ..
         } => {
             run_chaos(
@@ -347,6 +348,7 @@ async fn main() {
                 signal_dir.clone(),
                 save_to_json.clone(),
                 save_history_to_json.clone(),
+                *allow_disabled,
             )
             .await;
         }
@@ -560,6 +562,7 @@ async fn run_chaos(
     signal_dir: Option<std::path::PathBuf>,
     save_to_json: Option<std::path::PathBuf>,
     save_history_to_json: Option<std::path::PathBuf>,
+    allow_disabled: bool,
 ) {
     if !matches!(mode, TestMode::Cloud { .. }) {
         panic!("chaos scenarios require cloud mode");
@@ -587,9 +590,10 @@ async fn run_chaos(
                 ChaosScenarioArg::S1 => chaos::ScenarioCode::S1,
                 ChaosScenarioArg::S8 => chaos::ScenarioCode::S8,
                 ChaosScenarioArg::S12 => chaos::ScenarioCode::S12,
+                ChaosScenarioArg::S888 => chaos::ScenarioCode::S888,
             };
             let config = suite
-                .scenario(code)
+                .scenario(code, allow_disabled)
                 .expect("scenario is missing or disabled in the suite")
                 .clone();
 

@@ -453,14 +453,28 @@ impl ChaosSuite {
     /// The entry for `code`, which must exist and be enabled — the workflow is
     /// expected to have filtered disabled scenarios out already, so reaching one
     /// here means the two disagree and that is worth failing on.
-    pub fn scenario(&self, code: ScenarioCode) -> anyhow::Result<&ScenarioConfig> {
+    /// Looks a scenario up, refusing one the suite has switched off.
+    ///
+    /// `allow_disabled` is the caller saying an operator named this scenario
+    /// deliberately. It exists for prototype scenarios, which are `enabled:
+    /// false` so no ordinary run picks them up but must still be runnable on
+    /// demand. Without it the two gates — this one and the workflow's — would
+    /// disagree, and the workflow's would silently lose.
+    pub fn scenario(
+        &self,
+        code: ScenarioCode,
+        allow_disabled: bool,
+    ) -> anyhow::Result<&ScenarioConfig> {
         let entry = self
             .scenarios
             .iter()
             .find(|s| s.code.eq_ignore_ascii_case(code.as_str()))
             .ok_or_else(|| anyhow::anyhow!("chaos suite has no entry for scenario {code}"))?;
-        if !entry.enabled {
-            anyhow::bail!("chaos scenario {code} is disabled in the suite YAML");
+        if !entry.enabled && !allow_disabled {
+            anyhow::bail!(
+                "chaos scenario {code} is disabled in the suite YAML \
+                 (pass --allow-disabled to run it anyway)"
+            );
         }
         Ok(entry)
     }
@@ -547,7 +561,10 @@ mod tests {
                 signal_timeout_secs: 1,
             }],
         };
-        assert!(suite.scenario(ScenarioCode::S12).is_err());
+        assert!(suite.scenario(ScenarioCode::S12, false).is_err());
+        // ...unless the caller says an operator asked for it by name, which is
+        // how a prototype scenario stays off for ordinary runs.
+        assert!(suite.scenario(ScenarioCode::S12, true).is_ok());
     }
 
     /// The retry defaults are load-bearing for correctness, not just for load.
