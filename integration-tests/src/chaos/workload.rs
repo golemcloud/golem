@@ -80,9 +80,12 @@ const SCHEDULE_LEAD: Duration = Duration::from_secs(10);
 /// restart recovery, and extra spans only make the traces harder to read.
 const SCHEDULE_CONTEXT_SPANS: u32 = 0;
 
-/// Ceiling on operations in flight at once. The rate limiter sets the pace; this
-/// only stops a stalled platform from accumulating unbounded tasks during a
-/// fault, which would turn a fault window into an out-of-memory abort.
+/// Ceiling on operations in flight at once, across all streams. Divided evenly
+/// between the active streams, so a stream that stalls can only exhaust its own
+/// share — see the allocation site for why that matters. The rate limiter sets
+/// the pace; this only stops a stalled platform from accumulating unbounded
+/// tasks during a fault, which would turn a fault window into an out-of-memory
+/// abort.
 ///
 /// It has to stay well above `ratePerSec`, because it doubles as a stall
 /// backstop: once the pool is exhausted the streams stop submitting, so a cap
@@ -373,10 +376,6 @@ pub fn start(ctx: WorkloadContext, config: &crate::chaos::WorkloadConfig) -> Wor
     let submitted = Arc::new(AtomicU64::new(0));
     let mut tasks = JoinSet::new();
 
-    // One shared permit pool across streams, so a stalled stream cannot starve
-    // the others of the ability to submit.
-    let in_flight = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
-
     // The configured rate is split evenly across the active streams. Streams
     // with no agents configured are skipped entirely rather than run empty.
     let active: Vec<(Stream, u32)> = [
@@ -401,18 +400,36 @@ pub fn start(ctx: WorkloadContext, config: &crate::chaos::WorkloadConfig) -> Wor
 
     let per_stream_rate = (config.rate_per_sec as f64 / active.len() as f64).max(0.1);
     let interval = Duration::from_secs_f64(1.0 / per_stream_rate);
+    // One permit pool *per stream*, not one shared across them.
+    //
+    // A shared pool was the original design, on the reasoning that it would let
+    // a fast stream use capacity a slow one was not using. It does the opposite
+    // under the exact conditions these scenarios create. In S1 the quota stream
+    // blocks for minutes while its lease is unreachable, its operations sit on
+    // permits without completing, and the pool drains — so the four streams that
+    // cannot even see the fault stop submitting too. That run showed all five
+    // streams dropping from ~20 ops/s to ~5.7 ops/s together, which makes
+    // acceptance degradation unattributable: every stream looks affected by a
+    // fault only one of them touches.
+    //
+    // Per-stream budgets keep the blast radius inside the stream that stalled.
+    // The total ceiling is unchanged, so the out-of-memory backstop still holds.
+    let per_stream_in_flight = (MAX_IN_FLIGHT / active.len()).max(1);
+
     info!(
-        "Chaos workload starting: {} streams, {:.2} ops/s each ({:?} between submissions)",
+        "Chaos workload starting: {} streams, {:.2} ops/s each ({:?} between \
+         submissions), {} in flight per stream",
         active.len(),
         per_stream_rate,
-        interval
+        interval,
+        per_stream_in_flight
     );
 
     for (stream, agent_count) in active {
         let ctx = ctx.clone();
         let stop = stop.clone();
         let submitted = submitted.clone();
-        let in_flight = in_flight.clone();
+        let in_flight = Arc::new(Semaphore::new(per_stream_in_flight));
 
         tasks.spawn(async move {
             let mut ticker = tokio::time::interval(interval);
