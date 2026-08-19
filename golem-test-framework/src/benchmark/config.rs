@@ -238,9 +238,6 @@ pub enum ChaosScenarioArg {
     S8,
     /// Shard-manager pod restart under mixed workload.
     S12,
-    /// **Prototype.** Quota agent cold-start latency at increasing population.
-    /// Injects nothing.
-    S888,
 }
 
 /// Density subcommand action.

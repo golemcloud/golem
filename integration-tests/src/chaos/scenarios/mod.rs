@@ -28,7 +28,6 @@
 pub mod s1;
 pub mod s12;
 pub mod s8;
-pub mod s888;
 
 use crate::chaos::ScenarioConfig;
 use crate::chaos::history::{OperationHistory, OperationRecord};
@@ -176,6 +175,67 @@ pub async fn snapshot_routing(deps: &BenchmarkTestDependencies, at: &str) -> Rou
                 unavailable_reason: Some(format!("{e:#}")),
             }
         }
+    }
+}
+
+/// How long to wait for the routing table to cover every shard before a
+/// scenario starts measuring.
+///
+/// A cluster that has just scaled up is still converging, and a measurement
+/// taken against it cannot distinguish "the platform was slow" from "the shard
+/// was not routable yet". Waiting removes that doubt rather than leaving it to
+/// be argued about afterwards. Not a correctness gate: on expiry the scenario
+/// runs anyway and the snapshot says what the table looked like.
+const ROUTING_SETTLE_TIMEOUT_SECS: u64 = 180;
+
+/// How often to re-read the routing table while waiting.
+const ROUTING_POLL_SECS: u64 = 3;
+
+/// Blocks until the routing table covers every shard, or the timeout lapses.
+///
+/// Returns the line to record, so the result says which of the two happened
+/// rather than leaving a reader to infer it from timings.
+pub async fn wait_for_settled_routing(
+    deps: &BenchmarkTestDependencies,
+    snapshots: &mut Vec<RoutingSnapshot>,
+) -> String {
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(ROUTING_SETTLE_TIMEOUT_SECS);
+    let mut last = String::from("routing table never became readable");
+
+    loop {
+        match deps.shard_manager().get_routing_table().await {
+            Ok(table) => {
+                let total = table.number_of_shards.value;
+                let per_pod = table.shards_per_pod();
+                let assigned: usize = per_pod.values().sum();
+                let executors = per_pod.len();
+                last = format!(
+                    "routing at start: {assigned}/{total} shards across {executors} executor(s)"
+                );
+                if assigned == total && executors > 0 {
+                    snapshots.push(snapshot_routing(deps, "settled-before-start").await);
+                    info!("Chaos: {last} — settled");
+                    return format!("{last} (settled before measuring)");
+                }
+                info!("Chaos: {last} — waiting for the table to cover every shard");
+            }
+            Err(e) => {
+                last = format!("routing table unavailable: {e:#}");
+                warn!("Chaos: {last}");
+            }
+        }
+
+        if std::time::Instant::now() >= deadline {
+            snapshots.push(snapshot_routing(deps, "unsettled-before-start").await);
+            warn!("Chaos: {last} — proceeding anyway after {ROUTING_SETTLE_TIMEOUT_SECS}s");
+            return format!(
+                "WARNING: measured against an unsettled cluster — {last}. \
+                 Baseline numbers may reflect routing convergence rather than the \
+                 platform."
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(ROUTING_POLL_SECS)).await;
     }
 }
 

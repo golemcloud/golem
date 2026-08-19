@@ -71,6 +71,7 @@ use crate::chaos::prep::ChaosPrepManifest;
 use crate::chaos::probe;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
 use crate::chaos::scenarios::{
+    wait_for_settled_routing,
     OutputPaths, ReadKind, ScenarioOutcome, build_result, read_back_agents, signal_termination,
     snapshot_routing, write_outputs,
 };
@@ -238,6 +239,33 @@ pub async fn run(
             return Ok(result);
         }};
     }
+
+    // ── Warm-up ─────────────────────────────────────────────────────────────
+    //
+    // Bring every agent into existence and let its quota lease settle *before*
+    // the measured run starts. Without this the first ~50-90s of baseline is
+    // agents cold-starting, and the partition then lands on a population whose
+    // leases are still being acquired — which is a different experiment from
+    // the one S1 claims to run. A separate prototype measured this directly:
+    // the first quota reservation on an executor blocks every quota-bearing
+    // invocation on it for tens of seconds, and once warm 500 fresh agents
+    // cold-start in under two seconds.
+    //
+    // Warming is done with *reads*, not invocations. Reading an agent
+    // constructs it — which is what takes the quota token and starts lease
+    // acquisition — without incrementing anything. An increment here would be
+    // invisible to the operation history and would make every read-back look
+    // off by one.
+    routing_snapshots.push(snapshot_routing(deps, "before-warmup").await);
+    attention_extra.push(wait_for_settled_routing(deps, &mut routing_snapshots).await);
+
+    info!("S1: warming up agents so their quota leases are live before the fault");
+    let warmed = warm_up(&ctx, workload_config).await;
+    info!(
+        "S1: warmed {warmed} agents, settling {}s for lease acquisition",
+        WARMUP_SETTLE.as_secs()
+    );
+    tokio::time::sleep(WARMUP_SETTLE).await;
 
     // ── Baseline ────────────────────────────────────────────────────────────
     info!(
@@ -657,6 +685,51 @@ async fn read_counters(
 /// answers — a quota lease lost mid-run parks the agent's next reservation with
 /// no timeout on the platform side — and walking 300 agents sequentially behind
 /// a 30s ceiling would outlast the maintenance window several times over.
+/// How long to wait after warming, for the executors' quota leases to become
+/// live.
+///
+/// The executor's renewal loop runs every 10s and is what turns the placeholder
+/// a fresh token leaves behind into a real lease, so this has to comfortably
+/// exceed one cycle. Cheap next to a 300s baseline.
+const WARMUP_SETTLE: Duration = Duration::from_secs(45);
+
+/// Constructs every agent the run will drive, without mutating any of them.
+///
+/// Returns how many were touched. Failures are not fatal and not reported: an
+/// agent that cannot be read here will be exercised by the workload anyway, and
+/// its behaviour there is the measurement.
+async fn warm_up(ctx: &WorkloadContext, config: &crate::chaos::WorkloadConfig) -> usize {
+    let mut agents = Vec::new();
+    for index in 0..config.durable_agents {
+        agents.push((
+            Stream::Durable,
+            ctx.agent_name(Stream::Durable, index),
+            ReadKind::Counter,
+        ));
+    }
+    for index in 0..config.quota_agents {
+        agents.push((
+            Stream::Quota,
+            ctx.agent_name(Stream::Quota, index),
+            ReadKind::QuotaCounter,
+        ));
+    }
+    for index in 0..config.scheduled_agents {
+        agents.push((
+            Stream::Scheduled,
+            ctx.schedule_target_name(index),
+            ReadKind::Polls,
+        ));
+    }
+
+    let total = agents.len();
+    // Reuses the read-back path purely for its concurrency and per-read
+    // timeout. The returned verdicts are meaningless here — there are no
+    // records to compare against yet — so they are discarded.
+    let _ = read_back_agents(ctx, &[], agents).await;
+    total
+}
+
 async fn read_back(
     ctx: &WorkloadContext,
     records: &[OperationRecord],

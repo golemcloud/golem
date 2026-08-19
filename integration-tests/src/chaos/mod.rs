@@ -59,9 +59,6 @@ pub enum ScenarioCode {
     S8,
     /// Shard-manager pod restart under mixed workload.
     S12,
-    /// **Prototype.** Quota agent cold-start latency at increasing population.
-    /// Injects nothing; see [`scenarios::s888`].
-    S888,
 }
 
 impl ScenarioCode {
@@ -70,19 +67,13 @@ impl ScenarioCode {
             ScenarioCode::S1 => "S1",
             ScenarioCode::S8 => "S8",
             ScenarioCode::S12 => "S12",
-            ScenarioCode::S888 => "S888",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 4] = [
-        ScenarioCode::S1,
-        ScenarioCode::S8,
-        ScenarioCode::S12,
-        ScenarioCode::S888,
-    ];
+    pub const ALL: [ScenarioCode; 3] = [ScenarioCode::S1, ScenarioCode::S8, ScenarioCode::S12];
 
     pub fn parse(s: &str) -> Option<Self> {
         ScenarioCode::ALL
@@ -647,9 +638,6 @@ mod tests {
                     entry.require_workload().unwrap();
                     entry.require_ownership().unwrap();
                 }
-                // The prototype takes its ramp from a constant in its own
-                // module, not from the suite, so it requires no block here.
-                ScenarioCode::S888 => {}
             }
         }
     }
