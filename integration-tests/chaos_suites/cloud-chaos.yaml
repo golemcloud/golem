@@ -359,7 +359,19 @@ scenarios:
       ephemeralAgents: 50
       scheduledAgents: 50
       promiseAgents: 50
-      quotaAgents: 0
+      # Quota agents are here because executor churn is exactly what starves
+      # them. An executor that has just started holds no allocation, and the
+      # shard-manager cannot give it one while an existing executor is sitting
+      # on the pool: it divides by the executors that already hold leases, so
+      # whoever asked first holds everything until its own lease renews. That
+      # renewal is up to 40s away (60s lease, 20s threshold).
+      #
+      # S13 restarts an executor every 60s. So it puts a fresh, zero-allocation
+      # executor next to a lease-holding one, five times in a row, which is the
+      # sharpest test of that behaviour the suite can run. Agents starved this
+      # way do not fail: they wait with no error and no estimate, so without
+      # this stream the run would look clean.
+      quotaAgents: 50
       # The project caps this at 25% of measured per-pod capacity so the run
       # measures recovery rather than saturation. Restarting an executor
       # removes half the capacity for as long as the reschedule takes, so a
