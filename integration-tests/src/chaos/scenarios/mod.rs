@@ -201,7 +201,8 @@ pub async fn wait_for_settled_routing(
 ) -> String {
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(ROUTING_SETTLE_TIMEOUT_SECS);
-    let mut last = String::from("routing table never became readable");
+    // Assigned on every path through the loop below before it is read.
+    let mut last: String;
 
     loop {
         match deps.shard_manager().get_routing_table().await {
