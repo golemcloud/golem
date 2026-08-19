@@ -15,6 +15,8 @@
 use golem_common::SafeDisplay;
 use golem_common::model::base64::Base64;
 use golem_common::model::{Empty, RetryConfig};
+use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use golem_common::retries::RetryState;
 use http::Uri;
 use scc::hash_map::Entry;
@@ -69,11 +71,35 @@ fn build_endpoint(uri: Uri, config: &GrpcClientConfig) -> Result<Endpoint, tonic
     Ok(endpoint)
 }
 
+/// A connection attempt shared by every caller waiting for the same target.
+///
+/// Without this, callers queue inside tonic's `Channel` and each waits for the
+/// one ahead of it to burn a full `connect_timeout`. Sharing the attempt means an
+/// unreachable peer costs the whole cohort one `connect_timeout` between them,
+/// after which they all fail and the caller can re-resolve. See
+/// tests/grpc_client.rs::concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout.
+type SharedConnect = Shared<BoxFuture<'static, Result<Channel, Status>>>;
+
+fn connect_shared(endpoint: Endpoint, connect_timeout: Duration) -> SharedConnect {
+    async move {
+        match tokio::time::timeout(connect_timeout, endpoint.connect()).await {
+            Ok(Ok(channel)) => Ok(channel),
+            Ok(Err(err)) => Err(Status::unavailable(format!("tcp connect error: {err}"))),
+            Err(_) => Err(Status::unavailable(format!(
+                "connection not established within {connect_timeout:?}"
+            ))),
+        }
+    }
+    .boxed()
+    .shared()
+}
+
 #[derive(Clone)]
 pub struct GrpcClient<T: Clone> {
     endpoint: Uri,
     config: GrpcClientConfig,
     client: Arc<Mutex<Option<GrpcClientConnection<T>>>>,
+    connecting: Arc<Mutex<Option<SharedConnect>>>,
     client_factory: Arc<dyn Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync + 'static>,
     target_name: String,
 }
@@ -90,6 +116,7 @@ impl<T: Clone> GrpcClient<T> {
             endpoint,
             config,
             client: Arc::new(Mutex::new(None)),
+            connecting: Arc::new(Mutex::new(None)),
             client_factory: Arc::new(client_factory),
         }
     }
@@ -107,10 +134,20 @@ impl<T: Clone> GrpcClient<T> {
         );
         loop {
             retries.start_attempt();
-            let mut entry = self
-                .get()
-                .await
-                .map_err(|err| Status::from_error(Box::new(err)))?;
+            // A failed connection attempt goes through the same retry path as a
+            // failed call, so `retries_on_unavailable` still governs it.
+            let mut entry = match self.get().await {
+                Ok(entry) => entry,
+                Err(e) => {
+                    if !retries.failed_attempt().await {
+                        span.in_scope(|| warn!("gRPC connect failed: {:?}, no more retries", e));
+                        record_internal_grpc_failure(&self.target_name, description.as_ref(), &e);
+                        break Err(e);
+                    }
+                    record_internal_grpc_retry(&self.target_name, description.as_ref());
+                    continue;
+                }
+            };
             let attempt_start = Instant::now();
             match f(&mut entry.client).instrument(span.clone()).await {
                 Ok(result) => {
@@ -153,21 +190,41 @@ impl<T: Clone> GrpcClient<T> {
         }
     }
 
-    async fn get(&self) -> Result<GrpcClientConnection<T>, tonic::transport::Error> {
-        let mut entry = self.client.lock().await;
-
-        match &*entry {
-            Some(client) => Ok(client.clone()),
-            None => {
-                let endpoint = build_endpoint(self.endpoint.clone(), &self.config)?;
-                let channel = endpoint.connect_lazy();
-                let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
-                let client = (self.client_factory)(channel, self.config.max_message_size);
-                let connection = GrpcClientConnection { client };
-                *entry = Some(connection.clone());
-                Ok(connection)
-            }
+    async fn get(&self) -> Result<GrpcClientConnection<T>, Status> {
+        if let Some(connection) = self.client.lock().await.clone() {
+            return Ok(connection);
         }
+
+        // One connection attempt is shared by everyone waiting for it.
+        let shared = {
+            let mut connecting = self.connecting.lock().await;
+            match &*connecting {
+                Some(shared) => shared.clone(),
+                None => {
+                    let endpoint = build_endpoint(self.endpoint.clone(), &self.config)
+                        .map_err(|err| Status::from_error(Box::new(err)))?;
+                    let shared = connect_shared(endpoint, self.config.connect_timeout);
+                    *connecting = Some(shared.clone());
+                    shared
+                }
+            }
+        };
+
+        let result = shared.await;
+        // Clear it so a later call starts a fresh attempt rather than replaying
+        // this one's outcome.
+        let _ = self.connecting.lock().await.take();
+        let channel = result?;
+
+        let mut entry = self.client.lock().await;
+        if let Some(connection) = &*entry {
+            return Ok(connection.clone());
+        }
+        let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
+        let client = (self.client_factory)(channel, self.config.max_message_size);
+        let connection = GrpcClientConnection { client };
+        *entry = Some(connection.clone());
+        Ok(connection)
     }
 }
 
@@ -175,6 +232,7 @@ impl<T: Clone> GrpcClient<T> {
 pub struct MultiTargetGrpcClient<T: Clone> {
     config: GrpcClientConfig,
     clients: Arc<scc::HashMap<Uri, GrpcClientConnection<T>>>,
+    connecting: Arc<scc::HashMap<Uri, SharedConnect>>,
     client_factory: Arc<dyn Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync>,
     target_name: String,
 }
@@ -188,6 +246,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         Self {
             config,
             clients: Arc::new(scc::HashMap::new()),
+            connecting: Arc::new(scc::HashMap::new()),
             client_factory: Arc::new(client_factory),
             target_name: target_name.as_ref().to_string(),
         }
@@ -212,10 +271,20 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         );
         loop {
             retries.start_attempt();
-            let mut entry = self
-                .get(endpoint.clone())
-                .await
-                .map_err(|err| Status::from_error(Box::new(err)))?;
+            // A failed connection attempt goes through the same retry path as a
+            // failed call, so `retries_on_unavailable` still governs it.
+            let mut entry = match self.get(endpoint.clone()).await {
+                Ok(entry) => entry,
+                Err(e) => {
+                    if !retries.failed_attempt().await {
+                        span.in_scope(|| warn!("gRPC connect failed: {:?}, no more retries", e));
+                        record_internal_grpc_failure(&self.target_name, description.as_ref(), &e);
+                        break Err(e);
+                    }
+                    record_internal_grpc_retry(&self.target_name, description.as_ref());
+                    continue;
+                }
+            };
             let attempt_start = Instant::now();
             match f(&mut entry.client).instrument(span.clone()).await {
                 Ok(result) => {
@@ -262,13 +331,34 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         self.config.tls_enabled()
     }
 
-    async fn get(&self, endpoint: Uri) -> Result<GrpcClientConnection<T>, tonic::transport::Error> {
-        let entry = self.clients.entry_async(endpoint.clone()).await;
-        match entry {
+    async fn get(&self, endpoint: Uri) -> Result<GrpcClientConnection<T>, Status> {
+        if let Some(existing) = self.clients.get_async(&endpoint).await {
+            return Ok(existing.get().clone());
+        }
+
+        // One connection attempt per target, shared by everyone waiting for it.
+        // Connecting outside the map's entry lock also keeps unrelated targets
+        // that hash to the same bucket from serialising behind it.
+        let shared = match self.connecting.entry_async(endpoint.clone()).await {
+            Entry::Occupied(entry) => entry.get().clone(),
+            Entry::Vacant(entry) => {
+                let built = build_endpoint(endpoint.clone(), &self.config)
+                    .map_err(|err| Status::from_error(Box::new(err)))?;
+                let shared = connect_shared(built, self.config.connect_timeout);
+                entry.insert_entry(shared.clone());
+                shared
+            }
+        };
+
+        let result = shared.await;
+        // Clear it so a later call starts a fresh attempt rather than replaying
+        // this one's outcome.
+        let _ = self.connecting.remove_async(&endpoint).await;
+        let channel = result?;
+
+        match self.clients.entry_async(endpoint).await {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
-                let endpoint = build_endpoint(endpoint, &self.config)?;
-                let channel = endpoint.connect_lazy();
                 let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
                 let client = (self.client_factory)(channel, self.config.max_message_size);
                 let connection = GrpcClientConnection { client };
@@ -286,17 +376,14 @@ pub struct GrpcClientConnection<T: Clone> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrpcClientConfig {
-    /// Bounds a single TCP connect.
+    /// Bounds connection establishment to one target.
     ///
-    /// It also bounds something less obvious. tonic's `Channel` services
-    /// requests one at a time, so when a peer is unreachable every queued
-    /// request waits for each request ahead of it to burn a full
-    /// `connect_timeout` before its own connect is attempted. The worst-case
-    /// stall is therefore `queue_depth * connect_timeout`, not `connect_timeout`.
-    ///
-    /// This is what produced the 119,781ms stalls in chaos run S5 on 2026-08-19:
-    /// a 10s connect_timeout with roughly twelve requests queued against an
-    /// executor that had just been deleted. Keep this small.
+    /// Callers waiting for the same target share a single attempt, so an
+    /// unreachable peer costs the whole waiting cohort one `connect_timeout`
+    /// between them rather than one each. Before that was so, requests queued
+    /// inside tonic's `Channel` and each waited for those ahead of it to time
+    /// out in turn — which produced the 119,781ms stalls in chaos run S5 on
+    /// 2026-08-19, roughly twelve requests deep against a 10s timeout.
     #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
     #[serde(default, with = "humantime_serde::option")]
@@ -482,5 +569,15 @@ impl EnabledGrpcClientTlsConfig {
 }
 
 fn requires_reconnect(e: &Status) -> bool {
-    e.code() == Code::Unavailable
+    if e.code() == Code::Unavailable {
+        return true;
+    }
+
+    // A dead connection surfaces as a transport error, which tonic reports as
+    // `Unknown` rather than `Unavailable`. Matching only on `Unavailable` left
+    // such channels cached indefinitely, so every later request queued onto a
+    // connection that could never work again.
+    std::error::Error::source(e)
+        .map(|source| source.is::<tonic::transport::Error>())
+        .unwrap_or(false)
 }

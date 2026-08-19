@@ -423,17 +423,20 @@ async fn peer_dies_then_blackholes_fresh_connect_is_bounded() {
     );
 }
 
-/// tonic's `Channel` is a `tower::Buffer`: concurrent requests queue and are
-/// serviced one at a time. If the peer is unreachable, every queued request
-/// waits for the one ahead of it to burn a full `connect_timeout` before its own
-/// connect is even attempted.
+/// When an executor is unreachable, every request queued against it must fail
+/// after ONE connect_timeout, so the caller can invalidate the routing table and
+/// re-resolve to the executor that took over the shards.
 ///
-/// That would make a single logical attempt take N x connect_timeout, with the
-/// error still reported as one ConnectError/Elapsed — which is what S5 showed:
-/// 119,781ms on one attempt against a 10s connect_timeout, with 496 operations
-/// in flight against the executor that had just been killed.
+/// tonic's `Channel` does not give us this: it is a `tower::Buffer` that services
+/// requests one at a time, so each queued request waits for every request ahead
+/// of it to burn a full connect_timeout before its own connect is attempted —
+/// making the worst case queue_depth x connect_timeout.
+///
+/// That is what produced chaos run S5's 119,781ms stalls on 2026-08-19: a 10s
+/// connect_timeout with roughly twelve requests queued against a deleted
+/// executor. Reproduced here at 8 x connect_timeout before the fix.
 #[test]
-async fn concurrent_calls_queue_behind_each_others_connect_attempts() {
+async fn concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout() {
     if !can_drop_packets() {
         eprintln!("[REPRO3] skipped: needs CAP_NET_ADMIN in a network namespace.");
         return;
@@ -505,14 +508,56 @@ async fn concurrent_calls_queue_behind_each_others_connect_attempts() {
         started.elapsed()
     );
 
-    // Characterisation, not a guarantee: this documents the amplification that
-    // caused S5's 119,781ms stalls. tonic serialises requests on a channel, so
-    // the worst case is queue_depth x connect_timeout. If a future change makes
-    // queued requests fail fast instead, this assertion will fail — update it,
-    // that is an improvement.
     assert!(
-        slowest >= connect_timeout * (CONCURRENCY as u32 - 1),
-        "expected queued requests to serialise behind each other's connect \
-         attempts (~{CONCURRENCY}x{connect_timeout:?}), slowest was only {slowest:?}"
+        slowest < connect_timeout * 2,
+        "slowest of {CONCURRENCY} concurrent calls took {slowest:?} with \
+         connect_timeout={connect_timeout:?} — queued requests are serialising \
+         behind each other's connect attempts instead of sharing one"
+    );
+}
+
+/// The fix must not cost connection reuse: concurrent calls to a healthy peer
+/// must all succeed, and must share a single connection rather than each opening
+/// their own.
+#[test]
+async fn concurrent_calls_to_healthy_peer_share_one_connection() {
+    let (addr, _server) = serve_grpc().await;
+    let uri: Uri = format!("http://{addr}").parse().unwrap();
+
+    let client = MultiTargetGrpcClient::new(
+        "worker_executor",
+        |channel, max_message_size| {
+            WorkerExecutorClient::new(channel)
+                .max_decoding_message_size(max_message_size)
+                .max_encoding_message_size(max_message_size)
+        },
+        config(),
+    );
+
+    let started = Instant::now();
+    let mut tasks = Vec::new();
+    for _ in 0..16 {
+        let client = client.clone();
+        let uri = uri.clone();
+        tasks.push(tokio::spawn(async move {
+            client
+                .call("assign_shards", uri, move |client| {
+                    Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+                })
+                .await
+                .err()
+                .map(|e| e.code())
+        }));
+    }
+
+    for t in tasks {
+        // The empty router answers Unimplemented; what matters is that the call
+        // reached the peer rather than failing to connect.
+        assert_eq!(t.await.unwrap(), Some(tonic::Code::Unimplemented));
+    }
+    eprintln!("[HEALTHY] 16 concurrent calls settled in {:?}", started.elapsed());
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "healthy concurrent calls should not serialise"
     );
 }
