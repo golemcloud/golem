@@ -1068,17 +1068,17 @@ async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
 }
 
 /// A connection attempt outlives its callers by design, so that losing them does
-/// not strand it mid-connect. The cost of that is this: if the attempt succeeds
-/// after everyone has gone, nobody is left to clear it, and an established
-/// connection nobody asked for stays parked in the map. With keep-alive on by
-/// default it is not even idle; it pings.
+/// not strand it mid-connect. This is the other half of that bargain: when the
+/// attempt succeeds after everyone has gone, the connection it made must end up
+/// somewhere the next caller can find it. Otherwise it sits open with nobody able
+/// to use it, pinging away, until some later call happens to replace it.
 #[test]
-async fn a_connection_nobody_waits_for_is_not_left_open() {
-    if delegated_to_namespace("a_connection_nobody_waits_for_is_not_left_open") {
+async fn a_connection_nobody_waited_for_is_still_reused() {
+    if delegated_to_namespace("a_connection_nobody_waited_for_is_still_reused") {
         return;
     }
-    // Slow the loopback so a connect can be cancelled while it is still in flight.
-    // Without this the handshake completes far too fast to interleave with.
+    // Slow the loopback so a connect can be cancelled while it is still in
+    // flight. Without this the handshake completes far too fast to interleave.
     let tc = std::process::Command::new("tc")
         .args([
             "qdisc", "add", "dev", "lo", "root", "netem", "delay", "300ms",
@@ -1091,56 +1091,42 @@ async fn a_connection_nobody_waits_for_is_not_left_open() {
         String::from_utf8_lossy(&tc.stderr)
     );
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let open = std::sync::Arc::new(std::sync::atomic::AtomicIsize::new(0));
-    let tracker = open.clone();
-    let _accepter = tokio::spawn(async move {
-        while let Ok((sock, _)) = listener.accept().await {
-            tracker.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let tracker = tracker.clone();
-            tokio::spawn(async move {
-                // Stay silent; count the socket out again when the peer hangs up.
-                let mut sock = sock;
-                let mut buf = [0u8; 1024];
-                loop {
-                    match tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {}
-                    }
-                }
-                tracker.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-            });
-        }
-    });
-
+    let peer = serve_grpc().await;
+    let uri: Uri = format!("http://{}", peer.addr).parse().unwrap();
     let mut cfg = config();
     cfg.connect_timeout = Duration::from_secs(5);
     let client = executor_client(cfg);
-    let uri: Uri = format!("http://{addr}").parse().unwrap();
 
-    let caller = tokio::spawn({
+    let abandoned = tokio::spawn({
         let client = client.clone();
+        let uri = uri.clone();
         async move { ping(&client, uri).await }
     });
     // Cancel while the handshake is still crossing the delayed loopback.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    caller.abort();
+    abandoned.abort();
 
-    // Long enough for the attempt to finish on its own and for anything holding
-    // the result to have let go of it.
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    let still_open = open.load(std::sync::atomic::Ordering::SeqCst);
-    eprintln!("[ORPHAN] connections still open after the only caller went away: {still_open}");
+    // Long enough for the attempt to finish on its own.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let outcome = ping(&client, uri).await;
+    let connections = peer.connections.load(std::sync::atomic::Ordering::SeqCst);
+    eprintln!(
+        "[ORPHAN] call after the abandoned one used {connections} connection(s): {outcome:?}"
+    );
 
     let _ = std::process::Command::new("tc")
         .args(["qdisc", "del", "dev", "lo", "root"])
         .output();
 
     assert_eq!(
-        still_open, 0,
-        "an established connection was left open with no caller and no cache entry \
-         to reuse it; keep-alive keeps pinging it until some later call for the \
-         same target happens to replace it"
+        outcome.err().map(|e| e.code()),
+        Some(tonic::Code::Unimplemented),
+        "the call after the abandoned one should have reached the peer"
+    );
+    assert_eq!(
+        connections, 1,
+        "the abandoned attempt's connection was not reused; it opened \
+         {connections} connections where one would do"
     );
 }

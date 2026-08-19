@@ -93,71 +93,99 @@ fn connect_shared(endpoint: Endpoint, connect_timeout: Duration) -> SharedConnec
 #[derive(Clone)]
 struct ConnectionAttempts {
     in_flight: Arc<scc::HashMap<Uri, SharedConnect>>,
+    established: Arc<scc::HashMap<Uri, Channel>>,
 }
 
 impl ConnectionAttempts {
     fn new() -> Self {
         Self {
             in_flight: Arc::new(scc::HashMap::new()),
+            established: Arc::new(scc::HashMap::new()),
         }
     }
 
     /// Connects to `target`, joining an attempt already under way if there is one.
     async fn connect(&self, target: Uri, config: &GrpcClientConfig) -> Result<Channel, Status> {
+        if let Some(established) = self.established.get_async(&target).await {
+            return Ok(established.get().clone());
+        }
+
         // Built before the map is touched, so a rejected URI cannot leave an
         // entry behind. Connecting outside the entry lock also keeps unrelated
         // targets that hash to the same bucket from serialising behind it.
         let endpoint = build_endpoint(target.clone(), config)
             .map_err(|err| Status::from_error(Box::new(err)))?;
 
-        let (attempt, is_new) = match self.in_flight.entry_async(target.clone()).await {
-            // A settled attempt is already on its way out; its driver is about to
-            // clear it. If it succeeded, the connection it made is still good and
-            // worth taking. A failure is not worth inheriting: it describes a
-            // connection nobody is still making, and the caller deserves its own
-            // attempt rather than someone else's stale verdict.
-            Entry::Occupied(mut entry) if entry.get().peek().is_some() => {
-                if let Some(Ok(channel)) = entry.get().peek() {
-                    return Ok(channel.clone());
+        let mut started = None;
+        let attempt = match self.in_flight.entry_async(target.clone()).await {
+            Entry::Occupied(mut entry) => match entry.get().peek() {
+                // Settled and successful, and not yet published below. The
+                // connection it made is good, so take it.
+                Some(Ok(channel)) => return Ok(channel.clone()),
+                // Settled and failed. That verdict describes a connection nobody
+                // is still making, so the caller gets its own attempt rather than
+                // inheriting someone else's.
+                Some(Err(_)) => {
+                    let attempt = connect_shared(endpoint, config.connect_timeout);
+                    *entry.get_mut() = attempt.clone();
+                    started = Some(attempt.clone());
+                    attempt
                 }
-                let attempt = connect_shared(endpoint, config.connect_timeout);
-                *entry.get_mut() = attempt.clone();
-                (attempt, true)
-            }
-            Entry::Occupied(entry) => (entry.get().clone(), false),
+                None => entry.get().clone(),
+            },
             Entry::Vacant(entry) => {
                 let attempt = connect_shared(endpoint, config.connect_timeout);
                 entry.insert_entry(attempt.clone());
-                (attempt, true)
+                started = Some(attempt.clone());
+                attempt
             }
         };
-        if is_new {
-            self.drive(target, attempt.clone());
+        if let Some(attempt) = started {
+            self.drive(target, attempt);
         }
 
         attempt.await
     }
 
-    /// Drives an attempt to completion independently of its callers, and clears
-    /// it once it settles.
+    /// Drives an attempt to completion independently of its callers, and
+    /// publishes what it produced.
     ///
     /// Callers go away all the time: an upstream timeout, a dropped client. An
     /// attempt driven only by its waiters would, on losing the last of them, sit
     /// parked mid-connect with its deadline quietly expiring, and the next caller
     /// would inherit an instant verdict about a connection nobody ever made.
-    /// Clearing it here rather than in the caller matters for the opposite case:
-    /// when a cohort is cancelled after its connect succeeds, there is no one
-    /// left to tidy up, and the established connection would otherwise sit in the
-    /// map with nobody to use it, kept alive by our own keep-alive pings until
-    /// some later call for the same target happened to replace it.
+    ///
+    /// A successful attempt is deliberately left in place rather than cleared.
+    /// Clearing it opens a window, however brief, in which the connection is in
+    /// neither map: a caller that looked for an established connection just
+    /// before the attempt landed, and for an attempt just after it was cleared,
+    /// finds nothing and opens a second connection. Under load that window is
+    /// wide enough to hit. A failed attempt is cleared, since nothing is holding
+    /// and the next caller should try again for itself.
     fn drive(&self, target: Uri, attempt: SharedConnect) {
         let in_flight = self.in_flight.clone();
+        let established = self.established.clone();
         tokio::spawn(async move {
-            let _ = attempt.clone().await;
-            in_flight
-                .remove_if_async(&target, |current| current.ptr_eq(&attempt))
-                .await;
+            match attempt.clone().await {
+                Ok(channel) => {
+                    let _ = established.insert_async(target, channel).await;
+                }
+                Err(_) => {
+                    in_flight
+                        .remove_if_async(&target, |current| current.ptr_eq(&attempt))
+                        .await;
+                }
+            }
         });
+    }
+
+    /// Forgets the connection to `target`, so the next call builds a new one.
+    /// Used when a channel turns out to be dead. Both the established connection
+    /// and the settled attempt still holding it have to go, or the dead channel
+    /// would simply be handed out again.
+    async fn forget(&self, target: &Uri) {
+        self.established.remove_async(target).await;
+        self.in_flight.remove_async(target).await;
     }
 }
 
@@ -228,6 +256,7 @@ impl<T: Clone> GrpcClient<T> {
                 Err(e) => {
                     if requires_reconnect(&e) {
                         let _ = self.client.lock().await.take();
+                        self.attempts.forget(&self.endpoint).await;
                         if !retries.failed_attempt().await {
                             span.in_scope(|| {
                                 warn!("gRPC call failed: {:?}, no more retries", e);
@@ -354,6 +383,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                 Err(e) => {
                     if requires_reconnect(&e) {
                         self.clients.remove_async(&endpoint).await;
+                        self.attempts.forget(&endpoint).await;
                         if !retries.failed_attempt().await {
                             span.in_scope(|| {
                                 warn!("gRPC call failed: {:?}, no more retries", e);
