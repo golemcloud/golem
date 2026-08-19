@@ -125,16 +125,16 @@ impl Oplog for DebugOplog {
             .oplog_state
             .debug_session
             .get(&self.oplog_state.debug_session_id)
-            .await
-            .expect("Internal Error. Current Oplog Index failed. Debug session not found");
+            .await;
 
-        // If a debug session not found but hasn't been set up with a target index,
-        // it implies, we only connected to the worker and haven't started debugging yet.
-        if let Some(index) = debug_session_data.target_oplog_index {
-            index
-        } else {
-            self.inner.current_oplog_index().await
+        if let Some(debug_session_data) = debug_session_data
+            && let Some(index) = debug_session_data.target_oplog_index
+        {
+            return index;
         }
+
+        // Worker construction precedes session registration when first connecting.
+        self.inner.current_oplog_index().await
     }
 
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {

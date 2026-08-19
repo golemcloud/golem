@@ -1621,6 +1621,7 @@ mod classified_stream_tests {
         stream.write(Bytes::from_static(b"hello")).unwrap();
         started.notified().await;
 
+        stream.cancel_active_write();
         let cancellation = tokio::spawn(async move {
             stream.cancel().await;
             stream

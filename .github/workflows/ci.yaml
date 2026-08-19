@@ -203,9 +203,14 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
-      - uses: ./.github/actions/restore-test-components
+      - name: Download test component WASMs
+        uses: actions/download-artifact@v8
         with:
-          run-id: ${{ github.run_id }}
+          pattern: test-components-*
+          path: tmp/test-components-wasm
+          merge-multiple: true
+      - name: Install test component WASMs
+        run: cp -v tmp/test-components-wasm/*.wasm test-components/
       - name: Install XFS tools and Redis
         run: sudo apt-get update && sudo apt-get install --yes xfsprogs redis-server
       - name: Run managed XFS suite
