@@ -59,14 +59,6 @@ fn build_endpoint(
         endpoint = endpoint.keep_alive_while_idle(while_idle);
     }
 
-    if config.tcp_keepalive.is_some() {
-        endpoint = endpoint.tcp_keepalive(config.tcp_keepalive);
-    }
-
-    if let Some(buffer_size) = config.buffer_size {
-        endpoint = endpoint.buffer_size(buffer_size);
-    }
-
     if let GrpcClientTlsConfig::Enabled(tls) = &config.tls {
         endpoint = endpoint.tls_config(tls.to_tonic())?;
     }
@@ -453,16 +445,6 @@ pub struct GrpcClientConfig {
     /// Whether to keep pinging when no requests are in flight.
     #[serde(default)]
     pub http2_keep_alive_while_idle: Option<bool>,
-    #[serde(default, with = "humantime_serde::option")]
-    pub tcp_keepalive: Option<Duration>,
-    /// Depth of tonic's request buffer.
-    ///
-    /// Note this does NOT bound the stall described on `connect_timeout`:
-    /// `tower::Buffer` applies backpressure rather than rejecting, so callers
-    /// wait on readiness however shallow the buffer is. Verified with
-    /// buffer_size = 1: eight concurrent calls still took 1x..8x connect_timeout.
-    #[serde(default)]
-    pub buffer_size: Option<usize>,
     pub retries_on_unavailable: RetryConfig,
     pub tls: GrpcClientTlsConfig,
     #[serde(default = "default_max_message_size")]
@@ -495,8 +477,6 @@ impl Default for GrpcClientConfig {
             // Cached channels sit idle between requests; ping then too, so a dead
             // peer is discovered before the next request rather than during it.
             http2_keep_alive_while_idle: Some(true),
-            tcp_keepalive: None,
-            buffer_size: None,
             retries_on_unavailable: RetryConfig::default(),
             tls: GrpcClientTlsConfig::Disabled(Empty {}),
             max_message_size: default_max_message_size(),
@@ -524,8 +504,6 @@ impl SafeDisplay for GrpcClientConfig {
             "http2_keep_alive_while_idle: {:?}",
             self.http2_keep_alive_while_idle
         );
-        let _ = writeln!(&mut result, "tcp_keepalive: {:?}", self.tcp_keepalive);
-        let _ = writeln!(&mut result, "buffer_size: {:?}", self.buffer_size);
         let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
         let _ = writeln!(&mut result, "retries_on_unavailable:");
         let _ = writeln!(

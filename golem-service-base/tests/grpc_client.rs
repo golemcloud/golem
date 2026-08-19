@@ -21,6 +21,8 @@ use golem_service_base::grpc::client::{
 use http::Uri;
 use std::time::{Duration, Instant};
 use test_r::test;
+use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 /// RFC 5737 TEST-NET-1. Reserved for documentation and guaranteed never routable,
 /// so a TCP connect to it is silently dropped rather than refused. That is exactly
@@ -52,8 +54,6 @@ fn config() -> GrpcClientConfig {
         http2_keep_alive_interval: Some(KEEP_ALIVE_INTERVAL),
         http2_keep_alive_timeout: Some(KEEP_ALIVE_TIMEOUT),
         http2_keep_alive_while_idle: Some(true),
-        tcp_keepalive: None,
-        buffer_size: None,
         retries_on_unavailable: RetryConfig {
             max_attempts: 0,
             min_delay: Duration::from_millis(100),
@@ -64,6 +64,55 @@ fn config() -> GrpcClientConfig {
         tls: GrpcClientTlsConfig::Disabled(Empty {}),
         max_message_size: 32 * 1024 * 1024,
     }
+}
+
+/// The client type the incident involved: worker-service's client for the
+/// worker-executor API.
+type ExecutorClient = WorkerExecutorClient<OtelGrpcService<Channel>>;
+
+fn new_executor_client(
+    channel: OtelGrpcService<Channel>,
+    max_message_size: usize,
+) -> ExecutorClient {
+    WorkerExecutorClient::new(channel)
+        .max_decoding_message_size(max_message_size)
+        .max_encoding_message_size(max_message_size)
+}
+
+fn executor_client(config: GrpcClientConfig) -> MultiTargetGrpcClient<ExecutorClient> {
+    MultiTargetGrpcClient::new("worker_executor", new_executor_client, config)
+}
+
+fn single_target_executor_client(
+    endpoint: Uri,
+    config: GrpcClientConfig,
+) -> GrpcClient<ExecutorClient> {
+    GrpcClient::new("worker_executor", new_executor_client, endpoint, config)
+}
+
+/// One trivial round trip, used throughout as a probe.
+///
+/// The test servers here route nothing, so a peer that is reachable at all
+/// answers `Unimplemented`. Anything else means the call never got through.
+async fn ping(
+    client: &MultiTargetGrpcClient<ExecutorClient>,
+    target: Uri,
+) -> Result<(), tonic::Status> {
+    client
+        .call("assign_shards", target, move |executor| {
+            Box::pin(executor.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+        })
+        .await
+        .map(|_| ())
+}
+
+async fn ping_single(client: &GrpcClient<ExecutorClient>) -> Result<(), tonic::Status> {
+    client
+        .call("assign_shards", move |executor| {
+            Box::pin(executor.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+        })
+        .await
+        .map(|_| ())
 }
 
 /// A worker-executor pod deleted mid-flight leaves its IP blackholed. Calls
@@ -82,15 +131,7 @@ async fn multi_target_call_to_blackholed_pod_gives_up_within_connect_timeout() {
         );
         return;
     }
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        config(),
-    );
+    let client = executor_client(config());
 
     let started = Instant::now();
     let result = client
@@ -124,23 +165,10 @@ async fn single_target_call_to_blackholed_pod_gives_up_within_connect_timeout() 
         );
         return;
     }
-    let client = GrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        BLACKHOLE.parse::<Uri>().unwrap(),
-        config(),
-    );
+    let client = single_target_executor_client(BLACKHOLE.parse::<Uri>().unwrap(), config());
 
     let started = Instant::now();
-    let result = client
-        .call("assign_shards", move |client| {
-            Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-        })
-        .await;
+    let result = ping_single(&client).await;
     let elapsed = started.elapsed();
 
     assert!(
@@ -167,7 +195,6 @@ async fn single_target_call_to_blackholed_pod_gives_up_within_connect_timeout() 
 ///   - eager `Endpoint::connect()` — performs the TCP connect only, handshake is deferred
 ///   - driving the channel to readiness — tonic's Channel is a Buffer, ready() returns at once
 ///   - `request_timeout` — bounds it, but caps every RPC including long agent invocations
-///   - `tcp_keepalive` — never fires; the peer's kernel still ACKs, it just says nothing
 ///
 /// What works is HTTP/2 keep-alive: `http2_keep_alive_interval` + `keep_alive_timeout`
 /// bound detection at roughly their sum, without capping request duration.
@@ -186,15 +213,7 @@ async fn call_to_peer_that_accepts_but_never_speaks_http2_gives_up() {
     });
 
     let uri: Uri = format!("http://{addr}").parse().unwrap();
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        config(),
-    );
+    let client = executor_client(config());
 
     let started = Instant::now();
     let result = tokio::time::timeout(
@@ -262,11 +281,29 @@ fn no_keepalive(connect_timeout: Duration) -> GrpcClientConfig {
     cfg
 }
 
-async fn serve_grpc() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+/// A peer that routes nothing, and counts the TCP connections made to it.
+struct TestPeer {
+    addr: std::net::SocketAddr,
+    connections: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    _server: tokio::task::JoinHandle<()>,
+}
+
+async fn serve_grpc() -> TestPeer {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
-    let handle = tokio::spawn(async move {
+    let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let counter = connections.clone();
+    let incoming = futures::StreamExt::inspect(
+        tokio_stream::wrappers::TcpListenerStream::new(listener),
+        move |accepted| {
+            if accepted.is_ok() {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        },
+    );
+
+    let server = tokio::spawn(async move {
         // Empty router: any request gets a real HTTP/2 response carrying
         // grpc-status 12 (Unimplemented). That is not Unavailable, so the client
         // keeps the channel cached — exactly as in production.
@@ -275,7 +312,12 @@ async fn serve_grpc() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
             .serve_with_incoming(incoming)
             .await;
     });
-    (addr, handle)
+
+    TestPeer {
+        addr,
+        connections,
+        _server: server,
+    }
 }
 
 /// Whether it is safe to drop packets here.
@@ -399,27 +441,16 @@ async fn established_connection_to_blackholed_peer() {
         return;
     }
 
-    let (addr, _server) = serve_grpc().await;
+    let peer = serve_grpc().await;
+    let addr = peer.addr;
     let port = addr.port().to_string();
     let uri: Uri = format!("http://{addr}").parse().unwrap();
 
     let connect_timeout = Duration::from_secs(3);
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        no_keepalive(connect_timeout),
-    );
+    let client = executor_client(no_keepalive(connect_timeout));
 
     // 1. Establish and cache the connection, as production had done.
-    let first = client
-        .call("assign_shards", uri.clone(), move |client| {
-            Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-        })
-        .await;
+    let first = ping(&client, uri.clone()).await;
     let first_err = first.expect_err("empty router replies Unimplemented");
     eprintln!("[REPRO] first call settled: code={:?}", first_err.code());
     assert_ne!(
@@ -435,11 +466,7 @@ async fn established_connection_to_blackholed_peer() {
 
     // 3. Next request on the cached, now-dead connection.
     let started = Instant::now();
-    let result = client
-        .call("assign_shards", uri, move |client| {
-            Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-        })
-        .await;
+    let result = ping(&client, uri).await;
     let elapsed = started.elapsed();
 
     let err = result.expect_err("call to a vanished peer must fail");
@@ -472,26 +499,15 @@ async fn peer_dies_then_blackholes_fresh_connect_is_bounded() {
         return;
     }
 
-    let (addr, _server) = serve_grpc().await;
+    let peer = serve_grpc().await;
+    let addr = peer.addr;
     let port = addr.port().to_string();
     let uri: Uri = format!("http://{addr}").parse().unwrap();
 
     let connect_timeout = Duration::from_secs(3);
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        no_keepalive(connect_timeout),
-    );
+    let client = executor_client(no_keepalive(connect_timeout));
 
-    let first = client
-        .call("assign_shards", uri.clone(), move |client| {
-            Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-        })
-        .await;
+    let first = ping(&client, uri.clone()).await;
     eprintln!(
         "[REPRO2] first call settled: code={:?}",
         first.err().map(|e| e.code())
@@ -503,11 +519,7 @@ async fn peer_dies_then_blackholes_fresh_connect_is_bounded() {
 
     // Second call dies on the stale socket once the kernel gives up.
     let t2 = Instant::now();
-    let r2 = client
-        .call("assign_shards", uri.clone(), move |client| {
-            Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-        })
-        .await;
+    let r2 = ping(&client, uri.clone()).await;
     eprintln!(
         "[REPRO2] call2 (stale socket) elapsed={:?} code={:?}",
         t2.elapsed(),
@@ -519,11 +531,7 @@ async fn peer_dies_then_blackholes_fresh_connect_is_bounded() {
     // the one that produced ConnectError/Elapsed. Is it bounded by
     // connect_timeout?
     let started = Instant::now();
-    let result = client
-        .call("assign_shards", uri, move |client| {
-            Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-        })
-        .await;
+    let result = ping(&client, uri).await;
     let elapsed = started.elapsed();
     let err = result.expect_err("call to a dead peer must fail");
 
@@ -565,36 +573,21 @@ async fn concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout() 
     const CONCURRENCY: usize = 8;
     let connect_timeout = Duration::from_secs(1);
 
-    let (addr, _server) = serve_grpc().await;
+    let peer = serve_grpc().await;
+    let addr = peer.addr;
     let port = addr.port().to_string();
     let uri: Uri = format!("http://{addr}").parse().unwrap();
 
     let cfg = no_keepalive(connect_timeout);
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        cfg,
-    );
+    let client = executor_client(cfg);
 
     // Establish and cache the channel.
-    let _ = client
-        .call("assign_shards", uri.clone(), move |client| {
-            Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-        })
-        .await;
+    let _ = ping(&client, uri.clone()).await;
 
     let _blackhole = blackhole_port(&port);
 
     // Retire the stale socket so every request below takes the connect path.
-    let _ = client
-        .call("assign_shards", uri.clone(), move |client| {
-            Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-        })
-        .await;
+    let _ = ping(&client, uri.clone()).await;
     eprintln!("[REPRO3] stale socket retired; firing {CONCURRENCY} concurrent calls");
 
     let started = Instant::now();
@@ -604,11 +597,7 @@ async fn concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout() 
         let uri = uri.clone();
         tasks.push(tokio::spawn(async move {
             let t = Instant::now();
-            let r = client
-                .call("assign_shards", uri, move |client| {
-                    Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-                })
-                .await;
+            let r = ping(&client, uri).await;
             (i, t.elapsed(), r.err().map(|e| e.code()))
         }));
     }
@@ -640,46 +629,42 @@ async fn concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout() 
 /// their own.
 #[test]
 async fn concurrent_calls_to_healthy_peer_share_one_connection() {
-    let (addr, _server) = serve_grpc().await;
-    let uri: Uri = format!("http://{addr}").parse().unwrap();
+    const CONCURRENCY: usize = 16;
 
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        config(),
-    );
+    let peer = serve_grpc().await;
+    let uri: Uri = format!("http://{}", peer.addr).parse().unwrap();
+    let client = executor_client(config());
 
     let started = Instant::now();
-    let mut tasks = Vec::new();
-    for _ in 0..16 {
-        let client = client.clone();
-        let uri = uri.clone();
-        tasks.push(tokio::spawn(async move {
-            client
-                .call("assign_shards", uri, move |client| {
-                    Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-                })
-                .await
-                .err()
-                .map(|e| e.code())
-        }));
-    }
+    let calls: Vec<_> = (0..CONCURRENCY)
+        .map(|_| {
+            let client = client.clone();
+            let uri = uri.clone();
+            tokio::spawn(async move { ping(&client, uri).await.err().map(|e| e.code()) })
+        })
+        .collect();
 
-    for t in tasks {
+    for call in calls {
         // The empty router answers Unimplemented; what matters is that the call
         // reached the peer rather than failing to connect.
-        assert_eq!(t.await.unwrap(), Some(tonic::Code::Unimplemented));
+        assert_eq!(call.await.unwrap(), Some(tonic::Code::Unimplemented));
     }
+    let elapsed = started.elapsed();
+    let connections = peer.connections.load(std::sync::atomic::Ordering::SeqCst);
     eprintln!(
-        "[HEALTHY] 16 concurrent calls settled in {:?}",
-        started.elapsed()
+        "[HEALTHY] {CONCURRENCY} concurrent calls over {connections} connection(s) in {elapsed:?}"
+    );
+
+    // The point of the test, and the half of it that can go red without any
+    // special privileges: a cohort arriving together shares one connection
+    // rather than opening one each.
+    assert_eq!(
+        connections, 1,
+        "{CONCURRENCY} concurrent calls opened {connections} connections; they \
+         should have shared a single connection attempt"
     );
     assert!(
-        started.elapsed() < Duration::from_secs(5),
+        elapsed < Duration::from_secs(5),
         "healthy concurrent calls should not serialise"
     );
 }
@@ -698,40 +683,20 @@ async fn waiter_survives_cancellation_of_the_caller_that_started_the_connect() {
         return;
     }
     let connect_timeout = Duration::from_secs(2);
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        no_keepalive(connect_timeout),
-    );
+    let client = executor_client(no_keepalive(connect_timeout));
     let uri: Uri = BLACKHOLE.parse().unwrap();
 
     // A starts the attempt.
     let a_client = client.clone();
     let a_uri = uri.clone();
-    let a = tokio::spawn(async move {
-        a_client
-            .call("assign_shards", a_uri, move |c| {
-                Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-            })
-            .await
-    });
+    let a = tokio::spawn(async move { ping(&a_client, a_uri).await });
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // B joins the in-flight attempt, then A is cancelled.
     let b_client = client.clone();
     let b_uri = uri.clone();
     let started = Instant::now();
-    let b = tokio::spawn(async move {
-        b_client
-            .call("assign_shards", b_uri, move |c| {
-                Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-            })
-            .await
-    });
+    let b = tokio::spawn(async move { ping(&b_client, b_uri).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
     a.abort();
 
@@ -765,26 +730,12 @@ async fn abandoned_connect_attempt_is_not_replayed_to_the_next_caller() {
         return;
     }
     let connect_timeout = Duration::from_secs(1);
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        no_keepalive(connect_timeout),
-    );
+    let client = executor_client(no_keepalive(connect_timeout));
     let uri: Uri = BLACKHOLE.parse().unwrap();
 
     let a_client = client.clone();
     let a_uri = uri.clone();
-    let a = tokio::spawn(async move {
-        a_client
-            .call("assign_shards", a_uri, move |c| {
-                Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-            })
-            .await
-    });
+    let a = tokio::spawn(async move { ping(&a_client, a_uri).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
     a.abort();
 
@@ -792,11 +743,7 @@ async fn abandoned_connect_attempt_is_not_replayed_to_the_next_caller() {
     tokio::time::sleep(connect_timeout * 2).await;
 
     let started = Instant::now();
-    let _ = client
-        .call("assign_shards", uri, move |c| {
-            Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-        })
-        .await;
+    let _ = ping(&client, uri).await;
     let elapsed = started.elapsed();
     eprintln!("[STALE] next caller settled after {elapsed:?}");
 
@@ -852,33 +799,15 @@ async fn client_recovers_when_a_cleanly_killed_peer_returns() {
         (tx, handle)
     }
 
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        config(),
-    );
+    let client = executor_client(config());
     let uri: Uri = format!("http://{addr}").parse().unwrap();
-    let ping = |uri: Uri| {
-        let client = client.clone();
-        async move {
-            client
-                .call("assign_shards", uri, move |c| {
-                    Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-                })
-                .await
-        }
-    };
 
     // A live peer answers. The empty router replies Unimplemented, which proves
     // the transport works and is deliberately not Unavailable, so the channel is
     // cached exactly as it is in production.
     let (kill, joined) = start(addr);
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let first = ping(uri.clone()).await;
+    let first = ping(&client, uri.clone()).await;
     eprintln!(
         "[EVICT] live peer: {:?}",
         first.as_ref().err().map(|e| e.code())
@@ -892,7 +821,7 @@ async fn client_recovers_when_a_cleanly_killed_peer_returns() {
     // Kill it. The cached channel is now dead.
     let _ = kill.send(());
     joined.join().unwrap();
-    let during = ping(uri.clone()).await;
+    let during = ping(&client, uri.clone()).await;
     let code = during.as_ref().err().map(|e| e.code());
     eprintln!(
         "[EVICT] dead peer: {code:?} msg={:?}",
@@ -902,7 +831,7 @@ async fn client_recovers_when_a_cleanly_killed_peer_returns() {
     // Same address, fresh peer. Only an evicted channel can reach it.
     let (kill2, joined2) = start(addr);
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let after = ping(uri.clone()).await;
+    let after = ping(&client, uri.clone()).await;
     let after_code = after.as_ref().err().map(|e| e.code());
     eprintln!(
         "[EVICT] restarted peer: {after_code:?} msg={:?}",
@@ -930,31 +859,14 @@ async fn blackholed_channel_is_evicted_and_recovers_when_the_peer_answers_again(
         return;
     }
 
-    let (addr, _server) = serve_grpc().await;
+    let peer = serve_grpc().await;
+    let addr = peer.addr;
     let port = addr.port().to_string();
     let uri: Uri = format!("http://{addr}").parse().unwrap();
     let connect_timeout = Duration::from_secs(2);
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        no_keepalive(connect_timeout),
-    );
-    let ping = |uri: Uri| {
-        let client = client.clone();
-        async move {
-            client
-                .call("assign_shards", uri, move |c| {
-                    Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-                })
-                .await
-        }
-    };
+    let client = executor_client(no_keepalive(connect_timeout));
 
-    let first = ping(uri.clone()).await;
+    let first = ping(&client, uri.clone()).await;
     assert_eq!(
         first.err().map(|e| e.code()),
         Some(tonic::Code::Unimplemented)
@@ -962,7 +874,7 @@ async fn blackholed_channel_is_evicted_and_recovers_when_the_peer_answers_again(
 
     let blackhole = blackhole_port(&port);
 
-    let dead = ping(uri.clone()).await;
+    let dead = ping(&client, uri.clone()).await;
     let dead_err = dead.expect_err("blackholed peer must fail");
     let has_transport_source = std::error::Error::source(&dead_err)
         .map(|s| s.is::<tonic::transport::Error>())
@@ -983,7 +895,7 @@ async fn blackholed_channel_is_evicted_and_recovers_when_the_peer_answers_again(
 
     drop(blackhole);
 
-    let recovered = ping(uri).await;
+    let recovered = ping(&client, uri).await;
     let code = recovered.as_ref().err().map(|e| e.code());
     eprintln!("[EVICT2] after un-blackholing: code={code:?}");
     assert_eq!(
@@ -1031,28 +943,14 @@ async fn a_cohort_that_retries_opens_one_connection_per_round() {
         max_jitter_factor: None,
     };
 
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        cfg,
-    );
+    let client = executor_client(cfg);
     let uri: Uri = format!("http://{addr}").parse().unwrap();
 
     let started = Instant::now();
     let calls = (0..CALLERS).map(|_| {
         let client = client.clone();
         let uri = uri.clone();
-        tokio::spawn(async move {
-            client
-                .call("assign_shards", uri, move |c| {
-                    Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-                })
-                .await
-        })
+        tokio::spawn(async move { ping(&client, uri).await })
     });
     for call in calls.collect::<Vec<_>>() {
         let _ = call.await;
@@ -1115,15 +1013,7 @@ async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
         max_jitter_factor: None,
     };
 
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        cfg,
-    );
+    let client = executor_client(cfg);
     let uri: Uri = format!("http://127.0.0.1:{port}").parse().unwrap();
 
     let started = Instant::now();
@@ -1131,13 +1021,7 @@ async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
         .map(|_| {
             let client = client.clone();
             let uri = uri.clone();
-            tokio::spawn(async move {
-                client
-                    .call("assign_shards", uri, move |c| {
-                        Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-                    })
-                    .await
-            })
+            tokio::spawn(async move { ping(&client, uri).await })
         })
         .collect();
     for call in calls {
@@ -1220,26 +1104,12 @@ async fn a_connection_nobody_waits_for_is_not_left_open() {
 
     let mut cfg = config();
     cfg.connect_timeout = Duration::from_secs(5);
-    let client = MultiTargetGrpcClient::new(
-        "worker_executor",
-        |channel, max_message_size| {
-            WorkerExecutorClient::new(channel)
-                .max_decoding_message_size(max_message_size)
-                .max_encoding_message_size(max_message_size)
-        },
-        cfg,
-    );
+    let client = executor_client(cfg);
     let uri: Uri = format!("http://{addr}").parse().unwrap();
 
     let caller = tokio::spawn({
         let client = client.clone();
-        async move {
-            client
-                .call("assign_shards", uri, move |c| {
-                    Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-                })
-                .await
-        }
+        async move { ping(&client, uri).await }
     });
     // Cancel while the handshake is still crossing the delayed loopback.
     tokio::time::sleep(Duration::from_millis(200)).await;
