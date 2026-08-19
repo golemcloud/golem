@@ -137,6 +137,8 @@ jobs:
         run: cargo make --profile ci check-configs
       - name: Check WIT deps are synced
         run: cargo make --profile ci check-wit
+      - name: Test Amp orb benchmark automation
+        run: cargo make --profile ci test-orb-benchmark-automation
       - name: Unit tests
         run: cargo make --profile ci unit-tests
       - uses: ./.github/actions/publish-test-report
