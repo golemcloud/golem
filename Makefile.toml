@@ -1586,6 +1586,10 @@ source_ref = trim ${source_ref_result.stdout}
 exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- --primary-only suite --save-to-json ${results} --runner-id ${runner_id} --runner-label ${runner_label} --source-repository golemcloud/golem --source-commit-sha ${source_commit} --source-ref ${source_ref} integration-tests/benchmark_suites/ci.yaml spawned --registry-service-http-port ${registry_http_port}
 '''
 
+[tasks.run-and-publish-benchmark-suite-orb]
+description = "Runs and publishes the nightly Amp orb benchmark suite"
+command = "./integration-tests/benchmark_suites/run_orb_nightly.sh"
+
 [tasks.clean-test-components]
 description = "Cleans all test WASM components"
 script = '''
