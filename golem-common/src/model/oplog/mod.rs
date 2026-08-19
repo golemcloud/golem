@@ -182,6 +182,95 @@ pub struct ScopeScanState {
     pub current_is_descendant_scope: bool,
 }
 
+/// Tracks the transitive durable-call tree rooted at one `Start` for owner-oplog projections.
+#[derive(Debug, Clone)]
+pub struct OplogScopeProjection {
+    root: OplogIndex,
+    starts: std::collections::HashSet<OplogIndex>,
+    previous_index: Option<OplogIndex>,
+    previous_included_start: Option<OplogIndex>,
+}
+
+impl OplogScopeProjection {
+    pub fn new(root: OplogIndex) -> Self {
+        Self {
+            root,
+            starts: std::collections::HashSet::from([root]),
+            previous_index: None,
+            previous_included_start: None,
+        }
+    }
+
+    /// Returns whether `entry` belongs to the rooted call tree and records descendant Starts for
+    /// subsequent entries. The one adjacency rule is for `BeginRemoteTransaction`, which is
+    /// atomically appended as a pair with its immediately preceding transaction scope Start.
+    pub fn includes(&mut self, index: OplogIndex, entry: &OplogEntry) -> bool {
+        let mut included_start = false;
+        let included = match entry {
+            OplogEntry::Start {
+                parent_start_index, ..
+            } => {
+                if index == self.root {
+                    included_start = true;
+                    true
+                } else if parent_start_index.is_some_and(|parent| self.starts.contains(&parent)) {
+                    self.starts.insert(index);
+                    included_start = true;
+                    true
+                } else {
+                    false
+                }
+            }
+            OplogEntry::End { start_index, .. }
+            | OplogEntry::Cancelled { start_index, .. }
+            | OplogEntry::CompletionDiscarded { start_index, .. } => {
+                self.starts.contains(start_index)
+            }
+            OplogEntry::HostStreamFrame {
+                parent_start_index, ..
+            }
+            | OplogEntry::Log {
+                parent_start_index: Some(parent_start_index),
+                ..
+            }
+            | OplogEntry::StartSpan {
+                parent_start_index: Some(parent_start_index),
+                ..
+            }
+            | OplogEntry::FinishSpan {
+                parent_start_index: Some(parent_start_index),
+                ..
+            }
+            | OplogEntry::SetSpanAttribute {
+                parent_start_index: Some(parent_start_index),
+                ..
+            } => self.starts.contains(parent_start_index),
+            OplogEntry::Error { retry_from, .. } => self.starts.contains(retry_from),
+            OplogEntry::BeginRemoteTransaction {
+                original_begin_index: Some(begin),
+                ..
+            } => self.starts.contains(begin),
+            OplogEntry::BeginRemoteTransaction {
+                original_begin_index: None,
+                ..
+            } => self
+                .previous_index
+                .zip(self.previous_included_start)
+                .is_some_and(|(previous, start)| previous == start && previous.next() == index),
+            OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
+            | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
+            | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
+            | OplogEntry::RolledBackRemoteTransaction { begin_index, .. } => {
+                self.starts.contains(begin_index)
+            }
+            _ => false,
+        };
+        self.previous_index = Some(index);
+        self.previous_included_start = included_start.then_some(index);
+        included
+    }
+}
+
 impl ScopeScanState {
     /// Creates a fresh scan state for the scope rooted at `root`.
     pub fn new(root: OplogIndex) -> Self {

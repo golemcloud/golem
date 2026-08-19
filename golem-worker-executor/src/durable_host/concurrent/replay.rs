@@ -90,6 +90,16 @@ pub enum CallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     Incomplete(CallHandle<Pair, P>),
 }
 
+/// Replay outcome used by executor-owned entity reconstruction tasks. Cancellation is observable
+/// here because the executor, rather than a deterministic guest future, owns and fences the
+/// transient body task.
+#[allow(clippy::large_enum_variant)]
+pub enum ReconstructionReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
+    Replayed(Pair::Resp),
+    Cancelled,
+    Incomplete(CallHandle<Pair, P>),
+}
+
 /// The result of [`CallHandle::replay_access_deferred`]: like [`CallReplayOutcome`], but each
 /// replayed response carries the [`CompletionDelivery`] token describing the recorded delivery
 /// status the caller must mirror.
@@ -205,6 +215,15 @@ impl ConcurrentReplayResolver {
     /// markers.
     pub fn is_pending(&self, start_idx: OplogIndex) -> bool {
         self.pending.contains_key(&start_idx)
+    }
+
+    /// Returns whether the registered resolution receiver is still alive. A dropped replay handle
+    /// remains pending so its eventual terminal can be drained, but it cannot make further body
+    /// progress and therefore is not an active consumer for structural-divergence detection.
+    pub fn is_awaited(&self, start_idx: OplogIndex) -> bool {
+        self.pending
+            .get(&start_idx)
+            .is_some_and(|sender| !sender.is_closed())
     }
 }
 

@@ -184,6 +184,7 @@ where
     let claim_options = AccessClaimOptions {
         scope_discriminator: Some(format!("req:{scope_discriminator}")),
         request_identity: Some(HostRequest::from(host_request.clone())),
+        parent_start_index: None,
         observational_owner: None,
     };
     let mut handle = CallHandle::<P3HttpClientSend, P>::start_access_with_options(

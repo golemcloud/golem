@@ -870,6 +870,7 @@ async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
 fn stdout_log(message: &str) -> OplogEntry {
     OplogEntry::Log {
         timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
         level: LogLevel::Stdout,
         context: "stdout".to_string(),
         message: message.to_string(),
@@ -2422,9 +2423,150 @@ async fn switch_to_live_wakes_parked_awaiter_as_incomplete() {
     );
 }
 
+#[test]
+async fn completed_entity_body_detects_unconsumed_owned_start_at_cursor_head() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 41),
+        end_for(2, 42),
+    ])
+    .await;
+    let outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(outer.start_idx(), OplogIndex::from_u64(2));
+
+    assert_eq!(
+        rs.unconsumed_scope_head(
+            OplogIndex::from_u64(2),
+            HashSet::from([OplogIndex::from_u64(3)]),
+        )
+        .await
+        .unwrap(),
+        None,
+        "a nested reconstructed entity body remains able to claim its own Start"
+    );
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        Some(OplogIndex::from_u64(3)),
+        "once no nested body can consume the owned Start, it is structural divergence"
+    );
+}
+
+#[test]
+async fn completed_entity_body_waits_for_active_owner_of_retried_transaction_begin() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        noop(),
+        OplogEntry::begin_remote_transaction(
+            golem_common::model::TransactionId::new("retried".to_string()),
+            Some(OplogIndex::from_u64(3)),
+        ),
+        end_for(3, 41),
+        end_for(2, 42),
+    ])
+    .await;
+    let _outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let _child = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+
+    let (index, _) = rs.get_oplog_entry().await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert_eq!(
+        rs.unconsumed_scope_head(
+            OplogIndex::from_u64(2),
+            HashSet::from([OplogIndex::from_u64(3)]),
+        )
+        .await
+        .unwrap(),
+        None,
+        "a retried transaction Begin belongs to its original scope Start even when it is not adjacent"
+    );
+}
+
+#[test]
+async fn completed_entity_body_does_not_reject_auto_drainable_dropped_call_terminal() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        cancelled_for(3),
+        end_for(2, 42),
+    ])
+    .await;
+    let outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let dropped_child = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    drop(dropped_child);
+
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        None,
+        "a pending terminal with a dropped receiver remains auto-drainable"
+    );
+
+    rs.drain_awaited_terminals().await.unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    match rs.await_resolution(outer).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
+        other => panic!("expected completed outer call, got {other:?}"),
+    }
+}
+
+#[test]
+async fn visible_terminal_scan_crosses_multiple_chunks() {
+    let mut entries = vec![noop(), start_now()];
+    entries.extend(std::iter::repeat_with(noop).take(CHUNK_SIZE as usize + 1));
+    entries.push(end_for(2, 42));
+    let rs = replay_state_over(entries).await;
+
+    assert!(
+        rs.has_visible_terminal(OplogIndex::from_u64(2)).await,
+        "entity execution mode classification must scan through the complete replay prefix"
+    );
+}
+
 fn log_entry() -> OplogEntry {
     OplogEntry::Log {
         timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
         level: LogLevel::Info,
         context: "ctx".to_string(),
         message: "msg".to_string(),
@@ -3472,7 +3614,11 @@ async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver()
     // is claimed by identity (parent_start_index), and the scope End resolves response-less.
     let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let (scope_idx, scope_handle) = rs
-        .claim_scope_start(&scope_name, &DurableFunctionType::WriteRemoteBatched(None))
+        .claim_scope_start(
+            &scope_name,
+            &DurableFunctionType::WriteRemoteBatched(None),
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(scope_idx, OplogIndex::from_u64(11));
@@ -3539,6 +3685,7 @@ async fn discriminated_scope_claim_never_matches_plain_scope_start() {
         .claim_scope_start(
             &discriminated,
             &DurableFunctionType::WriteRemoteBatched(None),
+            None,
         )
         .await
         .expect_err("discriminated claim must not match the plain scope Start");
@@ -3550,7 +3697,7 @@ async fn discriminated_scope_claim_never_matches_plain_scope_start() {
 
     let plain = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let (scope_idx, scope_handle) = rs
-        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None))
+        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None), None)
         .await
         .unwrap();
     assert_eq!(scope_idx, OplogIndex::from_u64(2));
@@ -3579,7 +3726,7 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
 
     let plain = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let err = rs
-        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None))
+        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None), None)
         .await
         .expect_err("plain claim must not match a discriminated scope Start");
     let message = format!("{err}");
@@ -3593,6 +3740,7 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
         .claim_scope_start(
             &discriminated,
             &DurableFunctionType::WriteRemoteBatched(None),
+            None,
         )
         .await
         .unwrap();
@@ -3604,6 +3752,44 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
         other => panic!("expected Completed for the discriminated scope, got {other:?}"),
     }
     assert!(rs.is_live(), "replay must reach live at the end");
+}
+
+#[test]
+async fn entity_owned_scope_claim_requires_the_recorded_parent() {
+    let parent = OplogIndex::from_u64(7);
+    let scope_start = OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: Some(parent),
+        function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
+        invocation_id: None,
+        observational_owner: None,
+        request: None,
+        durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+    };
+    let rs = replay_state_over(vec![noop(), scope_start, batched_scope_end(2)]).await;
+    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
+
+    rs.claim_scope_start(
+        &scope_name,
+        &DurableFunctionType::WriteRemoteBatched(None),
+        Some(OplogIndex::from_u64(8)),
+    )
+    .await
+    .expect_err("a scope claim must not steal a sibling entity invocation's scope");
+
+    let (scope_index, handle) = rs
+        .claim_scope_start(
+            &scope_name,
+            &DurableFunctionType::WriteRemoteBatched(None),
+            Some(parent),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scope_index, OplogIndex::from_u64(2));
+    assert!(matches!(
+        rs.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
 }
 
 /// Pins the exact "expected" label each [`StartClaim`] variant renders for
@@ -3621,7 +3807,7 @@ fn start_claim_expected_descriptions_are_stable() {
     );
 
     assert_eq!(
-        StartClaim::scope(&name, &DurableFunctionType::WriteRemoteBatched(None))
+        StartClaim::scope(&name, &DurableFunctionType::WriteRemoteBatched(None), None)
             .expected_description(),
         format!(
             "Start {{ {name}, WriteRemoteBatched(None), request: None, parent_start_index: None }}"

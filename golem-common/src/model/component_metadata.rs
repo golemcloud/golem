@@ -1174,6 +1174,10 @@ mod protobuf {
                 secret_keys_readable: Some(value.secret_keys_readable.into()),
                 secret_keys_revealable: Some(value.secret_keys_revealable.into()),
                 source: Some(value.source.into()),
+                filesystem_access:
+                    golem_api_grpc::proto::golem::registry::ToolFilesystemAccess::from(
+                        value.filesystem_access,
+                    ) as i32,
             }
         }
     }
@@ -1208,11 +1212,45 @@ mod protobuf {
                     .secret_keys_revealable
                     .ok_or("missing CompiledToolBinding.secret_keys_revealable")?
                     .try_into()?,
+                filesystem_access:
+                    golem_api_grpc::proto::golem::registry::ToolFilesystemAccess::try_from(
+                        value.filesystem_access,
+                    )
+                    .map_err(|error| error.to_string())?
+                    .into(),
                 source: value
                     .source
                     .ok_or("missing CompiledToolBinding.source")?
                     .try_into()?,
             })
+        }
+    }
+
+    impl From<crate::model::tool::ToolFilesystemAccess>
+        for golem_api_grpc::proto::golem::registry::ToolFilesystemAccess
+    {
+        fn from(value: crate::model::tool::ToolFilesystemAccess) -> Self {
+            match value {
+                crate::model::tool::ToolFilesystemAccess::Unset => Self::Unset,
+                crate::model::tool::ToolFilesystemAccess::Allowed => Self::Allowed,
+                crate::model::tool::ToolFilesystemAccess::Denied => Self::Denied,
+            }
+        }
+    }
+
+    impl From<golem_api_grpc::proto::golem::registry::ToolFilesystemAccess>
+        for crate::model::tool::ToolFilesystemAccess
+    {
+        fn from(value: golem_api_grpc::proto::golem::registry::ToolFilesystemAccess) -> Self {
+            match value {
+                golem_api_grpc::proto::golem::registry::ToolFilesystemAccess::Unset => Self::Unset,
+                golem_api_grpc::proto::golem::registry::ToolFilesystemAccess::Allowed => {
+                    Self::Allowed
+                }
+                golem_api_grpc::proto::golem::registry::ToolFilesystemAccess::Denied => {
+                    Self::Denied
+                }
+            }
         }
     }
 
@@ -1640,6 +1678,7 @@ mod tests {
             parameters: NormalizedJsonValue::new(serde_json::json!({})),
             secret_keys_readable: SecretKeyScope::Keys(BTreeSet::new()),
             secret_keys_revealable: SecretKeyScope::All,
+            filesystem_access: crate::model::tool::ToolFilesystemAccess::Unset,
             source,
         };
         let state = ToolDeploymentState {
@@ -1692,6 +1731,7 @@ mod tests {
             parameters: NormalizedJsonValue::new(serde_json::json!({ "root": "/workspace" })),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
+            filesystem_access: crate::model::tool::ToolFilesystemAccess::Allowed,
             source,
         };
         let state = ToolDeploymentState {

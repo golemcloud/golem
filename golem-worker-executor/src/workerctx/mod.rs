@@ -41,6 +41,7 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasOplog, HasWorker, worker_enumeration};
+use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
@@ -48,6 +49,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
+use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -84,6 +86,7 @@ pub trait WorkerCtx:
     + UpdateManagement
     + FileSystemReading
     + InvocationContextManagement
+    + EntityInvocationManagement
     + DurableWorkerCtxView<Self>
     + WasiView
     + WasiHttpView
@@ -171,6 +174,12 @@ pub trait WorkerCtx:
         websocket_connection_pool: WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
+        runtime: OwnerRuntime,
+        owner_execution: Arc<OwnerExecution>,
+        owner_resources: Arc<OwnerRuntimeResources>,
+        filesystem: FilesystemCapability,
+        executable_component: Component,
+        entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
@@ -230,6 +239,16 @@ pub trait WorkerCtx:
     fn max_disk_space(&self) -> u64;
 }
 
+/// Installs the per-call identity used while a transient entity Store executes.
+pub trait EntityInvocationManagement {
+    fn set_entity_invocation_scope(
+        &mut self,
+        scope: Option<EntityInvocationScope>,
+    ) -> Result<(), WorkerExecutorError>;
+
+    fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope>;
+}
+
 /// The fuel management interface of a worker context is responsible for borrowing and returning
 /// fuel required for executing a worker. The implementation can decide to ignore fuel management
 /// and allow unconstrained execution of the worker, or it can communicate with some external store
@@ -250,6 +269,10 @@ pub trait FuelManagement {
 
     /// Returns the amount of fuel consumed since the last call to return_fuel.
     fn return_fuel(&mut self, current_level: u64) -> u64;
+
+    /// Refunds any unused prepaid fuel before a Store is dropped or handed off without advancing
+    /// the invocation-consumption baseline.
+    fn settle_fuel(&mut self, current_level: u64);
 }
 
 /// Manages per-invocation and monthly account-level HTTP and RPC call counts.

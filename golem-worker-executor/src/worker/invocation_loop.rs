@@ -17,7 +17,7 @@ use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
-use crate::services::{HasEvents, HasOplog, HasWorker};
+use crate::services::{HasActiveWorkers, HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
@@ -137,6 +137,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let mut deferred_wakeups = VecDeque::new();
 
         'outer: loop {
+            let entity_generation = self
+                .parent
+                .active_workers()
+                .try_get_active_agent(&self.owned_agent_id)
+                .await
+                .map(|active_agent| {
+                    let generation = active_agent.entity_fence_generation();
+                    (active_agent, generation)
+                });
             let (instance, store) = match self.create_instance().await {
                 CreateInstanceResult::Created { instance, store } => (instance, store),
                 CreateInstanceResult::Interrupted(kind) => {
@@ -182,6 +191,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             };
 
+            if let Some((active_agent, generation)) = entity_generation {
+                let interrupt_state = self.interrupt_signal.lock().await;
+                if !interrupt_state.has_interrupt() {
+                    active_agent.reopen_entity_admission_if_generation(generation);
+                }
+            }
             let mut final_decision = self.recover_instance_state(&instance, &store).await;
             let mut final_interrupt = None;
             let mut cleanup_ephemeral_worker = false;
@@ -362,6 +377,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
+        if let Some(active_agent) = self
+            .parent
+            .active_workers()
+            .try_get_active_agent(&self.owned_agent_id)
+            .await
+        {
+            active_agent.fence_entity_bodies();
+        }
         self.parent
             .stop_internal(true, None, FinalWorkerState::Unloaded { startup_failure })
             .await;
@@ -1492,6 +1515,19 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         path: CanonicalFilePath,
         sender: Sender<Result<GetFileSystemNodeResult, WorkerExecutorError>>,
     ) {
+        let _filesystem_access = match self
+            .store
+            .data()
+            .durable_ctx()
+            .acquire_owner_filesystem_inspection()
+            .await
+        {
+            Ok(access) => access,
+            Err(error) => {
+                let _ = sender.send(Err(error));
+                return;
+            }
+        };
         let result = self.store.data().get_file_system_node(&path).await;
         let _ = sender.send(result);
     }
@@ -1505,6 +1541,19 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         path: CanonicalFilePath,
         sender: Sender<Result<ReadFileResult, WorkerExecutorError>>,
     ) {
+        let _filesystem_access = match self
+            .store
+            .data()
+            .durable_ctx()
+            .acquire_owner_filesystem_inspection()
+            .await
+        {
+            Ok(access) => access,
+            Err(error) => {
+                let _ = sender.send(Err(error));
+                return;
+            }
+        };
         let result = self.store.data().read_file(&path).await;
         match result {
             Ok(ReadFileResult::Ok(stream)) => {

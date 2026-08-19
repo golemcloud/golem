@@ -693,6 +693,15 @@ pub trait OplogOps: Oplog {
         &self,
         invocation: AgentInvocation,
     ) -> Result<OplogEntry, String> {
+        self.add_agent_invocation_started_with_index(invocation)
+            .await
+            .map(|(_, entry)| entry)
+    }
+
+    async fn add_agent_invocation_started_with_index(
+        &self,
+        invocation: AgentInvocation,
+    ) -> Result<(OplogIndex, OplogEntry), String> {
         let (idempotency_key, invocation_payload, ctx) = invocation.into_parts();
         let payload = self.upload_payload(&invocation_payload).await?;
         let trace_id = ctx.trace_id.clone();
@@ -706,8 +715,8 @@ pub trait OplogOps: Oplog {
             trace_states,
             invocation_context,
         };
-        self.add(entry.clone()).await;
-        Ok(entry)
+        let index = self.add(entry.clone()).await;
+        Ok((index, entry))
     }
 
     async fn add_agent_invocation_finished(

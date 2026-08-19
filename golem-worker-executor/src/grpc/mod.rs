@@ -481,7 +481,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         worker.start_deleting().await?;
 
         self.worker_service().remove(&owned_agent_id).await;
-        self.active_workers().remove(&owned_agent_id.agent_id).await;
+        self.active_workers().remove(&owned_agent_id).await;
 
         // ensure we are holding the worker while we are doing cleanup.
         drop(worker);
@@ -703,7 +703,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         await_interruption.recv().await.unwrap();
                     };
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_agent_id.agent_id).await;
+                    self.active_workers().remove(&owned_agent_id).await;
                 }
                 AgentStatus::Retrying => {
                     debug!("Marking worker scheduled to be retried as interrupted");
@@ -725,7 +725,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         await_interruption.recv().await.unwrap();
                     };
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_agent_id.agent_id).await;
+                    self.active_workers().remove(&owned_agent_id).await;
                 }
                 AgentStatus::Running => {
                     let worker = Worker::get_or_create_suspended(
@@ -751,7 +751,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     };
 
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_agent_id.agent_id).await;
+                    self.active_workers().remove(&owned_agent_id).await;
                 }
             }
         }

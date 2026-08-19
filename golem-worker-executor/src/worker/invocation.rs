@@ -137,6 +137,12 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         .await?;
     }
 
+    let primary_body = store
+        .data()
+        .durable_ctx()
+        .enter_primary_invocation_body()
+        .await?;
+
     store.data_mut().set_running();
 
     // Arm the optional per-invocation wall-clock deadline (`limits.max_invocation_duration`).
@@ -172,6 +178,10 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     let call_result = apply_invocation_deadline(&mut store, deadline, call_result).await;
 
     store.data().set_suspended();
+
+    if let Some(primary_body) = primary_body {
+        primary_body.complete().await;
+    }
 
     call_result
 }
@@ -463,6 +473,7 @@ async fn prepare_guest_call<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
 ) {
+    rearm_fuel_check(store);
     store.data_mut().reset_invocation_call_counts();
 
     let idempotency_key = store.data().get_current_idempotency_key().await;
@@ -473,6 +484,10 @@ async fn prepare_guest_call<Ctx: WorkerCtx>(
             .event_service()
             .emit_invocation_start(display_name, idempotency_key, store.data().is_live());
     }
+}
+
+pub(crate) fn rearm_fuel_check<T>(store: &mut StoreContextMut<'_, T>) {
+    store.set_epoch_deadline(0);
 }
 
 /// Builds an [`InvokeResult`] from a wasmtime trap (guest panic, interrupt,

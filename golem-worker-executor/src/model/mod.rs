@@ -34,6 +34,7 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
+use golem_service_base::model::component::Component;
 use nonempty_collections::NEVec;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
@@ -76,6 +77,7 @@ pub struct AgentConfig {
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
     pub agent_effective_surface: EffectiveSurface,
+    pub owner_component_metadata: Option<Arc<Component>>,
 }
 
 impl AgentConfig {
@@ -89,6 +91,7 @@ impl AgentConfig {
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
         agent_effective_surface: EffectiveSurface,
+        owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
         AgentConfig {
             deleted_regions,
@@ -100,6 +103,7 @@ impl AgentConfig {
             initial_agent_config,
             last_snapshot_index,
             agent_effective_surface,
+            owner_component_metadata,
         }
     }
 

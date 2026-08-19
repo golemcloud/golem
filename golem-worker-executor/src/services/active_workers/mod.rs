@@ -35,7 +35,11 @@ use async_trait::async_trait;
 pub use component_charge::HeldComponentCharge;
 use component_charge::{ChargeSource, ComponentChargeGuard, ComponentChargeRegistry};
 use memory_probe::{MemoryProbe, default_probe};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
@@ -48,6 +52,11 @@ use crate::services::golem_config::{
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::Worker;
+use crate::worker::entity_invocation::{EntityInvocationHandle, start_entity_invocation};
+use crate::worker::entity_slot::ActiveEntityInvocationMetadata;
+use crate::worker::entity_slot::EntitySlot;
+use crate::worker::instance::{InstanceHost, OwnerExecution, OwnerRuntimeResources};
+use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -55,12 +64,17 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::entity::{
+    AgentEntity, EntityActivation, EntityInvocationScope, OwnedAgentEntityId,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use wasmtime::Store;
+use wasmtime::component::Instance;
 
 /// Capability proving that per-account concurrent-agent state has been registered
 /// in this executor and can be used for subsequent permit acquires.
@@ -76,9 +90,277 @@ impl RegisteredConcurrentAccount {
     }
 }
 
-/// Holds the metadata and wasmtime structures of currently active Golem workers
-pub struct ActiveWorkers<Ctx: WorkerCtx> {
-    workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+/// One owner-routed runtime group. Entity instances share its execution and resources but never
+/// become independently routable workers.
+pub struct ActiveAgent<Ctx: WorkerCtx> {
+    owner_id: OwnedAgentId,
+    primary: Arc<Worker<Ctx>>,
+    execution: Arc<OwnerExecution>,
+    resources: Arc<OwnerRuntimeResources>,
+    entities: Mutex<HashMap<AgentEntity, Arc<EntitySlot>>>,
+    accepting_entities: AtomicBool,
+    entity_fence_generation: AtomicU64,
+    _metrics: OwnerGroupMetricsGuard,
+}
+
+struct OwnerGroupMetricsGuard;
+
+impl OwnerGroupMetricsGuard {
+    fn new() -> Self {
+        crate::metrics::workers::inc_owner_group_alive();
+        Self
+    }
+}
+
+impl Drop for OwnerGroupMetricsGuard {
+    fn drop(&mut self) {
+        crate::metrics::workers::dec_owner_group_alive();
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActiveEntitySlotMetadata {
+    pub entity_id: OwnedAgentEntityId,
+    pub accepting: bool,
+    pub invocations: Vec<ActiveEntityInvocationMetadata>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActiveAgentEntityMetadata {
+    pub owner_id: OwnedAgentId,
+    pub accepting_entities: bool,
+    pub slots: Vec<ActiveEntitySlotMetadata>,
+}
+
+impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
+    fn new(primary: Arc<Worker<Ctx>>) -> Self {
+        Self {
+            owner_id: primary.owned_agent_id().clone(),
+            execution: primary.owner_execution(),
+            resources: primary.owner_runtime_resources(),
+            entities: Mutex::new(HashMap::new()),
+            accepting_entities: AtomicBool::new(true),
+            entity_fence_generation: AtomicU64::new(0),
+            _metrics: OwnerGroupMetricsGuard::new(),
+            primary,
+        }
+    }
+
+    pub fn owner_id(&self) -> &OwnedAgentId {
+        &self.owner_id
+    }
+
+    pub fn primary(&self) -> Arc<Worker<Ctx>> {
+        self.primary.clone()
+    }
+
+    pub fn execution(&self) -> Arc<OwnerExecution> {
+        self.execution.clone()
+    }
+
+    pub fn resources(&self) -> Arc<OwnerRuntimeResources> {
+        self.resources.clone()
+    }
+
+    pub fn entity_slot(&self, entity: &AgentEntity) -> Arc<EntitySlot> {
+        self.entities
+            .lock()
+            .unwrap()
+            .entry(entity.clone())
+            .or_insert_with(|| {
+                Arc::new(EntitySlot::new(OwnedAgentEntityId {
+                    owner: self.owner_id.clone(),
+                    entity: entity.clone(),
+                }))
+            })
+            .clone()
+    }
+
+    fn entity_slot_if_accepting(
+        &self,
+        entity: &AgentEntity,
+    ) -> Result<Arc<EntitySlot>, WorkerExecutorError> {
+        let mut entities = self.entities.lock().unwrap();
+        if !self.accepting_entities.load(Ordering::Acquire) {
+            return Err(WorkerExecutorError::runtime(
+                "Entity admission is fenced by owner lifecycle",
+            ));
+        }
+        Ok(entities
+            .entry(entity.clone())
+            .or_insert_with(|| {
+                Arc::new(EntitySlot::new(OwnedAgentEntityId {
+                    owner: self.owner_id.clone(),
+                    entity: entity.clone(),
+                }))
+            })
+            .clone())
+    }
+
+    pub fn entity_slots(&self) -> Vec<Arc<EntitySlot>> {
+        self.entities.lock().unwrap().values().cloned().collect()
+    }
+
+    pub fn entity_metadata(&self) -> ActiveAgentEntityMetadata {
+        let mut slots = self
+            .entity_slots()
+            .into_iter()
+            .map(|slot| ActiveEntitySlotMetadata {
+                entity_id: slot.entity_id().clone(),
+                accepting: slot.is_accepting(),
+                invocations: slot.active_invocations(),
+            })
+            .collect::<Vec<_>>();
+        slots.sort_by(|left, right| left.entity_id.entity.cmp(&right.entity_id.entity));
+        ActiveAgentEntityMetadata {
+            owner_id: self.owner_id.clone(),
+            accepting_entities: self.accepting_entities.load(Ordering::Acquire),
+            slots,
+        }
+    }
+
+    /// Returns transient metadata for one entity without creating a slot. Historical metadata is
+    /// queried from the owner oplog; this view exists only while the owner group is active.
+    pub fn entity_slot_metadata(
+        &self,
+        entity_id: &OwnedAgentEntityId,
+    ) -> Option<ActiveEntitySlotMetadata> {
+        if entity_id.owner_id() != &self.owner_id {
+            return None;
+        }
+        self.entities
+            .lock()
+            .unwrap()
+            .get(&entity_id.entity)
+            .map(|slot| ActiveEntitySlotMetadata {
+                entity_id: slot.entity_id().clone(),
+                accepting: slot.is_accepting(),
+                invocations: slot.active_invocations(),
+            })
+    }
+
+    pub(crate) fn fence_entity_bodies(&self) {
+        let entities = self.entities.lock().unwrap();
+        self.entity_fence_generation.fetch_add(1, Ordering::AcqRel);
+        self.accepting_entities.store(false, Ordering::Release);
+        for slot in entities.values() {
+            slot.fence();
+        }
+        drop(entities);
+        self.resources.filesystem().fence();
+    }
+
+    /// Closes admission for an eviction decision if no entity invocation is active.
+    ///
+    /// Holding the slot map while closing admission makes this atomic with slot lookup. A caller
+    /// that already obtained a slot is rejected by the per-slot fence below if it has not yet
+    /// registered; a caller that already registered makes this attempt fail. The inner result is a
+    /// generation token with which a failed stop may reopen admission without overriding a newer
+    /// lifecycle fence.
+    pub(crate) fn try_fence_idle_entity_bodies(&self) -> Option<Option<u64>> {
+        let entities = self.entities.lock().unwrap();
+        if entities
+            .values()
+            .any(|slot| slot.active_invocation_count() != 0)
+        {
+            return None;
+        }
+        let reopen_generation = self
+            .accepting_entities
+            .swap(false, Ordering::AcqRel)
+            .then(|| self.entity_fence_generation.fetch_add(1, Ordering::AcqRel) + 1);
+        for slot in entities.values() {
+            slot.fence();
+        }
+        Some(reopen_generation)
+    }
+
+    pub(crate) fn entity_fence_generation(&self) -> u64 {
+        self.entity_fence_generation.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn reopen_entity_admission_if_generation(&self, generation: u64) -> bool {
+        let entities = self.entities.lock().unwrap();
+        if self.entity_fence_generation.load(Ordering::Acquire) != generation {
+            return false;
+        }
+        for slot in entities.values() {
+            slot.reopen();
+        }
+        self.accepting_entities.store(true, Ordering::Release);
+        true
+    }
+
+    pub fn entity_instance_host(
+        &self,
+        activation: &EntityActivation,
+        owner_component_metadata: Arc<golem_service_base::model::component::Component>,
+    ) -> Result<InstanceHost<Ctx>, WorkerExecutorError> {
+        let entity = activation.entity();
+        let slot = self.entity_slot(&entity);
+        InstanceHost::new_entity(&self.primary, activation, slot, owner_component_metadata)
+    }
+
+    /// Starts one already-durable entity invocation in a fresh Store.
+    ///
+    /// Call-surface adapters resolve and pin the activation, append the owner-oplog Start, and then
+    /// enter here with its invocation scope. Middleware chain dispatch uses the same hook
+    /// recursively for each layer and the underlying tool; it does not instantiate Stores, acquire
+    /// the owner lane, or register slots itself.
+    pub fn start_entity_invocation<R, F, Finalize, Finalized>(
+        &self,
+        parent: OwnerInvocationId,
+        scope: EntityInvocationScope,
+        owner_component_metadata: Arc<golem_service_base::model::component::Component>,
+        mode: EntityCallMode,
+        invoke: F,
+        finalize: Finalize,
+    ) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+    where
+        R: Send + 'static,
+        F: Send + 'static,
+        F: for<'a> FnOnce(
+            &'a Instance,
+            &'a mut Store<Ctx>,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
+        >,
+        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    {
+        if !self.accepting_entities.load(Ordering::Acquire) {
+            return Err(WorkerExecutorError::runtime(
+                "Entity admission is fenced by owner lifecycle",
+            ));
+        }
+        if scope.owner_id() != &self.owner_id {
+            return Err(WorkerExecutorError::runtime(
+                "Entity invocation scope does not belong to the active owner",
+            ));
+        }
+        let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
+        let host = InstanceHost::new_entity(
+            &self.primary,
+            scope.activation(),
+            slot.clone(),
+            owner_component_metadata,
+        )?;
+        start_entity_invocation(
+            host,
+            slot,
+            self.execution.lane(),
+            parent,
+            scope,
+            mode,
+            invoke,
+            finalize,
+        )
+    }
+}
+
+/// Holds owner-keyed active agent groups.
+pub struct ActiveAgents<Ctx: WorkerCtx> {
+    agents: Cache<OwnedAgentId, (), Arc<ActiveAgent<Ctx>>, WorkerExecutorError>,
     card_interest_index: Arc<CardInterestIndex>,
     worker_filesystem_storage: Arc<FilesystemStorageSemaphore>,
     concurrent_agents: Arc<ConcurrentAgentsScheduler>,
@@ -99,13 +381,17 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     status_flush_queue: Arc<AgentStatusFlushQueue>,
 }
 
+/// Compatibility name for services whose API has not yet adopted the conceptual rename. The
+/// underlying registry and all lookups are owner-keyed [`ActiveAgent`] groups.
+pub type ActiveWorkers<Ctx> = ActiveAgents<Ctx>;
+
 /// Identifies a compiled component for module-charge accounting.
 type ComponentChargeKey = (ComponentId, ComponentRevision);
 
 /// Guard held by a resident worker keeping its component's module charge alive.
 pub type WorkerComponentCharge = ComponentChargeGuard<ComponentChargeKey, GateChargeSource>;
 
-impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
+impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     pub fn new(
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
@@ -142,7 +428,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 memory_config.admission_policy(),
             ))
         });
-        let workers = Cache::new(
+        let agents = Cache::new(
             None,
             FullCacheEvictionMode::None,
             BackgroundEvictionMode::None,
@@ -152,7 +438,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             admission: admission.clone(),
         });
         let active_workers = Self {
-            workers,
+            agents,
             card_interest_index: Arc::new(CardInterestIndex::new()),
             worker_filesystem_storage: Arc::new(FilesystemStorageSemaphore::new(
                 storage_config.worker_filesystem_storage(),
@@ -238,13 +524,13 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        let agent_id = owned_agent_id.agent_id();
-
         let owned_agent_id = owned_agent_id.clone();
+        let cache_key = owned_agent_id.clone();
         let deps = deps.clone();
         let invocation_context_stack = invocation_context_stack.clone();
-        self.workers
-            .get_or_insert_simple(&agent_id, || {
+        let active_agent = self
+            .agents
+            .get_or_insert_simple(&cache_key, || {
                 Box::pin(async move {
                     let worker = Worker::new(
                         &deps,
@@ -261,24 +547,57 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                     .in_current_span()
                     .await;
 
-                    worker.map(Arc::new)
+                    worker.map(|worker| Arc::new(ActiveAgent::new(Arc::new(worker))))
                 })
             })
-            .await
+            .await?;
+        Ok(active_agent.primary())
     }
 
     pub async fn try_get(&self, owned_agent_id: &OwnedAgentId) -> Option<Arc<Worker<Ctx>>> {
-        let agent_id = owned_agent_id.agent_id();
-        self.workers.get(&agent_id).await
+        self.try_get_active_agent(owned_agent_id)
+            .await
+            .map(|active_agent| active_agent.primary())
     }
 
-    pub async fn remove(&self, agent_id: &AgentId) {
-        if let Some(worker) = self.workers.get(agent_id).await {
+    pub async fn try_get_active_agent(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<Arc<ActiveAgent<Ctx>>> {
+        self.agents.get(owned_agent_id).await
+    }
+
+    /// Inspects all currently known entity slots for an active owner. No durable child status is
+    /// created when the owner or a completed invocation is absent.
+    pub async fn entity_metadata(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<ActiveAgentEntityMetadata> {
+        self.try_get_active_agent(owned_agent_id)
+            .await
+            .map(|active_agent| active_agent.entity_metadata())
+    }
+
+    /// Owner-routed local inspection for one entity slot. Looking up an unknown selector does not
+    /// create it and never treats the entity identity as a routing or shard key.
+    pub async fn entity_slot_metadata(
+        &self,
+        entity_id: &OwnedAgentEntityId,
+    ) -> Option<ActiveEntitySlotMetadata> {
+        self.try_get_active_agent(entity_id.owner_id())
+            .await
+            .and_then(|active_agent| active_agent.entity_slot_metadata(entity_id))
+    }
+
+    pub async fn remove(&self, owned_agent_id: &OwnedAgentId) {
+        if let Some(active_agent) = self.agents.get(owned_agent_id).await {
+            active_agent.fence_entity_bodies();
+            let worker = active_agent.primary();
             self.card_interest_index
                 .set_card_interest(worker.owned_agent_id().clone(), &[])
                 .await;
         }
-        self.workers.remove(agent_id).await
+        self.agents.remove(owned_agent_id).await
     }
 
     pub async fn tracked_card_ids(&self) -> Vec<CardId> {
@@ -300,7 +619,15 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     pub async fn snapshot(&self) -> Vec<(AgentId, Arc<Worker<Ctx>>)> {
-        self.workers.iter().await
+        self.agents
+            .iter()
+            .await
+            .into_iter()
+            .map(|(_, active_agent)| {
+                let primary = active_agent.primary();
+                (primary.agent_id(), primary)
+            })
+            .collect()
     }
 
     /// Interrupts and unloads all in-memory workers whose environment matches
@@ -315,7 +642,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 {
                     await_interrupted.recv().await.unwrap();
                 }
-                self.remove(&worker.agent_id()).await;
+                self.remove(worker.owned_agent_id()).await;
             }
         }
     }
@@ -353,7 +680,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     /// admission controller to reclaim memory through.
     fn eviction_source(&self) -> WorkerEvictionSource<Ctx> {
         WorkerEvictionSource {
-            workers: self.workers.clone(),
+            agents: self.agents.clone(),
             component_charges: self.component_charges.clone(),
             component_size_coefficient: self.component_size_coefficient,
         }
@@ -413,11 +740,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     /// Blocking acquire of storage semaphore permits. Loops until the requested
     /// number of bytes is available, evicting idle workers as needed.
     pub async fn acquire_filesystem_storage(&self, storage_bytes: u64) -> FilesystemStoragePermit {
-        let workers = self.workers.clone();
+        let agents = self.agents.clone();
         self.worker_filesystem_storage
             .acquire(storage_bytes, || {
-                let workers = workers.clone();
-                async move { Self::try_free_up_filesystem_storage(&workers, storage_bytes).await }
+                let agents = agents.clone();
+                async move { Self::try_free_up_filesystem_storage(&agents, storage_bytes).await }
             })
             .await
     }
@@ -460,19 +787,20 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     }
 
     async fn try_free_up_filesystem_storage(
-        workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+        agents: &Cache<OwnedAgentId, (), Arc<ActiveAgent<Ctx>>, WorkerExecutorError>,
         storage_bytes: u64,
     ) -> bool {
         let mut idle_candidates = Vec::new();
         let mut warm_candidates = Vec::new();
 
         debug!("Collecting storage eviction candidates");
-        for (agent_id, worker) in workers.iter().await {
+        for (owned_agent_id, active_agent) in agents.iter().await {
+            let worker = active_agent.primary();
             if let Some(class) = worker.eviction_class().await
                 && let Ok(storage) = worker.filesystem_storage_requirement().await
             {
                 let last_changed = worker.last_execution_state_change();
-                let entry = (agent_id, worker, storage, last_changed);
+                let entry = (owned_agent_id, worker, storage, last_changed);
                 match class {
                     crate::worker::EvictionClass::LoadedIdle => idle_candidates.push(entry),
                     crate::worker::EvictionClass::WarmRunnable => warm_candidates.push(entry),
@@ -625,7 +953,7 @@ pub(crate) fn plan_memory_eviction_stops<K: Eq + std::hash::Hash + Clone>(
 /// of a component is correctly counted as freeing its memory *and* its module,
 /// rather than memory alone, which would over-evict.
 async fn evict_at_most_memory<Ctx: WorkerCtx>(
-    workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+    agents: &Cache<OwnedAgentId, (), Arc<ActiveAgent<Ctx>>, WorkerExecutorError>,
     component_charges: &Arc<ComponentChargeRegistry<ComponentChargeKey, GateChargeSource>>,
     component_size_coefficient: f64,
     priority: EvictionPriority,
@@ -634,7 +962,8 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
     let target_class: crate::worker::EvictionClass = priority.into();
 
     let mut candidates = Vec::new();
-    for (agent_id, worker) in workers.iter().await {
+    for (owned_agent_id, active_agent) in agents.iter().await {
+        let worker = active_agent.primary();
         if let Some(class) = worker.eviction_class().await
             && class == target_class
             && let Ok(mem) = worker.memory_requirement().await
@@ -649,7 +978,14 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
             let charge_bytes = (component_size_coefficient * module_bytes as f64) as u64;
             let component: ComponentChargeKey = (component_id, component_revision);
             let last_changed = worker.last_execution_state_change();
-            candidates.push((agent_id, worker, mem, component, charge_bytes, last_changed));
+            candidates.push((
+                owned_agent_id,
+                worker,
+                mem,
+                component,
+                charge_bytes,
+                last_changed,
+            ));
         }
     }
 
@@ -703,7 +1039,7 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
 
 /// A source of evictable, already-resident memory the gate reclaims through.
 struct WorkerEvictionSource<Ctx: WorkerCtx> {
-    workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+    agents: Cache<OwnedAgentId, (), Arc<ActiveAgent<Ctx>>, WorkerExecutorError>,
     component_charges: Arc<ComponentChargeRegistry<ComponentChargeKey, GateChargeSource>>,
     component_size_coefficient: f64,
 }
@@ -712,7 +1048,7 @@ struct WorkerEvictionSource<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> EvictionSource for WorkerEvictionSource<Ctx> {
     async fn evict_at_most(&self, priority: EvictionPriority, needed_bytes: u64) -> u64 {
         evict_at_most_memory(
-            &self.workers,
+            &self.agents,
             &self.component_charges,
             self.component_size_coefficient,
             priority,

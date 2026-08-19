@@ -38,6 +38,7 @@ use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::card::{Card, CardId, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
+use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
@@ -138,9 +139,9 @@ use golem_worker_executor::services::{HasAll, NoAdditionalDeps, rdbms};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    CallCountManagement, EntityInvocationManagement, ExternalOperations, FileSystemReading,
+    FuelManagement, InvocationContextManagement, InvocationHooks, InvocationManagement,
+    LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails, bootstrap_and_run_worker_executor};
 use prometheus::Registry;
@@ -586,6 +587,19 @@ impl TestWorkerExecutor {
                 upper: Vec::new(),
             },
         })
+    }
+
+    /// Returns the owner-keyed active-agent group for executor instance-layer tests.
+    pub async fn active_agent(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<Arc<golem_worker_executor::services::active_workers::ActiveAgent<TestWorkerCtx>>>
+    {
+        self.additional_test_deps
+            .active_workers
+            .get()?
+            .try_get_active_agent(owned_agent_id)
+            .await
     }
 
     pub async fn store_component_with_id(
@@ -1233,7 +1247,7 @@ async fn run(
     .await
 }
 
-struct TestWorkerCtx {
+pub struct TestWorkerCtx {
     durable_ctx: DurableWorkerCtx<TestWorkerCtx>,
 }
 
@@ -1284,6 +1298,8 @@ impl FuelManagement for TestWorkerCtx {
     fn return_fuel(&mut self, _current_level: u64) -> u64 {
         0
     }
+
+    fn settle_fuel(&mut self, _current_level: u64) {}
 }
 
 impl CallCountManagement for TestWorkerCtx {
@@ -1550,6 +1566,12 @@ impl WorkerCtx for TestWorkerCtx {
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
+        runtime: OwnerRuntime,
+        owner_execution: Arc<golem_worker_executor::worker::instance::OwnerExecution>,
+        owner_resources: Arc<golem_worker_executor::worker::instance::OwnerRuntimeResources>,
+        filesystem: FilesystemCapability,
+        executable_component: Component,
+        entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
         // Capture the executor's ActiveWorkers handle the first time we see
         // it, so test helpers (e.g. `worker_is_loaded`) can observe worker
@@ -1561,13 +1583,12 @@ impl WorkerCtx for TestWorkerCtx {
             oplog.clone(),
             extra_deps,
         ));
-        let account_resource_limits = Arc::new(AtomicResourceEntry::new(
-            u64::MAX,
-            usize::MAX,
-            usize::MAX,
-            u64::MAX,
-            u64::MAX,
-        ));
+        if !Arc::ptr_eq(&execution_status, &owner_resources.execution_status()) {
+            return Err(WorkerExecutorError::runtime(
+                "Store execution status does not belong to its owner runtime resources",
+            ));
+        }
+        let account_resource_limits = owner_resources.resource_limits();
 
         let durable_ctx = DurableWorkerCtx::create(
             owned_agent_id,
@@ -1605,6 +1626,12 @@ impl WorkerCtx for TestWorkerCtx {
             original_phantom_id,
             u64::MAX,
             u64::MAX,
+            runtime,
+            owner_execution,
+            owner_resources,
+            filesystem,
+            executable_component,
+            entity_activation,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -1686,6 +1713,19 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn max_disk_space(&self) -> u64 {
         u64::MAX // no plan limit enforcement in tests by default
+    }
+}
+
+impl EntityInvocationManagement for TestWorkerCtx {
+    fn set_entity_invocation_scope(
+        &mut self,
+        scope: Option<EntityInvocationScope>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.durable_ctx.set_entity_invocation_scope(scope)
+    }
+
+    fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope> {
+        self.durable_ctx.entity_invocation_scope()
     }
 }
 
