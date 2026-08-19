@@ -24,14 +24,6 @@ use test_r::test;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
-/// RFC 5737 TEST-NET-1. Reserved for documentation and guaranteed never routable,
-/// so a TCP connect to it is silently dropped rather than refused. That is exactly
-/// what a deleted Kubernetes pod IP does: no RST, no ICMP, just silence.
-///
-/// A closed port on localhost would NOT do: it answers with RST immediately, so
-/// the connect fails fast and any timeout bug stays invisible.
-const BLACKHOLE: &str = "http://192.0.2.1:9093";
-
 /// Small enough to keep the test quick, large enough that failing inside it
 /// cannot be confused with failing instantly for an unrelated reason.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -124,23 +116,15 @@ async fn ping_single(client: &GrpcClient<ExecutorClient>) -> Result<(), tonic::S
 /// operations for two minutes each.
 #[test]
 async fn multi_target_call_to_blackholed_pod_gives_up_within_connect_timeout() {
-    if !blackhole_hangs() {
-        eprintln!(
-            "[BLACKHOLE] skipped: connects to TEST-NET-1 fail instantly here rather than \
-             hanging, so this would pass without reproducing anything."
-        );
+    if delegated_to_namespace("multi_target_call_to_blackholed_pod_gives_up_within_connect_timeout")
+    {
         return;
     }
+    let (uri, _blackhole) = blackholed_target();
     let client = executor_client(config());
 
     let started = Instant::now();
-    let result = client
-        .call(
-            "assign_shards",
-            BLACKHOLE.parse::<Uri>().unwrap(),
-            move |client| Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] })),
-        )
-        .await;
+    let result = ping(&client, uri).await;
     let elapsed = started.elapsed();
 
     assert!(
@@ -158,14 +142,13 @@ async fn multi_target_call_to_blackholed_pod_gives_up_within_connect_timeout() {
 /// registry clients use.
 #[test]
 async fn single_target_call_to_blackholed_pod_gives_up_within_connect_timeout() {
-    if !blackhole_hangs() {
-        eprintln!(
-            "[BLACKHOLE] skipped: connects to TEST-NET-1 fail instantly here rather than \
-             hanging, so this would pass without reproducing anything."
-        );
+    if delegated_to_namespace(
+        "single_target_call_to_blackholed_pod_gives_up_within_connect_timeout",
+    ) {
         return;
     }
-    let client = single_target_executor_client(BLACKHOLE.parse::<Uri>().unwrap(), config());
+    let (uri, _blackhole) = blackholed_target();
+    let client = single_target_executor_client(uri, config());
 
     let started = Instant::now();
     let result = ping_single(&client).await;
@@ -241,23 +224,16 @@ async fn call_to_peer_that_accepts_but_never_speaks_http2_gives_up() {
 // ---------------------------------------------------------------------------
 // Reproduction harness for the executor stall.
 //
-// Needs a network namespace with CAP_NET_ADMIN so packets can be dropped rather
-// than refused: a deleted pod IP blackholes, it does not send RST. Everything
-// here self-skips anywhere else, so an ordinary `cargo test` never goes near a
-// firewall.
+// These tests drop packets, because that is the only way to imitate what a
+// deleted pod does to the connections already pointed at it: the IP stops
+// answering without ever sending an RST. A refused connection fails fast and
+// reproduces nothing.
 //
-// The namespace also needs somewhere to send TEST-NET-1 traffic. Without a route
-// those connects fail instantly with "network unreachable" instead of hanging,
-// and the tests that measure how long a hang lasts would pass without
-// reproducing anything:
-//
-//   unshare -rn bash -c '
-//     ip link set lo up
-//     ip link add dummy0 type dummy && ip link set dummy0 up
-//     ip route add 192.0.2.0/24 dev dummy0
-//     iptables -A OUTPUT -o dummy0 -j DROP
-//     echo 4 > /proc/sys/net/ipv4/tcp_retries2
-//     exec target/debug/deps/integration-<hash> grpc_client --nocapture'
+// Dropping packets needs CAP_NET_ADMIN, so each of these tests re-runs itself
+// inside a network namespace it creates for the purpose (see
+// `delegated_to_namespace`). Plain `cargo test` runs them, `sudo` is not
+// involved, and no rule is ever installed anywhere that outlives the test. On a
+// machine that cannot do it at all, they say so rather than passing quietly.
 // ---------------------------------------------------------------------------
 
 fn iptables(args: &[&str]) {
@@ -320,31 +296,83 @@ async fn serve_grpc() -> TestPeer {
     }
 }
 
-/// Whether it is safe to drop packets here.
+/// The marker the parent sets on the child it spawns in [`delegated_to_namespace`].
+const IN_OWN_NAMESPACE: &str = "GOLEM_TEST_NET_NAMESPACE";
+
+/// Runs a test that needs to drop packets inside a network namespace of its own.
 ///
-/// These tests install firewall rules, so they must only ever run inside a
-/// throwaway network namespace. Two things would otherwise go wrong: on macOS
-/// there is no iptables at all, and running the suite as root on a Linux host
-/// would install DROP rules in that host's real firewall.
-fn can_drop_packets() -> bool {
-    if !cfg!(target_os = "linux") || !is_throwaway_namespace() {
+/// Dropping packets needs CAP_NET_ADMIN. Rather than make that someone else's
+/// problem, or quietly skip for want of it, the test arranges it: `unshare
+/// --user --map-root-user` makes the current user root inside a new user
+/// namespace, and `--net` gives that namespace an empty network stack. The
+/// capability is real but reaches nothing except that namespace's own loopback,
+/// and all of it disappears when the child exits. No privilege on the host is
+/// involved, and `sudo` is never needed.
+///
+/// Returns true when the work has been handed to a child process and the caller
+/// should return, false when we are that child and the body should run.
+#[must_use]
+fn delegated_to_namespace(test: &str) -> bool {
+    if std::env::var_os(IN_OWN_NAMESPACE).is_some() {
+        assert!(
+            is_isolated_namespace(),
+            "{test} was spawned into a namespace that still has a default route, \
+             so its firewall rules could reach a real network"
+        );
         return false;
     }
-    std::process::Command::new("iptables")
-        .arg("-S")
+
+    if !cfg!(target_os = "linux") {
+        eprintln!(
+            "[{test}] not run: dropping packets needs Linux network namespaces. \
+             CI runs Linux, so this is covered there."
+        );
+        return true;
+    }
+
+    let binary = std::env::current_exe().expect("the running test binary");
+    let child = std::process::Command::new("unshare")
+        .args(["--user", "--map-root-user", "--net", "--"])
+        .arg("sh")
+        .arg("-c")
+        .arg(format!(
+            // tcp_retries2 is per namespace. Left at its default, the kernel
+            // spends about fifteen minutes giving up on an established
+            // connection whose peer has gone silent, and that wait is precisely
+            // what some of these tests are timing.
+            "ip link set lo up \
+             && echo 4 > /proc/sys/net/ipv4/tcp_retries2 \
+             && exec {} {test} --nocapture",
+            shell_quoted(&binary)
+        ))
+        .env(IN_OWN_NAMESPACE, "1")
         .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
+        .unwrap_or_else(|err| {
+            panic!("could not run `unshare` to isolate {test}: {err}. It ships with util-linux.")
+        });
+
+    // Held back unless it is needed, so concurrent children do not interleave
+    // their output into nonsense.
+    assert!(
+        child.status.success(),
+        "{test} failed inside its own network namespace. If `unshare` itself \
+         failed, this kernel may have unprivileged user namespaces switched off: \
+         check `sysctl kernel.unprivileged_userns_clone`.\n\n{}\n{}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr),
+    );
+    true
 }
 
-/// A network namespace with no default route.
+fn shell_quoted(path: &std::path::Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
+}
+
+/// A network namespace with no default route, which is what the child above gets.
 ///
-/// `unshare -rn` gives you one. A developer machine or CI runner always has a
-/// default route, so treating its absence as the signal keeps these tests away
-/// from any firewall that matters. Read from `/proc/net/route`, which resolves
-/// per namespace, unlike `/sys/class/net`, which `unshare -rn` leaves pointing
-/// at the host's interfaces.
-fn is_throwaway_namespace() -> bool {
+/// Read from `/proc/net/route`, which resolves per namespace, unlike
+/// `/sys/class/net`, which `unshare` leaves pointing at the host's interfaces.
+fn is_isolated_namespace() -> bool {
     let Ok(routes) = std::fs::read_to_string("/proc/net/route") else {
         return false;
     };
@@ -354,24 +382,6 @@ fn is_throwaway_namespace() -> bool {
         .lines()
         .skip(1)
         .any(|route| route.split_whitespace().nth(1) == Some("00000000"))
-}
-
-/// Whether a connect to [`BLACKHOLE`] really hangs here, measured rather than
-/// assumed.
-///
-/// TEST-NET-1 imitates a deleted pod only where its packets go somewhere that
-/// swallows them. A normal machine's default route does that. A bare namespace
-/// has no route to it at all and fails the connect instantly, so any test that
-/// measures the length of a hang would pass there without reproducing anything.
-fn blackhole_hangs() -> bool {
-    static HANGS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *HANGS.get_or_init(|| {
-        let addr: std::net::SocketAddr = "192.0.2.1:9093".parse().unwrap();
-        matches!(
-            std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)),
-            Err(err) if err.kind() == std::io::ErrorKind::TimedOut
-        )
-    })
 }
 
 /// An iptables rule that lasts only as long as it is held. Removing it on drop
@@ -410,6 +420,20 @@ fn blackhole_port(port: &str) -> Vec<FirewallRule> {
         .collect()
 }
 
+/// An address that swallows packets the way a deleted pod's IP does: the connect
+/// hangs instead of being refused.
+///
+/// A merely closed port will not do. It answers with RST immediately, so a
+/// connect against it fails fast whether or not any timeout is applied, and the
+/// bug this file exists for stays invisible.
+fn blackholed_target() -> (Uri, Vec<FirewallRule>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let rules = blackhole_port(&port.to_string());
+    (format!("http://127.0.0.1:{port}").parse().unwrap(), rules)
+}
+
 /// A sysctl restored to its previous value on drop.
 #[must_use = "the previous value is restored as soon as this is dropped"]
 struct Sysctl {
@@ -433,11 +457,7 @@ impl Drop for Sysctl {
 
 #[test]
 async fn established_connection_to_blackholed_peer() {
-    if !can_drop_packets() {
-        eprintln!(
-            "[REPRO] skipped: needs CAP_NET_ADMIN in a network namespace. \
-             Run under `unshare -rn`."
-        );
+    if delegated_to_namespace("established_connection_to_blackholed_peer") {
         return;
     }
 
@@ -494,8 +514,7 @@ async fn established_connection_to_blackholed_peer() {
 ///                Custom { kind: TimedOut, error: Elapsed(()) })
 #[test]
 async fn peer_dies_then_blackholes_fresh_connect_is_bounded() {
-    if !can_drop_packets() {
-        eprintln!("[REPRO2] skipped: needs CAP_NET_ADMIN in a network namespace.");
+    if delegated_to_namespace("peer_dies_then_blackholes_fresh_connect_is_bounded") {
         return;
     }
 
@@ -565,8 +584,9 @@ async fn peer_dies_then_blackholes_fresh_connect_is_bounded() {
 /// executor. Reproduced here at 8 x connect_timeout before the fix.
 #[test]
 async fn concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout() {
-    if !can_drop_packets() {
-        eprintln!("[REPRO3] skipped: needs CAP_NET_ADMIN in a network namespace.");
+    if delegated_to_namespace(
+        "concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout",
+    ) {
         return;
     }
 
@@ -675,16 +695,13 @@ async fn concurrent_calls_to_healthy_peer_share_one_connection() {
 /// drives.
 #[test]
 async fn waiter_survives_cancellation_of_the_caller_that_started_the_connect() {
-    if !blackhole_hangs() {
-        eprintln!(
-            "[CANCEL] skipped: no route to TEST-NET-1 here, so the connect fails \
-             instantly instead of hanging. Run outside `unshare -rn`."
-        );
+    if delegated_to_namespace("waiter_survives_cancellation_of_the_caller_that_started_the_connect")
+    {
         return;
     }
     let connect_timeout = Duration::from_secs(2);
     let client = executor_client(no_keepalive(connect_timeout));
-    let uri: Uri = BLACKHOLE.parse().unwrap();
+    let (uri, _blackhole) = blackholed_target();
 
     // A starts the attempt.
     let a_client = client.clone();
@@ -722,16 +739,12 @@ async fn waiter_survives_cancellation_of_the_caller_that_started_the_connect() {
 /// in-flight attempt. The next caller for that target then inherits it.
 #[test]
 async fn abandoned_connect_attempt_is_not_replayed_to_the_next_caller() {
-    if !blackhole_hangs() {
-        eprintln!(
-            "[STALE] skipped: no route to TEST-NET-1 here, so the connect fails \
-             instantly instead of hanging. Run outside `unshare -rn`."
-        );
+    if delegated_to_namespace("abandoned_connect_attempt_is_not_replayed_to_the_next_caller") {
         return;
     }
     let connect_timeout = Duration::from_secs(1);
     let client = executor_client(no_keepalive(connect_timeout));
-    let uri: Uri = BLACKHOLE.parse().unwrap();
+    let (uri, _blackhole) = blackholed_target();
 
     let a_client = client.clone();
     let a_uri = uri.clone();
@@ -854,8 +867,9 @@ async fn client_recovers_when_a_cleanly_killed_peer_returns() {
 /// later request queues onto a connection that can never work again.
 #[test]
 async fn blackholed_channel_is_evicted_and_recovers_when_the_peer_answers_again() {
-    if !can_drop_packets() {
-        eprintln!("[EVICT2] skipped: needs CAP_NET_ADMIN. Run under `unshare -rn`.");
+    if delegated_to_namespace(
+        "blackholed_channel_is_evicted_and_recovers_when_the_peer_answers_again",
+    ) {
         return;
     }
 
@@ -978,8 +992,7 @@ async fn a_cohort_that_retries_opens_one_connection_per_round() {
 /// because a blackholed peer accepts nothing that could be counted at the far end.
 #[test]
 async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
-    if !can_drop_packets() {
-        eprintln!("[SYN] skipped: needs CAP_NET_ADMIN. Run under `unshare -rn`.");
+    if delegated_to_namespace("a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round") {
         return;
     }
     // One SYN per attempt, so the count is attempts rather than retransmits.
@@ -1061,8 +1074,7 @@ async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
 /// default it is not even idle; it pings.
 #[test]
 async fn a_connection_nobody_waits_for_is_not_left_open() {
-    if !can_drop_packets() {
-        eprintln!("[ORPHAN] skipped: needs a throwaway namespace to add latency.");
+    if delegated_to_namespace("a_connection_nobody_waits_for_is_not_left_open") {
         return;
     }
     // Slow the loopback so a connect can be cancelled while it is still in flight.
