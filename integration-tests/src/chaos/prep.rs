@@ -49,6 +49,12 @@ use tracing::info;
 /// `Counter`, `EphemeralCounter`, `ScheduleEmitter` and `ScheduleCounter` agent
 /// types the mixed workload drives.
 pub const COUNTERS_WASM: &str = "it_agent_counters_release";
+/// WASM file name of the counters component S5 updates *to*.
+///
+/// Identical to [`COUNTERS_WASM`] apart from `Counter::component_version`, so a
+/// state mismatch after an update can only mean the restart lost something.
+pub const COUNTERS_V2_WASM: &str = "it_agent_counters_v2_release";
+
 /// WASM file name of the Rust promise component.
 pub const PROMISE_WASM: &str = "golem_it_promise_agent_rust_release";
 

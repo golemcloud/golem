@@ -26,11 +26,12 @@
 //! produce a plausible-looking report from a wasted maintenance window.
 
 pub mod s1;
+pub mod s5;
 pub mod s12;
 pub mod s8;
 
 use crate::chaos::ScenarioConfig;
-use crate::chaos::history::{OperationHistory, OperationRecord};
+use crate::chaos::history::{OperationHistory, OperationRecord, Stream};
 use crate::chaos::pinned::PinnedSelection;
 use crate::chaos::result::{ChaosResult, Phases, RESULT_SCHEMA_VERSION, RunScope};
 use crate::chaos::signal::SignalError;
@@ -38,7 +39,9 @@ use crate::chaos::summary::{AgentReadback, ChaosSummary, RoutingSnapshot, Termin
 use chrono::{DateTime, Utc};
 use golem_test_framework::benchmark::RunMetadata;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
+use crate::chaos::workload::WorkloadContext;
 use std::collections::BTreeMap;
+use std::time::Duration;
 use tracing::{info, warn};
 
 /// Where the driver writes its artifacts. Both are optional so a scenario can
@@ -239,6 +242,52 @@ pub async fn wait_for_settled_routing(
         tokio::time::sleep(std::time::Duration::from_secs(ROUTING_POLL_SECS)).await;
     }
 }
+
+/// How long to wait after warming, for the executors' quota leases to become
+/// live.
+///
+/// The executor's renewal loop runs every 10s and is what turns the placeholder
+/// a fresh token leaves behind into a real lease, so this has to comfortably
+/// exceed one cycle. Cheap next to a 300s baseline.
+pub const WARMUP_SETTLE: Duration = Duration::from_secs(45);
+
+/// Constructs every agent the run will drive, without mutating any of them.
+///
+/// Returns how many were touched. Failures are not fatal and not reported: an
+/// agent that cannot be read here will be exercised by the workload anyway, and
+/// its behaviour there is the measurement.
+pub async fn warm_up(ctx: &WorkloadContext, config: &crate::chaos::WorkloadConfig) -> usize {
+    let mut agents = Vec::new();
+    for index in 0..config.durable_agents {
+        agents.push((
+            Stream::Durable,
+            ctx.agent_name(Stream::Durable, index),
+            ReadKind::Counter,
+        ));
+    }
+    for index in 0..config.quota_agents {
+        agents.push((
+            Stream::Quota,
+            ctx.agent_name(Stream::Quota, index),
+            ReadKind::QuotaCounter,
+        ));
+    }
+    for index in 0..config.scheduled_agents {
+        agents.push((
+            Stream::Scheduled,
+            ctx.schedule_target_name(index),
+            ReadKind::Polls,
+        ));
+    }
+
+    let total = agents.len();
+    // Reuses the read-back path purely for its concurrency and per-read
+    // timeout. The returned verdicts are meaningless here — there are no
+    // records to compare against yet — so they are discarded.
+    let _ = read_back_agents(ctx, &[], agents).await;
+    total
+}
+
 
 /// Which durable value an agent is read back on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

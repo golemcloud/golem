@@ -701,6 +701,44 @@ pub async fn read_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, Str
     .await
 }
 
+/// Reads which build of the counters component an agent is running.
+///
+/// S5 updates the component underneath running agents and then has to prove
+/// they came up on the new one. Component metadata reports the revision the
+/// platform *believes* an agent is on; this asks the code actually executing,
+/// which is the only answer that settles the question.
+pub async fn read_component_version(ctx: &WorkloadContext, agent: &str) -> Result<u32, String> {
+    read_with_timeout("component_version", agent, async {
+        let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "component_version", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "component_version returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
+    .map(|v| v as u32)
+}
+
+/// The platform-level id of a durable counter agent, for callers that address
+/// one directly rather than through the workload.
+///
+/// Built the same way the worker-service builds the id it routes on: the
+/// component id plus the *string form* of the parsed agent id. Anything else
+/// would name a different agent from the one the workload is driving.
+pub fn counter_agent_id(ctx: &WorkloadContext, agent: &str) -> golem_common::model::AgentId {
+    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+    golem_common::model::AgentId {
+        component_id: ctx.counters.id,
+        agent_id: parsed.to_string(),
+    }
+}
+
 /// Reads back how many reservations a quota agent was refused.
 ///
 /// The counterpart to [`read_counter`] for the quota stream: the counter says

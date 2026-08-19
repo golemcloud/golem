@@ -236,6 +236,8 @@ pub enum ChaosScenarioArg {
     S1,
     /// Executor pod kill with pinned HTTP invocations in flight.
     S8,
+    /// Executor pod kill during an automatic component update.
+    S5,
     /// Shard-manager pod restart under mixed workload.
     S12,
 }

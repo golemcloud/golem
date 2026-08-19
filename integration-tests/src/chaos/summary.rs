@@ -688,6 +688,22 @@ pub enum TerminationReason {
     /// owners is an agent whose state can fork, and there is no instant at
     /// which that is legitimate.
     ShardOwnershipViolated { findings: u64, first: String },
+    /// An agent's durable state did not survive a component update. Asserted
+    /// because an update is supposed to change what an agent runs and nothing
+    /// about what it remembers — state that moved is the one outcome an update
+    /// may never produce.
+    UpdateStateInconsistent { agent: String, detail: String },
+    /// An agent was still running the old build after recovery. Asserted on the
+    /// agent's own answer rather than on component metadata: metadata says what
+    /// the platform believes, and the question is what the code is.
+    ///
+    /// An agent that could not be read at all does not reach here. That is
+    /// reported, because an unreadable agent says nothing either way.
+    UpdateNotApplied {
+        agent: String,
+        observed: Option<u32>,
+        expected: u32,
+    },
 }
 
 impl TerminationReason {

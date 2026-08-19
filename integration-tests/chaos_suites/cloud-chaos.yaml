@@ -256,3 +256,64 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # S5 — executor pod kill during an automatic component update (GOL-365).
+  #
+  # Agents run on the counters component, the scenario updates that component to
+  # a second build, asks every durable agent to move to it, and kills an
+  # executor while those updates are in flight. Every affected agent has to come
+  # back on the new build with its state intact.
+  #
+  # The update target is `agent-counters-v2`, which is `agent-counters` with
+  # `Counter::component_version` returning 2 instead of 1 and nothing else
+  # changed. If the builds behaved differently, a state mismatch after the kill
+  # would be ambiguous between "the restart lost it" and "the builds disagree" —
+  # and telling those apart is the whole job.
+  - code: S5
+    name: executor-restart-during-update
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # `one` plus the namespace and opt-in label selectors in podchaos-s5.yaml
+      # are what bound the blast radius. Unlike S8 the driver does not name the
+      # pod: agents are mid-update across both executors, so either one
+      # interrupts updates in flight and which one carries no information.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Long enough for cold starts and route warm-up to settle, so the update
+      # is applied to a population that is running rather than still arriving.
+      baselineSecs: 300
+      # Covers the kill, the reschedule, and the updates finishing on both the
+      # surviving executor and the replacement.
+      faultSecs: 120
+      # Updates continue after the kill and agents have to converge before
+      # read-back compares their state.
+      recoverySecs: 300
+
+    workload:
+      # Durable agents are the population being updated, so the pool is large:
+      # a divergence localises to one agent out of 200 rather than a haystack.
+      durableAgents: 200
+      # Ephemeral agents are not updated — they exist to show whether
+      # acceptance degraded during the kill, separately from the update.
+      ephemeralAgents: 50
+      # Scheduled agents keep durable state that the update does not touch, so
+      # they are the control: their read-back should be unaffected.
+      scheduledAgents: 50
+      promiseAgents: 0
+      # No quota stream. S5 has nothing to do with the shard-manager link, and
+      # a lease that cannot be renewed would add a second failure mode to a
+      # scenario that already has one.
+      quotaAgents: 0
+      ratePerSec: 100
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

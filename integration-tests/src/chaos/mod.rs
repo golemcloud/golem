@@ -57,6 +57,8 @@ pub enum ScenarioCode {
     S1,
     /// Executor pod kill with pinned HTTP invocations in flight.
     S8,
+    /// Executor pod kill during an automatic component update.
+    S5,
     /// Shard-manager pod restart under mixed workload.
     S12,
 }
@@ -66,6 +68,7 @@ impl ScenarioCode {
         match self {
             ScenarioCode::S1 => "S1",
             ScenarioCode::S8 => "S8",
+            ScenarioCode::S5 => "S5",
             ScenarioCode::S12 => "S12",
         }
     }
@@ -73,7 +76,12 @@ impl ScenarioCode {
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 3] = [ScenarioCode::S1, ScenarioCode::S8, ScenarioCode::S12];
+    pub const ALL: [ScenarioCode; 4] = [
+        ScenarioCode::S1,
+        ScenarioCode::S5,
+        ScenarioCode::S8,
+        ScenarioCode::S12,
+    ];
 
     pub fn parse(s: &str) -> Option<Self> {
         ScenarioCode::ALL
@@ -637,6 +645,9 @@ mod tests {
                 ScenarioCode::S1 => {
                     entry.require_workload().unwrap();
                     entry.require_ownership().unwrap();
+                }
+                ScenarioCode::S5 => {
+                    entry.require_workload().unwrap();
                 }
             }
         }

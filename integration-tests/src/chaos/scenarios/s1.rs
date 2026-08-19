@@ -71,7 +71,7 @@ use crate::chaos::prep::ChaosPrepManifest;
 use crate::chaos::probe;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
 use crate::chaos::scenarios::{
-    wait_for_settled_routing,
+    WARMUP_SETTLE, wait_for_settled_routing, warm_up,
     OutputPaths, ReadKind, ScenarioOutcome, build_result, read_back_agents, signal_termination,
     snapshot_routing, write_outputs,
 };
@@ -685,51 +685,6 @@ async fn read_counters(
 /// answers — a quota lease lost mid-run parks the agent's next reservation with
 /// no timeout on the platform side — and walking 300 agents sequentially behind
 /// a 30s ceiling would outlast the maintenance window several times over.
-/// How long to wait after warming, for the executors' quota leases to become
-/// live.
-///
-/// The executor's renewal loop runs every 10s and is what turns the placeholder
-/// a fresh token leaves behind into a real lease, so this has to comfortably
-/// exceed one cycle. Cheap next to a 300s baseline.
-const WARMUP_SETTLE: Duration = Duration::from_secs(45);
-
-/// Constructs every agent the run will drive, without mutating any of them.
-///
-/// Returns how many were touched. Failures are not fatal and not reported: an
-/// agent that cannot be read here will be exercised by the workload anyway, and
-/// its behaviour there is the measurement.
-async fn warm_up(ctx: &WorkloadContext, config: &crate::chaos::WorkloadConfig) -> usize {
-    let mut agents = Vec::new();
-    for index in 0..config.durable_agents {
-        agents.push((
-            Stream::Durable,
-            ctx.agent_name(Stream::Durable, index),
-            ReadKind::Counter,
-        ));
-    }
-    for index in 0..config.quota_agents {
-        agents.push((
-            Stream::Quota,
-            ctx.agent_name(Stream::Quota, index),
-            ReadKind::QuotaCounter,
-        ));
-    }
-    for index in 0..config.scheduled_agents {
-        agents.push((
-            Stream::Scheduled,
-            ctx.schedule_target_name(index),
-            ReadKind::Polls,
-        ));
-    }
-
-    let total = agents.len();
-    // Reuses the read-back path purely for its concurrency and per-read
-    // timeout. The returned verdicts are meaningless here — there are no
-    // records to compare against yet — so they are discarded.
-    let _ = read_back_agents(ctx, &[], agents).await;
-    total
-}
-
 async fn read_back(
     ctx: &WorkloadContext,
     records: &[OperationRecord],
