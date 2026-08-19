@@ -67,13 +67,16 @@ object AgentClientRuntime {
     inputCodec: golem.runtime.InputRecordCodec[In],
     input: In
   ): Either[String, JsSchemaValueTree] =
-    // `SchemaRpcCodec.encodeArgs` throws on a malformed positional record; keep
-    // local encode errors as `Left` rather than throwing synchronously.
-    try Right(SchemaRpcCodec.encodeArgs(input)(inputCodec))
-    catch {
-      case js.JavaScriptException(err) => Left(err.toString)
-      case NonFatal(err)               => Left(err.getMessage)
-    }
+    if (inputCodec.graph.containsStream)
+      Left("live streams cannot cross fire-and-forget or scheduled agent invocation boundaries")
+    else
+      // `SchemaRpcCodec.encodeArgs` throws on a malformed positional record; keep
+      // local encode errors as `Left` rather than throwing synchronously.
+      try Right(SchemaRpcCodec.encodeArgs(input)(inputCodec))
+      catch {
+        case js.JavaScriptException(err) => Left(err.toString)
+        case NonFatal(err)               => Left(err.getMessage)
+      }
 
   private def decodeOutput[Out](
     outputCodec: OutputCodec[Out],

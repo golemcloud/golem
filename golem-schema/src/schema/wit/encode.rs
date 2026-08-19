@@ -564,11 +564,8 @@ fn preflight_host_streams(value: &SchemaValue) -> Result<(), EncodeError> {
                     walk(value, seen)?;
                 }
             }
-            SchemaValue::Option { inner } => {
-                if let Some(value) = inner {
-                    walk(value, seen)?;
-                }
-            }
+            SchemaValue::Option { inner: Some(value) } => walk(value, seen)?,
+            SchemaValue::Option { inner: None } => {}
             SchemaValue::Result(payload) => {
                 let value = match payload {
                     ResultValuePayload::Ok { value } | ResultValuePayload::Err { value } => value,

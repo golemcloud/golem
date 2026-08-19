@@ -1557,7 +1557,7 @@ mod tests {
     fn component_metadata_grpc_roundtrip_preserves_tool_envelope() {
         let metadata = metadata_with_tool();
         let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
-            metadata.clone().into();
+            metadata.clone().try_into().unwrap();
         let decoded = ComponentMetadata::try_from(proto).unwrap();
 
         assert_eq!(decoded, metadata);

@@ -101,7 +101,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
         )
       }
     },
-    test("PROVISIONAL bug_finder reproducer — remove if the finding is rejected: trigger rejects streams without consuming them") {
+    test("trigger rejects streams without consuming them") {
       val agentType = rpcAgentType
       val invoker   = new RecordingRpcInvoker
       val resolved  = resolvedAgent(invoker, agentType)
