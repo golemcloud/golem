@@ -36,6 +36,9 @@ min_executors = 2
 [registry_service]
 connect_timeout = "10s"
 host = "localhost"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
 max_message_size = 52428800
 port = 8080
 
@@ -115,6 +118,9 @@ without_time = false
 assign_shards_timeout = "5s"
 connect_timeout = "10s"
 health_check_timeout = "2s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
 max_message_size = 33554432
 revoke_shards_timeout = "5s"
 
@@ -177,6 +183,9 @@ type = "Disabled"
 # [registry_service]
 # connect_timeout = "10s"
 # host = "localhost"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
 # max_message_size = 52428800
 # port = 8080
 # 
@@ -256,6 +265,9 @@ type = "Disabled"
 # assign_shards_timeout = "5s"
 # connect_timeout = "10s"
 # health_check_timeout = "2s"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
 # max_message_size = 33554432
 # revoke_shards_timeout = "5s"
 # 

@@ -139,6 +139,9 @@ count = 10
 [public_worker_api]
 connect_timeout = "10s"
 host = "localhost"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
 max_message_size = 33554432
 port = 9007
 
@@ -166,6 +169,9 @@ query_batch = 50
 [registry_service]
 connect_timeout = "10s"
 host = "localhost"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
 max_message_size = 52428800
 port = 8080
 
@@ -418,6 +424,9 @@ without_time = false
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
 # max_message_size = 33554432
 # port = 9007
 # 
@@ -445,6 +454,9 @@ without_time = false
 # [registry_service]
 # connect_timeout = "10s"
 # host = "localhost"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
 # max_message_size = 52428800
 # port = 8080
 # 
