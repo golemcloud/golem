@@ -456,7 +456,7 @@ impl Drop for Sysctl {
 }
 
 #[test]
-async fn established_connection_to_blackholed_peer() {
+async fn an_established_connection_to_a_blackholed_peer_still_stalls() {
     if delegated_to_namespace("established_connection_to_blackholed_peer") {
         return;
     }
@@ -498,10 +498,21 @@ async fn established_connection_to_blackholed_peer() {
         err
     );
 
+    // Deliberately asserts the stall is still there. `connect_timeout` bounds
+    // the TCP connect and nothing else, so a connection already established when
+    // the peer went silent waits on the kernel instead. Keep-alive is what bounds
+    // this in production, and it is switched off here to show the difference.
+    // If this ever goes red, the stall was fixed and this test should be replaced
+    // rather than repaired.
     assert!(
         elapsed > connect_timeout,
-        "expected the stall to exceed connect_timeout ({connect_timeout:?}), got {elapsed:?} — \
-         no stall reproduced"
+        "expected the stall to exceed connect_timeout ({connect_timeout:?}), got {elapsed:?}"
+    );
+    // The kernel is what ends this wait, so give it an outer bound rather than
+    // letting a misconfigured tcp_retries2 hang the suite for a quarter of an hour.
+    assert!(
+        elapsed < Duration::from_secs(60),
+        "the stall ran to {elapsed:?}; tcp_retries2 is not being applied in the namespace"
     );
 }
 
@@ -683,9 +694,11 @@ async fn concurrent_calls_to_healthy_peer_share_one_connection() {
         "{CONCURRENCY} concurrent calls opened {connections} connections; they \
          should have shared a single connection attempt"
     );
+    // Measured at ~43ms. Loose enough not to flake on a loaded runner, tight
+    // enough that serialising the cohort could not slip past.
     assert!(
-        elapsed < Duration::from_secs(5),
-        "healthy concurrent calls should not serialise"
+        elapsed < Duration::from_secs(2),
+        "healthy concurrent calls took {elapsed:?}; they should not serialise"
     );
 }
 
@@ -1084,7 +1097,7 @@ async fn a_connection_nobody_waited_for_is_still_reused() {
             "qdisc", "add", "dev", "lo", "root", "netem", "delay", "300ms",
         ])
         .output()
-        .expect("tc must be available");
+        .expect("tc must be available; it comes with iproute2");
     assert!(
         tc.status.success(),
         "tc: {}",
@@ -1128,5 +1141,49 @@ async fn a_connection_nobody_waited_for_is_still_reused() {
         connections, 1,
         "the abandoned attempt's connection was not reused; it opened \
          {connections} connections where one would do"
+    );
+}
+
+/// A request that ran out of time says nothing about the connection it ran on.
+///
+/// tonic reports a `request_timeout` as `Cancelled` and still attaches a
+/// transport error to it, which is indistinguishable by source alone from a
+/// genuinely dead connection. Treating it as one would tear down a healthy
+/// channel that every other caller is sharing, and worker-executor's registry
+/// client really does set request_timeout (30s).
+#[test]
+async fn a_request_timeout_does_not_tear_down_the_shared_connection() {
+    let peer = serve_grpc().await;
+    let uri: Uri = format!("http://{}", peer.addr).parse().unwrap();
+
+    let mut cfg = config();
+    cfg.request_timeout = Some(Duration::from_millis(300));
+    let client = executor_client(cfg);
+
+    // The empty router answers immediately, so this establishes and caches a
+    // connection without timing anything out.
+    assert_eq!(
+        ping(&client, uri.clone()).await.err().map(|e| e.code()),
+        Some(tonic::Code::Unimplemented)
+    );
+
+    // A call that does time out, against a peer that is perfectly healthy.
+    let timed_out = single_target_executor_client(uri.clone(), {
+        let mut cfg = no_keepalive(Duration::from_secs(2));
+        cfg.request_timeout = Some(Duration::from_millis(300));
+        cfg
+    });
+    let _ = ping_single(&timed_out).await;
+
+    assert_eq!(
+        ping(&client, uri).await.err().map(|e| e.code()),
+        Some(tonic::Code::Unimplemented)
+    );
+    let connections = peer.connections.load(std::sync::atomic::Ordering::SeqCst);
+    eprintln!("[TIMEOUT] connections opened by the client that timed out: {connections}");
+    assert!(
+        connections <= 2,
+        "a request timeout reconnected instead of reusing the channel: \
+         {connections} connections opened"
     );
 }
