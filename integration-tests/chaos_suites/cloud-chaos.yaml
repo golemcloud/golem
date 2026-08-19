@@ -256,3 +256,55 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # S888 — quota agent cold start. PROTOTYPE, and deliberately `enabled: false`.
+  #
+  # Not a chaos scenario: nothing is injected, nothing is scaled, no pod is
+  # touched. Two executors held steady, and a ramp of cold agent populations.
+  # It exists because S1 measured an 85s first-invocation latency on agents
+  # holding a quota token, on a healthy cluster five minutes before any fault —
+  # and that finding is impossible to argue about while a partition, a scale
+  # schedule and four other streams are in the frame.
+  #
+  # Off by default so ordinary runs are unaffected. The workflow runs a
+  # scenario named explicitly in `scenarios` even when it is disabled here, so
+  # `-f scenarios=S888` is how you get it.
+  - code: S888
+    name: quota-cold-start
+    enabled: false
+
+    fault:
+      # The workflow special-cases this: no CRD is required, nothing is applied,
+      # and the fault signals are never written. The driver never waits on them.
+      kind: none
+      target: none
+      mode: none
+      durationSecs: 0
+
+    # Unused by the driver — the ramp lives in `ROUNDS` in scenarios/s888.rs,
+    # because a prototype's shape changes faster than a schema should. Present
+    # because the suite schema requires them.
+    phases:
+      baselineSecs: 0
+      faultSecs: 0
+      recoverySecs: 0
+
+    workload:
+      durableAgents: 0
+      ephemeralAgents: 0
+      scheduledAgents: 0
+      promiseAgents: 0
+      quotaAgents: 0
+      ratePerSec: 0
+
+    retryPolicy:
+      # No retries: a cold start that had to be retried is a different
+      # measurement, and averaging the two would hide exactly what we are here
+      # to see.
+      transportOnly: true
+      maxRetries: 0
+      delaySecs: 5
+
+    # Four rounds with 60s settles between them, plus a 500-agent round that may
+    # itself take minutes. Generous.
+    signalTimeoutSecs: 3600

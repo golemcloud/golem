@@ -472,7 +472,7 @@ pub fn start(ctx: WorkloadContext, config: &crate::chaos::WorkloadConfig) -> Wor
 }
 
 /// Submits one operation of `stream` against agent `index`.
-async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32, seq: u64) {
+pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32, seq: u64) {
     match stream {
         // Driven by `crate::chaos::pinned`, not by the rate-based streams: it
         // has no rate and its agents are chosen by shard ownership rather than

@@ -28,6 +28,7 @@
 pub mod s1;
 pub mod s12;
 pub mod s8;
+pub mod s888;
 
 use crate::chaos::ScenarioConfig;
 use crate::chaos::history::{OperationHistory, OperationRecord};

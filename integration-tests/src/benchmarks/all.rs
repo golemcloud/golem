@@ -612,6 +612,9 @@ async fn run_chaos(
                 chaos::ScenarioCode::S12 => {
                     chaos::scenarios::s12::run(&config, &manifest, &deps, &signals, &outputs).await
                 }
+                chaos::ScenarioCode::S888 => {
+                    chaos::scenarios::s888::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
             };
 
             deps.kill_all().await;
