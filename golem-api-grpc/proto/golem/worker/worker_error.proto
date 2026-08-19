@@ -5,6 +5,9 @@ package golem.worker;
 import "golem/common/environment.proto";
 
 message AgentError {
+  reserved 11, 12;
+  reserved "node_out_of_filesystem_storage", "agent_exceeded_filesystem_storage_limit";
+
   oneof error {
     StackOverflow stack_overflow = 1;
     OutOfMemory out_of_memory = 2;
@@ -16,8 +19,6 @@ message AgentError {
     TransientError transient_error = 8;
     PermanentError permanent_error = 9;
     ExceededTableLimit exceeded_table_limit = 10;
-    NodeOutOfFilesystemStorage node_out_of_filesystem_storage = 11;
-    AgentExceededFilesystemStorageLimit agent_exceeded_filesystem_storage_limit = 12;
     ExceededHttpCallLimit exceeded_http_call_limit = 13;
     ExceededRpcCallLimit exceeded_rpc_call_limit = 14;
     AgentTerminatedByQuota agent_terminated_by_quota = 15;
@@ -63,10 +64,6 @@ message ExceededTableLimit {}
 message ExceededHttpCallLimit {}
 
 message ExceededRpcCallLimit {}
-
-message NodeOutOfFilesystemStorage {}
-
-message AgentExceededFilesystemStorageLimit {}
 
 message AgentTerminatedByQuota {
   golem.common.EnvironmentId environment_id = 1;

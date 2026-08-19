@@ -379,18 +379,6 @@ oplog_entry! {
             delta: u64
         }
     },
-    /// Updated storage usage by a signed delta (positive = write, negative = delete/shrink)
-    FilesystemStorageUsageUpdate {
-        hint: true
-        wit_raw_type: "filesystem-storage-usage-update-parameters"
-        wit_public_type: "filesystem-storage-usage-update-parameters"
-        raw {
-            delta: i64
-        }
-        public {
-            delta: i64
-        }
-    },
     /// Created a resource instance
     CreateResource {
         hint: true

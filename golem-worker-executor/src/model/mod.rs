@@ -365,12 +365,6 @@ impl TrapType {
                         Some(GolemSpecificWasmTrap::WorkerExceededRpcCallLimit) => {
                             make_error(AgentError::ExceededRpcCallLimit)
                         }
-                        Some(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage) => {
-                            make_error(AgentError::NodeOutOfFilesystemStorage)
-                        }
-                        Some(GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit) => {
-                            make_error(AgentError::AgentExceededFilesystemStorageLimit)
-                        }
                         Some(GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted) => {
                             match agent_mode {
                                 AgentMode::Durable => TrapType::Interrupt(InterruptKind::Suspend(

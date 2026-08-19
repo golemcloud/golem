@@ -766,9 +766,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Records one outgoing HTTP call against the monthly account quota.
     ///
     /// Returns `Err(WorkerMonthlyHttpCallBudgetExhausted)` if the monthly budget
-    /// is exhausted. This trap maps to `RetryDecision::TryStop` — the worker is
-    /// suspended (same as filesystem `NodeOutOfFilesystemStorage` -> `ReacquirePermits`),
-    /// and will be resumed when the registry replenishes the budget.
+    /// is exhausted. This trap maps to `RetryDecision::TryStop`; the worker is
+    /// suspended and resumed when the registry replenishes the budget.
     pub fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
         if self.state.is_live() && !self.state.resource_limit_entry.record_http_call() {
             Err(anyhow!(
@@ -1434,14 +1433,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => Some(RetryDecision::None),
             TrapType::Error {
-                error: AgentError::NodeOutOfFilesystemStorage,
-                ..
-            } => Some(RetryDecision::ReacquirePermits),
-            TrapType::Error {
-                error: AgentError::AgentExceededFilesystemStorageLimit,
-                ..
-            } => Some(RetryDecision::None),
-            TrapType::Error {
                 error: AgentError::AgentTerminatedByQuota(_),
                 ..
             } => Some(RetryDecision::None),
@@ -1501,10 +1492,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentError::ExceededTableLimit => "exceeded-table-limit",
             AgentError::ExceededHttpCallLimit => "exceeded-http-call-limit",
             AgentError::ExceededRpcCallLimit => "exceeded-rpc-call-limit",
-            AgentError::NodeOutOfFilesystemStorage => "node-out-of-filesystem-storage",
-            AgentError::AgentExceededFilesystemStorageLimit => {
-                "agent-exceeded-filesystem-storage-limit"
-            }
             AgentError::InternalError(_) => "internal-error",
             AgentError::DeterministicTrap(_) => "deterministic-trap",
             AgentError::PermanentError(_) => "permanent-error",

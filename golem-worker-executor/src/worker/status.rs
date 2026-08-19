@@ -169,13 +169,11 @@ pub async fn try_fold_status_from<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
-    mut baseline: AgentStatusRecord,
+    baseline: AgentStatusRecord,
 ) -> Option<AgentStatusRecord>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
-    baseline.current_filesystem_storage_usage = 0;
-
     let last_oplog_index = this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
@@ -346,7 +344,6 @@ pub fn update_status_with_new_entries(
         component_size,
         owned_resources,
         total_linear_memory_size,
-        current_filesystem_storage_usage: 0,
         active_plugins,
         oplog_processor_checkpoints,
         revoked_cards,
@@ -481,7 +478,6 @@ fn calculate_latest_worker_status(
             OplogEntry::FailedUpdate { .. } => {}
             OplogEntry::SuccessfulUpdate { .. } => {}
             OplogEntry::GrowMemory { .. } => {}
-            OplogEntry::FilesystemStorageUsageUpdate { .. } => {}
             OplogEntry::CreateResource { .. } => {}
             OplogEntry::DropResource { .. } => {}
             OplogEntry::Log { .. } => {
@@ -1167,8 +1163,6 @@ fn is_worker_error_retriable(
         AgentError::PermanentError(_) => false,
         AgentError::ExceededHttpCallLimit => false,
         AgentError::ExceededRpcCallLimit => false,
-        AgentError::NodeOutOfFilesystemStorage => true,
-        AgentError::AgentExceededFilesystemStorageLimit => false,
         AgentError::AgentTerminatedByQuota(_) => false,
         AgentError::EphemeralSleepTooLong(_) => false,
         AgentError::EphemeralFuelExhausted(_) => false,
