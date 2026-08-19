@@ -90,9 +90,7 @@ async fn multi_target_call_to_blackholed_pod_gives_up_within_connect_timeout() {
         .call(
             "assign_shards",
             BLACKHOLE.parse::<Uri>().unwrap(),
-            move |client| {
-                Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
-            },
+            move |client| Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] })),
         )
         .await;
     let elapsed = started.elapsed();
@@ -167,12 +165,9 @@ async fn call_to_peer_that_accepts_but_never_speaks_http2_gives_up() {
     let addr = listener.local_addr().unwrap();
     let _accepter = tokio::spawn(async move {
         let mut held = Vec::new();
-        loop {
-            match listener.accept().await {
-                // Hold the socket open forever without writing anything.
-                Ok((sock, _)) => held.push(sock),
-                Err(_) => break,
-            }
+        // Hold every socket open forever without writing anything.
+        while let Ok((sock, _)) = listener.accept().await {
+            held.push(sock);
         }
     });
 
@@ -258,12 +253,82 @@ async fn serve_grpc() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
     (addr, handle)
 }
 
+/// Whether it is safe to drop packets here.
+///
+/// These tests install firewall rules, so they must only ever run inside a
+/// throwaway network namespace. Two things would otherwise go wrong: on macOS
+/// there is no iptables at all, and running the suite as root on a Linux host
+/// would install DROP rules in that host's real firewall.
+///
+/// "Throwaway" is taken to mean loopback is the only interface, which is what
+/// `unshare -rn` gives you and what a developer machine or CI runner is not.
 fn can_drop_packets() -> bool {
+    if !cfg!(target_os = "linux") || !loopback_is_the_only_interface() {
+        return false;
+    }
     std::process::Command::new("iptables")
         .arg("-S")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Reads `/proc/net/dev` rather than `/sys/class/net`: sysfs is not remounted by
+/// `unshare -rn`, so it keeps reporting the host's interfaces, while `/proc/net`
+/// resolves per network namespace.
+fn loopback_is_the_only_interface() -> bool {
+    let Ok(devices) = std::fs::read_to_string("/proc/net/dev") else {
+        return false;
+    };
+    let mut names = devices
+        .lines()
+        .skip(2)
+        .filter_map(|line| line.split(':').next())
+        .map(str::trim);
+    names.next() == Some("lo") && names.next().is_none()
+}
+
+/// Whether a connect to [`BLACKHOLE`] actually hangs here.
+///
+/// TEST-NET-1 behaves like a deleted pod only where a default route exists to
+/// swallow the packets. Inside `unshare -rn` there is no route to it at all, so
+/// the connect fails instantly with "network unreachable" rather than hanging,
+/// and a test that measures how long a hang lasts would pass without ever
+/// reproducing what it claims to.
+fn blackhole_hangs() -> bool {
+    !loopback_is_the_only_interface()
+}
+
+/// Silently drops every packet to and from `port` for as long as it is held, so
+/// the peer behaves like a deleted pod: no RST, no ICMP, just silence. Removing
+/// the rules on drop keeps a panicking test from leaving the namespace's
+/// firewall in a state that fails every test after it.
+#[must_use = "the rules are removed as soon as this is dropped"]
+struct Blackhole {
+    port: String,
+}
+
+impl Blackhole {
+    fn new(port: &str) -> Self {
+        for direction in ["--dport", "--sport"] {
+            iptables(&["-A", "INPUT", "-p", "tcp", direction, port, "-j", "DROP"]);
+        }
+        Self {
+            port: port.to_string(),
+        }
+    }
+}
+
+impl Drop for Blackhole {
+    fn drop(&mut self) {
+        for direction in ["--dport", "--sport"] {
+            let _ = std::process::Command::new("iptables")
+                .args([
+                    "-D", "INPUT", "-p", "tcp", direction, &self.port, "-j", "DROP",
+                ])
+                .output();
+        }
+    }
 }
 
 #[test]
@@ -297,7 +362,7 @@ async fn established_connection_to_blackholed_peer() {
             Box::pin(client.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
         })
         .await;
-    let first_err = first.err().expect("empty router replies Unimplemented");
+    let first_err = first.expect_err("empty router replies Unimplemented");
     eprintln!("[REPRO] first call settled: code={:?}", first_err.code());
     assert_ne!(
         first_err.code(),
@@ -307,8 +372,7 @@ async fn established_connection_to_blackholed_peer() {
     );
 
     // 2. The pod vanishes: its packets are silently dropped in both directions.
-    iptables(&["-A", "INPUT", "-p", "tcp", "--dport", &port, "-j", "DROP"]);
-    iptables(&["-A", "INPUT", "-p", "tcp", "--sport", &port, "-j", "DROP"]);
+    let _blackhole = Blackhole::new(&port);
     eprintln!("[REPRO] peer blackholed on port {port}");
 
     // 3. Next request on the cached, now-dead connection.
@@ -320,7 +384,7 @@ async fn established_connection_to_blackholed_peer() {
         .await;
     let elapsed = started.elapsed();
 
-    let err = result.err().expect("call to a vanished peer must fail");
+    let err = result.expect_err("call to a vanished peer must fail");
     eprintln!(
         "[REPRO] elapsed={:?} connect_timeout={:?} code={:?}\n[REPRO] error={:?}",
         elapsed,
@@ -350,7 +414,7 @@ async fn peer_dies_then_blackholes_fresh_connect_is_bounded() {
         return;
     }
 
-    let (addr, server) = serve_grpc().await;
+    let (addr, _server) = serve_grpc().await;
     let port = addr.port().to_string();
     let uri: Uri = format!("http://{addr}").parse().unwrap();
 
@@ -376,9 +440,7 @@ async fn peer_dies_then_blackholes_fresh_connect_is_bounded() {
     );
 
     // Pod IP stops routing.
-    iptables(&["-A", "INPUT", "-p", "tcp", "--dport", &port, "-j", "DROP"]);
-    iptables(&["-A", "INPUT", "-p", "tcp", "--sport", &port, "-j", "DROP"]);
-    let _ = server;
+    let _blackhole = Blackhole::new(&port);
     eprintln!("[REPRO2] peer blackholed on port {port}");
 
     // Second call dies on the stale socket once the kernel gives up.
@@ -405,7 +467,7 @@ async fn peer_dies_then_blackholes_fresh_connect_is_bounded() {
         })
         .await;
     let elapsed = started.elapsed();
-    let err = result.err().expect("call to a dead peer must fail");
+    let err = result.expect_err("call to a dead peer must fail");
 
     eprintln!(
         "[REPRO2] call3 (reconnect) elapsed={:?} connect_timeout={:?} code={:?}\n[REPRO2] error={:?}",
@@ -449,7 +511,7 @@ async fn concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout() 
     let port = addr.port().to_string();
     let uri: Uri = format!("http://{addr}").parse().unwrap();
 
-    let mut cfg = no_keepalive(connect_timeout);
+    let cfg = no_keepalive(connect_timeout);
     let client = MultiTargetGrpcClient::new(
         "worker_executor",
         |channel, max_message_size| {
@@ -467,8 +529,7 @@ async fn concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout() 
         })
         .await;
 
-    iptables(&["-A", "INPUT", "-p", "tcp", "--dport", &port, "-j", "DROP"]);
-    iptables(&["-A", "INPUT", "-p", "tcp", "--sport", &port, "-j", "DROP"]);
+    let _blackhole = Blackhole::new(&port);
 
     // Retire the stale socket so every request below takes the connect path.
     let _ = client
@@ -555,9 +616,489 @@ async fn concurrent_calls_to_healthy_peer_share_one_connection() {
         // reached the peer rather than failing to connect.
         assert_eq!(t.await.unwrap(), Some(tonic::Code::Unimplemented));
     }
-    eprintln!("[HEALTHY] 16 concurrent calls settled in {:?}", started.elapsed());
+    eprintln!(
+        "[HEALTHY] 16 concurrent calls settled in {:?}",
+        started.elapsed()
+    );
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "healthy concurrent calls should not serialise"
+    );
+}
+
+/// If the caller that started a connection attempt goes away (upstream timeout,
+/// client disconnect), everyone else waiting on that same attempt must still get
+/// an answer within connect_timeout rather than stalling on a future nobody
+/// drives.
+#[test]
+async fn waiter_survives_cancellation_of_the_caller_that_started_the_connect() {
+    if !blackhole_hangs() {
+        eprintln!(
+            "[CANCEL] skipped: no route to TEST-NET-1 here, so the connect fails \
+             instantly instead of hanging. Run outside `unshare -rn`."
+        );
+        return;
+    }
+    let connect_timeout = Duration::from_secs(2);
+    let client = MultiTargetGrpcClient::new(
+        "worker_executor",
+        |channel, max_message_size| {
+            WorkerExecutorClient::new(channel)
+                .max_decoding_message_size(max_message_size)
+                .max_encoding_message_size(max_message_size)
+        },
+        no_keepalive(connect_timeout),
+    );
+    let uri: Uri = BLACKHOLE.parse().unwrap();
+
+    // A starts the attempt.
+    let a_client = client.clone();
+    let a_uri = uri.clone();
+    let a = tokio::spawn(async move {
+        a_client
+            .call("assign_shards", a_uri, move |c| {
+                Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+            })
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // B joins the in-flight attempt, then A is cancelled.
+    let b_client = client.clone();
+    let b_uri = uri.clone();
+    let started = Instant::now();
+    let b = tokio::spawn(async move {
+        b_client
+            .call("assign_shards", b_uri, move |c| {
+                Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+            })
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    a.abort();
+
+    let b_result = tokio::time::timeout(connect_timeout * 3, b).await;
+    let elapsed = started.elapsed();
+    eprintln!(
+        "[CANCEL] B settled after {elapsed:?}: {:?}",
+        b_result
+            .as_ref()
+            .map(|r| r.as_ref().map(|i| i.as_ref().err().map(|e| e.code())))
+    );
+    assert!(
+        b_result.is_ok(),
+        "waiter B stalled after its driver was cancelled ({elapsed:?}) — Shared future left undriven"
+    );
+    assert!(
+        elapsed < connect_timeout * 2,
+        "waiter B took {elapsed:?} with connect_timeout={connect_timeout:?}"
+    );
+}
+
+/// When every waiter is cancelled, nothing reaches the cleanup that removes the
+/// in-flight attempt. The next caller for that target then inherits it.
+#[test]
+async fn abandoned_connect_attempt_is_not_replayed_to_the_next_caller() {
+    if !blackhole_hangs() {
+        eprintln!(
+            "[STALE] skipped: no route to TEST-NET-1 here, so the connect fails \
+             instantly instead of hanging. Run outside `unshare -rn`."
+        );
+        return;
+    }
+    let connect_timeout = Duration::from_secs(1);
+    let client = MultiTargetGrpcClient::new(
+        "worker_executor",
+        |channel, max_message_size| {
+            WorkerExecutorClient::new(channel)
+                .max_decoding_message_size(max_message_size)
+                .max_encoding_message_size(max_message_size)
+        },
+        no_keepalive(connect_timeout),
+    );
+    let uri: Uri = BLACKHOLE.parse().unwrap();
+
+    let a_client = client.clone();
+    let a_uri = uri.clone();
+    let a = tokio::spawn(async move {
+        a_client
+            .call("assign_shards", a_uri, move |c| {
+                Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+            })
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    a.abort();
+
+    // Well past the abandoned attempt's deadline.
+    tokio::time::sleep(connect_timeout * 2).await;
+
+    let started = Instant::now();
+    let _ = client
+        .call("assign_shards", uri, move |c| {
+            Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+        })
+        .await;
+    let elapsed = started.elapsed();
+    eprintln!("[STALE] next caller settled after {elapsed:?}");
+
+    assert!(
+        elapsed >= connect_timeout / 2,
+        "next caller returned in {elapsed:?}, far under connect_timeout \
+         ({connect_timeout:?}) — it replayed the abandoned attempt's stale \
+         outcome instead of making its own"
+    );
+}
+
+/// Kills a peer and brings it back on the same address. The dead channel must be
+/// evicted, otherwise every later request is routed onto a connection that can
+/// never work again — the first of the two defects this PR claims to fix.
+#[test]
+async fn dead_channel_is_evicted_when_the_peer_returns_on_the_same_address() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+
+    fn start(
+        addr: std::net::SocketAddr,
+    ) -> (
+        tokio::sync::oneshot::Sender<()>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+                let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+                tokio::select! {
+                    _ = tonic::transport::Server::builder()
+                        .add_routes(tonic::service::Routes::default())
+                        .serve_with_incoming(incoming) => {}
+                    _ = rx => {}
+                }
+            });
+            // Drops the per-connection tasks tonic spawned, closing the sockets.
+            rt.shutdown_timeout(Duration::ZERO);
+        });
+        (tx, handle)
+    }
+
+    let client = MultiTargetGrpcClient::new(
+        "worker_executor",
+        |channel, max_message_size| {
+            WorkerExecutorClient::new(channel)
+                .max_decoding_message_size(max_message_size)
+                .max_encoding_message_size(max_message_size)
+        },
+        config(),
+    );
+    let uri: Uri = format!("http://{addr}").parse().unwrap();
+    let ping = |uri: Uri| {
+        let client = client.clone();
+        async move {
+            client
+                .call("assign_shards", uri, move |c| {
+                    Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+                })
+                .await
+        }
+    };
+
+    // A live peer answers. The empty router replies Unimplemented, which proves
+    // the transport works and is deliberately not Unavailable, so the channel is
+    // cached exactly as it is in production.
+    let (kill, joined) = start(addr);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let first = ping(uri.clone()).await;
+    eprintln!(
+        "[EVICT] live peer: {:?}",
+        first.as_ref().err().map(|e| e.code())
+    );
+    assert_eq!(
+        first.err().map(|e| e.code()),
+        Some(tonic::Code::Unimplemented),
+        "peer should be reachable before the kill"
+    );
+
+    // Kill it. The cached channel is now dead.
+    let _ = kill.send(());
+    joined.join().unwrap();
+    let during = ping(uri.clone()).await;
+    let code = during.as_ref().err().map(|e| e.code());
+    eprintln!(
+        "[EVICT] dead peer: {code:?} msg={:?}",
+        during.as_ref().err().map(|e| e.message().to_string())
+    );
+
+    // Same address, fresh peer. Only an evicted channel can reach it.
+    let (kill2, joined2) = start(addr);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let after = ping(uri.clone()).await;
+    let after_code = after.as_ref().err().map(|e| e.code());
+    eprintln!(
+        "[EVICT] restarted peer: {after_code:?} msg={:?}",
+        after.as_ref().err().map(|e| e.message().to_string())
+    );
+    let _ = kill2.send(());
+    joined2.join().unwrap();
+
+    assert_eq!(
+        after_code,
+        Some(tonic::Code::Unimplemented),
+        "client did not recover after the peer returned on the same address — \
+         the dead channel was never evicted"
+    );
+}
+
+/// The blackhole path, which is what production actually hit: a cached channel
+/// whose peer stops answering without sending RST. If the resulting error is not
+/// recognised as needing a reconnect, the channel stays cached forever and every
+/// later request queues onto a connection that can never work again.
+#[test]
+async fn blackholed_channel_is_evicted_and_recovers_when_the_peer_answers_again() {
+    if !can_drop_packets() {
+        eprintln!("[EVICT2] skipped: needs CAP_NET_ADMIN. Run under `unshare -rn`.");
+        return;
+    }
+
+    let (addr, _server) = serve_grpc().await;
+    let port = addr.port().to_string();
+    let uri: Uri = format!("http://{addr}").parse().unwrap();
+    let connect_timeout = Duration::from_secs(2);
+    let client = MultiTargetGrpcClient::new(
+        "worker_executor",
+        |channel, max_message_size| {
+            WorkerExecutorClient::new(channel)
+                .max_decoding_message_size(max_message_size)
+                .max_encoding_message_size(max_message_size)
+        },
+        no_keepalive(connect_timeout),
+    );
+    let ping = |uri: Uri| {
+        let client = client.clone();
+        async move {
+            client
+                .call("assign_shards", uri, move |c| {
+                    Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+                })
+                .await
+        }
+    };
+
+    let first = ping(uri.clone()).await;
+    assert_eq!(
+        first.err().map(|e| e.code()),
+        Some(tonic::Code::Unimplemented)
+    );
+
+    let blackhole = Blackhole::new(&port);
+
+    let dead = ping(uri.clone()).await;
+    let dead_err = dead.expect_err("blackholed peer must fail");
+    let has_transport_source = std::error::Error::source(&dead_err)
+        .map(|s| s.is::<tonic::transport::Error>())
+        .unwrap_or(false);
+    eprintln!(
+        "[EVICT2] blackholed: code={:?} msg={:?} transport_source={has_transport_source}",
+        dead_err.code(),
+        dead_err.message()
+    );
+
+    drop(blackhole);
+
+    let recovered = ping(uri).await;
+    let code = recovered.as_ref().err().map(|e| e.code());
+    eprintln!("[EVICT2] after un-blackholing: code={code:?}");
+    assert_eq!(
+        code,
+        Some(tonic::Code::Unimplemented),
+        "channel was not evicted: the client never recovered even though the peer answers again"
+    );
+}
+
+/// Counts how many TCP connections a cohort of callers actually opens.
+///
+/// Latency alone cannot see the difference: duplicate attempts run concurrently,
+/// so the wall clock stays flat while the connect count multiplies. Only a count
+/// distinguishes "one attempt shared by everyone" from "one attempt each".
+#[test]
+async fn a_cohort_that_retries_opens_one_connection_per_round() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = accepted.clone();
+    let _accepter = tokio::spawn(async move {
+        let mut held = Vec::new();
+        // Accept, count, and then stay silent, so every attempt has to be given
+        // up on rather than completing.
+        while let Ok((sock, _)) = listener.accept().await {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            held.push(sock);
+        }
+    });
+
+    // shard-manager's executor client really does run with retries enabled
+    // (max_attempts = 5 in shard-manager.toml), so the retry path is not
+    // hypothetical. Two retries keep the test short.
+    const CALLERS: usize = 6;
+    const MAX_ATTEMPTS: u64 = 2;
+    let mut cfg = config();
+    cfg.connect_timeout = Duration::from_secs(1);
+    cfg.http2_keep_alive_interval = Some(Duration::from_millis(300));
+    cfg.http2_keep_alive_timeout = Some(Duration::from_millis(300));
+    cfg.retries_on_unavailable = RetryConfig {
+        max_attempts: MAX_ATTEMPTS as u32,
+        min_delay: Duration::from_millis(10),
+        max_delay: Duration::from_millis(50),
+        multiplier: 1.0,
+        max_jitter_factor: None,
+    };
+
+    let client = MultiTargetGrpcClient::new(
+        "worker_executor",
+        |channel, max_message_size| {
+            WorkerExecutorClient::new(channel)
+                .max_decoding_message_size(max_message_size)
+                .max_encoding_message_size(max_message_size)
+        },
+        cfg,
+    );
+    let uri: Uri = format!("http://{addr}").parse().unwrap();
+
+    let started = Instant::now();
+    let calls = (0..CALLERS).map(|_| {
+        let client = client.clone();
+        let uri = uri.clone();
+        tokio::spawn(async move {
+            client
+                .call("assign_shards", uri, move |c| {
+                    Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+                })
+                .await
+        })
+    });
+    for call in calls.collect::<Vec<_>>() {
+        let _ = call.await;
+    }
+
+    let connects = accepted.load(std::sync::atomic::Ordering::SeqCst);
+    let rounds = MAX_ATTEMPTS as usize + 1;
+    eprintln!(
+        "[COHORT] {CALLERS} callers, {rounds} rounds: {connects} TCP connects in {:?}",
+        started.elapsed()
+    );
+    assert!(
+        connects <= rounds,
+        "{CALLERS} callers opened {connects} connections across {rounds} retry rounds; \
+         single-flight should have opened at most one per round"
+    );
+}
+
+/// The same cohort question, but where the connects *fail*. The previous test
+/// cannot see this: there the TCP connect succeeds, so the channel is cached and
+/// later rounds open nothing at all. Here every attempt has to be given up on,
+/// which is the case the incident was about.
+///
+/// Counted by dropping outbound SYNs and reading the rule's packet counter,
+/// because a blackholed peer accepts nothing that could be counted at the far end.
+#[test]
+async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
+    if !can_drop_packets() {
+        eprintln!("[SYN] skipped: needs CAP_NET_ADMIN. Run under `unshare -rn`.");
+        return;
+    }
+    // One SYN per attempt, so the count is attempts rather than retransmits.
+    std::fs::write("/proc/sys/net/ipv4/tcp_syn_retries", "1").unwrap();
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port().to_string();
+    drop(listener);
+
+    let drop_syns = [
+        "-p",
+        "tcp",
+        "-d",
+        "127.0.0.1",
+        "--dport",
+        &port,
+        "--syn",
+        "-j",
+        "DROP",
+    ];
+    let mut rule = vec!["-A", "OUTPUT"];
+    rule.extend_from_slice(&drop_syns);
+    iptables(&rule);
+
+    const CALLERS: usize = 6;
+    const MAX_ATTEMPTS: u32 = 2;
+    let mut cfg = no_keepalive(Duration::from_millis(800));
+    cfg.retries_on_unavailable = RetryConfig {
+        max_attempts: MAX_ATTEMPTS,
+        min_delay: Duration::from_millis(10),
+        max_delay: Duration::from_millis(50),
+        multiplier: 1.0,
+        max_jitter_factor: None,
+    };
+
+    let client = MultiTargetGrpcClient::new(
+        "worker_executor",
+        |channel, max_message_size| {
+            WorkerExecutorClient::new(channel)
+                .max_decoding_message_size(max_message_size)
+                .max_encoding_message_size(max_message_size)
+        },
+        cfg,
+    );
+    let uri: Uri = format!("http://127.0.0.1:{port}").parse().unwrap();
+
+    let started = Instant::now();
+    let calls: Vec<_> = (0..CALLERS)
+        .map(|_| {
+            let client = client.clone();
+            let uri = uri.clone();
+            tokio::spawn(async move {
+                client
+                    .call("assign_shards", uri, move |c| {
+                        Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+                    })
+                    .await
+            })
+        })
+        .collect();
+    for call in calls {
+        let _ = call.await;
+    }
+    let elapsed = started.elapsed();
+
+    let counters = std::process::Command::new("iptables")
+        .args(["-L", "OUTPUT", "-v", "-x", "-n"])
+        .output()
+        .unwrap();
+    let counters = String::from_utf8_lossy(&counters.stdout);
+    let syns: usize = counters
+        .lines()
+        .find(|line| line.contains(&format!("dpt:{port}")))
+        .and_then(|line| line.split_whitespace().next())
+        .and_then(|pkts| pkts.parse().ok())
+        .expect("the DROP rule must be present with a packet counter");
+
+    let mut remove = vec!["-D", "OUTPUT"];
+    remove.extend_from_slice(&drop_syns);
+    iptables(&remove);
+
+    let rounds = MAX_ATTEMPTS as usize + 1;
+    eprintln!(
+        "[SYN] {CALLERS} callers, {rounds} rounds: {syns} SYNs sent in {elapsed:?} \
+         (single-flight expects ~{rounds}, one attempt each expects ~{})",
+        CALLERS * rounds
+    );
+    assert!(
+        syns <= rounds * 2,
+        "{CALLERS} callers sent {syns} SYNs across {rounds} retry rounds; single-flight \
+         should have opened about one connection per round, not one per caller per round"
     );
 }
