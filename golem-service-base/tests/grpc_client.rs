@@ -75,6 +75,13 @@ fn config() -> GrpcClientConfig {
 /// operations for two minutes each.
 #[test]
 async fn multi_target_call_to_blackholed_pod_gives_up_within_connect_timeout() {
+    if !blackhole_hangs() {
+        eprintln!(
+            "[BLACKHOLE] skipped: connects to TEST-NET-1 fail instantly here rather than \
+             hanging, so this would pass without reproducing anything."
+        );
+        return;
+    }
     let client = MultiTargetGrpcClient::new(
         "worker_executor",
         |channel, max_message_size| {
@@ -110,6 +117,13 @@ async fn multi_target_call_to_blackholed_pod_gives_up_within_connect_timeout() {
 /// registry clients use.
 #[test]
 async fn single_target_call_to_blackholed_pod_gives_up_within_connect_timeout() {
+    if !blackhole_hangs() {
+        eprintln!(
+            "[BLACKHOLE] skipped: connects to TEST-NET-1 fail instantly here rather than \
+             hanging, so this would pass without reproducing anything."
+        );
+        return;
+    }
     let client = GrpcClient::new(
         "worker_executor",
         |channel, max_message_size| {
@@ -206,14 +220,25 @@ async fn call_to_peer_that_accepts_but_never_speaks_http2_gives_up() {
 }
 
 // ---------------------------------------------------------------------------
-// Reproduction harness for the S5 stall (chaos run 32272077341, 2026-08-19).
+// Reproduction harness for the executor stall.
 //
-// Requires a network namespace with CAP_NET_ADMIN so packets can be dropped
-// rather than refused — a deleted pod IP blackholes, it does not send RST.
-// Ignored by default; run with:
+// Needs a network namespace with CAP_NET_ADMIN so packets can be dropped rather
+// than refused: a deleted pod IP blackholes, it does not send RST. Everything
+// here self-skips anywhere else, so an ordinary `cargo test` never goes near a
+// firewall.
 //
-//   unshare -rn bash -c 'ip link set lo up; echo 4 > /proc/sys/net/ipv4/tcp_retries2;
-//     exec target/debug/deps/integration-<hash> established_connection'
+// The namespace also needs somewhere to send TEST-NET-1 traffic. Without a route
+// those connects fail instantly with "network unreachable" instead of hanging,
+// and the tests that measure how long a hang lasts would pass without
+// reproducing anything:
+//
+//   unshare -rn bash -c '
+//     ip link set lo up
+//     ip link add dummy0 type dummy && ip link set dummy0 up
+//     ip route add 192.0.2.0/24 dev dummy0
+//     iptables -A OUTPUT -o dummy0 -j DROP
+//     echo 4 > /proc/sys/net/ipv4/tcp_retries2
+//     exec target/debug/deps/integration-<hash> grpc_client --nocapture'
 // ---------------------------------------------------------------------------
 
 fn iptables(args: &[&str]) {
@@ -259,75 +284,108 @@ async fn serve_grpc() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
 /// throwaway network namespace. Two things would otherwise go wrong: on macOS
 /// there is no iptables at all, and running the suite as root on a Linux host
 /// would install DROP rules in that host's real firewall.
-///
-/// "Throwaway" is taken to mean loopback is the only interface, which is what
-/// `unshare -rn` gives you and what a developer machine or CI runner is not.
 fn can_drop_packets() -> bool {
-    if !cfg!(target_os = "linux") || !loopback_is_the_only_interface() {
+    if !cfg!(target_os = "linux") || !is_throwaway_namespace() {
         return false;
     }
     std::process::Command::new("iptables")
         .arg("-S")
         .output()
-        .map(|o| o.status.success())
+        .map(|out| out.status.success())
         .unwrap_or(false)
 }
 
-/// Reads `/proc/net/dev` rather than `/sys/class/net`: sysfs is not remounted by
-/// `unshare -rn`, so it keeps reporting the host's interfaces, while `/proc/net`
-/// resolves per network namespace.
-fn loopback_is_the_only_interface() -> bool {
-    let Ok(devices) = std::fs::read_to_string("/proc/net/dev") else {
+/// A network namespace with no default route.
+///
+/// `unshare -rn` gives you one. A developer machine or CI runner always has a
+/// default route, so treating its absence as the signal keeps these tests away
+/// from any firewall that matters. Read from `/proc/net/route`, which resolves
+/// per namespace, unlike `/sys/class/net`, which `unshare -rn` leaves pointing
+/// at the host's interfaces.
+fn is_throwaway_namespace() -> bool {
+    let Ok(routes) = std::fs::read_to_string("/proc/net/route") else {
         return false;
     };
-    let mut names = devices
+    // Columns are Iface, Destination, Gateway, ...; destination 00000000 is the
+    // default route.
+    !routes
         .lines()
-        .skip(2)
-        .filter_map(|line| line.split(':').next())
-        .map(str::trim);
-    names.next() == Some("lo") && names.next().is_none()
+        .skip(1)
+        .any(|route| route.split_whitespace().nth(1) == Some("00000000"))
 }
 
-/// Whether a connect to [`BLACKHOLE`] actually hangs here.
+/// Whether a connect to [`BLACKHOLE`] really hangs here, measured rather than
+/// assumed.
 ///
-/// TEST-NET-1 behaves like a deleted pod only where a default route exists to
-/// swallow the packets. Inside `unshare -rn` there is no route to it at all, so
-/// the connect fails instantly with "network unreachable" rather than hanging,
-/// and a test that measures how long a hang lasts would pass without ever
-/// reproducing what it claims to.
+/// TEST-NET-1 imitates a deleted pod only where its packets go somewhere that
+/// swallows them. A normal machine's default route does that. A bare namespace
+/// has no route to it at all and fails the connect instantly, so any test that
+/// measures the length of a hang would pass there without reproducing anything.
 fn blackhole_hangs() -> bool {
-    !loopback_is_the_only_interface()
+    static HANGS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HANGS.get_or_init(|| {
+        let addr: std::net::SocketAddr = "192.0.2.1:9093".parse().unwrap();
+        matches!(
+            std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)),
+            Err(err) if err.kind() == std::io::ErrorKind::TimedOut
+        )
+    })
 }
 
-/// Silently drops every packet to and from `port` for as long as it is held, so
-/// the peer behaves like a deleted pod: no RST, no ICMP, just silence. Removing
-/// the rules on drop keeps a panicking test from leaving the namespace's
-/// firewall in a state that fails every test after it.
-#[must_use = "the rules are removed as soon as this is dropped"]
-struct Blackhole {
-    port: String,
+/// An iptables rule that lasts only as long as it is held. Removing it on drop
+/// keeps a panicking test from leaving the namespace's firewall in a state that
+/// misleads every test after it.
+#[must_use = "the rule is removed as soon as this is dropped"]
+struct FirewallRule {
+    rule: Vec<String>,
 }
 
-impl Blackhole {
-    fn new(port: &str) -> Self {
-        for direction in ["--dport", "--sport"] {
-            iptables(&["-A", "INPUT", "-p", "tcp", direction, port, "-j", "DROP"]);
-        }
+impl FirewallRule {
+    fn add(rule: &[&str]) -> Self {
+        let mut args = vec!["-A"];
+        args.extend_from_slice(rule);
+        iptables(&args);
         Self {
-            port: port.to_string(),
+            rule: rule.iter().map(|part| part.to_string()).collect(),
         }
     }
 }
 
-impl Drop for Blackhole {
+impl Drop for FirewallRule {
     fn drop(&mut self) {
-        for direction in ["--dport", "--sport"] {
-            let _ = std::process::Command::new("iptables")
-                .args([
-                    "-D", "INPUT", "-p", "tcp", direction, &self.port, "-j", "DROP",
-                ])
-                .output();
-        }
+        let mut args = vec!["-D".to_string()];
+        args.extend(self.rule.iter().cloned());
+        let _ = std::process::Command::new("iptables").args(&args).output();
+    }
+}
+
+/// Silences a port in both directions, so the peer behaves like a deleted pod:
+/// no RST, no ICMP, just silence.
+fn blackhole_port(port: &str) -> Vec<FirewallRule> {
+    ["--dport", "--sport"]
+        .into_iter()
+        .map(|direction| FirewallRule::add(&["INPUT", "-p", "tcp", direction, port, "-j", "DROP"]))
+        .collect()
+}
+
+/// A sysctl restored to its previous value on drop.
+#[must_use = "the previous value is restored as soon as this is dropped"]
+struct Sysctl {
+    path: &'static str,
+    previous: String,
+}
+
+impl Sysctl {
+    fn set(path: &'static str, value: &str) -> Self {
+        let previous = std::fs::read_to_string(path).unwrap_or_default();
+        std::fs::write(path, value).expect("sysctl must be writable in the namespace");
+        Self { path, previous }
+    }
+}
+
+impl Drop for Sysctl {
+    fn drop(&mut self) {
+        let _ = std::fs::write(self.path, self.previous.trim());
     }
 }
 
@@ -372,7 +430,7 @@ async fn established_connection_to_blackholed_peer() {
     );
 
     // 2. The pod vanishes: its packets are silently dropped in both directions.
-    let _blackhole = Blackhole::new(&port);
+    let _blackhole = blackhole_port(&port);
     eprintln!("[REPRO] peer blackholed on port {port}");
 
     // 3. Next request on the cached, now-dead connection.
@@ -440,7 +498,7 @@ async fn peer_dies_then_blackholes_fresh_connect_is_bounded() {
     );
 
     // Pod IP stops routing.
-    let _blackhole = Blackhole::new(&port);
+    let _blackhole = blackhole_port(&port);
     eprintln!("[REPRO2] peer blackholed on port {port}");
 
     // Second call dies on the stale socket once the kernel gives up.
@@ -529,7 +587,7 @@ async fn concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout() 
         })
         .await;
 
-    let _blackhole = Blackhole::new(&port);
+    let _blackhole = blackhole_port(&port);
 
     // Retire the stale socket so every request below takes the connect path.
     let _ = client
@@ -750,11 +808,18 @@ async fn abandoned_connect_attempt_is_not_replayed_to_the_next_caller() {
     );
 }
 
-/// Kills a peer and brings it back on the same address. The dead channel must be
-/// evicted, otherwise every later request is routed onto a connection that can
-/// never work again — the first of the two defects this PR claims to fix.
+/// Kills a peer cleanly and brings it back on the same address.
+///
+/// Note what this does and does not cover. A killed process closes its sockets,
+/// so the client gets an RST and tonic's own `Reconnect` layer recovers without
+/// help: this test passes with our channel eviction disabled entirely, which was
+/// verified by removing it. It is here because that recovery is worth holding
+/// onto, not as evidence for eviction. Eviction proper needs a peer that goes
+/// silent instead of refusing, which is
+/// `blackholed_channel_is_evicted_and_recovers_when_the_peer_answers_again`, and
+/// that one cannot run without CAP_NET_ADMIN.
 #[test]
-async fn dead_channel_is_evicted_when_the_peer_returns_on_the_same_address() {
+async fn client_recovers_when_a_cleanly_killed_peer_returns() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener);
@@ -895,7 +960,7 @@ async fn blackholed_channel_is_evicted_and_recovers_when_the_peer_answers_again(
         Some(tonic::Code::Unimplemented)
     );
 
-    let blackhole = Blackhole::new(&port);
+    let blackhole = blackhole_port(&port);
 
     let dead = ping(uri.clone()).await;
     let dead_err = dead.expect_err("blackholed peer must fail");
@@ -906,6 +971,14 @@ async fn blackholed_channel_is_evicted_and_recovers_when_the_peer_answers_again(
         "[EVICT2] blackholed: code={:?} msg={:?} transport_source={has_transport_source}",
         dead_err.code(),
         dead_err.message()
+    );
+    // The predicate that decides eviction keys off exactly this, so pin it: a
+    // dead transport must stay recognisable even though its code is not
+    // Unavailable.
+    assert!(
+        has_transport_source,
+        "a dead transport no longer carries a tonic::transport::Error source, so \
+         requires_reconnect cannot recognise it and the channel would stay cached"
     );
 
     drop(blackhole);
@@ -1012,13 +1085,14 @@ async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
         return;
     }
     // One SYN per attempt, so the count is attempts rather than retransmits.
-    std::fs::write("/proc/sys/net/ipv4/tcp_syn_retries", "1").unwrap();
+    let _syn_retries = Sysctl::set("/proc/sys/net/ipv4/tcp_syn_retries", "1");
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port().to_string();
     drop(listener);
 
-    let drop_syns = [
+    let _drop_syns = FirewallRule::add(&[
+        "OUTPUT",
         "-p",
         "tcp",
         "-d",
@@ -1028,10 +1102,7 @@ async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
         "--syn",
         "-j",
         "DROP",
-    ];
-    let mut rule = vec!["-A", "OUTPUT"];
-    rule.extend_from_slice(&drop_syns);
-    iptables(&rule);
+    ]);
 
     const CALLERS: usize = 6;
     const MAX_ATTEMPTS: u32 = 2;
@@ -1086,10 +1157,6 @@ async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
         .and_then(|pkts| pkts.parse().ok())
         .expect("the DROP rule must be present with a packet counter");
 
-    let mut remove = vec!["-D", "OUTPUT"];
-    remove.extend_from_slice(&drop_syns);
-    iptables(&remove);
-
     let rounds = MAX_ATTEMPTS as usize + 1;
     eprintln!(
         "[SYN] {CALLERS} callers, {rounds} rounds: {syns} SYNs sent in {elapsed:?} \
@@ -1100,5 +1167,98 @@ async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
         syns <= rounds * 2,
         "{CALLERS} callers sent {syns} SYNs across {rounds} retry rounds; single-flight \
          should have opened about one connection per round, not one per caller per round"
+    );
+}
+
+/// A connection attempt outlives its callers by design, so that losing them does
+/// not strand it mid-connect. The cost of that is this: if the attempt succeeds
+/// after everyone has gone, nobody is left to clear it, and an established
+/// connection nobody asked for stays parked in the map. With keep-alive on by
+/// default it is not even idle; it pings.
+#[test]
+async fn a_connection_nobody_waits_for_is_not_left_open() {
+    if !can_drop_packets() {
+        eprintln!("[ORPHAN] skipped: needs a throwaway namespace to add latency.");
+        return;
+    }
+    // Slow the loopback so a connect can be cancelled while it is still in flight.
+    // Without this the handshake completes far too fast to interleave with.
+    let tc = std::process::Command::new("tc")
+        .args([
+            "qdisc", "add", "dev", "lo", "root", "netem", "delay", "300ms",
+        ])
+        .output()
+        .expect("tc must be available");
+    assert!(
+        tc.status.success(),
+        "tc: {}",
+        String::from_utf8_lossy(&tc.stderr)
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let open = std::sync::Arc::new(std::sync::atomic::AtomicIsize::new(0));
+    let tracker = open.clone();
+    let _accepter = tokio::spawn(async move {
+        while let Ok((sock, _)) = listener.accept().await {
+            tracker.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let tracker = tracker.clone();
+            tokio::spawn(async move {
+                // Stay silent; count the socket out again when the peer hangs up.
+                let mut sock = sock;
+                let mut buf = [0u8; 1024];
+                loop {
+                    match tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+                tracker.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+    });
+
+    let mut cfg = config();
+    cfg.connect_timeout = Duration::from_secs(5);
+    let client = MultiTargetGrpcClient::new(
+        "worker_executor",
+        |channel, max_message_size| {
+            WorkerExecutorClient::new(channel)
+                .max_decoding_message_size(max_message_size)
+                .max_encoding_message_size(max_message_size)
+        },
+        cfg,
+    );
+    let uri: Uri = format!("http://{addr}").parse().unwrap();
+
+    let caller = tokio::spawn({
+        let client = client.clone();
+        async move {
+            client
+                .call("assign_shards", uri, move |c| {
+                    Box::pin(c.assign_shards(AssignShardsRequest { shard_ids: vec![] }))
+                })
+                .await
+        }
+    });
+    // Cancel while the handshake is still crossing the delayed loopback.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    caller.abort();
+
+    // Long enough for the attempt to finish on its own and for anything holding
+    // the result to have let go of it.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let still_open = open.load(std::sync::atomic::Ordering::SeqCst);
+    eprintln!("[ORPHAN] connections still open after the only caller went away: {still_open}");
+
+    let _ = std::process::Command::new("tc")
+        .args(["qdisc", "del", "dev", "lo", "root"])
+        .output();
+
+    assert_eq!(
+        still_open, 0,
+        "an established connection was left open with no caller and no cache entry \
+         to reuse it; keep-alive keeps pinging it until some later call for the \
+         same target happens to replace it"
     );
 }
