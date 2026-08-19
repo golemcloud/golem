@@ -35,6 +35,36 @@ use crate::metrics::grpc::{
     record_internal_grpc_failure, record_internal_grpc_retry, record_internal_grpc_success,
 };
 
+fn build_endpoint(uri: Uri, config: &GrpcClientConfig) -> Result<Endpoint, tonic::transport::Error> {
+    let mut endpoint = Endpoint::new(uri)?.connect_timeout(config.connect_timeout);
+
+    if let Some(request_timeout) = config.request_timeout {
+        endpoint = endpoint.timeout(request_timeout);
+    }
+
+    if let Some(interval) = config.http2_keep_alive_interval {
+        endpoint = endpoint.http2_keep_alive_interval(interval);
+    }
+
+    if let Some(timeout) = config.http2_keep_alive_timeout {
+        endpoint = endpoint.keep_alive_timeout(timeout);
+    }
+
+    if let Some(while_idle) = config.http2_keep_alive_while_idle {
+        endpoint = endpoint.keep_alive_while_idle(while_idle);
+    }
+
+    if config.tcp_keepalive.is_some() {
+        endpoint = endpoint.tcp_keepalive(config.tcp_keepalive);
+    }
+
+    if let GrpcClientTlsConfig::Enabled(tls) = &config.tls {
+        endpoint = endpoint.tls_config(tls.to_tonic())?;
+    }
+
+    Ok(endpoint)
+}
+
 #[derive(Clone)]
 pub struct GrpcClient<T: Clone> {
     endpoint: Uri,
@@ -125,17 +155,7 @@ impl<T: Clone> GrpcClient<T> {
         match &*entry {
             Some(client) => Ok(client.clone()),
             None => {
-                let mut endpoint = Endpoint::new(self.endpoint.clone())?
-                    .connect_timeout(self.config.connect_timeout);
-
-                if let Some(request_timeout) = self.config.request_timeout {
-                    endpoint = endpoint.timeout(request_timeout);
-                }
-
-                if let GrpcClientTlsConfig::Enabled(tls) = &self.config.tls {
-                    endpoint = endpoint.tls_config(tls.to_tonic())?;
-                }
-
+                let endpoint = build_endpoint(self.endpoint.clone(), &self.config)?;
                 let channel = endpoint.connect_lazy();
                 let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
                 let client = (self.client_factory)(channel, self.config.max_message_size);
@@ -239,21 +259,11 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
     }
 
     async fn get(&self, endpoint: Uri) -> Result<GrpcClientConnection<T>, tonic::transport::Error> {
-        let connect_timeout = self.config.connect_timeout;
         let entry = self.clients.entry_async(endpoint.clone()).await;
         match entry {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
-                let mut endpoint = Endpoint::new(endpoint)?.connect_timeout(connect_timeout);
-
-                if let Some(request_timeout) = self.config.request_timeout {
-                    endpoint = endpoint.timeout(request_timeout);
-                }
-
-                if let GrpcClientTlsConfig::Enabled(tls) = &self.config.tls {
-                    endpoint = endpoint.tls_config(tls.to_tonic())?;
-                }
-
+                let endpoint = build_endpoint(endpoint, &self.config)?;
                 let channel = endpoint.connect_lazy();
                 let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
                 let client = (self.client_factory)(channel, self.config.max_message_size);
@@ -276,6 +286,19 @@ pub struct GrpcClientConfig {
     pub connect_timeout: Duration,
     #[serde(default, with = "humantime_serde::option")]
     pub request_timeout: Option<Duration>,
+    /// How often to send an HTTP/2 PING on an established connection. Without
+    /// this, a peer that disappears while a connection is open is only noticed
+    /// when the kernel gives up retransmitting, which takes minutes.
+    #[serde(default, with = "humantime_serde::option")]
+    pub http2_keep_alive_interval: Option<Duration>,
+    /// How long to wait for the PING ack before considering the connection dead.
+    #[serde(default, with = "humantime_serde::option")]
+    pub http2_keep_alive_timeout: Option<Duration>,
+    /// Whether to keep pinging when no requests are in flight.
+    #[serde(default)]
+    pub http2_keep_alive_while_idle: Option<bool>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub tcp_keepalive: Option<Duration>,
     pub retries_on_unavailable: RetryConfig,
     pub tls: GrpcClientTlsConfig,
     #[serde(default = "default_max_message_size")]
@@ -297,6 +320,18 @@ impl Default for GrpcClientConfig {
         Self {
             connect_timeout: Duration::from_secs(10),
             request_timeout: None,
+            // `connect_timeout` only bounds the TCP connect, and `request_timeout`
+            // is deliberately unset because agent invocations run arbitrarily
+            // long. Without keep-alive, a peer that disappears while a connection
+            // is open is therefore unbounded: the call waits until the kernel
+            // gives up retransmitting. Pinging bounds detection at roughly
+            // interval + timeout without capping legitimate request duration.
+            http2_keep_alive_interval: Some(Duration::from_secs(10)),
+            http2_keep_alive_timeout: Some(Duration::from_secs(10)),
+            // Cached channels sit idle between requests; ping then too, so a dead
+            // peer is discovered before the next request rather than during it.
+            http2_keep_alive_while_idle: Some(true),
+            tcp_keepalive: None,
             retries_on_unavailable: RetryConfig::default(),
             tls: GrpcClientTlsConfig::Disabled(Empty {}),
             max_message_size: default_max_message_size(),
@@ -309,6 +344,22 @@ impl SafeDisplay for GrpcClientConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "connect_timeout: {:?}", self.connect_timeout);
         let _ = writeln!(&mut result, "request_timeout: {:?}", self.request_timeout);
+        let _ = writeln!(
+            &mut result,
+            "http2_keep_alive_interval: {:?}",
+            self.http2_keep_alive_interval
+        );
+        let _ = writeln!(
+            &mut result,
+            "http2_keep_alive_timeout: {:?}",
+            self.http2_keep_alive_timeout
+        );
+        let _ = writeln!(
+            &mut result,
+            "http2_keep_alive_while_idle: {:?}",
+            self.http2_keep_alive_while_idle
+        );
+        let _ = writeln!(&mut result, "tcp_keepalive: {:?}", self.tcp_keepalive);
         let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
         let _ = writeln!(&mut result, "retries_on_unavailable:");
         let _ = writeln!(
