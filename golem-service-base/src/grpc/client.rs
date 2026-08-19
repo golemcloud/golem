@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use golem_common::SafeDisplay;
 use golem_common::model::base64::Base64;
 use golem_common::model::{Empty, RetryConfig};
-use futures::FutureExt;
-use futures::future::{BoxFuture, Shared};
 use golem_common::retries::RetryState;
 use http::Uri;
 use scc::hash_map::Entry;
@@ -37,7 +37,10 @@ use crate::metrics::grpc::{
     record_internal_grpc_failure, record_internal_grpc_retry, record_internal_grpc_success,
 };
 
-fn build_endpoint(uri: Uri, config: &GrpcClientConfig) -> Result<Endpoint, tonic::transport::Error> {
+fn build_endpoint(
+    uri: Uri,
+    config: &GrpcClientConfig,
+) -> Result<Endpoint, tonic::transport::Error> {
     let mut endpoint = Endpoint::new(uri)?.connect_timeout(config.connect_timeout);
 
     if let Some(request_timeout) = config.request_timeout {
@@ -81,7 +84,7 @@ fn build_endpoint(uri: Uri, config: &GrpcClientConfig) -> Result<Endpoint, tonic
 type SharedConnect = Shared<BoxFuture<'static, Result<Channel, Status>>>;
 
 fn connect_shared(endpoint: Endpoint, connect_timeout: Duration) -> SharedConnect {
-    async move {
+    let shared = async move {
         match tokio::time::timeout(connect_timeout, endpoint.connect()).await {
             Ok(Ok(channel)) => Ok(channel),
             Ok(Err(err)) => Err(Status::unavailable(format!("tcp connect error: {err}"))),
@@ -91,7 +94,22 @@ fn connect_shared(endpoint: Endpoint, connect_timeout: Duration) -> SharedConnec
         }
     }
     .boxed()
-    .shared()
+    .shared();
+
+    // The attempt gets its own driver rather than relying on whichever caller
+    // happens to poll it. Callers go away all the time — an upstream timeout, a
+    // dropped client — and an attempt driven only by its waiters would, on losing
+    // the last of them, sit parked mid-connect while its deadline quietly expired.
+    // The next caller would then adopt it and be handed an instant verdict about a
+    // connection nobody ever made.
+    tokio::spawn({
+        let attempt = shared.clone();
+        async move {
+            let _ = attempt.await;
+        }
+    });
+
+    shared
 }
 
 #[derive(Clone)]
@@ -200,25 +218,43 @@ impl<T: Clone> GrpcClient<T> {
             return Ok(connection);
         }
 
-        // One connection attempt is shared by everyone waiting for it.
+        // One connection attempt is shared by everyone waiting for it. An attempt
+        // that has already settled is never handed out: if every waiter was
+        // cancelled before clearing it, its verdict describes a connection nobody
+        // is still making, and the next caller would inherit that stale answer
+        // instead of trying for itself.
         let shared = {
             let mut connecting = self.connecting.lock().await;
-            match &*connecting {
-                Some(shared) => shared.clone(),
+            let in_flight = connecting
+                .as_ref()
+                .filter(|attempt| attempt.peek().is_none())
+                .cloned();
+            match in_flight {
+                Some(attempt) => attempt,
                 None => {
                     let endpoint = build_endpoint(self.endpoint.clone(), &self.config)
                         .map_err(|err| Status::from_error(Box::new(err)))?;
-                    let shared = connect_shared(endpoint, self.config.connect_timeout);
-                    *connecting = Some(shared.clone());
-                    shared
+                    let attempt = connect_shared(endpoint, self.config.connect_timeout);
+                    *connecting = Some(attempt.clone());
+                    attempt
                 }
             }
         };
 
-        let result = shared.await;
+        // Cloned so the attempt itself is still identifiable afterwards.
+        let result = shared.clone().await;
         // Clear it so a later call starts a fresh attempt rather than replaying
-        // this one's outcome.
-        let _ = self.connecting.lock().await.take();
+        // this one's outcome — but only if it is still the attempt we waited on,
+        // so a slow waiter cannot evict a newer one and split the next cohort.
+        {
+            let mut connecting = self.connecting.lock().await;
+            if connecting
+                .as_ref()
+                .is_some_and(|current| current.ptr_eq(&shared))
+            {
+                *connecting = None;
+            }
+        }
         let channel = result?;
 
         let mut entry = self.client.lock().await;
@@ -350,6 +386,15 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         // Connecting outside the map's entry lock also keeps unrelated targets
         // that hash to the same bucket from serialising behind it.
         let shared = match self.connecting.entry_async(endpoint.clone()).await {
+            // An attempt that has already settled is never handed out; see
+            // `GrpcClient::connected_client`.
+            Entry::Occupied(mut entry) if entry.get().peek().is_some() => {
+                let built = build_endpoint(endpoint.clone(), &self.config)
+                    .map_err(|err| Status::from_error(Box::new(err)))?;
+                let attempt = connect_shared(built, self.config.connect_timeout);
+                *entry.get_mut() = attempt.clone();
+                attempt
+            }
             Entry::Occupied(entry) => entry.get().clone(),
             Entry::Vacant(entry) => {
                 let built = build_endpoint(endpoint.clone(), &self.config)
@@ -360,10 +405,14 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             }
         };
 
-        let result = shared.await;
+        // Cloned so the attempt itself is still identifiable afterwards.
+        let result = shared.clone().await;
         // Clear it so a later call starts a fresh attempt rather than replaying
-        // this one's outcome.
-        let _ = self.connecting.remove_async(&endpoint).await;
+        // this one's outcome — but only if it is still the attempt we waited on.
+        let _ = self
+            .connecting
+            .remove_if_async(&endpoint, |current| current.ptr_eq(&shared))
+            .await;
         let channel = result?;
 
         match self.clients.entry_async(endpoint).await {
