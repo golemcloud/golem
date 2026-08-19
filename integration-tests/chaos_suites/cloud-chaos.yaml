@@ -188,22 +188,41 @@ scenarios:
       # scheduled work to drain before read-back.
       recoverySecs: 420
 
-    # No `scaleDuringFault`. It was here as a second traffic generator — scaling
-    # an executor down and back up forces revoke/reassign/register, which are
+    # Second traffic generator: the executor scale schedule.
+    #
+    # The quota stream above covers executor → shard-manager. This covers the
+    # other direction — removing an executor forces a revoke and reassign,
+    # adding one back forces a register and rebalance, and all of those are
     # shard-manager → executor calls the partition can block.
     #
-    # It was removed because it does not test the partition. A scale-up under
-    # load strands shards on its own: the executor commits a revoke and then
-    # drains its workers before answering, the shard-manager times out after 5s
-    # and puts the shards back in its routing table, and the two sides never
-    # reconcile. One run left 460 of 1024 shards with no serving owner for 43
-    # minutes on a freshly wiped cluster, with the partition long healed and
-    # nothing on the failing path touching it.
+    # Down and back up, not up and down. An executor requests 13Gi against
+    # 16 GiB nodes, so exactly one fits per node, and the worker-exec nodegroup
+    # is pinned at two with no autoscaler: a third replica would sit Pending for
+    # the whole run and generate no traffic at all. Scaling down to one and back
+    # exercises the same code paths within the capacity that exists.
     #
-    # That is a shard-manager design problem, recorded on the "Replace Shard
-    # Manager" project, not something this suite can assert on. Keeping the
-    # schedule here would mean every S1 run fails for a reason S1 is not about,
-    # and the partition would go untested behind it.
+    # This schedule depends on an interim cluster setting. Until 2026-08-18 it
+    # could not pass: a scale-up under load strands shards, because the executor
+    # commits a revoke and only then drains its workers, the shard-manager times
+    # out and puts the shards back in its routing table, and nothing reconciles
+    # the two. One run left 460 of 1024 shards unserved for 43 minutes.
+    #
+    # golem-dev now runs GOLEM__WORKER_EXECUTORS__REVOKE_SHARDS_TIMEOUT=60s
+    # (was 5s), matching the assign leg. That is a mitigation, not a fix — the
+    # drain is unbounded, so a large enough working set still outruns any
+    # timeout. Keeping this schedule here is deliberate: it is what tells us
+    # whether the mitigation holds, and it is expected to fail again if the
+    # setting is reverted or the workload grows. The design fix is tracked on
+    # the "Replace Shard Manager" project.
+    scaleDuringFault:
+      steps:
+        # A quarter in, so the partition is established first.
+        - afterFraction: 0.25
+          toReplicas: 1
+        # Two thirds in, leaving the rest of the window plus the settle window
+        # for the restored executor to register and be rebalanced onto.
+        - afterFraction: 0.65
+          toReplicas: 2
 
     ownership:
       # The load-bearing number of this scenario. After the partition heals the
@@ -214,29 +233,22 @@ scenarios:
       settleSecs: 120
 
     workload:
-      # Quota only. Every other stream goes client → worker-service → executor
-      # and never touches the shard-manager, so a shard-manager partition is
-      # invisible to it — the first three S1 runs measured exactly zero
-      # degradation for that reason. Carrying those streams added hours of
-      # read-back and buried the one signal that matters.
+      # The mixed workload S12 runs, plus the stream that makes this scenario
+      # mean anything.
       #
-      # A quota agent holds a token for its whole lifetime, which keeps its
-      # executor renewing a lease against the shard-manager every 10s against a
-      # 60s expiry. That renewal is the only traffic on the link the partition
-      # cuts, so it is the only traffic that can show the partition's effect.
-      #
-      # Zero-agent streams are skipped rather than run empty, so the other four
-      # cost nothing here.
-      durableAgents: 0
-      ephemeralAgents: 0
-      scheduledAgents: 0
-      promiseAgents: 0
+      # `quotaAgents` is the load-bearing one. Every other stream goes client →
+      # worker-service → executor and never touches the shard-manager, so a
+      # shard-manager partition is invisible to it — the first three S1 runs
+      # measured exactly zero degradation for that reason. A quota agent holds a
+      # token for its lifetime, which keeps the executor renewing a lease
+      # against the shard-manager every 10s against a 60s expiry, and that is
+      # the traffic the partition cuts.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 50
+      promiseAgents: 50
       quotaAgents: 50
-      # Rate is split evenly across active streams, and quota is now the only
-      # one — so this is the quota stream's rate, held at what it already had
-      # when it was one of five at 100 ops/s. Raising it because the other
-      # streams left would change the experiment rather than sharpen it.
-      ratePerSec: 20
+      ratePerSec: 100
 
     retryPolicy:
       transportOnly: true
