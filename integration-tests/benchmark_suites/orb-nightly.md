@@ -19,6 +19,9 @@ It must be a dedicated, narrowly scoped GitHub token with contents write access 
 `golemcloud/benchmark-results`; rotate it according to the workspace credential policy. An
 interactive run can instead use the orb's existing GitHub credential.
 
+Regression warnings require `SLACK_BENCHMARK_WEBHOOK_URL` as an Amp project secret. Use a Slack
+incoming webhook restricted to `#golem-dev-internal`, and never store the URL in the repository.
+
 The Amp schedule is intentionally only a trigger. Its durable prompt is:
 
 > Verify the tracked worktree is clean, fast-forward `main` to `origin/main`, run
