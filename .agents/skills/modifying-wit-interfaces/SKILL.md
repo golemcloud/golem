@@ -47,6 +47,7 @@ sub-projects below by copying from the root. **Never manually edit a sub-project
 | `sdks/ts/wit/deps/` | **all** root deps + golem-ai (overlaid from `sdks/ts/wit/golem-ai`) |
 | `sdks/scala/wit/deps/` | **all** root deps |
 | `sdks/moonbit/golem_sdk/wit/deps/` | **all** root deps |
+| `sdks/go/golem/wit/deps/` | **all** root deps |
 
 The exact copy lists live in the `wit-golem-common`, `wit-golem-cli`, and
 `wit-sdks` tasks in `Makefile.toml`.
@@ -90,7 +91,7 @@ This mirrors the correct subset of the root `wit/deps/` into each sub-project, i
 cargo make check-wit
 ```
 
-This re-runs the sync and then `git status` over every per-crate `wit/deps` copy (golem-common, golem-cli, and all four SDKs) to ensure the committed WIT files match what the sync produces. CI runs this; if it fails, you forgot to run `cargo make wit` (or you hand-edited a generated sub-project copy).
+This re-runs the sync and then `git status` over every per-crate `wit/deps` copy (golem-common, golem-cli, and all five SDKs — rust, ts, scala, moonbit, go) to ensure the committed WIT files match what the sync produces. CI runs this; if it fails, you forgot to run `cargo make wit` (or you hand-edited a generated sub-project copy).
 
 ### Step 4: Build and verify
 
@@ -142,7 +143,8 @@ If WIT changes affect SDK interfaces:
 2. **TS SDK**: Rebuild packages (`npx pnpm run build` in `sdks/ts/`), then rebuild agent template WASM (`npx pnpm run build-agent-template`)
 3. **Scala SDK**: Regenerate `agent_guest.wasm`, adjust Scala SDK types or codecs if the WIT shape changed, and run the relevant Scala test suites
 4. **MoonBit SDK**: Regenerate WIT bindings (`wit-bindgen moonbit` in `sdks/moonbit/golem_sdk/`), then `moon fmt` and `moon check --target wasm`
-5. **Test components**: Rebuild any test components that use the changed interfaces (see their `AGENTS.md`)
+5. **Go SDK**: Regenerate WIT bindings (`cargo make generate-sdk-go-bindings`), then `GOOS=wasip1 GOARCH=wasm go build ./...` in `sdks/go/golem/`
+6. **Test components**: Rebuild any test components that use the changed interfaces (see their `AGENTS.md`)
 
 ## Checklist
 

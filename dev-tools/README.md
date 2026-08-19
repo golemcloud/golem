@@ -29,6 +29,12 @@ main workspace.
 
 ## Tools
 
+- **`go-bindgen-fixup`** — post-processes the generated Go SDK bindings (`sdks/go/internal/wit`)
+  to work around a `wit-bindgen` `crates/go` codegen bug: variant case tag constants are named
+  `<Variant><Case>`, which collides with the record type generated from a WIT record named
+  `<variant>-<case>` (golem's `queued-card-event`), producing Go that does not compile. Renames
+  the colliding *constant* to `<Name>Tag`. Collision detection is generic, not hardcoded. Invoked
+  by `sdks/go/scripts/generate-bindings.sh`; **delete once fixed upstream**.
 - **`dir-mirror`** — idempotent directory mirror: makes a destination directory a
   byte-identical copy of a source directory, rewriting only changed files (preserving
   mtimes) and pruning stale ones. Used by the `wit` task to sync the per-crate

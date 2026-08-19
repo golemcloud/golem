@@ -23,3 +23,7 @@ componentTemplates:
     customCommands:
       copy:
       - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
+  go-test-component:
+    customCommands:
+      copy:
+      - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"

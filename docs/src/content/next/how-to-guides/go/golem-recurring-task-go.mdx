@@ -1,0 +1,92 @@
+# Recurring & Scheduled Tasks in Go
+
+## Overview
+
+A recurring task is a method that **reschedules itself**: it does its work, then schedules the next run. Scheduling uses `Method.Schedule(client, at, in)`, which arranges an invocation at a future time and returns a cancelable `*golem.ScheduledInvocation`.
+
+To message itself an agent needs a client for its **own** instance, which needs its own `ID`. `Context` only exposes the raw id string, so **capture the typed `ID` in state at construction** — the constructor passed to `golem.Implement` receives it.
+
+## Steps
+
+1. **Capture the agent's own `ID` in state** in the `Implement` constructor.
+2. **Add a tick method** that does the work and then `Schedule`s itself for the next run.
+3. **Start the loop** — a `Start` method (or an external trigger) schedules the first tick.
+
+## Example
+
+Definition (`agents/poller/poller.go`):
+
+```go
+package poller
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{Name: "PollerAgent", Description: "Periodic poller"})
+
+var (
+	Start = golem.DefineMethod[ID, golem.Unit, golem.Unit]("start", golem.Desc("Begin the recurring loop"))
+	Tick  = golem.DefineMethod[ID, golem.Unit, golem.Unit]("tick", golem.Desc("One iteration; reschedules itself"))
+)
+```
+
+Implementation (`agents/poller/impl/impl.go`):
+
+```go
+package impl
+
+import (
+	"time"
+
+	"myapp/agents/poller"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+const interval = time.Minute
+
+// state stashes the agent's own ID so it can build a client to itself.
+type state struct{ self poller.ID }
+
+// The constructor receives this instance's ID — capture it.
+var agent = golem.Implement(poller.Agent, func(id poller.ID) *state { return &state{self: id} })
+
+func init() {
+	golem.Handle(agent, poller.Start, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
+		self := poller.Agent.Get(ctx.State.self)
+		poller.Tick.Schedule(self, time.Now().Add(interval), golem.Unit{})
+		return golem.Unit{}
+	})
+
+	golem.Handle(agent, poller.Tick, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
+		// ... do the periodic work ...
+
+		// schedule the next iteration
+		self := poller.Agent.Get(ctx.State.self)
+		poller.Tick.Schedule(self, time.Now().Add(interval), golem.Unit{})
+		return golem.Unit{}
+	})
+}
+```
+
+Kick off the loop by invoking `start` once (from the CLI, an HTTP endpoint, or another agent).
+
+## Scheduling vs immediate self-messaging
+
+- `Schedule(client, at, in) *ScheduledInvocation` — run at a future `time.Time`. Keep the handle to cancel it: `inv.Cancel()`.
+- `Trigger(client, in)` — enqueue immediately, no delay (use it to advance a state machine to the next step now).
+- **Never self-`Call`** — a synchronous call into the same instance deadlocks (one instance processes one invocation at a time). Self-messaging must use `Trigger` or `Schedule`.
+
+## Key Constraints
+
+- The self `ID` must come from the constructor (or be reconstructable) — `Context` exposes only `AgentID() string`, not the typed `ID`.
+- The reschedule must live in the tick handler itself (a package-level descriptor referencing its own handler in an `init()` is fine; there is no var-initialization cycle because the handler is registered in `init`, not in a `var` initializer).
+- Compute the next time with `time.Now().Add(interval)`; the scheduled time is recorded durably.
+
+### Related Guides
+| Guide | Description |
+|-------|--------------|
+| [`golem-fire-and-forget-go`](/next/how-to-guides/go/golem-fire-and-forget-go) | Enqueue an immediate invocation (`Trigger`) |
+| [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go) | Await a result from another agent |
+| [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go) | Define the agent |

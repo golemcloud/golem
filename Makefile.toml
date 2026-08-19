@@ -111,6 +111,7 @@ args = [
     "--src", "wit/deps", "--dst", "sdks/ts/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/scala/wit/deps",
     "--src", "wit/deps", "--dst", "sdks/moonbit/golem_sdk/wit/deps",
+    "--src", "wit/deps", "--dst", "sdks/go/golem/wit/deps",
 ]
 
 [tasks.wit-golem-cli]
@@ -129,7 +130,7 @@ args = [
 private = true
 script_runner = "@duckscript"
 script = '''
-status = exec git status --porcelain -- golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps
+status = exec git status --porcelain -- golem-common/wit/deps cli/golem-cli/wit/deps sdks/rust/golem-rust/wit/deps sdks/ts/wit/deps sdks/scala/wit/deps sdks/moonbit/golem_sdk/wit/deps sdks/go/golem/wit/deps
 ok = eq ${status.code} 0
 if not ${ok}
     echo "git status failed (exit ${status.code}):"
@@ -401,6 +402,33 @@ else
     mkdir -p target
     touch target/.local-publish-marker
 fi
+'''
+
+[tasks.generate-sdk-go-bindings]
+description = "Regenerates the Go SDK's WIT bindings (sdks/go/golem/internal/wit)"
+dependencies = ["wit"]
+cwd = "./sdks/go/golem"
+script_runner = "@duckscript"
+script = '''
+# The componentize-go version is pinned in sdks/go/golem/go.mod via the `tool` directive
+# (never `latest`); `go tool` therefore resolves the exact pinned build.
+# --all-features is a GLOBAL flag and must precede the subcommand: golem's p3 WIT
+# uses @unstable annotations (timezone).
+# Imports + the wasmexport glue are generated into internal/wit (wiped each run).
+# The export packages are NOT generated: --export-pkg-name points the glue at
+# internal/exports, which we hand-write (the `Exports` slots the SDK fills in at
+# init). That keeps generated and hand-written code strictly separated.
+exec --fail-on-error go tool componentize-go --all-features bindings --output internal/wit --pkg-name github.com/golemcloud/golem/sdks/go/golem/internal/wit --export-pkg-name github.com/golemcloud/golem/sdks/go/golem/internal/exports --format
+
+# Works around a wit-bindgen crates/go codegen bug; see dev-tools/go-bindgen-fixup.
+exec --fail-on-error cargo run --quiet --manifest-path ../../../dev-tools/Cargo.toml --bin go-bindgen-fixup -- internal/wit
+exec --fail-on-error gofmt -w internal/wit
+
+# The generated code is wasm-only (//go:wasmimport declarations have no bodies),
+# so it can only be type-checked for the wasip1 target, not the host.
+set_env GOOS wasip1
+set_env GOARCH wasm
+exec --fail-on-error go build ./internal/wit/...
 '''
 
 [tasks.clean-sdk-scala]

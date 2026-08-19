@@ -1,0 +1,135 @@
+# Creating Ephemeral (Stateless) Agents (Go)
+
+## Overview
+
+An **ephemeral agent** gets a **fresh instance for every invocation**. Unlike the default durable agents, an ephemeral agent:
+
+- **Has no shared state** — each invocation starts from a clean init function; values set in one call are gone by the next.
+- **Is not replayed** — an oplog is still recorded lazily (inspectable via `golem agent oplog`), but it is never used to replay/recover.
+- **Discards its memory** after each invocation completes.
+- **Keeps the same identity model** — still addressed by its constructor parameters (`ID`), but every call behaves as if the agent was just created.
+
+This fits **pure request handlers**, **stateless transformers**, **adapters**, and **serverless-style functions** where each call is independent.
+
+## How to make an agent ephemeral
+
+Set `Mode: golem.Ephemeral` on the `Spec`. `Mode` defaults to `golem.Durable`.
+
+```go
+// Package handler is the DEFINITION of a stateless request-handler agent.
+package handler
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+// An ID with no fields is a singleton identity; add fields to address variants.
+type ID struct{}
+
+type HandleIn struct{ Input string }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{
+    Name:        "RequestHandlerAgent",
+    Description: "Stateless request handler — fresh instance per invocation",
+    Mode:        golem.Ephemeral, // <- makes every invocation start clean
+})
+
+var Handle = golem.DefineMethod[ID, HandleIn, string]("handle",
+    golem.Desc("Process one request and return the result"))
+```
+
+### Implementation
+
+The implementation is written exactly like a durable agent's — the `state` type just holds nothing meaningful across calls (or is empty), because it is recreated each invocation:
+
+```go
+package impl
+
+import (
+    "strings"
+
+    "myapp/agents/handler"
+
+    "github.com/golemcloud/golem/sdks/go/golem"
+)
+
+// state is empty: an ephemeral agent keeps nothing between invocations.
+type state struct{}
+
+var agent = golem.Implement(handler.Agent, func(handler.ID) *state { return &state{} })
+
+func init() {
+    golem.Handle(agent, handler.Handle, func(_ *golem.Context[state], in handler.HandleIn) string {
+        return "processed: " + strings.ToUpper(in.Input)
+    })
+}
+```
+
+## What "fresh instance per invocation" means
+
+The only difference from a durable agent is `Mode`:
+
+```go
+// DURABLE (default) — state accumulates across calls.
+var Durable = golem.DefineAgent[ID](golem.Spec{Name: "DurableCounter"})
+// increment() three times → 1, 2, 3
+
+// EPHEMERAL — state resets every call.
+var Ephemeral = golem.DefineAgent[ID](golem.Spec{Name: "EphemeralCounter", Mode: golem.Ephemeral})
+// increment() three times → 1, 1, 1
+```
+
+Each invocation of an ephemeral agent:
+1. Runs the init function (`func(ID) *state`) to build a fresh state.
+2. Executes the method handler.
+3. Discards the instance entirely.
+
+## Combining with HTTP endpoints
+
+Ephemeral agents are a natural fit for HTTP request handlers — declare an HTTP mount alongside `Mode: golem.Ephemeral`:
+
+```go
+var Agent = golem.DefineAgent[ID](golem.Spec{
+    Name: "ConverterAgent",
+    Mode: golem.Ephemeral,
+    HTTP: &golem.Mount{Path: "/api/convert/{name}"},
+})
+
+var (
+    ToUpper = golem.DefineMethod[ID, ConvertIn, string]("toUpper",
+        golem.HTTP(golem.POST("/to-upper")))
+    ToLower = golem.DefineMethod[ID, ConvertIn, string]("toLower",
+        golem.HTTP(golem.POST("/to-lower")))
+)
+```
+
+## When to use ephemeral agents
+
+| Use case | Why ephemeral |
+|----------|---------------|
+| Stateless HTTP API (REST adapter, proxy) | No state to persist between requests |
+| Data transformation / format conversion | Pure function — input in, output out |
+| Validation service | Each validation is independent |
+| Webhook receiver that forwards events | No need to remember previous events |
+| Stateless computation (math, encoding) | No side effects worth persisting |
+
+## When NOT to use ephemeral agents
+
+- **Counters, accumulators, shopping carts** — need state across calls → use durable (default).
+- **Workflow orchestrators, sagas** — need the oplog for recovery → use durable (default).
+- **Agents where at-least-once semantics on external effects matter** → use durable (default).
+- **Any agent where one call's result depends on a previous call** → use durable (default).
+
+## Key Constraints
+
+- Ephemeral mode is set at the **agent type level** (`Spec.Mode`) — all instances of the type are ephemeral.
+- Constructor parameters still define identity — different `ID` values are still distinct addressable agents.
+- Ephemeral agents can still call other agents (RPC), make HTTP requests, and use the rest of the SDK — they simply don't retain state or replay.
+- The oplog is recorded lazily (inspectable via `golem agent oplog`) but is never replayed for recovery.
+- State-only durability features (snapshotting, atomic blocks over persisted state) have nothing to persist here; leave `Spec.Snapshot` at its default.
+
+### Related Guides
+| Guide | Description |
+|-------|--------------|
+| [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go) | Define the agent and its methods (durable baseline) |
+| [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go) | Expose the stateless agent over HTTP |
+| [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go) | An ephemeral agent calling other agents |
+| [`golem-configure-durability-go`](/next/how-to-guides/go/golem-configure-durability-go) | Durability controls for the durable alternative |

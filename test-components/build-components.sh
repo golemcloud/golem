@@ -4,10 +4,12 @@ IFS=$'\n\t'
 
 rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-mcp")
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc")
+go_test_apps=("agent-sdk-go")
 benchmark_apps=("benchmarks")
 
 RUST_CHUNKS=3 # Number of chunks to split rust apps into for parallel CI builds
 TS_CHUNKS=1   # Number of chunks to split ts apps into for parallel CI builds
+GO_CHUNKS=1   # Number of chunks to split go apps into for parallel CI builds
 
 # Optional arguments:
 # - clean: clean all projects without building
@@ -66,6 +68,10 @@ print_groups_json() {
     printf '%s{"name":"ts-%d","needs-node":true}' "$sep" "$i"
     sep=","
   done
+  for ((i=1; i<=GO_CHUNKS; i++)); do
+    printf '%s{"name":"go-%d","needs-node":false,"needs-go":true}' "$sep" "$i"
+    sep=","
+  done
   printf '%s{"name":"benchmarks","needs-node":true}]\n' "$sep"
 }
 
@@ -85,12 +91,12 @@ for arg in "$@"; do
     check)
       check_only=true
       ;;
-    rust|ts|benchmarks)
+    rust|ts|go|benchmarks)
       single_group=true
       group="$arg"
       ;;
-    rust-*|ts-*)
-      if [[ "$arg" =~ ^(rust|ts)-([0-9]+)$ ]]; then
+    rust-*|ts-*|go-*)
+      if [[ "$arg" =~ ^(rust|ts|go)-([0-9]+)$ ]]; then
         single_group=true
         group="$arg"
       else
@@ -173,6 +179,38 @@ build_rust_apps() {
   done
 }
 
+build_go_apps() {
+  local apps=("$@")
+  if [ "$clean_only" = true ]; then
+    echo "Cleaning Go test apps"
+  elif [ "$check_only" = true ]; then
+    echo "Checking Go test apps"
+  else
+    echo "Building Go test apps"
+  fi
+  TEST_COMP_DIR="$(pwd)"
+  export GOLEM_GO_PATH="${TEST_COMP_DIR}/../sdks/go/golem"
+  for subdir in "${apps[@]}"; do
+    pushd "$subdir" || exit
+
+    if should_clean; then
+      echo "Cleaning $subdir..."
+      "$GOLEM_CLI" clean
+    fi
+
+    if [ "$check_only" = true ]; then
+      echo "Checking $subdir..."
+      "$GOLEM_CLI" build --step check --yes
+    elif [ "$clean_only" = false ]; then
+      echo "Building $subdir..."
+      "$GOLEM_CLI" --preset release build --yes --skip-check
+      "$GOLEM_CLI" --preset release exec copy
+    fi
+
+    popd || exit
+  done
+}
+
 build_node_apps() {
   local apps=("$@")
   local label="${NODE_GROUP_LABEL:-Node}"
@@ -233,6 +271,19 @@ if [[ "$group" =~ ^ts-([0-9]+)$ ]]; then
   NODE_GROUP_LABEL="TS" build_node_apps "${chunk_apps[@]}"
 elif [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
   NODE_GROUP_LABEL="TS" build_node_apps "${ts_test_apps[@]}"
+fi
+
+if [[ "$group" =~ ^go-([0-9]+)$ ]]; then
+  chunk_idx="${BASH_REMATCH[1]}"
+  if [ "$chunk_idx" -lt 1 ] || [ "$chunk_idx" -gt "$GO_CHUNKS" ]; then
+    echo "Invalid go chunk: $chunk_idx (expected 1..$GO_CHUNKS)" >&2
+    exit 1
+  fi
+  get_chunk chunk_apps go_test_apps "$chunk_idx" "$GO_CHUNKS"
+  echo "Go chunk $chunk_idx/$GO_CHUNKS: ${chunk_apps[*]}"
+  build_go_apps "${chunk_apps[@]}"
+elif [ "$single_group" = "false" ] || [ "$group" = "go" ]; then
+  build_go_apps "${go_test_apps[@]}"
 fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then

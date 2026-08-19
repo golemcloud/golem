@@ -24,6 +24,7 @@ use std::sync::Once;
 use test_r::{sequential_suite, tag_suite, test_dep};
 
 pub mod agent;
+pub mod agent_sdk_go;
 pub mod agent_sdk_ts;
 pub mod api;
 pub mod blobstore;
@@ -96,6 +97,7 @@ tag_suite!(websocket, group1);
 tag_suite!(rdbms, group1);
 tag_suite!(agent, group1);
 tag_suite!(agent_sdk_ts, group1);
+tag_suite!(agent_sdk_go, group2);
 
 tag_suite!(hot_update, group2);
 tag_suite!(transactions, group2);
@@ -260,4 +262,10 @@ test_component!(
     "agent_sdk_ts",
     "golem_it_agent_sdk_ts",
     "golem-it:agent-sdk-ts"
+);
+test_component!(
+    agent_sdk_go,
+    "agent_sdk_go",
+    "golem_it_agent_sdk_go",
+    "golem-it:agent-sdk-go"
 );

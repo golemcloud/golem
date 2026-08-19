@@ -66,7 +66,7 @@ Components are keyed by `namespace:name` (e.g., `my-app:billing`).
 ```yaml
 components:
   my-app:billing:
-    dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps
+    dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps ("module" for Go)
     templates:                     # Parent template names (inherit build, env, plugins, files)
       - rust
     componentWasm: target/wasm32-wasip1/debug/billing.wasm   # Path to built WASM
@@ -97,7 +97,7 @@ components:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `dir` | string | Base directory for resolving paths. `"."` for single-component apps |
+| `dir` | string | Base directory for resolving paths. `"."` for single-component apps (Go uses `"module"`) |
 | `templates` | string or string[] | Parent template name(s) to inherit from |
 | `componentWasm` | string | Path to the built WASM component |
 | `outputWasm` | string | Path for the final output WASM ready for upload |

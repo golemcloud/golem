@@ -1,0 +1,140 @@
+---
+name: golem-add-config-go
+description: "Adding typed configuration to a Go Golem agent with DefineConfiguredAgent and golem.Config. Use when the user asks about agent config, configuration values, config structs, or passing settings to a Go agent."
+---
+
+# Adding Typed Configuration to a Go Agent
+
+## Overview
+
+A Go agent's configuration is a single **config struct** attached to the agent's type. Each exported field becomes a config key; the platform provisions the values (from `golem.yaml`, env, or the CLI) and the agent reads them back at runtime as a typed struct. Config is materialized once per worker and cached, so reads on a hot method are near-free.
+
+Two things change versus a plain agent:
+
+- define with `golem.DefineConfiguredAgent[ID, Cfg]` instead of `golem.DefineAgent[ID]`,
+- implement with `golem.ImplementConfigured` (its constructor receives an `*golem.InitContext[ID, state, Cfg]`),
+
+then read the config with `golem.Config(Agent, ctx)` inside a method, or `ctx.Config()` inside the constructor.
+
+## Steps
+
+1. **Declare the config struct** — one exported field per config key.
+2. **Attach it** with `golem.DefineConfiguredAgent[ID, Cfg]` in the definition.
+3. **Implement** with `golem.ImplementConfigured`; read config from the `InitContext` in the constructor.
+4. **Read at method time** with `golem.Config(Agent, ctx)`.
+5. **Provide values** under `agents.<Name>.config` in `golem.yaml`.
+
+## Definition (`agents/shop/shop.go`)
+
+```go
+// Package shop is the DEFINITION of the shop agent.
+package shop
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+// Config is the agent's whole config surface. Each exported field is a config
+// key; a nested struct flattens into multi-segment paths; a pointer field is
+// optional; list/map fields decode as their WIT shapes.
+type Config struct {
+	Greeting string
+	Tax      TaxConfig         // nested → paths tax.ratePct
+	Timezone *string           // optional (read back as nil when unset)
+	Features []string          // list
+	Limits   map[string]int64  // map
+}
+
+type TaxConfig struct{ RatePct int64 }
+
+var Agent = golem.DefineConfiguredAgent[ID, Config](golem.Spec{
+	Name:        "ShopAgent",
+	Description: "A shop whose behaviour is driven by config",
+})
+
+var (
+	Greet    = golem.DefineMethod[ID, golem.Unit, string]("greet", golem.Desc("Greeting, from config"))
+	Settings = golem.DefineMethod[ID, golem.Unit, []string]("settings", golem.Desc("Return the configured features"))
+)
+```
+
+Field-name conventions match plain agent types: use sized integers (`int64`, not bare `int`), a `*T` field is `option<T>`, and nested structs recurse. Field names are lower-camel-cased for the wire (`RatePct` → `ratePct`).
+
+## Implementation (`agents/shop/impl/impl.go`)
+
+```go
+// Package impl is the IMPLEMENTATION of the shop agent.
+package impl
+
+import (
+	"myapp/agents/shop"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+type state struct{ greeting string }
+
+// ImplementConfigured binds the constructor; its InitContext exposes Config().
+var agent = golem.ImplementConfigured(shop.Agent,
+	func(ctx *golem.InitContext[shop.ID, state, shop.Config]) *state {
+		// Constructor-time config read: seed state once from config.
+		return &state{greeting: ctx.Config().Greeting}
+	})
+
+func init() {
+	golem.Handle(agent, shop.Greet, func(ctx *golem.Context[state], _ golem.Unit) string {
+		return ctx.State.greeting
+	})
+
+	golem.Handle(agent, shop.Settings, func(ctx *golem.Context[state], _ golem.Unit) []string {
+		cfg := golem.Config(shop.Agent, ctx) // method-time config read
+		return cfg.Features
+	})
+}
+```
+
+`golem.Config(shop.Agent, ctx)` returns the whole `shop.Config` value; `ctx` is the running method's `*golem.Context[state]` (requiring it means config is only readable from inside a running method). The constructor reads the same config via `ctx.Config()` on its `InitContext`.
+
+## Providing Values in `golem.yaml`
+
+Set defaults under `agents.<Name>.config`. Keys are **camelCase** — they match the lower-camel-cased Go field names; nested structs are nested maps, and a `map[string]V` is a list of `[key, value]` pairs:
+
+```yaml
+agents:
+  ShopAgent:
+    config:
+      greeting: "Welcome to ACME"
+      tax:
+        ratePct: 20
+      features: ["fast-checkout", "gift-wrap"]
+      limits: [["maxItems", 100]]
+      # timezone is omitted → the optional *string field reads back as nil
+```
+
+## Overriding Config Over RPC
+
+When one agent calls another, the caller can override the callee's **local** (non-secret) config at client creation with `golem.WithConfig`:
+
+```go
+client := shop.Agent.Get(
+	shop.ID{Name: "acme"},
+	golem.WithConfig(shop.Config{Greeting: "Hi from the caller"}),
+)
+```
+
+Only declared local keys can be overridden; secret fields are always platform-provisioned and are skipped.
+
+## Key Constraints
+
+- Config is **agent-attached and instance-bound** — read only from within that agent's own constructor or methods, never from free-floating code.
+- Reading an **undeclared** key, or an unset **required** key, traps. Declare a field as a pointer (`*T`) to read an absent value back as `nil` instead of trapping.
+- Config is materialized **once per worker** and cached; local fields are read on first access and reused for the worker's life. (Secret fields stay live — see `golem-add-secret-go`.)
+- Use `golem.DefineAgent[ID]` (no config) for agents that need none; `golem.NoConfig` is the empty config type and never needs naming.
+
+### Related Skills
+
+| Skill | When to Load |
+|-------|--------------|
+| `golem-add-agent-go` | Define the base agent this config attaches to |
+| `golem-add-secret-go` | Add `golem.Secret[T]` fields for sensitive values |
+| `golem-call-another-agent-go` | Override a callee's config with `golem.WithConfig` over RPC |

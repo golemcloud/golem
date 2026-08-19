@@ -1,0 +1,67 @@
+---
+name: golem-fire-and-forget-go
+description: "Fire-and-forget agent invocations in Go with Trigger. Use when the user wants to enqueue work without awaiting a result, send a notification to another agent, fan out to many agents, or kick off background work in a Go Golem project."
+---
+
+# Fire-and-Forget Invocations in Go (`Trigger`)
+
+## Overview
+
+`Method.Trigger(client, in)` enqueues an invocation **without waiting for its result** and returns an `InvocationID`. Use it for notifications, fan-out, or handing work to a background/worker agent. Unlike a synchronous `Call`, `Trigger` does not block — so it is also safe for an agent to message **itself** (a synchronous self-`Call` would deadlock, since one instance handles one invocation at a time).
+
+## Steps
+
+1. **Import the target agent's definition package.**
+2. **Get a client** with `Agent.Get(id)`.
+3. **Trigger the method**: `Target.Method.Trigger(client, in)` — returns immediately.
+
+## Example
+
+```go
+package impl
+
+import (
+	"myapp/agents/coordinator"
+	"myapp/agents/worker"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+type state struct{}
+
+var agent = golem.Implement(coordinator.Agent, func(coordinator.ID) *state { return &state{} })
+
+func init() {
+	golem.Handle(agent, coordinator.Start, func(_ *golem.Context[state], in coordinator.StartIn) golem.Unit {
+		// Hand each unit of work to a worker without awaiting the outcome.
+		for _, w := range in.Jobs {
+			c := worker.Agent.Get(worker.ID{Name: w.Worker})
+			worker.Dispatch.Trigger(c, worker.DispatchIn{Job: w.Job})
+		}
+		return golem.Unit{}
+	})
+}
+```
+
+Fanning out is just a loop of `Trigger` calls — each runs independently on its target agent.
+
+## Trigger vs Call
+
+- `Call(c, in) Out` — blocks, returns the result. Use when you need the value. Never self-`Call`.
+- `Trigger(c, in) InvocationID` — returns immediately, no result. Use for notifications, fan-out, and self-messaging.
+- `CallAsync(c, in) *Future[Out]` — start now, await later with `Get()`. Use when you want the result but not to block yet (see `golem-call-another-agent-go`).
+
+The returned `InvocationID` is an opaque handle to the enqueued invocation; you can ignore it for pure fire-and-forget.
+
+## Key Constraints
+
+- `Trigger` delivers a value-less enqueue: there is no way to read a return value from it. If you need the result, use `Call`/`CallAsync`.
+- As with all RPC, `Trigger` is called on the **method descriptor** (`Worker.Dispatch.Trigger(client, in)`), and the client comes from the callee's **definition** (`worker.Agent.Get(id)`).
+
+### Related Skills
+
+| Skill | When to Load |
+|-------|--------------|
+| `golem-call-another-agent-go` | You need the callee's result (sync `Call` / async `CallAsync`) |
+| `golem-recurring-task-go` | Schedule a future/self invocation at a specific time |
+| `golem-add-agent-go` | Define the agent being triggered |
