@@ -475,7 +475,11 @@ impl Default for WorkerExecutorClientConfig {
                     multiplier: 2.0,
                     max_jitter_factor: Some(0.15),
                 },
-                connect_timeout: Duration::from_secs(10),
+                // Deliberately small: a stalled connect is multiplied by the
+                // number of requests queued on the same channel, so this is the
+                // worst-case stall divided by queue depth, not a per-call bound.
+                // Connecting to a healthy executor in-cluster takes milliseconds.
+                connect_timeout: Duration::from_secs(2),
                 ..Default::default()
             },
         }

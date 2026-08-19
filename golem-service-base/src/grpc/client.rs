@@ -58,6 +58,10 @@ fn build_endpoint(uri: Uri, config: &GrpcClientConfig) -> Result<Endpoint, tonic
         endpoint = endpoint.tcp_keepalive(config.tcp_keepalive);
     }
 
+    if let Some(buffer_size) = config.buffer_size {
+        endpoint = endpoint.buffer_size(buffer_size);
+    }
+
     if let GrpcClientTlsConfig::Enabled(tls) = &config.tls {
         endpoint = endpoint.tls_config(tls.to_tonic())?;
     }
@@ -282,6 +286,17 @@ pub struct GrpcClientConnection<T: Clone> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrpcClientConfig {
+    /// Bounds a single TCP connect.
+    ///
+    /// It also bounds something less obvious. tonic's `Channel` services
+    /// requests one at a time, so when a peer is unreachable every queued
+    /// request waits for each request ahead of it to burn a full
+    /// `connect_timeout` before its own connect is attempted. The worst-case
+    /// stall is therefore `queue_depth * connect_timeout`, not `connect_timeout`.
+    ///
+    /// This is what produced the 119,781ms stalls in chaos run S5 on 2026-08-19:
+    /// a 10s connect_timeout with roughly twelve requests queued against an
+    /// executor that had just been deleted. Keep this small.
     #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
     #[serde(default, with = "humantime_serde::option")]
@@ -299,6 +314,14 @@ pub struct GrpcClientConfig {
     pub http2_keep_alive_while_idle: Option<bool>,
     #[serde(default, with = "humantime_serde::option")]
     pub tcp_keepalive: Option<Duration>,
+    /// Depth of tonic's request buffer.
+    ///
+    /// Note this does NOT bound the stall described on `connect_timeout`:
+    /// `tower::Buffer` applies backpressure rather than rejecting, so callers
+    /// wait on readiness however shallow the buffer is. Verified with
+    /// buffer_size = 1: eight concurrent calls still took 1x..8x connect_timeout.
+    #[serde(default)]
+    pub buffer_size: Option<usize>,
     pub retries_on_unavailable: RetryConfig,
     pub tls: GrpcClientTlsConfig,
     #[serde(default = "default_max_message_size")]
@@ -332,6 +355,7 @@ impl Default for GrpcClientConfig {
             // peer is discovered before the next request rather than during it.
             http2_keep_alive_while_idle: Some(true),
             tcp_keepalive: None,
+            buffer_size: None,
             retries_on_unavailable: RetryConfig::default(),
             tls: GrpcClientTlsConfig::Disabled(Empty {}),
             max_message_size: default_max_message_size(),
@@ -360,6 +384,7 @@ impl SafeDisplay for GrpcClientConfig {
             self.http2_keep_alive_while_idle
         );
         let _ = writeln!(&mut result, "tcp_keepalive: {:?}", self.tcp_keepalive);
+        let _ = writeln!(&mut result, "buffer_size: {:?}", self.buffer_size);
         let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
         let _ = writeln!(&mut result, "retries_on_unavailable:");
         let _ = writeln!(
