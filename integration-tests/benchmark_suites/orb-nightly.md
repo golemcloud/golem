@@ -38,6 +38,9 @@ The generated analysis has one of these statuses:
 - `candidates-found`: inspect the listed measurements and investigate the Golem commits between
   `previous.commitSha` and `latest.commitSha`, then send one consolidated warning.
 
+A candidate can be a single duration series, such as one language and invocation path for one
+throughput configuration. Do not require movement across the rest of that benchmark before warning.
+
 For each candidate, inspect the commit subjects and diffs for changes on the benchmark's execution
 path. Distinguish direct evidence from inference, consider whether infrastructure-wide movement or
 a benchmark definition change better explains the result, and avoid naming a commit solely because
