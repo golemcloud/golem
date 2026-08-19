@@ -5,7 +5,7 @@ interface oplog {
     use wasi:clocks/system-clock@0.3.0.{instant as datetime};
     use golem:core/types@2.0.0.{account-id, card-id, schema-value-tree, typed-schema-value};
 
-    use host.{component-revision, oplog-index, persistence-level, environment-id, uuid, agent-id, snapshot};
+    use host.{component-revision, oplog-index, environment-id, uuid, agent-id, snapshot};
     use wasi:clocks/types@0.3.0.{duration};
 
     /// Whether an agent is durable (persistent oplog) or ephemeral.
@@ -131,6 +131,8 @@ interface oplog {
         timestamp: datetime,
         parent-start-index: option<oplog-index>,
         function-name: string,
+        invocation-id: option<uuid>,
+        observational-owner: option<oplog-index>,
         request: option<typed-schema-value>,
         durable-function-type: wrapped-function-type,
     }
@@ -478,11 +480,6 @@ interface oplog {
         value: attribute-value
     }
 
-    record change-persistence-level-parameters {
-        timestamp: datetime,
-        persistence-level: persistence-level
-    }
-
     record begin-remote-transaction-parameters {
         timestamp: datetime,
         transaction-id: string
@@ -592,6 +589,8 @@ interface oplog {
         timestamp: datetime,
         parent-start-index: option<oplog-index>,
         function-name: string,
+        invocation-id: option<uuid>,
+        observational-owner: option<oplog-index>,
         request: option<oplog-payload>,
         durable-function-type: wrapped-function-type,
     }
@@ -802,8 +801,6 @@ interface oplog {
         finish-span(finish-span-parameters),
         /// Set an attribute on an open span in the invocation context
         set-span-attribute(set-span-attribute-parameters),
-        /// Change the current persistence level
-        change-persistence-level(change-persistence-level-parameters),
         /// Begins a transaction operation
         begin-remote-transaction(raw-begin-remote-transaction-parameters),
         /// Pre-Commit of the transaction, indicating that the transaction will be committed
@@ -911,8 +908,6 @@ interface oplog {
         finish-span(finish-span-parameters),
         /// Set an attribute on an open span in the invocation context
         set-span-attribute(set-span-attribute-parameters),
-        /// Change the current persistence level
-        change-persistence-level(change-persistence-level-parameters),
         /// Begins a transaction operation
         begin-remote-transaction(begin-remote-transaction-parameters),
         /// Pre-Commit of the transaction, indicating that the transaction will be committed

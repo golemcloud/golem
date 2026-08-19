@@ -41,7 +41,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-scala` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-scala` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
 | `golem-multi-instance-agent-scala` | Creating multiple agent instances with the same constructor parameters using phantom agents |
-| `golem-atomic-block-scala` | Atomic blocks, persistence control, and idempotency |
+| `golem-atomic-block-scala` | Atomic blocks and idempotency |
 | `golem-add-transactions-scala` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-scala` | Exposing an agent over HTTP with mount paths and endpoint annotations |
 | `golem-http-params-scala` | Mapping path, query, header, and body parameters for HTTP endpoints |

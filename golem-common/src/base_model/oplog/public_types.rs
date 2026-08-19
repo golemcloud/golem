@@ -440,14 +440,6 @@ pub enum HostStreamKind {
     P3HttpRequestBody,
 }
 
-#[derive(Copy, Clone, Debug, PartialOrd, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
-pub enum PersistenceLevel {
-    PersistNothing,
-    PersistRemoteSideEffects,
-    Smart,
-}
-
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(
     feature = "full",

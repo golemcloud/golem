@@ -13179,12 +13179,6 @@ components:
       required:
       - timestamp
       - targetRevision
-    PersistenceLevel:
-      type: string
-      enum:
-      - PersistNothing
-      - PersistRemoteSideEffects
-      - Smart
     PluginInstallationDescription:
       title: PluginInstallationDescription
       type: object
@@ -13618,7 +13612,6 @@ components:
           StartSpan: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
           FinishSpan: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
           SetSpanAttribute: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
-          ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_r#ChangePersistenceLevelParams'
           BeginRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#BeginRemoteTransactionParams'
           PreCommitRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreCommitRemoteTransactionParams'
           PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
@@ -13667,7 +13660,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ChangePersistenceLevelParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#BeginRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreCommitRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
@@ -13840,18 +13832,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#CardRevokedParams'
-    PublicOplogEntry_r#ChangePersistenceLevelParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: ChangePersistenceLevel
-            type: string
-            enum:
-            - ChangePersistenceLevel
-        required:
-        - type
-      - $ref: '#/components/schemas/r#ChangePersistenceLevelParams'
     PublicOplogEntry_r#CommittedRemoteTransactionParams:
       allOf:
       - type: object
@@ -16532,18 +16512,6 @@ components:
       - timestamp
       - queuedEventIndex
       - cardId
-    r#ChangePersistenceLevelParams:
-      title: r#ChangePersistenceLevelParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        persistenceLevel:
-          $ref: '#/components/schemas/PersistenceLevel'
-      required:
-      - timestamp
-      - persistenceLevel
     r#CommittedRemoteTransactionParams:
       title: r#CommittedRemoteTransactionParams
       type: object
@@ -17028,6 +16996,12 @@ components:
           format: uint64
         functionName:
           type: string
+        invocationId:
+          type: string
+          format: uuid
+        observationalOwner:
+          type: integer
+          format: uint64
         request:
           $ref: '#/components/schemas/TypedSchemaValue'
         durableFunctionType:

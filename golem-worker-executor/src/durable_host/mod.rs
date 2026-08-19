@@ -115,8 +115,8 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequest, HostRequestHttpRequest,
-    HostResponse, LogLevel, OplogEntry, OplogIndex, PersistenceLevel, RawSnapshotData,
-    ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
+    HostResponse, LogLevel, OplogEntry, OplogIndex, RawSnapshotData, ScopeScanState,
+    TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -1344,6 +1344,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.switch_to_live();
     }
 
+    fn cleanup_custom_durability_state(&mut self) {
+        let resources: Vec<_> = self
+            .state
+            .custom_invocation_scopes
+            .drain()
+            .map(|(_, scope)| scope.resource_rep)
+            .collect();
+        for resource_rep in resources {
+            let _ = self
+                .table()
+                .delete(Resource::<durability::LiveCustomDurableInvocation>::new_own(resource_rep));
+        }
+        self.state.active_custom_invocations.clear();
+    }
     pub fn increase_memory(&mut self, delta: u64) {
         let (_, reconciling) = self.linear_memory.grow(delta, Instant::now());
         if self.state.is_live() && !reconciling {
@@ -1686,7 +1700,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             let begin_index = self.state.current_oplog_index().await;
             self.state.current_retry_point = begin_index;
             return Ok(begin_index);
@@ -1708,6 +1722,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     timestamp: Timestamp::now_utc(),
                     parent_start_index: None,
                     function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
+                    invocation_id: None,
+                    observational_owner: None,
                     request: None,
                     durable_function_type: function_type.clone(),
                 };
@@ -1755,7 +1771,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             begin_index,
                             OplogEntry::is_end_remote_write_s::<ScopeScanState>,
                             OplogEntry::no_concurrent_side_effect,
-                            ScopeScanState::new(begin_index, self.state.persistence_level),
+                            ScopeScanState::new(begin_index),
                             OplogEntry::track_scope_membership,
                         )
                         .await;
@@ -1870,7 +1886,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             return Ok(());
         }
 
@@ -2005,6 +2021,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 timestamp: now,
                 parent_start_index,
                 function_name,
+                invocation_id: None,
+                observational_owner: None,
                 request: Some(request_payload),
                 durable_function_type: function_type,
             })
@@ -2043,7 +2061,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     where
         Err: From<WorkerExecutorError>,
     {
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             let (_, tx) = handler.create_new().await?;
             let begin_index = self.state.current_oplog_index().await;
             Ok((begin_index, tx))
@@ -2058,6 +2076,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: None,
                 function_name: HostFunctionName::Custom("<scope:transaction>".to_string()),
+                invocation_id: None,
+                observational_owner: None,
                 request: None,
                 durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
             };
@@ -2133,7 +2153,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     original_begin_index,
                     OplogEntry::is_pre_remote_transaction_s,
                     OplogEntry::no_concurrent_side_effect,
-                    ScopeScanState::new(original_begin_index, self.state.persistence_level),
+                    ScopeScanState::new(original_begin_index),
                     OplogEntry::track_scope_membership,
                 )
                 .await;
@@ -2159,7 +2179,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             original_begin_index,
                             OplogEntry::is_end_remote_transaction_s,
                             OplogEntry::no_concurrent_side_effect,
-                            ScopeScanState::new(original_begin_index, self.state.persistence_level),
+                            ScopeScanState::new(original_begin_index),
                             OplogEntry::track_scope_membership,
                         )
                         .await;
@@ -2270,7 +2290,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             Ok(())
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
@@ -2299,7 +2319,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             Ok(())
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
@@ -2328,7 +2348,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             return Ok(());
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
@@ -2379,7 +2399,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             return Ok(());
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
@@ -2984,7 +3004,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub(crate) fn end_call_snapshotting_function_if_active(&mut self) {
-        if self.state.snapshotting_mode.is_some() {
+        if self.state.snapshotting_mode {
             self.end_call_snapshotting_function();
         }
     }
@@ -3405,7 +3425,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         mut invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.snapshotting_mode.is_none() {
+        if !self.state.snapshotting_mode {
             let stack = self.get_current_invocation_context().await;
 
             match &mut invocation {
@@ -3447,10 +3467,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         trap_type: &TrapType,
     ) -> RetryDecision {
+        self.cleanup_custom_durability_state();
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
         if self.state.is_live()
-            && self.state.snapshotting_mode.is_none()
+            && !self.state.snapshotting_mode
             && let Err(err) = concurrent::drain_queued_dropped_call_events(self).await
         {
             error!("failed to drain dropped durable calls before invocation failure entry: {err}");
@@ -3591,13 +3612,22 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         let is_live = self.state.is_live();
+        if is_live && !self.state.snapshotting_mode {
+            concurrent::drain_queued_dropped_call_events(self)
+                .await
+                .map_err(|err| err.source)?;
+        }
+        if !self.state.active_custom_invocations.is_empty()
+            || !self.state.custom_invocation_scopes.is_empty()
+        {
+            self.cleanup_custom_durability_state();
+            return Err(WorkerExecutorError::runtime(
+                "agent invocation returned while a custom durable invocation ownership scope was still open",
+            ));
+        }
 
         if is_live {
-            if self.state.snapshotting_mode.is_none() {
-                concurrent::drain_queued_dropped_call_events(self)
-                    .await
-                    .map_err(|err| err.source)?;
-
+            if !self.state.snapshotting_mode {
                 let component_revision = output.component_revision.ok_or_else(|| {
                     WorkerExecutorError::runtime(
                         "component_revision missing in AgentInvocationOutput during replay",
@@ -3781,34 +3811,24 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
     }
 
     fn begin_call_snapshotting_function(&mut self) {
-        // While calling a snapshotting function (load/save), we completely turn off persistence
-        // In addition to the user-controllable persistence level we also skip writing the
-        // oplog entries marking the exported function call.
-        if self.state.snapshotting_mode.is_some() {
+        // Snapshot load/save calls do not write durable host-call entries.
+        if self.state.snapshotting_mode {
             warn!(
                 "begin_call_snapshotting_function called while snapshotting is already active; \
-                 leaving persistence level unchanged"
+                 leaving snapshotting active"
             );
             return;
         }
-
-        let previous_level = self.state.persistence_level;
-        self.state.snapshotting_mode = Some(previous_level);
-        self.state.persistence_level = PersistenceLevel::PersistNothing;
+        self.state.snapshotting_mode = true;
     }
 
     fn end_call_snapshotting_function(&mut self) {
-        // Restoring the state of persistence after calling a snapshotting function
-        match self.state.snapshotting_mode.take() {
-            Some(level) => {
-                self.state.persistence_level = level;
-            }
-            None => {
-                warn!(
-                    "end_call_snapshotting_function called without a matching begin_call_snapshotting_function; \
-                     leaving persistence level unchanged"
-                );
-            }
+        if self.state.snapshotting_mode {
+            self.state.snapshotting_mode = false;
+        } else {
+            warn!(
+                "end_call_snapshotting_function called without a matching begin_call_snapshotting_function"
+            );
         }
     }
 
@@ -4585,13 +4605,6 @@ mod tests {
             ),
             (
                 SnapshotBoundaryConditions {
-                    persist_nothing: true,
-                    ..Default::default()
-                },
-                SnapshotBoundaryBlocker::PersistNothing,
-            ),
-            (
-                SnapshotBoundaryConditions {
                     snapshotting: true,
                     ..Default::default()
                 },
@@ -4616,16 +4629,15 @@ mod tests {
 
     #[test]
     fn snapshot_boundary_any_condition_combination_blocks() {
-        // Exhaustive truth table over the six conditions: a snapshot is admitted iff every
+        // Exhaustive truth table over the five conditions: a snapshot is admitted iff every
         // condition is clear, and the reported blocker is always one of the set conditions.
-        for bits in 0u32..64 {
+        for bits in 0u32..32 {
             let conditions = SnapshotBoundaryConditions {
                 replaying: bits & 1 != 0,
                 open_atomic_region: bits & 2 != 0,
                 open_durable_scope: bits & 4 != 0,
-                persist_nothing: bits & 8 != 0,
-                snapshotting: bits & 16 != 0,
-                in_flight_host_call: bits & 32 != 0,
+                snapshotting: bits & 8 != 0,
+                in_flight_host_call: bits & 16 != 0,
             };
             let blocker = conditions.blocker();
             assert_eq!(
@@ -4638,7 +4650,6 @@ mod tests {
                     SnapshotBoundaryBlocker::Replaying => conditions.replaying,
                     SnapshotBoundaryBlocker::OpenAtomicRegion => conditions.open_atomic_region,
                     SnapshotBoundaryBlocker::OpenDurableScope => conditions.open_durable_scope,
-                    SnapshotBoundaryBlocker::PersistNothing => conditions.persist_nothing,
                     SnapshotBoundaryBlocker::Snapshotting => conditions.snapshotting,
                     SnapshotBoundaryBlocker::InFlightHostCall => conditions.in_flight_host_call,
                 };
@@ -4652,26 +4663,24 @@ mod tests {
 
     #[test]
     fn checkpoint_boundary_truth_table() {
-        // Exhaustive truth table over the five blocking conditions: a mid-invocation status
+        // Exhaustive truth table over the four blocking conditions: a mid-invocation status
         // checkpoint is admitted iff every condition is clear.
-        for bits in 0u32..32 {
+        for bits in 0u32..16 {
             let replaying = bits & 1 != 0;
             let open_atomic_region = bits & 2 != 0;
             let open_durable_scope = bits & 4 != 0;
-            let persist_nothing = bits & 8 != 0;
-            let snapshotting = bits & 16 != 0;
+            let snapshotting = bits & 8 != 0;
             assert_eq!(
                 PrivateDurableWorkerState::clean_checkpoint_boundary(
                     replaying,
                     open_atomic_region,
                     open_durable_scope,
-                    persist_nothing,
                     snapshotting,
                 ),
                 bits == 0,
                 "checkpoint must be admitted iff no condition is set; replaying: {replaying}, \
                  open_atomic_region: {open_atomic_region}, open_durable_scope: {open_durable_scope}, \
-                 persist_nothing: {persist_nothing}, snapshotting: {snapshotting}"
+                 snapshotting: {snapshotting}"
             );
         }
     }
@@ -4680,20 +4689,18 @@ mod tests {
     fn snapshot_boundary_is_checkpoint_boundary_with_no_in_flight_host_call() {
         // The documented sync invariant between the two predicates: `blocker() == None` is
         // equivalent to `at_clean_checkpoint_boundary() && !has_in_flight_live_host_calls()`.
-        for bits in 0u32..64 {
+        for bits in 0u32..32 {
             let conditions = SnapshotBoundaryConditions {
                 replaying: bits & 1 != 0,
                 open_atomic_region: bits & 2 != 0,
                 open_durable_scope: bits & 4 != 0,
-                persist_nothing: bits & 8 != 0,
-                snapshotting: bits & 16 != 0,
-                in_flight_host_call: bits & 32 != 0,
+                snapshotting: bits & 8 != 0,
+                in_flight_host_call: bits & 16 != 0,
             };
             let at_checkpoint_boundary = PrivateDurableWorkerState::clean_checkpoint_boundary(
                 conditions.replaying,
                 conditions.open_atomic_region,
                 conditions.open_durable_scope,
-                conditions.persist_nothing,
                 conditions.snapshotting,
             );
             assert_eq!(
@@ -5953,12 +5960,6 @@ struct ActiveDurableScope {
     /// scope `End` is written, not replayed) and once the handle has been taken by the closing
     /// `end_function` / transaction terminal.
     replay_end: Option<concurrent::ReplayCallHandle>,
-    /// `true` when the scope `Start` was appended live while a `PersistNothing` zone was open, i.e.
-    /// the `Start` lies inside a region that replay skips wholesale. Such a scope must be closed
-    /// before the zone is: if the zone ended first, the scope's `End` would land outside the
-    /// skipped region and reference a `Start` replay never sees. `set_oplog_persistence_level`
-    /// refuses to leave a `PersistNothing` zone while such a scope is open.
-    opened_in_persist_nothing_zone: bool,
 }
 
 #[derive(Debug)]
@@ -6064,8 +6065,16 @@ struct PrivateDurableWorkerState {
     resources: HashMap<AgentResourceId, (ResourceTypeId, ResourceAny)>,
     last_resource_id: AgentResourceId,
     replay_state: ReplayState,
-    persistence_level: PersistenceLevel,
     assume_idempotence: bool,
+
+    /// Custom durable invocations whose committed logical `Start` is currently executing live.
+    active_custom_invocations: HashMap<OplogIndex, ActiveCustomInvocation>,
+    /// Next custom invocation ordinal in each logical parent namespace for the current top-level
+    /// agent invocation. `None` is the root namespace.
+    custom_invocation_ordinals: HashMap<Option<uuid::Uuid>, u64>,
+    /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
+    custom_invocation_scopes: HashMap<u64, OpenCustomInvocationScope>,
+    next_custom_invocation_scope_id: u64,
 
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
@@ -6132,7 +6141,7 @@ struct PrivateDurableWorkerState {
     /// the HttpRequestState. Keyed by outgoing request rep.
     pending_http_retry_eligibility: HashMap<u32, HttpRetryEligibility>,
 
-    snapshotting_mode: Option<PersistenceLevel>,
+    snapshotting_mode: bool,
 
     /// Tracks whether the currently executing invocation is restricted to read-only side effects.
     /// When `ReadOnly`, outgoing HTTP and RPC host calls are trapped before any oplog entry is
@@ -6450,8 +6459,11 @@ impl PrivateDurableWorkerState {
             worker_proxy,
             resources: HashMap::new(),
             last_resource_id: AgentResourceId::INITIAL,
-            persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
+            active_custom_invocations: HashMap::new(),
+            custom_invocation_ordinals: HashMap::new(),
+            custom_invocation_scopes: HashMap::new(),
+            next_custom_invocation_scope_id: 1,
             open_http_requests: HashMap::new(),
             open_p3_http_responses: HashMap::new(),
             pending_p3_http_request_transmissions: HashMap::new(),
@@ -6463,7 +6475,7 @@ impl PrivateDurableWorkerState {
             open_filesystem_input_streams: HashSet::new(),
             file_stream_pollables: HashSet::new(),
             tcp_taken_streams: HashMap::new(),
-            snapshotting_mode: None,
+            snapshotting_mode: false,
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,
             component_metadata,
@@ -6596,13 +6608,12 @@ impl PrivateDurableWorkerState {
     /// (`None`) call of a batched remote write.
     ///
     /// Snapshotting turns off persistence entirely, and `persist`/`replay` skip `end_function`
-    /// while snapshotting, so no scope must be opened either: otherwise the scope `Start` (written
-    /// through `add_and_commit_oplog`, which commits with `CommitLevel::Always` and therefore
-    /// ignores `PersistNothing`) would be committed with no matching `End`, corrupting later replay.
+    /// while snapshotting, so no scope must be opened either: otherwise the scope `Start` would be
+    /// committed with no matching `End`, corrupting later replay.
     /// A snapshotting region never straddles a single scope's begin/end, so guarding both ends with
     /// the same predicate keeps the durable-scope stack balanced.
     fn opens_durable_scope(&self, function_type: &DurableFunctionType) -> bool {
-        self.snapshotting_mode.is_none()
+        !self.snapshotting_mode
             && ((*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
                 || matches!(
                     *function_type,
@@ -6620,26 +6631,11 @@ impl PrivateDurableWorkerState {
         kind: DurableScopeKind,
         replay_end: Option<concurrent::ReplayCallHandle>,
     ) {
-        // A scope claimed during replay (`replay_end` present) can never lie inside a
-        // persist-nothing zone: replay skips such zones wholesale, so their contents are never
-        // claimed.
-        let opened_in_persist_nothing_zone =
-            replay_end.is_none() && self.persistence_level == PersistenceLevel::PersistNothing;
         self.active_durable_scopes.push(ActiveDurableScope {
             start_index,
             kind,
             replay_end,
-            opened_in_persist_nothing_zone,
         });
-    }
-
-    /// Whether any currently open durable scope was opened live inside the currently open
-    /// `PersistNothing` zone. Leaving the zone while such a scope is open would strand its `Start`
-    /// in the replay-skipped region while its eventual `End` lands outside it.
-    fn has_open_scope_in_persist_nothing_zone(&self) -> bool {
-        self.active_durable_scopes
-            .iter()
-            .any(|scope| scope.opened_in_persist_nothing_zone)
     }
 
     /// Takes the resolver handle for the scope `End` of the open scope at `start_index`, if one was
@@ -6698,8 +6694,8 @@ impl PrivateDurableWorkerState {
 
     /// Whether any live durable host call is currently in flight (its `Start` may already be
     /// appended while its `End`/`Cancelled` is still pending). Used to guard operations that
-    /// establish positional oplog boundaries — e.g. a persistence-level transition — which no
-    /// durable call's `Start`/`End` pair may straddle.
+    /// establish positional oplog boundaries which no durable call's `Start`/`End` pair may
+    /// straddle.
     pub fn has_in_flight_live_host_calls(&self) -> bool {
         self.live_host_calls.load(Ordering::Acquire) > 0
     }
@@ -6966,16 +6962,15 @@ impl PrivateDurableWorkerState {
 
     /// Whether the current oplog tip is a structurally clean boundary at which a mid-invocation
     /// status checkpoint may be taken: we are live, no rollback-capable region is open (so no later
-    /// trap/replay can append a jump that deletes the tip), and we are not in a persistence regime
-    /// whose entries are not folded normally. The `get_oplog_index` marker watermark is checked
-    /// separately by the caller against the committed status tip.
+    /// trap/replay can append a jump that deletes the tip), and snapshotting is not active. The
+    /// `get_oplog_index` marker watermark is checked separately by the caller against the committed
+    /// status tip.
     pub fn at_clean_checkpoint_boundary(&self) -> bool {
         Self::clean_checkpoint_boundary(
             !self.is_live(),
             !self.active_atomic_regions.is_empty(),
             !self.active_durable_scopes.is_empty(),
-            self.persistence_level == PersistenceLevel::PersistNothing,
-            self.snapshotting_mode.is_some(),
+            self.snapshotting_mode,
         )
     }
 
@@ -6986,14 +6981,9 @@ impl PrivateDurableWorkerState {
         replaying: bool,
         open_atomic_region: bool,
         open_durable_scope: bool,
-        persist_nothing: bool,
         snapshotting: bool,
     ) -> bool {
-        !replaying
-            && !open_atomic_region
-            && !open_durable_scope
-            && !persist_nothing
-            && !snapshotting
+        !replaying && !open_atomic_region && !open_durable_scope && !snapshotting
     }
 
     /// The first condition currently blocking a snapshot, or `None` when the worker is at a safe
@@ -7005,8 +6995,8 @@ impl PrivateDurableWorkerState {
     /// but whose `End`/`Cancelled` is recorded after it would leave a terminal whose `Start` the
     /// post-snapshot replay never sees (the orphan terminal is drained harmlessly, but the call
     /// itself cannot be restored from the snapshot). Snapshots are therefore only taken at a
-    /// clean checkpoint boundary (no open atomic regions or durable scopes, normal persistence
-    /// regime) with no durable host call in flight.
+    /// clean checkpoint boundary (no open atomic regions or durable scopes, and no snapshotting)
+    /// with no durable host call in flight.
     ///
     /// The sampled conditions must stay in sync with [`Self::at_clean_checkpoint_boundary`]:
     /// `blocker() == None` is equivalent to
@@ -7016,8 +7006,7 @@ impl PrivateDurableWorkerState {
             replaying: !self.is_live(),
             open_atomic_region: !self.active_atomic_regions.is_empty(),
             open_durable_scope: !self.active_durable_scopes.is_empty(),
-            persist_nothing: self.persistence_level == PersistenceLevel::PersistNothing,
-            snapshotting: self.snapshotting_mode.is_some(),
+            snapshotting: self.snapshotting_mode,
             in_flight_host_call: self.has_in_flight_live_host_calls(),
         }
         .blocker()
@@ -7034,6 +7023,7 @@ impl PrivateDurableWorkerState {
 
     pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
         self.current_idempotency_key = Some(invocation_key);
+        self.custom_invocation_ordinals.clear();
     }
 
     pub async fn get_workers(
@@ -7071,8 +7061,6 @@ struct SnapshotBoundaryConditions {
     open_atomic_region: bool,
     /// A durable scope is open: its `Start`/`End` pair would straddle the snapshot cut.
     open_durable_scope: bool,
-    /// The current persistence level is `PersistNothing`, so entries are not folded normally.
-    persist_nothing: bool,
     /// A snapshotting function (save/load) call is already in progress.
     snapshotting: bool,
     /// A live durable host call is in flight: its `Start` may precede the cut while its
@@ -7090,8 +7078,6 @@ impl SnapshotBoundaryConditions {
             Some(SnapshotBoundaryBlocker::OpenAtomicRegion)
         } else if self.open_durable_scope {
             Some(SnapshotBoundaryBlocker::OpenDurableScope)
-        } else if self.persist_nothing {
-            Some(SnapshotBoundaryBlocker::PersistNothing)
         } else if self.snapshotting {
             Some(SnapshotBoundaryBlocker::Snapshotting)
         } else if self.in_flight_host_call {
@@ -7109,7 +7095,6 @@ pub enum SnapshotBoundaryBlocker {
     Replaying,
     OpenAtomicRegion,
     OpenDurableScope,
-    PersistNothing,
     Snapshotting,
     InFlightHostCall,
 }
@@ -7120,9 +7105,6 @@ impl Display for SnapshotBoundaryBlocker {
             Self::Replaying => write!(f, "the worker is still replaying its oplog"),
             Self::OpenAtomicRegion => write!(f, "an atomic region is still open"),
             Self::OpenDurableScope => write!(f, "a durable scope is still open"),
-            Self::PersistNothing => {
-                write!(f, "persistence is currently disabled (persist-nothing)")
-            }
             Self::Snapshotting => write!(f, "a snapshot function call is already in progress"),
             Self::InFlightHostCall => write!(f, "a durable host call is still in flight"),
         }

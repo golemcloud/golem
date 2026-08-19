@@ -190,10 +190,9 @@ pub(super) struct BegunCallExecutionScope {
     /// Atomic region active when the durable call was initiated, captured so the call's membership
     /// lease is registered against the region it was actually started in.
     pub(super) atomic_region: Option<OplogIndex>,
-    /// Persistence level active when the call was initiated. Kept with the call so p3 Accessor
-    /// windows can snapshot all execution facts before async work resumes elsewhere.
-    #[allow(dead_code)]
-    pub(super) persistence_level: PersistenceLevel,
+    /// Custom durable invocation whose physical execution this call observes. Captured once at
+    /// initiation so asynchronous continuations never depend on ambient task context.
+    pub(super) observational_owner: Option<OplogIndex>,
 }
 
 impl BegunCallExecutionScope {
@@ -203,10 +202,13 @@ impl BegunCallExecutionScope {
         atomic_lease: Option<Arc<AtomicRegionLease>>,
     ) -> CallExecutionScope {
         CallExecutionScope {
-            retry_from: self.parent_start_index.unwrap_or(start_idx),
+            retry_from: self
+                .observational_owner
+                .or(self.parent_start_index)
+                .unwrap_or(start_idx),
             durable_scope: self.parent_start_index,
+            observational_owner: self.observational_owner,
             atomic_lease,
-            persistence_level: self.persistence_level,
         }
     }
 }
@@ -219,15 +221,14 @@ pub(super) struct CallExecutionScope {
     /// The enclosing durable scope, if this call belongs to one.
     #[allow(dead_code)]
     pub(super) durable_scope: Option<OplogIndex>,
+    /// Custom durable invocation that owns this observational call, if any.
+    pub(super) observational_owner: Option<OplogIndex>,
     /// The call's atomic-region ownership lease, registered when the call was initiated inside an
     /// open atomic region. The lease's *current* owner — not the initiation-time region — drives
     /// trap/retry classification: region close transfers pending members to the enclosing region
     /// or detaches them, and a detached call must group at its own `retry_from` instead of
     /// retrying into the committed region.
     pub(super) atomic_lease: Option<Arc<AtomicRegionLease>>,
-    /// Persistence level active when this call was initiated.
-    #[allow(dead_code)]
-    pub(super) persistence_level: PersistenceLevel,
 }
 
 impl CallExecutionScope {
@@ -244,13 +245,16 @@ impl CallExecutionScope {
         }
     }
 
-    /// The retry point to attach to a trap raised by this call: the call's *currently owning*
-    /// atomic region (whole region retried from its begin index) if it still has one, otherwise
-    /// its enclosing durable scope `Start` or its own `Start`. This mirrors
+    /// The retry point to attach to a trap raised by this call: the owning custom invocation for
+    /// an observational call, otherwise the call's *currently owning* atomic region (whole region
+    /// retried from its begin index) if it still has one, otherwise its enclosing durable scope
+    /// `Start` or its own `Start`. This mirrors
     /// [`ScopedRetryHost::retry_point`] so a hard (non-semantic) trap groups exactly like an
     /// inline/semantic retry would.
-    fn trap_retry_point(&self) -> OplogIndex {
-        self.atomic_region().unwrap_or(self.retry_from)
+    pub(super) fn trap_retry_point(&self) -> OplogIndex {
+        self.observational_owner
+            .or_else(|| self.atomic_region())
+            .unwrap_or(self.retry_from)
     }
 }
 
@@ -290,9 +294,9 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     /// permit when a replayed scope switches to live mid-start.
     live_host_calls: Arc<AtomicUsize>,
     /// Taken at prepare time — synchronously with worker state, *before* any oplog entry of this
-    /// call is appended — so an in-flight check (e.g. the `set_oplog_persistence_level` boundary
-    /// guard) can never observe zero calls between this call's `Start` append and its handle
-    /// construction in `finish_access_start`. `Some` for live calls, `None` on replay.
+    /// call is appended — so boundary checks can never observe zero calls between this call's
+    /// `Start` append and its handle construction in `finish_access_start`. `Some` for live calls,
+    /// `None` on replay.
     live_call_permit: Option<LiveCallPermit>,
     _phantom: PhantomData<(Pair, P)>,
 }
@@ -322,10 +326,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
 ///   match it (by value, never by serialized bytes — payloads can contain `HashMap`s whose byte
 ///   order is process-random), disambiguating concurrent top-level calls that differ only in
 ///   their request.
+/// - `observational_owner` carries ownership from a resource created by an earlier observational
+///   call into an asynchronous continuation. When absent, initiation captures the current custom
+///   invocation from the guest-task context.
 #[derive(Default)]
 pub(crate) struct AccessClaimOptions {
     pub(crate) scope_discriminator: Option<String>,
     pub(crate) request_identity: Option<HostRequest>,
+    /// Ownership propagated from a resource created by an earlier observational call. When absent,
+    /// initiation captures the current custom-invocation task context.
+    pub(crate) observational_owner: Option<OplogIndex>,
 }
 
 struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
@@ -405,6 +415,53 @@ fn is_write_side_effect_for_access(function_type: &DurableFunctionType) -> bool 
     )
 }
 
+fn resolve_observational_owner<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    explicit_owner: Option<OplogIndex>,
+    custom_invocation_scope: Option<CustomInvocationScope>,
+) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+    match explicit_owner {
+        Some(owner) => Ok(Some(owner)),
+        None => custom_invocation_scope
+            .map(|scope| {
+                let registered = ctx
+                    .state
+                    .custom_invocation_scopes
+                    .get(&scope.scope_id)
+                    .ok_or_else(|| {
+                        WorkerExecutorError::runtime(format!(
+                            "custom-operation scope {} is no longer active",
+                            scope.scope_id
+                        ))
+                    })?;
+                if registered.owner_start_index != scope.owner_start_index
+                    || !ctx
+                        .state
+                        .active_custom_invocations
+                        .contains_key(&scope.owner_start_index)
+                {
+                    return Err(WorkerExecutorError::runtime(format!(
+                        "custom-operation scope {} has stale invocation attribution",
+                        scope.scope_id
+                    )));
+                }
+                Ok(scope.owner_start_index)
+            })
+            .transpose(),
+    }
+}
+
+pub(crate) fn resolve_current_observational_owner<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    custom_invocation_context: Option<&CustomInvocationContext>,
+) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+    resolve_observational_owner(
+        ctx,
+        None,
+        custom_invocation_context.and_then(CustomInvocationContext::current),
+    )
+}
+
 pub(super) struct ScopedRetryHost<'a, H> {
     inner: &'a mut H,
     execution_scope: &'a CallExecutionScope,
@@ -445,9 +502,7 @@ impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHo
     }
 
     fn durable_execution_state(&self) -> DurableExecutionState {
-        let mut state = self.inner.durable_execution_state();
-        state.persistence_level = self.execution_scope.persistence_level;
-        state
+        self.inner.durable_execution_state()
     }
 
     fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
@@ -649,6 +704,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         Ctx: WorkerCtx,
         F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
     {
+        // Capture the immutable task-context snapshot synchronously, before the first await. The
+        // store window below validates it against worker state and moves the owner into the call's
+        // execution scope.
+        let custom_invocation_scope = store
+            .guest_task_context::<CustomInvocationContext>()
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            .as_deref()
+            .and_then(CustomInvocationContext::current);
         if !is_accessor_supported_function_type(&function_type) {
             return Err(WorkerExecutorError::runtime(format!(
                 "p3 accessor durable call path currently supports only ReadLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
@@ -656,7 +719,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         }
         let prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            Self::prepare_access_start(ctx, function_type, claim_options)
+            Self::prepare_access_start(ctx, function_type, claim_options, custom_invocation_scope)
         })?;
         let mut start_guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
 
@@ -745,6 +808,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
+        custom_invocation_scope: Option<CustomInvocationScope>,
     ) -> Result<PreparedAccessStart<Pair, P, Ctx>, WorkerExecutorError> {
         DurabilityHost::observe_function_call(ctx, Pair::INTERFACE, Pair::FUNCTION);
         if !is_accessor_supported_function_type(&function_type) {
@@ -774,13 +838,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         let parent_start_index = ctx
             .state
             .child_parent_start_index(&function_type, OplogIndex::INITIAL);
+        let observational_owner = resolve_observational_owner(
+            ctx,
+            claim_options.observational_owner,
+            custom_invocation_scope,
+        )?;
         let execution_scope = BegunCallExecutionScope {
             parent_start_index,
             atomic_region,
-            persistence_level: ctx.state.persistence_level,
+            observational_owner,
         };
         let is_live = durable_execution_state.is_live;
-        let snapshotting = durable_execution_state.snapshotting_mode.is_some();
+        let snapshotting = durable_execution_state.snapshotting_mode;
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
         // A live persisted call initiated inside an open atomic region joins the region's member
@@ -830,16 +899,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         })
     }
 
-    /// Persistence-suppression model: only **snapshotting** is handled here (the live
-    /// `persisted: false` branch). `PersistenceLevel::PersistNothing` deliberately is *not* — a
-    /// live call inside a persist-nothing zone still appends its `Start`/`End`, exactly like the
-    /// legacy P2 path (`persist_durable_function_invocation`), because the PersistNothing contract
-    /// is enforced elsewhere: `PrimaryOplog::commit` suppresses non-`Always` commits while the
-    /// zone is open (so the call's own `DurableOnly` commits flush nothing), zone contents that do
-    /// reach storage (via the zone-closing `Always` commit) are observability-only, and the replay
-    /// cursor skips whole persist-nothing zones without claiming the entries inside them. The
-    /// replay branch below guards against ever *replaying* a durable call inside a PersistNothing
-    /// block, mirroring `read_persisted_durable_function_invocation`.
+    /// Snapshotting is the only state in which a live host call is intentionally not persisted.
     async fn execute_access_start<Ctx: WorkerCtx, F>(
         mut prepared: PreparedAccessStart<Pair, P, Ctx>,
         build_request: F,
@@ -870,7 +930,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     retry.function_type().clone(),
                     DurableExecutionState {
                         is_live: true,
-                        persistence_level: previous.persistence_level,
                         snapshotting_mode: previous.snapshotting_mode,
                         assume_idempotence: previous.assume_idempotence,
                         max_in_function_retry_delay: previous.max_in_function_retry_delay,
@@ -941,6 +1000,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 let request: HostRequest = request.into();
                 let function_type = retry.function_type().clone();
                 let parent_start_index = execution_scope.parent_start_index;
+                let observational_owner = execution_scope.observational_owner;
                 let (start_idx, request_upload) = prepared
                     .oplog
                     .add_start_with_reserved_payload(request, move |request_payload| {
@@ -948,6 +1008,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                             timestamp: Timestamp::now_utc(),
                             parent_start_index,
                             function_name: Pair::HOST_FUNCTION_NAME,
+                            invocation_id: None,
+                            observational_owner,
                             request: Some(request_payload),
                             durable_function_type: function_type,
                         }
@@ -991,17 +1053,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 })
             }
         } else {
-            if retry.durable_execution_state().persistence_level == PersistenceLevel::PersistNothing
-            {
-                return Err((
-                    WorkerExecutorError::runtime(
-                        "Trying to replay a durable invocation in a PersistNothing block",
-                    ),
-                    AccessStartCleanup {
-                        atomic_lease: prepared.atomic_lease.clone(),
-                    },
-                ));
-            }
             // A call owned by another durable record (its own opened scope, or the parent
             // encoded in the function type) is claimed by identity: accessor host calls run
             // concurrently, so owned `Start`s (e.g. per-chunk children of overlapping
@@ -1106,6 +1157,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: None,
                 function_name: scope_name,
+                invocation_id: None,
+                observational_owner: prepared.execution_scope.observational_owner,
                 request: None,
                 durable_function_type: function_type,
             };
@@ -1169,10 +1222,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         begin_index,
                         OplogEntry::is_end_remote_write_s::<ScopeScanState>,
                         OplogEntry::no_concurrent_side_effect,
-                        ScopeScanState::new(
-                            begin_index,
-                            prepared.execution_scope.persistence_level,
-                        ),
+                        ScopeScanState::new(begin_index),
                         OplogEntry::track_scope_membership,
                     )
                     .await;
@@ -1289,6 +1339,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
     ) -> Result<BegunCall<Pair, P>, WorkerExecutorError> {
+        // Capture and validate the host task's immutable initiation-time context before the first
+        // await. Calls already in flight retain this owner after the guest leaves the lexical scope.
+        let custom_invocation_scope =
+            wasmtime::component::current_guest_task_context::<CustomInvocationContext>()
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                .as_deref()
+                .and_then(CustomInvocationContext::current);
+        let observational_owner = resolve_observational_owner(ctx, None, custom_invocation_scope)?;
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(|err| err.source)?;
@@ -1309,7 +1367,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 .active_atomic_regions
                 .last()
                 .map(|region| region.begin_index),
-            persistence_level: ctx.state.persistence_level,
+            observational_owner,
         };
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
@@ -1338,6 +1396,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     /// derivation).
     pub fn begin_index(&self) -> OplogIndex {
         self.begin_index
+    }
+
+    pub(crate) fn observational_owner(&self) -> Option<OplogIndex> {
+        self.execution_scope.observational_owner
+    }
+
+    pub(crate) fn is_observational(&self) -> bool {
+        self.observational_owner().is_some()
     }
 
     /// Low-level abandon: marks the call as finished without writing anything to the oplog, leaving
@@ -3249,11 +3315,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         request: Pair::Req,
     ) -> Result<CallHandle<Pair, P>, WorkerExecutorError> {
         debug_assert!(self.is_live(), "start_live() called on a replay handle");
-        let snapshotting = self
-            .retry
-            .durable_execution_state()
-            .snapshotting_mode
-            .is_some();
+        let snapshotting = self.retry.durable_execution_state().snapshotting_mode;
         // The host-call `Start` nests inside the enclosing durable scope captured at initiation
         // (its own opened scope, or the scope encoded in the function type), derived explicitly —
         // never from the set of temporally-open sibling scopes. `None` for a top-level unscoped call.
@@ -3270,6 +3332,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             let request: HostRequest = request.into();
             let function_type = self.retry.function_type().clone();
             let oplog = ctx.state.oplog.clone();
+            let observational_owner = self.execution_scope.observational_owner;
             // Reserve the request payload and append the `Start` in one guarded step: a big request
             // blob's upload is *begun* but not awaited, so the `Start` is appended in initiation
             // order before the (potentially slow) upload finishes. `add_start_with_reserved_payload`
@@ -3282,6 +3345,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                         timestamp: Timestamp::now_utc(),
                         parent_start_index,
                         function_name: Pair::HOST_FUNCTION_NAME,
+                        invocation_id: None,
+                        observational_owner,
                         request: Some(request_payload),
                         durable_function_type: function_type,
                     }
@@ -3343,14 +3408,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
     ) -> Result<CallHandle<Pair, P>, WorkerExecutorError> {
         debug_assert!(!self.is_live(), "start_replay() called on a live handle");
-        // Defensive guard, mirroring `read_persisted_durable_function_invocation`.
-        if self.retry.durable_execution_state().persistence_level
-            == PersistenceLevel::PersistNothing
-        {
-            return Err(WorkerExecutorError::runtime(
-                "Trying to replay a durable invocation in a PersistNothing block",
-            ));
-        }
         let replay = ctx
             .state
             .replay_state

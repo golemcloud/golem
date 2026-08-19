@@ -278,9 +278,7 @@ mod tests {
     use golem_common::model::agent::AgentMode;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::oplog::{
-        OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
-    };
+    use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
     use golem_common::model::{AgentId, OwnedAgentId, PromiseId, ScheduleId, ScheduledAction};
     use std::collections::{BTreeMap, BTreeSet};
     use std::fmt::{Debug, Formatter};
@@ -410,8 +408,6 @@ mod tests {
         ) -> Result<OrderedOplogStart, String> {
             unreachable!("oplog is unused by this test")
         }
-
-        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
     }
 
     fn unused_wakeup_scheduler() -> WakeupScheduler {
@@ -558,8 +554,6 @@ mod tests {
         ) -> Result<OrderedOplogStart, String> {
             unreachable!("oplog is unused by this test")
         }
-
-        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
     }
 
     fn flipping_wakeup_scheduler(safe: Arc<AtomicBool>) -> WakeupScheduler {

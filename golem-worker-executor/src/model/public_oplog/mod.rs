@@ -29,16 +29,15 @@ use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedParams, ChangePersistenceLevelParams,
-    CommittedRemoteTransactionParams, CompletionDiscardedParams, CreateParams,
-    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
-    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FinishSpanParams, GrowMemoryParams,
-    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
-    SuspendParams,
+    CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
+    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
+    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
+    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
+    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -318,6 +317,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 parent_start_index,
                 function_name,
+                invocation_id,
+                observational_owner,
                 request,
                 durable_function_type,
             } => {
@@ -351,6 +352,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     parent_start_index,
                     function_name: function_name.to_string(),
+                    invocation_id,
+                    observational_owner,
                     request: request_value,
                     durable_function_type: durable_function_type.into(),
                 }))
@@ -770,15 +773,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 key,
                 value: value.into(),
             })),
-            OplogEntry::ChangePersistenceLevel {
-                timestamp,
-                persistence_level,
-            } => Ok(PublicOplogEntry::ChangePersistenceLevel(
-                ChangePersistenceLevelParams {
-                    timestamp,
-                    persistence_level,
-                },
-            )),
             OplogEntry::BeginRemoteTransaction {
                 timestamp,
                 transaction_id,

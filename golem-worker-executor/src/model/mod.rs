@@ -24,8 +24,7 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::oplog::{
-    AgentError, AgentTerminatedByQuotaError, EphemeralCannotSuspendError, PersistenceLevel,
-    ReadOnlyViolationError,
+    AgentError, AgentTerminatedByQuotaError, EphemeralCannotSuspendError, ReadOnlyViolationError,
 };
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::worker::TypedAgentConfigEntry;
@@ -526,38 +525,6 @@ pub struct LastError {
 impl Display for LastError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.error.to_string(&self.stderr))
-    }
-}
-
-impl From<crate::preview2::golem_api_1_x::host::PersistenceLevel> for PersistenceLevel {
-    fn from(value: crate::preview2::golem_api_1_x::host::PersistenceLevel) -> Self {
-        match value {
-            crate::preview2::golem_api_1_x::host::PersistenceLevel::PersistNothing => {
-                PersistenceLevel::PersistNothing
-            }
-            crate::preview2::golem_api_1_x::host::PersistenceLevel::PersistRemoteSideEffects => {
-                PersistenceLevel::PersistRemoteSideEffects
-            }
-            crate::preview2::golem_api_1_x::host::PersistenceLevel::Smart => {
-                PersistenceLevel::Smart
-            }
-        }
-    }
-}
-
-impl From<PersistenceLevel> for crate::preview2::golem_api_1_x::host::PersistenceLevel {
-    fn from(value: PersistenceLevel) -> Self {
-        match value {
-            PersistenceLevel::PersistNothing => {
-                crate::preview2::golem_api_1_x::host::PersistenceLevel::PersistNothing
-            }
-            PersistenceLevel::PersistRemoteSideEffects => {
-                crate::preview2::golem_api_1_x::host::PersistenceLevel::PersistRemoteSideEffects
-            }
-            PersistenceLevel::Smart => {
-                crate::preview2::golem_api_1_x::host::PersistenceLevel::Smart
-            }
-        }
     }
 }
 

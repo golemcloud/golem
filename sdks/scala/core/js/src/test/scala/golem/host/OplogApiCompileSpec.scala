@@ -115,7 +115,6 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.StartSpan(p)                    => s"start-span(${p.spanId})"
     case OplogEntry.FinishSpan(p)                   => s"finish-span(${p.spanId})"
     case OplogEntry.SetSpanAttribute(p)             => s"set-attr(${p.key})"
-    case OplogEntry.ChangePersistenceLevel(p)       => s"change-pl(${p.persistenceLevel})"
     case OplogEntry.BeginRemoteTransaction(p)       => s"begin-tx(${p.transactionId})"
     case OplogEntry.PreCommitRemoteTransaction(p)   => s"pre-commit(${p.beginIndex})"
     case OplogEntry.PreRollbackRemoteTransaction(p) => s"pre-rollback(${p.beginIndex})"
@@ -163,7 +162,6 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.GrowMemory(GrowMemoryParameters(ts, BigInt(65536))),
       OplogEntry.CancelPendingInvocation(CancelPendingInvocationParameters(ts, "idem-key")),
       OplogEntry.FinishSpan(FinishSpanParameters(ts, "span-1")),
-      OplogEntry.ChangePersistenceLevel(ChangePersistenceLevelParameters(ts, HostApi.PersistenceLevel.Smart)),
       OplogEntry.BeginRemoteTransaction(BeginRemoteTransactionParameters(ts, "tx-1")),
       OplogEntry.PreCommitRemoteTransaction(RemoteTransactionParameters(ts, BigInt(10))),
       OplogEntry.PreRollbackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(11))),
@@ -185,6 +183,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           ts,
           None,
           "wasi:io/read",
+          None,
+          None,
           Some(sampleTyped),
           DurabilityApi.DurableFunctionType.ReadRemote
         )

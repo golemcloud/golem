@@ -2928,28 +2928,29 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let env = deps.create_env(app.revision.application_id).await;
     let environment_id = env.revision.environment_id;
     let component_name = format!("tool-component-{}", new_repo_uuid());
+    let initial_component_revision = ComponentRevisionRecord {
+        component_id: new_repo_uuid(),
+        revision_id: 0,
+        hash: SqlBlake3Hash::empty(),
+        audit: DeletableRevisionAuditFields::new(owner_account_id),
+        size: 0.into(),
+        metadata: Blob::new(ComponentMetadata::from_parts(
+            KnownExports::default(),
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+        )),
+        object_store_key: String::new(),
+        binary_hash: SqlBlake3Hash::empty(),
+    };
     let component = deps
         .component_repo
         .create(
             environment_id,
             &component_name,
-            ComponentRevisionRecord {
-                component_id: new_repo_uuid(),
-                revision_id: 0,
-                hash: SqlBlake3Hash::empty(),
-                audit: DeletableRevisionAuditFields::new(owner_account_id),
-                size: 0.into(),
-                metadata: Blob::new(ComponentMetadata::from_parts(
-                    KnownExports::default(),
-                    Vec::new(),
-                    None,
-                    None,
-                    Vec::new(),
-                    BTreeMap::new(),
-                )),
-                object_store_key: String::new(),
-                binary_hash: SqlBlake3Hash::empty(),
-            },
+            initial_component_revision.clone(),
             Vec::new(),
         )
         .await
@@ -2958,7 +2959,10 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let component_revision_id = component.revision.revision_id;
     let agent_type_name = format!("Agent{}", new_repo_uuid().simple());
 
-    let deployment_creation = |deployment_revision_id: i64, version: &str, tools: Vec<Tool>| {
+    let deployment_creation = |deployment_revision_id: i64,
+                               component_revision_id: i64,
+                               version: &str,
+                               tools: Vec<Tool>| {
         let deployment_revision = DeploymentRevision::try_from(deployment_revision_id).unwrap();
         let source = ToolSource::Component {
             component_id: ComponentId(component_id),
@@ -3056,6 +3060,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .deploy(
             deployment_creation(
                 1,
+                component_revision_id,
                 "1.0.0",
                 vec![
                     make_test_tool("zeta", "1.0.0"),
@@ -3069,7 +3074,12 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .signal_new_events_available(&deps.test_registry_change_notifier());
     deps.full_deployment_repo
         .deploy(
-            deployment_creation(2, "2.0.0", vec![make_test_tool("alpha", "2.0.0")]),
+            deployment_creation(
+                2,
+                component_revision_id,
+                "2.0.0",
+                vec![make_test_tool("alpha", "2.0.0")],
+            ),
             false,
         )
         .await
@@ -3128,6 +3138,60 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             .0,
         serde_json::json!({ "revision": 2 })
     );
+
+    let updated_component_revision_id = component_revision_id + 1;
+    deps.component_repo
+        .update(
+            ComponentRevisionRecord {
+                revision_id: updated_component_revision_id,
+                ..initial_component_revision
+            }
+            .with_updated_hash()
+            .unwrap(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    deps.full_deployment_repo
+        .deploy(
+            deployment_creation(
+                3,
+                updated_component_revision_id,
+                "3.0.0",
+                vec![make_test_tool("alpha", "3.0.0")],
+            ),
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+
+    let latest_for_component: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_latest_tool_deployment_state_by_component_revision(
+            &environment_id,
+            &component_id,
+            component_revision_id,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(latest_for_component.deployment_revision.get(), 2);
+    let latest_for_updated_component: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_latest_tool_deployment_state_by_component_revision(
+            &environment_id,
+            &component_id,
+            updated_component_revision_id,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(latest_for_updated_component.deployment_revision.get(), 3);
 
     deps.full_deployment_repo
         .set_current_deployment(owner_account_id, environment_id, 1)

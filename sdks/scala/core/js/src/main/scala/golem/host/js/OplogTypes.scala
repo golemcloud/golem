@@ -87,6 +87,8 @@ sealed trait JsStartParameters extends js.Object {
   def timestamp: JsDatetime                      = js.native
   def parentStartIndex: js.UndefOr[js.BigInt]    = js.native
   def functionName: String                       = js.native
+  def invocationId: js.UndefOr[JsUuid]           = js.native
+  def observationalOwner: js.UndefOr[js.BigInt]  = js.native
   def request: js.UndefOr[JsTypedSchemaValue]    = js.native
   def durableFunctionType: JsWrappedFunctionType = js.native
 }
@@ -487,14 +489,6 @@ sealed trait JsSetSpanAttributeParameters extends js.Object {
   def spanId: String          = js.native
   def key: String             = js.native
   def value: JsAttributeValue = js.native
-}
-
-// --- ChangePersistenceLevelParameters ---
-
-@js.native
-sealed trait JsChangePersistenceLevelParameters extends js.Object {
-  def timestamp: JsDatetime                = js.native
-  def persistenceLevel: JsPersistenceLevel = js.native
 }
 
 // --- BeginRemoteTransactionParameters ---

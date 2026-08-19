@@ -314,46 +314,6 @@ let same = OtherAgentClient::get_phantom(id, "param".to_string());
 
 Avoid RPC cycles (A calls B calls A) — use `trigger_` to break deadlocks.
 
-## Durability Features
-
-Golem provides **automatic durable execution** — all agents are durable by default without any special code. State is persisted via an oplog (operation log) and agents survive failures, restarts, and updates transparently.
-
-The APIs below are **advanced controls** that most agents will never need. Only use them when you have specific requirements around persistence granularity, idempotency, or transactional compensation:
-
-```rust
-use golem_rust::{
-    with_persistence_level, PersistenceLevel,
-    with_idempotence_mode,
-    atomically,
-    oplog_commit,
-    generate_idempotency_key,
-    with_retry_policy, RetryPolicy,
-};
-
-// Atomic operations — retried together on failure
-let result = atomically(|| {
-let a = side_effect_1();
-let b = side_effect_2(a);
-(a, b)
-});
-
-// Control persistence level
-with_persistence_level(PersistenceLevel::PersistNothing, || {
-// No oplog entries — side effects replayed on recovery
-});
-
-// Control idempotence mode
-with_idempotence_mode(false, || {
-// HTTP requests won't be retried if result is uncertain
-});
-
-// Ensure oplog is replicated
-oplog_commit(3); // Wait for 3 replicas
-
-// Generate a durable idempotency key (persisted, safe for payment APIs etc.)
-let key = generate_idempotency_key();
-```
-
 ### Transactions
 
 For saga-pattern compensation:
@@ -549,7 +509,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-ts` | Waiting for external input using Golem promises (human-in-the-loop) |
 | `golem-add-webhook-ts` | Creating and awaiting webhooks for webhook-driven external APIs |
 | `golem-multi-instance-agent-ts` | Creating multiple agent instances with phantom agents |
-| `golem-atomic-block-ts` | Atomic blocks, persistence control, and idempotency |
+| `golem-atomic-block-ts` | Atomic blocks and idempotency |
 | `golem-add-transactions-ts` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-ts` | Exposing an agent over HTTP with mount paths and endpoints |
 | `golem-http-params-ts` | Mapping path, query, header, and body parameters for HTTP endpoints |

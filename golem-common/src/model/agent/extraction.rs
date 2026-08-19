@@ -18,7 +18,7 @@ use crate::schema::agent::AgentTypeSchema;
 use crate::schema::agent::wit::{decode_agent_error_rejecting_quota_with, decode_agent_type, wire};
 use crate::schema::tool::Tool;
 use crate::schema::tool::validation::validate_tool;
-use crate::schema::tool::wit::{decode_tool, wire as tool_wire};
+use crate::schema::tool::wit::wire as tool_wire;
 use crate::wasmtime_config::create_wasmtime_config;
 use anyhow::anyhow;
 use golem_schema::schema::wit::{
@@ -366,7 +366,7 @@ async fn discover_tools(store: &mut Store<Host>, func: Func) -> anyhow::Result<V
         Ok(results) => {
             let mut tools: Vec<Tool> = Vec::with_capacity(results.len());
             for wire_tool in results {
-                let tool = decode_tool(&wire_tool)
+                let tool = Tool::try_from(&wire_tool)
                     .map_err(|e| anyhow!("Failed to decode discovered tool: {e}"))?;
                 if let Err(errors) = validate_tool(&tool) {
                     let errors = errors

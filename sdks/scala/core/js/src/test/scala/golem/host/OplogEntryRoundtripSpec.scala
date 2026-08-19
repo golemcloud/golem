@@ -177,23 +177,6 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.asInstanceOf[OplogEntry.FinishSpan].params.spanId == "span-42"
       )
     },
-    test("ChangePersistenceLevel from dynamic") {
-      val raw = wrapEntry(
-        "change-persistence-level",
-        js.Dynamic.literal(
-          timestamp = ts(),
-          persistenceLevel = js.Dynamic.literal(tag = "smart")
-        )
-      )
-      val parsed = OplogEntry.fromJs(raw)
-      assertTrue(
-        parsed.isInstanceOf[OplogEntry.ChangePersistenceLevel],
-        parsed
-          .asInstanceOf[OplogEntry.ChangePersistenceLevel]
-          .params
-          .persistenceLevel == HostApi.PersistenceLevel.Smart
-      )
-    },
     test("BeginRemoteTransaction from dynamic") {
       val raw = wrapEntry(
         "begin-remote-transaction",
@@ -396,6 +379,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           timestamp = ts(),
           parentStartIndex = js.undefined,
           functionName = "wasi:io/read",
+          invocationId = js.Dynamic.literal(highBits = js.BigInt("1"), lowBits = js.BigInt("2")),
+          observationalOwner = js.BigInt("11"),
           request = sampleTypedJs,
           durableFunctionType = js.Dynamic.literal(tag = "read-remote")
         )
@@ -405,6 +390,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         parsed.isInstanceOf[OplogEntry.Start],
         s.params.functionName == "wasi:io/read",
+        s.params.invocationId.contains(golem.Uuid(BigInt(1), BigInt(2))),
+        s.params.observationalOwner.contains(BigInt(11)),
         s.params.request.isDefined,
         s.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote
       )

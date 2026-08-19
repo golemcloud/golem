@@ -23,9 +23,7 @@ use crate::services::oplog::{
 use async_trait::async_trait;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
-};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use nonempty_collections::NEVec;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
@@ -691,8 +689,6 @@ impl Oplog for EphemeralOplog {
         }
         total
     }
-
-    async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
         self.primary_service
