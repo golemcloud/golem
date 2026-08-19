@@ -61,6 +61,8 @@ pub enum ScenarioCode {
     S5,
     /// Shard-manager pod restart under mixed workload.
     S12,
+    /// Rolling executor restarts under load.
+    S13,
 }
 
 impl ScenarioCode {
@@ -70,17 +72,19 @@ impl ScenarioCode {
             ScenarioCode::S8 => "S8",
             ScenarioCode::S5 => "S5",
             ScenarioCode::S12 => "S12",
+            ScenarioCode::S13 => "S13",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 4] = [
+    pub const ALL: [ScenarioCode; 5] = [
         ScenarioCode::S1,
         ScenarioCode::S5,
         ScenarioCode::S8,
         ScenarioCode::S12,
+        ScenarioCode::S13,
     ];
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -647,6 +651,9 @@ mod tests {
                     entry.require_ownership().unwrap();
                 }
                 ScenarioCode::S5 => {
+                    entry.require_workload().unwrap();
+                }
+                ScenarioCode::S13 => {
                     entry.require_workload().unwrap();
                 }
             }

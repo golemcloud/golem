@@ -240,6 +240,8 @@ pub enum ChaosScenarioArg {
     S5,
     /// Shard-manager pod restart under mixed workload.
     S12,
+    /// Rolling executor restarts under load.
+    S13,
 }
 
 /// Density subcommand action.

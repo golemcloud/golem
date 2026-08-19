@@ -317,3 +317,58 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # S13 — rolling executor restarts under load (GOL-367).
+  #
+  # One executor killed every 60 seconds for five minutes while the mixed
+  # workload runs. Nothing is partitioned and nothing is updated: the question
+  # is only whether five rebalances in a row compose the way one does.
+  #
+  # The cadence is deliberately close to how long a rebalance takes. Spacing the
+  # kills far enough apart to guarantee quiet between them would turn S13 into
+  # S8 five times over, which tests nothing new.
+  - code: S13
+    name: rolling-executor-restarts
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      mode: one
+      # Each individual kill. The schedule below is what makes this rolling.
+      durationSecs: 30
+
+    rollingRestarts:
+      # Five kills, 60s apart, is the five-minute window from the spec. The
+      # workflow performs them and records each one in executor-restarts.json;
+      # the driver reads that back rather than inferring restarts from the
+      # routing table, which cannot distinguish a kill from a rebalance.
+      intervalSecs: 60
+      count: 5
+
+    phases:
+      baselineSecs: 300
+      # Long enough to cover five kills 60s apart plus the last reschedule.
+      faultSecs: 360
+      # Cumulative damage is the thing S13 looks for, so the cluster gets a
+      # generous window to converge before read-back decides whether it did.
+      recoverySecs: 420
+
+    workload:
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 50
+      promiseAgents: 50
+      quotaAgents: 0
+      # The project caps this at 25% of measured per-pod capacity so the run
+      # measures recovery rather than saturation. Restarting an executor
+      # removes half the capacity for as long as the reschedule takes, so a
+      # rate that is comfortable at two executors has to stay survivable at one.
+      ratePerSec: 100
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

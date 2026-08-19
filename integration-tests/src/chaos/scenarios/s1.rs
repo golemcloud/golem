@@ -71,7 +71,8 @@ use crate::chaos::prep::ChaosPrepManifest;
 use crate::chaos::probe;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
 use crate::chaos::scenarios::{
-    WARMUP_SETTLE, wait_for_settled_routing, warm_up,
+    WARMUP_SETTLE, exactly_once_termination, read_counters, sample_ownership,
+    wait_for_settled_routing, warm_up,
     OutputPaths, ReadKind, ScenarioOutcome, build_result, read_back_agents, signal_termination,
     snapshot_routing, write_outputs,
 };
@@ -586,105 +587,7 @@ pub async fn run(
     finish!(reason, &records, readback, Some(exactly_once));
 }
 
-/// Reads the shard-manager's assignment, relative to the previous sample.
-///
-/// Failure is recorded, not propagated: an unreachable shard-manager is an
-/// observation, and during a fault aimed at its links the expected one.
-async fn sample_ownership(
-    deps: &BenchmarkTestDependencies,
-    at: &str,
-    previous: Option<&OwnershipSample>,
-    settled: bool,
-) -> OwnershipSample {
-    let routing = deps.shard_manager().get_routing_table().await.ok();
-    OwnershipSample::from_routing(at, routing.as_ref(), previous, settled)
-}
 
-/// Turns the exactly-once account into a termination reason, if it found
-/// something.
-///
-/// This is where S1's single assertion lives. Two executors owning one shard is
-/// not observable from outside the cluster, but a key that executed twice is,
-/// and it is the harm that ownership overlap would cause. See
-/// [`crate::chaos::ownership`] for why the routing table cannot answer this.
-fn exactly_once_termination(report: &ExactlyOnceReport) -> Option<TerminationReason> {
-    if !report.has_violations() {
-        return None;
-    }
-    Some(TerminationReason::ShardOwnershipViolated {
-        findings: report.findings.len() as u64,
-        first: report
-            .findings
-            .first()
-            .map(|f| format!("{} on key {}", f.violation, f.idempotency_key))
-            .unwrap_or_default(),
-    })
-}
-
-/// Current counter of every durable agent the run touched.
-///
-/// Scoped to the agents in the history rather than the whole configured pool:
-/// an agent the run never drove has nothing to say about it.
-///
-/// Concurrent and bounded, for the same reason [`super::read_back_agents`] is,
-/// and this function learned it the expensive way: it walked 200 agents one at
-/// a time behind a 30s ceiling, so a run where every agent had stopped
-/// answering spent 100 minutes here producing nothing but timeouts. Reads do
-/// not mutate, so batching them changes none of the numbers.
-async fn read_counters(
-    ctx: &WorkloadContext,
-    records: &[OperationRecord],
-) -> std::collections::BTreeMap<String, u64> {
-    let agents: Vec<String> = records
-        .iter()
-        .filter(|r| r.stream == Stream::Durable)
-        .map(|r| r.agent.clone())
-        .collect::<std::collections::BTreeSet<String>>()
-        .into_iter()
-        .collect();
-
-    let total = agents.len();
-    let mut values = std::collections::BTreeMap::new();
-    let mut done = 0usize;
-    let mut next_report = super::READ_PROGRESS_EVERY;
-
-    for chunk in agents.chunks(super::READ_CONCURRENCY) {
-        let mut batch = tokio::task::JoinSet::new();
-        for agent in chunk.iter().cloned() {
-            let ctx = ctx.clone();
-            batch.spawn(async move {
-                let value = workload::read_counter(&ctx, &agent).await;
-                (agent, value)
-            });
-        }
-
-        while let Some(joined) = batch.join_next().await {
-            match joined {
-                Ok((agent, Ok(value))) => {
-                    values.insert(agent, value);
-                }
-                Ok((agent, Err(e))) => {
-                    warn!("S1: could not read durable agent {agent}: {e}")
-                }
-                Err(e) => warn!("S1: a durable read-back task panicked: {e}"),
-            }
-        }
-
-        done += chunk.len();
-        if done >= next_report {
-            info!("S1: read {done} of {total} durable counters");
-            next_report += super::READ_PROGRESS_EVERY;
-        }
-    }
-    values
-}
-
-/// Read-back for every stream that keeps a durable count.
-///
-/// Concurrent and individually bounded: a fault can leave an agent that never
-/// answers — a quota lease lost mid-run parks the agent's next reservation with
-/// no timeout on the platform side — and walking 300 agents sequentially behind
-/// a 30s ceiling would outlast the maintenance window several times over.
 async fn read_back(
     ctx: &WorkloadContext,
     records: &[OperationRecord],

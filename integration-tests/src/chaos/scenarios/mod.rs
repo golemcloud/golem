@@ -26,6 +26,7 @@
 //! produce a plausible-looking report from a wasted maintenance window.
 
 pub mod s1;
+pub mod s13;
 pub mod s5;
 pub mod s12;
 pub mod s8;
@@ -35,11 +36,14 @@ use crate::chaos::history::{OperationHistory, OperationRecord, Stream};
 use crate::chaos::pinned::PinnedSelection;
 use crate::chaos::result::{ChaosResult, Phases, RESULT_SCHEMA_VERSION, RunScope};
 use crate::chaos::signal::SignalError;
-use crate::chaos::summary::{AgentReadback, ChaosSummary, RoutingSnapshot, TerminationReason};
+use crate::chaos::summary::{
+    AgentReadback, ChaosSummary, ExactlyOnceReport, RoutingSnapshot, TerminationReason,
+};
 use chrono::{DateTime, Utc};
 use golem_test_framework::benchmark::RunMetadata;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
-use crate::chaos::workload::WorkloadContext;
+use crate::chaos::ownership::OwnershipSample;
+use crate::chaos::workload::{self, WorkloadContext};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -288,6 +292,107 @@ pub async fn warm_up(ctx: &WorkloadContext, config: &crate::chaos::WorkloadConfi
     total
 }
 
+
+/// Turns the exactly-once account into a termination reason, if it found
+/// something.
+///
+/// This is the assertion S1 and S13 share. Two executors owning one shard is
+/// not observable from outside the cluster, but a key that executed twice is,
+/// and it is the harm that ownership overlap would cause. See
+/// [`crate::chaos::ownership`] for why the routing table cannot answer this.
+pub fn exactly_once_termination(report: &ExactlyOnceReport) -> Option<TerminationReason> {
+    if !report.has_violations() {
+        return None;
+    }
+    Some(TerminationReason::ShardOwnershipViolated {
+        findings: report.findings.len() as u64,
+        first: report
+            .findings
+            .first()
+            .map(|f| format!("{} on key {}", f.violation, f.idempotency_key))
+            .unwrap_or_default(),
+    })
+}
+
+
+/// Current counter of every durable agent the run touched.
+///
+/// Scoped to the agents in the history rather than the whole configured pool:
+/// an agent the run never drove has nothing to say about it.
+///
+/// Concurrent and bounded, for the same reason [`super::read_back_agents`] is,
+/// and this function learned it the expensive way: it walked 200 agents one at
+/// a time behind a 30s ceiling, so a run where every agent had stopped
+/// answering spent 100 minutes here producing nothing but timeouts. Reads do
+/// not mutate, so batching them changes none of the numbers.
+pub async fn read_counters(
+    ctx: &WorkloadContext,
+    records: &[OperationRecord],
+) -> std::collections::BTreeMap<String, u64> {
+    let agents: Vec<String> = records
+        .iter()
+        .filter(|r| r.stream == Stream::Durable)
+        .map(|r| r.agent.clone())
+        .collect::<std::collections::BTreeSet<String>>()
+        .into_iter()
+        .collect();
+
+    let total = agents.len();
+    let mut values = std::collections::BTreeMap::new();
+    let mut done = 0usize;
+    let mut next_report = READ_PROGRESS_EVERY;
+
+    for chunk in agents.chunks(READ_CONCURRENCY) {
+        let mut batch = tokio::task::JoinSet::new();
+        for agent in chunk.iter().cloned() {
+            let ctx = ctx.clone();
+            batch.spawn(async move {
+                let value = workload::read_counter(&ctx, &agent).await;
+                (agent, value)
+            });
+        }
+
+        while let Some(joined) = batch.join_next().await {
+            match joined {
+                Ok((agent, Ok(value))) => {
+                    values.insert(agent, value);
+                }
+                Ok((agent, Err(e))) => {
+                    warn!("S1: could not read durable agent {agent}: {e}")
+                }
+                Err(e) => warn!("S1: a durable read-back task panicked: {e}"),
+            }
+        }
+
+        done += chunk.len();
+        if done >= next_report {
+            info!("S1: read {done} of {total} durable counters");
+            next_report += READ_PROGRESS_EVERY;
+        }
+    }
+    values
+}
+
+/// Read-back for every stream that keeps a durable count.
+///
+/// Concurrent and individually bounded: a fault can leave an agent that never
+/// answers — a quota lease lost mid-run parks the agent's next reservation with
+/// no timeout on the platform side — and walking 300 agents sequentially behind
+/// a 30s ceiling would outlast the maintenance window several times over.
+
+/// Reads the shard-manager's assignment, relative to the previous sample.
+///
+/// Failure is recorded, not propagated: an unreachable shard-manager is an
+/// observation, and during a fault aimed at its links the expected one.
+pub async fn sample_ownership(
+    deps: &BenchmarkTestDependencies,
+    at: &str,
+    previous: Option<&OwnershipSample>,
+    settled: bool,
+) -> OwnershipSample {
+    let routing = deps.shard_manager().get_routing_table().await.ok();
+    OwnershipSample::from_routing(at, routing.as_ref(), previous, settled)
+}
 
 /// Which durable value an agent is read back on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

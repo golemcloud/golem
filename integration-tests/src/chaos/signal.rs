@@ -48,6 +48,11 @@ pub const FAULT_INJECTED_FILE: &str = "fault-injected.json";
 /// File name the workflow writes once it has scaled the executor deployment
 /// mid-run. Optional: a scenario that never asks for it simply never sees it.
 pub const EXECUTORS_SCALED_FILE: &str = "executors-scaled.json";
+
+/// Appended to by the workflow for every executor restart in a rolling
+/// schedule. Republished atomically, so a driver reading it mid-schedule always
+/// sees a complete list rather than a tail it caught halfway.
+pub const EXECUTOR_RESTARTS_FILE: &str = "executor-restarts.json";
 /// File name the workflow writes once the fault is removed and the target is
 /// healthy again.
 pub const FAULT_RECOVERED_FILE: &str = "fault-recovered.json";
@@ -134,6 +139,22 @@ pub struct ScaleEvent {
     pub to_replicas: u32,
 }
 
+/// One executor restart in a rolling schedule, as the workflow performed it.
+///
+/// S13 kills an executor repeatedly rather than once, so the single
+/// `fault-injected` signal cannot describe what happened. Each kill is appended
+/// here instead, and the driver folds them into the result so a reader can line
+/// a rebalance up against the restart that caused it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestartEvent {
+    pub killed_at: DateTime<Utc>,
+    /// Which kill this is in the schedule, 1-based.
+    pub sequence: u32,
+    /// The Chaos Mesh object that did it, so a leftover can be traced back.
+    pub fault_id: String,
+}
+
 /// Written by the workflow: the fault is gone and the target has rolled back to
 /// healthy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -205,6 +226,28 @@ impl FaultSignals {
     /// file, and an empty result is not an error.
     pub fn read_scale_events(&self) -> Vec<ScaleEvent> {
         let path = self.dir.join(EXECUTORS_SCALED_FILE);
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        if raw.trim().is_empty() {
+            return Vec::new();
+        }
+        match serde_json::from_str(&raw) {
+            Ok(events) => events,
+            Err(e) => {
+                warn!("Chaos signal {path:?} is not valid JSON: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Every executor restart the workflow has performed so far.
+    ///
+    /// Read repeatedly while a rolling fault is in progress, so it has to
+    /// tolerate a file that is still growing. The workflow republishes it
+    /// atomically for that reason.
+    pub fn read_restart_events(&self) -> Vec<RestartEvent> {
+        let path = self.dir.join(EXECUTOR_RESTARTS_FILE);
         let Ok(raw) = std::fs::read_to_string(&path) else {
             return Vec::new();
         };
@@ -485,6 +528,42 @@ mod tests {
             events[1].scaled_at >= events[0].scaled_at,
             "steps must stay in the order the workflow ran them"
         );
+    }
+
+    /// The exact bytes S13's rolling loop produced, captured from a simulated
+    /// run. A contract test rather than a shape test: five restarts that the
+    /// driver cannot read are five restarts the result cannot describe, and
+    /// S13's whole claim is about the sequence.
+    #[test]
+    async fn the_drivers_reader_accepts_the_rolling_restart_output() {
+        let dir = temp_signal_dir("restart-contract");
+        let signals = FaultSignals::new(&dir).unwrap();
+        std::fs::write(
+            dir.join(EXECUTOR_RESTARTS_FILE),
+            r#"[{"killedAt": "2026-08-19T07:40:56.566811+00:00", "sequence": 1, "faultId": "chaos-s13-999"}, {"killedAt": "2026-08-19T07:40:56.590718+00:00", "sequence": 2, "faultId": "chaos-s13-999-2"}, {"killedAt": "2026-08-19T07:40:56.605923+00:00", "sequence": 3, "faultId": "chaos-s13-999-3"}, {"killedAt": "2026-08-19T07:40:56.620901+00:00", "sequence": 4, "faultId": "chaos-s13-999-4"}, {"killedAt": "2026-08-19T07:40:56.635783+00:00", "sequence": 5, "faultId": "chaos-s13-999-5"}]"#,
+        )
+        .unwrap();
+
+        let events = signals.read_restart_events();
+        assert_eq!(events.len(), 5, "every restart in the schedule must survive");
+        assert_eq!(
+            events.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5],
+            "restarts must stay in the order the workflow performed them"
+        );
+        assert!(
+            events.iter().all(|e| !e.fault_id.is_empty()),
+            "each restart names the object that caused it, so a leftover can be traced back"
+        );
+    }
+
+    /// An absent restart signal is the normal case for every scenario that is
+    /// not rolling, and must not be an error.
+    #[test]
+    async fn an_absent_restart_signal_reads_as_no_events() {
+        let dir = temp_signal_dir("restart-absent");
+        let signals = FaultSignals::new(&dir).unwrap();
+        assert!(signals.read_restart_events().is_empty());
     }
 
     /// A half-written or corrupt scale signal must not take the run down: it is
