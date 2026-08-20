@@ -1846,8 +1846,8 @@ mod tests {
         child_start
     }
 
-    /// A successful live transfer must deliver the chunk to the guest, consume the token as
-    /// delivered (no marker append), and advance the delivered-byte count by the chunk length.
+    /// A successful live transfer must deliver the chunk to the guest, record the child's
+    /// `CompletionDelivered` marker, and advance the delivered-byte count by the chunk length.
     #[test]
     #[timeout("10s")]
     async fn transfer_data_chunk_delivers_live_chunk_and_advances_bytes() {
@@ -1881,9 +1881,23 @@ mod tests {
         }
         assert_eq!(
             oplog.entry_count(),
-            seeded_entries,
-            "a delivered chunk must not append a marker"
+            seeded_entries + 1,
+            "a delivered chunk must append exactly one marker"
         );
+        let markers = oplog
+            .entries()
+            .into_iter()
+            .filter(|entry| matches!(entry, OplogEntry::CompletionDelivered { .. }))
+            .collect::<Vec<_>>();
+        match markers.as_slice() {
+            [OplogEntry::CompletionDelivered { start_index, .. }] => {
+                assert_eq!(
+                    *start_index, child_start,
+                    "the marker must reference the delivered child's Start"
+                );
+            }
+            other => panic!("expected exactly one CompletionDelivered marker, got {other:?}"),
+        }
     }
 
     /// The vanished-demand-receiver regression at the unit level: the child's `End(Data)` is
