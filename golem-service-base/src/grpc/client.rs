@@ -348,7 +348,7 @@ impl<T: Clone> GrpcClient<T> {
 
     /// See [`MultiTargetGrpcClient::retire`].
     async fn retire(&self, connection: &GrpcClientConnection<T>, cause: &Status) {
-        if transport_failed(cause) {
+        if connection_is_gone(cause) {
             connection.retired.cancel();
         }
         {
@@ -500,10 +500,10 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
     ///
     /// A status the peer sent back is proof the transport works, however unwelcome
     /// the answer, so that case evicts the connection without disturbing the
-    /// requests already riding it. Only a transport failure justifies cutting
-    /// those short.
+    /// requests already riding it. Only a connection that is gone justifies
+    /// cutting those short.
     async fn retire(&self, endpoint: &Uri, connection: &GrpcClientConnection<T>, cause: &Status) {
-        if transport_failed(cause) {
+        if connection_is_gone(cause) {
             connection.retired.cancel();
         }
         self.clients
@@ -801,18 +801,10 @@ impl<'a> CallAttempts<'a> {
 }
 
 fn requires_reconnect(e: &Status) -> bool {
-    e.code() == Code::Unavailable || transport_failed(e)
-}
+    if e.code() == Code::Unavailable {
+        return true;
+    }
 
-/// Whether the connection itself failed, as opposed to the peer answering with a
-/// status of its own.
-///
-/// The distinction matters because this is what decides whether the other
-/// requests riding the same connection are cut short. A status the peer sent is
-/// proof the transport works, so an `Unavailable` the executor raised while its
-/// shards are moving must not take every invocation on that connection down with
-/// it.
-fn transport_failed(e: &Status) -> bool {
     // A request that ran out of time, or was cancelled, says nothing about the
     // health of the connection it ran on. tonic reports both as `Cancelled` and
     // still attaches a transport error, so without this the registry client
@@ -826,6 +818,34 @@ fn transport_failed(e: &Status) -> bool {
     // `Unknown` rather than `Unavailable`. Matching only on `Unavailable` left
     // such channels cached indefinitely, so every later request queued onto a
     // connection that could never work again.
+    has_transport_source(e)
+}
+
+/// Whether the connection carrying this request is gone, as opposed to one
+/// request on it having gone wrong.
+///
+/// This is a stricter question than [`requires_reconnect`], and deliberately so.
+/// Dropping a connection from the cache costs one reconnect, so it is worth doing
+/// on a hint. Declaring it gone releases every other request riding it, so it
+/// needs to be right.
+///
+/// The source alone cannot answer it. `Channel` reports every failure as a
+/// `tonic::transport::Error`, a single reset stream included, so the code is what
+/// separates them. Measured against a real peer: a connect into a blackhole and
+/// an expired keep-alive ping both arrive as `Unavailable`, and a connection the
+/// kernel gives up on arrives as `Unknown`. Every other code tonic derives from
+/// an HTTP/2 reset — `Internal`, `Cancelled`, `ResourceExhausted`,
+/// `PermissionDenied` — describes one stream, and the connection under it is
+/// still carrying everyone else.
+fn connection_is_gone(e: &Status) -> bool {
+    code_means_connection_gone(e.code()) && has_transport_source(e)
+}
+
+fn code_means_connection_gone(code: Code) -> bool {
+    matches!(code, Code::Unavailable | Code::Unknown)
+}
+
+fn has_transport_source(e: &Status) -> bool {
     std::error::Error::source(e)
         .map(|source| source.is::<tonic::transport::Error>())
         .unwrap_or(false)
@@ -888,16 +908,48 @@ mod test {
     /// `Unavailable` while its shards move is the case that matters: retiring the
     /// connection under it would cut short every invocation riding it.
     #[test]
-    async fn a_status_from_the_peer_is_not_a_transport_failure() {
+    async fn a_status_from_the_peer_does_not_retire_the_connection() {
         let from_peer = Status::unavailable("shard is being reassigned");
         assert!(
             requires_reconnect(&from_peer),
-            "an Unavailable still retires the cached connection"
+            "an Unavailable still drops the cached connection"
         );
         assert!(
-            !transport_failed(&from_peer),
+            !connection_is_gone(&from_peer),
             "an Unavailable the peer sent must not cut short the requests \
              sharing its connection"
         );
+    }
+
+    /// `Channel` reports a reset stream and a dead connection alike as a
+    /// transport error, so the code is the only thing separating them. Pinned
+    /// against the codes tonic derives from an HTTP/2 reset, because reading one
+    /// of those as a dead connection would end every request riding a connection
+    /// that is still perfectly good.
+    #[test]
+    async fn only_a_dead_connection_releases_the_requests_riding_it() {
+        // Measured against a real peer: a blackholed connect and an expired
+        // keep-alive ping arrive as Unavailable, a connection the kernel gives up
+        // on arrives as Unknown.
+        for code in [Code::Unavailable, Code::Unknown] {
+            assert!(
+                code_means_connection_gone(code),
+                "{code:?} is what a dead connection arrives as"
+            );
+        }
+
+        // What tonic maps HTTP/2 reset reasons to. Each describes one stream.
+        for code in [
+            Code::Internal,
+            Code::Cancelled,
+            Code::ResourceExhausted,
+            Code::PermissionDenied,
+        ] {
+            assert!(
+                !code_means_connection_gone(code),
+                "{code:?} describes one reset stream, not the connection \
+                 carrying it"
+            );
+        }
     }
 }
