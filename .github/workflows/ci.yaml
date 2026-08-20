@@ -192,8 +192,9 @@ jobs:
 
   managed-xfs-tests:
     name: managed-xfs-tests
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     needs:
+      - build-and-store
       - merge-test-components
     timeout-minutes: 45
     steps:
@@ -203,18 +204,23 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
-      - name: Download test component WASMs
-        uses: actions/download-artifact@v8
+          install-cargo-binstall: 'true'
+      - uses: ./.github/actions/restore-binaries
         with:
-          pattern: test-components-*
-          path: tmp/test-components-wasm
-          merge-multiple: true
-      - name: Install test component WASMs
-        run: cp -v tmp/test-components-wasm/*.wasm test-components/
+          run-id: ${{ github.run_id }}
+          fail-on-cache-miss: 'true'
+      - uses: ./.github/actions/restore-test-components
+        with:
+          run-id: ${{ github.run_id }}
       - name: Install XFS tools and Redis
         run: sudo apt-get update && sudo apt-get install --yes xfsprogs redis-server
       - name: Run managed XFS suite
-        run: sudo integration-tests/scripts/managed-filesystem/run-loopback-xfs.sh
+        run: |
+          sudo env \
+            CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target" \
+            GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES=1 \
+            GOLEM_MANAGED_XFS_CARGO_TEST_R="$(command -v cargo-test-r)" \
+            integration-tests/scripts/managed-filesystem/run-loopback-xfs.sh
 
   build-cli-test-bins:
     env:

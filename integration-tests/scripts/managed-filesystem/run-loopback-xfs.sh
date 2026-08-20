@@ -37,6 +37,12 @@ if [[ ${validate_cache_only} != 0 && ${validate_cache_only} != 1 ]]; then
   echo "GOLEM_MANAGED_XFS_VALIDATE_CACHE_ONLY must be 0 or 1" >&2
   exit 1
 fi
+reuse_test_binaries=${GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES:-0}
+if [[ ${reuse_test_binaries} != 0 && ${reuse_test_binaries} != 1 ]]; then
+  echo "GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES must be 0 or 1" >&2
+  exit 1
+fi
+cargo_test_r=${GOLEM_MANAGED_XFS_CARGO_TEST_R:-cargo-test-r}
 export CARGO_TARGET_DIR=${target_dir}
 export CARGO_INCREMENTAL=0
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
@@ -203,6 +209,19 @@ run_privileged_test() {
   local selected=$2
   local filter=$3
 
+  if [[ ${reuse_test_binaries} == 1 ]]; then
+    local target_args=()
+    if [[ ${target} == integration ]]; then
+      target_args=(--test integration)
+    else
+      target_args=(--lib)
+    fi
+    timeout --kill-after=30s 5m \
+      "${cargo_test_r}" run --package golem-worker-executor "${target_args[@]}" \
+      "${filter}" -- --exact --include-ignored --nocapture --report-time
+    return
+  fi
+
   local capable_binary=${work_dir}/${target}-capable
   cp "${selected}" "${capable_binary}"
   chmod 0755 "${capable_binary}"
@@ -259,7 +278,11 @@ if [[ ${rebuild_initial_file_wasm} == true ]]; then
   )
 fi
 
-build_test_binaries
+lib_test_binary=
+integration_test_binary=
+if [[ ${reuse_test_binaries} == 0 ]]; then
+  build_test_binaries
+fi
 
 run_privileged_test \
   lib \
