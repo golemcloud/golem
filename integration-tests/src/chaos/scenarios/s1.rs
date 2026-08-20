@@ -71,10 +71,9 @@ use crate::chaos::prep::ChaosPrepManifest;
 use crate::chaos::probe;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
 use crate::chaos::scenarios::{
-    WARMUP_SETTLE, exactly_once_termination, read_counters, sample_ownership,
-    wait_for_settled_routing, warm_up,
-    OutputPaths, ReadKind, ScenarioOutcome, build_result, read_back_agents, signal_termination,
-    snapshot_routing, write_outputs,
+    OutputPaths, ReadKind, ScenarioOutcome, WARMUP_SETTLE, build_result, exactly_once_termination,
+    read_back_agents, read_counters, sample_ownership, signal_termination, snapshot_routing,
+    wait_for_settled_routing, warm_up, write_outputs,
 };
 use crate::chaos::signal::{BaselineReady, FaultSignals, ScaleEvent};
 use crate::chaos::summary::{AgentReadback, ChaosSummary, ExactlyOnceReport, TerminationReason};
@@ -586,7 +585,6 @@ pub async fn run(
 
     finish!(reason, &records, readback, Some(exactly_once));
 }
-
 
 async fn read_back(
     ctx: &WorkloadContext,

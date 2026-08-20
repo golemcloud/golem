@@ -63,7 +63,7 @@ use crate::chaos::prep::ChaosPrepManifest;
 use crate::chaos::probe;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
 use crate::chaos::scenarios::{
-    OutputPaths, ScenarioOutcome, WARMUP_SETTLE, ReadKind, build_result, exactly_once_termination,
+    OutputPaths, ReadKind, ScenarioOutcome, WARMUP_SETTLE, build_result, exactly_once_termination,
     read_back_agents, read_counters, sample_ownership, signal_termination, snapshot_routing,
     wait_for_settled_routing, warm_up, write_outputs,
 };
@@ -156,8 +156,12 @@ pub async fn run(
                     break;
                 }
                 let routing = deps.shard_manager().get_routing_table().await.ok();
-                let sample =
-                    OwnershipSample::from_routing(&format!("t{seq:03}"), routing.as_ref(), None, false);
+                let sample = OwnershipSample::from_routing(
+                    &format!("t{seq:03}"),
+                    routing.as_ref(),
+                    None,
+                    false,
+                );
                 seq += 1;
                 if let Ok(mut t) = timeline.lock() {
                     t.push(sample);
@@ -281,7 +285,10 @@ pub async fn run(
             finish!(signal_termination(&e), &records, Vec::new(), None);
         }
     };
-    info!("S13: rolling restarts finished at {}", recovered.recovered_at);
+    info!(
+        "S13: rolling restarts finished at {}",
+        recovered.recovered_at
+    );
     fault_recovered_at = Some(recovered.recovered_at);
     if let Some(window) = phases.fault.as_mut() {
         window.end(recovered.recovered_at);

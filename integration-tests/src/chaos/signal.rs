@@ -545,7 +545,11 @@ mod tests {
         .unwrap();
 
         let events = signals.read_restart_events();
-        assert_eq!(events.len(), 5, "every restart in the schedule must survive");
+        assert_eq!(
+            events.len(),
+            5,
+            "every restart in the schedule must survive"
+        );
         assert_eq!(
             events.iter().map(|e| e.sequence).collect::<Vec<_>>(),
             vec![1, 2, 3, 4, 5],

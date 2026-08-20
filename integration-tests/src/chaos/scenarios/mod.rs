@@ -26,24 +26,24 @@
 //! produce a plausible-looking report from a wasted maintenance window.
 
 pub mod s1;
+pub mod s12;
 pub mod s13;
 pub mod s5;
-pub mod s12;
 pub mod s8;
 
 use crate::chaos::ScenarioConfig;
 use crate::chaos::history::{OperationHistory, OperationRecord, Stream};
+use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::pinned::PinnedSelection;
 use crate::chaos::result::{ChaosResult, Phases, RESULT_SCHEMA_VERSION, RunScope};
 use crate::chaos::signal::SignalError;
 use crate::chaos::summary::{
     AgentReadback, ChaosSummary, ExactlyOnceReport, RoutingSnapshot, TerminationReason,
 };
+use crate::chaos::workload::{self, WorkloadContext};
 use chrono::{DateTime, Utc};
 use golem_test_framework::benchmark::RunMetadata;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
-use crate::chaos::ownership::OwnershipSample;
-use crate::chaos::workload::{self, WorkloadContext};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -292,7 +292,6 @@ pub async fn warm_up(ctx: &WorkloadContext, config: &crate::chaos::WorkloadConfi
     total
 }
 
-
 /// Turns the exactly-once account into a termination reason, if it found
 /// something.
 ///
@@ -313,7 +312,6 @@ pub fn exactly_once_termination(report: &ExactlyOnceReport) -> Option<Terminatio
             .unwrap_or_default(),
     })
 }
-
 
 /// Current counter of every durable agent the run touched.
 ///
@@ -373,13 +371,6 @@ pub async fn read_counters(
     values
 }
 
-/// Read-back for every stream that keeps a durable count.
-///
-/// Concurrent and individually bounded: a fault can leave an agent that never
-/// answers — a quota lease lost mid-run parks the agent's next reservation with
-/// no timeout on the platform side — and walking 300 agents sequentially behind
-/// a 30s ceiling would outlast the maintenance window several times over.
-
 /// Reads the shard-manager's assignment, relative to the previous sample.
 ///
 /// Failure is recorded, not propagated: an unreachable shard-manager is an
@@ -422,6 +413,11 @@ const READ_PROGRESS_EVERY: usize = 100;
 /// Returns one entry per agent that had records, in the order given. An agent
 /// that could not be read carries its reason rather than being dropped — see
 /// [`AgentReadback`].
+///
+/// Bounded individually as well as concurrently: a fault can leave an agent that
+/// never answers — a quota lease lost mid-run parks the agent's next reservation
+/// with no timeout on the platform side — and walking 300 agents sequentially
+/// behind a 30s ceiling would outlast the maintenance window several times over.
 pub async fn read_back_agents(
     ctx: &crate::chaos::workload::WorkloadContext,
     records: &[OperationRecord],
