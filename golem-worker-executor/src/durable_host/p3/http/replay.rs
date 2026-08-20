@@ -14,6 +14,7 @@
 
 use super::serialization::{deserialize_error_code, serialize_error_code, serialize_headers};
 use super::*;
+use crate::durable_host::concurrent::drain_dropped_call_events_access;
 use crate::durable_host::p3::{DurableP3, durable_worker_ctx, wasi_http_view};
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::oplog::Oplog;
@@ -156,15 +157,21 @@ where
         // drops it (channel closed) — which strictly precedes the settlement
         // check that consults the tracker.
         let disarmed = disarm_rx.await.is_ok();
-        if !disarmed
-            && let Err(error) =
+        if !disarmed {
+            if let Err(error) =
                 consume_replayed_request::<Ctx, U>(accessor, Resource::new_own(request_rep), None)
                     .await
-        {
-            warn!(
-                ?error,
-                "failed to consume a replayed p3 HTTP request dropped by the guest mid-replay"
-            );
+            {
+                warn!(
+                    ?error,
+                    "failed to consume a replayed p3 HTTP request dropped by the guest mid-replay"
+                );
+            }
+            // The dropped send handle queued its replay-scope close, and this
+            // cancellation path may be the invocation's final host call. Drain
+            // it here so both the send terminal and its enclosing scope can
+            // advance before this last host task exits.
+            drain_dropped_call_events_access(accessor, durable_worker_ctx::<Ctx, U>).await?;
         }
         drop(activity);
         Ok(())
