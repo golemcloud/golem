@@ -1279,6 +1279,53 @@ async fn filesystem_mutation_histories_reconstruct_from_full_replay(
     .await
 }
 
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn cross_preview_append_coordination_survives_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent_id = agent_id!("P3FileSystem", "cross-preview-append");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let coordinated = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "run_cross_preview_append",
+            data_value!(),
+        )
+        .await?
+        .into_return_value();
+    assert_eq!(coordinated, Some(SchemaValue::Bool(true)));
+
+    executor.simulated_crash(&worker_id).await?;
+    let reconstructed = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "inspect_cross_preview_append",
+            data_value!(),
+        )
+        .await?
+        .into_return_value();
+    assert_eq!(reconstructed, Some(SchemaValue::Bool(true)));
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the privileged managed XFS test runner"]

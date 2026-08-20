@@ -1002,6 +1002,7 @@ async fn run_streaming_filesystem_write(
     };
     // Safe park: each chunk is guest-produced stream data.
     while let Some(chunk) = activity.park(chunks_rx.recv()).await {
+        let cancellation = chunk.cancellation.clone();
         let written_len = if result.is_ok() {
             let effect = match position {
                 Some(_) => chunk.admission.begin().await?,
@@ -1043,10 +1044,33 @@ async fn run_streaming_filesystem_write(
             0
         };
 
-        let _ = chunk.result_tx.send((written_len, result.clone()));
+        deliver_filesystem_write_result(
+            filesystem_runtime,
+            chunk.result_tx,
+            cancellation,
+            written_len,
+            result.clone(),
+        )
+        .await?;
     }
 
     filesystem_write_result_to_wasi(result)
+}
+
+async fn deliver_filesystem_write_result(
+    filesystem_runtime: &AgentFilesystemRuntime,
+    result_tx: tokio::sync::oneshot::Sender<(usize, FilesystemWriteResult)>,
+    cancellation: tokio_util::sync::CancellationToken,
+    written: usize,
+    result: FilesystemWriteResult,
+) -> wasmtime::Result<()> {
+    if result_tx.send((written, result)).is_err() && !cancellation.is_cancelled() {
+        filesystem_runtime.invalidate_runtime().await;
+        return Err(wasmtime::Error::msg(
+            "filesystem write progress could not be delivered",
+        ));
+    }
+    Ok(())
 }
 
 async fn run_live_filesystem_write_chunk(
@@ -3254,6 +3278,40 @@ mod tests {
         assert!(matches!(result, Poll::Ready(Err(_))));
         assert!(invalidated.load(std::sync::atomic::Ordering::Acquire));
         assert!(runtime.begin_effect().await.is_err());
+    }
+
+    #[test]
+    async fn lost_p3_write_progress_delivery_invalidates_runtime() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        drop(result_rx);
+
+        let result = deliver_filesystem_write_result(
+            &runtime,
+            result_tx,
+            tokio_util::sync::CancellationToken::new(),
+            2,
+            Ok(()),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(runtime.begin_effect().await.is_err());
+    }
+
+    #[test]
+    async fn cancelled_p3_write_does_not_require_progress_delivery() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        drop(result_rx);
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        cancellation.cancel();
+
+        let result =
+            deliver_filesystem_write_result(&runtime, result_tx, cancellation, 2, Ok(())).await;
+
+        assert!(result.is_ok());
+        assert!(runtime.begin_effect().await.is_ok());
     }
 
     #[cfg(target_os = "linux")]

@@ -31,6 +31,22 @@ use wasmtime_wasi::runtime::spawn_blocking;
 use wasmtime_wasi::{DirPerms, FilePerms};
 use wasmtime_wasi::{StreamError, StreamResult};
 
+#[allow(
+    dead_code,
+    reason = "the semantic mutation seam is exercised through its interface-level tests"
+)]
+mod protocol;
+
+#[allow(
+    unused_imports,
+    reason = "the mutation module defines the semantic host-adapter boundary"
+)]
+pub(crate) use protocol::{
+    AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemMutationResult,
+    AgentFilesystemMutations, AgentFilesystemWriteCompletion, AgentFilesystemWriteMode,
+    AgentFilesystemWriter, NativeFilesystemError,
+};
+
 // Terminal flag: once set, this runtime never admits another filesystem effect.
 pub(super) const FILESYSTEM_RUNTIME_SEALED: usize = 1 << (usize::BITS - 1);
 // Temporary flag: reject new effects while an existing set drains for a consistent observation.
@@ -318,6 +334,14 @@ pub(crate) fn open(
 }
 
 impl AgentFilesystemRuntime {
+    #[allow(
+        dead_code,
+        reason = "the runtime exposes the semantic mutation boundary"
+    )]
+    pub(crate) fn mutations(&self) -> AgentFilesystemMutations {
+        AgentFilesystemMutations::new(self.clone())
+    }
+
     pub(crate) async fn begin_effect(&self) -> Result<AgentFilesystemEffectLease, wasmtime::Error> {
         self.admit_effect()?.begin().await
     }

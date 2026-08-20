@@ -57,13 +57,20 @@ pub(crate) use failure::{
     FILESYSTEM_MUTATION_RETRY_TIMEOUT, MutationDecision, MutationEffect, MutationFailure,
     MutationOperation, native_write_failure_effect, proven_write_progress_effect,
 };
+#[allow(
+    unused_imports,
+    reason = "the agent filesystem module exposes the semantic mutation boundary"
+)]
 pub(crate) use mutation::{
-    AgentFilesystemEffectAdmission, AgentFilesystemEffectLease, AgentFilesystemUpdateEffectLease,
-    ClassifiedFileOutputStream, FilesystemStreamMode, NativeMutationGuestError, NativeOpenOptions,
-    NativeOpenResult, classified_filesystem_stream_error_code, create_directory, hard_link, open,
-    remove_directory, rename, resize_file, run_blocking_filesystem_mutation, set_descriptor_times,
-    set_path_times, symlink, sync_descriptor, unlink_file, validate_descriptor_times,
-    validate_directory_mutation, validate_open, validate_resize, validate_two_directory_mutation,
+    AdmittedFilesystemWrite, AgentFilesystemEffectAdmission, AgentFilesystemEffectLease,
+    AgentFilesystemMutationError, AgentFilesystemMutationResult, AgentFilesystemMutations,
+    AgentFilesystemUpdateEffectLease, AgentFilesystemWriteCompletion, AgentFilesystemWriteMode,
+    AgentFilesystemWriter, ClassifiedFileOutputStream, FilesystemStreamMode, NativeFilesystemError,
+    NativeMutationGuestError, NativeOpenOptions, NativeOpenResult,
+    classified_filesystem_stream_error_code, create_directory, hard_link, open, remove_directory,
+    rename, resize_file, run_blocking_filesystem_mutation, set_descriptor_times, set_path_times,
+    symlink, sync_descriptor, unlink_file, validate_descriptor_times, validate_directory_mutation,
+    validate_open, validate_resize, validate_two_directory_mutation,
 };
 #[allow(
     unused_imports,

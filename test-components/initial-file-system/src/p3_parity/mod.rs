@@ -58,6 +58,10 @@ pub trait P3FileSystem {
     /// Verifies that abandoning only a P3 write completion future does not cancel
     /// the write still driven by its input stream.
     async fn abandon_p3_write_completion(&self) -> bool;
+    /// Overlaps P2 and P3 appends to the same file and verifies chunk integrity.
+    async fn run_cross_preview_append(&self) -> bool;
+    /// Verifies the cross-preview append file after reconstruction.
+    async fn inspect_cross_preview_append(&self) -> bool;
 }
 
 struct P3FileSystemImpl {
@@ -156,5 +160,13 @@ impl P3FileSystem for P3FileSystemImpl {
 
     async fn abandon_p3_write_completion(&self) -> bool {
         parity::abandon_p3_write_completion().await
+    }
+
+    async fn run_cross_preview_append(&self) -> bool {
+        parity::run_cross_preview_append().await
+    }
+
+    async fn inspect_cross_preview_append(&self) -> bool {
+        parity::inspect_cross_preview_append().await
     }
 }

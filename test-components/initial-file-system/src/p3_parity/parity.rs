@@ -500,6 +500,79 @@ pub(crate) async fn abandon_p3_write_completion() -> bool {
     actual == expected
 }
 
+pub(crate) async fn run_cross_preview_append() -> bool {
+    let (root_p2, _) = p2_preopens::get_directories()
+        .into_iter()
+        .next()
+        .expect("no P2 preopened directory");
+    let (root_p3, _) = p3_preopens::get_directories()
+        .into_iter()
+        .next()
+        .expect("no P3 preopened directory");
+    let path = "cross-preview-append.bin";
+    let p2_file = root_p2
+        .open_at(
+            p2_types::PathFlags::empty(),
+            path,
+            p2_types::OpenFlags::CREATE | p2_types::OpenFlags::TRUNCATE,
+            p2_types::DescriptorFlags::READ | p2_types::DescriptorFlags::WRITE,
+        )
+        .expect("create cross-preview append file through P2");
+    let p3_file = root_p3
+        .open_at(
+            p3_types::PathFlags::empty(),
+            path.to_string(),
+            p3_types::OpenFlags::empty(),
+            p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::WRITE,
+        )
+        .await
+        .expect("open cross-preview append file through P3");
+    let p2_bytes = vec![b'2'; 1024 * 1024];
+    let p3_bytes = vec![b'3'; 1024 * 1024];
+    let p2_stream = p2_file
+        .append_via_stream()
+        .expect("open P2 cross-preview append stream");
+    p2_stream
+        .write(&p2_bytes)
+        .expect("start P2 cross-preview append");
+
+    let (mut p3_writer, p3_data) = wit_stream::new();
+    let p3_completion = p3_file.append_via_stream(p3_data);
+    assert!(p3_writer.write_all(p3_bytes).await.is_empty());
+    drop(p3_writer);
+    p3_completion.await.expect("P3 cross-preview append failed");
+    p2_stream
+        .blocking_flush()
+        .expect("finish P2 cross-preview append");
+
+    inspect_cross_preview_append().await
+}
+
+pub(crate) async fn inspect_cross_preview_append() -> bool {
+    let (root, _) = p3_preopens::get_directories()
+        .into_iter()
+        .next()
+        .expect("no P3 preopened directory");
+    let file = root
+        .open_at(
+            p3_types::PathFlags::empty(),
+            "cross-preview-append.bin".to_string(),
+            p3_types::OpenFlags::empty(),
+            p3_types::DescriptorFlags::READ,
+        )
+        .await
+        .expect("open cross-preview append result");
+    let (reader, completion) = file.read_via_stream(0);
+    let bytes = reader.collect().await;
+    completion.await.expect("read cross-preview append result");
+    let split = 1024 * 1024;
+    bytes.len() == split * 2
+        && ((bytes[..split].iter().all(|byte| *byte == b'2')
+            && bytes[split..].iter().all(|byte| *byte == b'3'))
+            || (bytes[..split].iter().all(|byte| *byte == b'3')
+                && bytes[split..].iter().all(|byte| *byte == b'2')))
+}
+
 async fn write_p3(file: &p3_types::Descriptor, bytes: &[u8], offset: u64) {
     let (mut writer, data) = wit_stream::new();
     let result = file.write_via_stream(data, offset);
@@ -558,11 +631,20 @@ pub(crate) async fn run_reconstruction_matrix() -> Vec<String> {
     appended_p2
         .write(b"p2-", 0)
         .expect("write P2 append prefix");
-    appended_p2
+    let append_stream = appended_p2
         .append_via_stream()
-        .expect("open P2 append stream")
-        .blocking_write_and_flush(b"append")
-        .expect("append P2 bytes");
+        .expect("open P2 append stream");
+    append_stream.write(b"append").expect("append P2 bytes");
+    while append_stream
+        .check_write()
+        .expect("check P2 append readiness")
+        == 0
+    {
+        append_stream.subscribe().block();
+    }
+    append_stream
+        .blocking_flush()
+        .expect("flush P2 append bytes");
 
     root_p2
         .create_directory_at("replay-p2-directory")
