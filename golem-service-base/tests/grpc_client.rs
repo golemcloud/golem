@@ -272,7 +272,25 @@ fn no_keepalive(connect_timeout: Duration) -> GrpcClientConfig {
 struct TestPeer {
     addr: std::net::SocketAddr,
     connections: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    _server: tokio::task::JoinHandle<()>,
+    /// Present for a peer whose connections are owned by tasks it spawned
+    /// itself, which aborting the server task would orphan rather than close.
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    server: tokio::task::JoinHandle<()>,
+}
+
+impl TestPeer {
+    /// Stops the peer, closing its listener and every connection it holds, which
+    /// is what a client sees when a pod's process exits. Awaits the task so the
+    /// sockets are demonstrably gone before the caller continues.
+    async fn shutdown(mut self) {
+        match self.shutdown.take() {
+            Some(tx) => {
+                let _ = tx.send(());
+            }
+            None => self.server.abort(),
+        }
+        let _ = self.server.await;
+    }
 }
 
 async fn serve_grpc() -> TestPeer {
@@ -290,20 +308,26 @@ async fn serve_grpc() -> TestPeer {
         },
     );
 
+    // tonic drives each accepted connection on a task of its own, so aborting the
+    // server task would leave them running. A shutdown signal closes them.
+    let (tx, rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         // Empty router: any request gets a real HTTP/2 response carrying
         // grpc-status 12 (Unimplemented). That is not Unavailable, so the client
         // keeps the channel cached — exactly as in production.
         let _ = tonic::transport::Server::builder()
             .add_routes(tonic::service::Routes::default())
-            .serve_with_incoming(incoming)
+            .serve_with_incoming_shutdown(incoming, async move {
+                let _ = rx.await;
+            })
             .await;
     });
 
     TestPeer {
         addr,
         connections,
-        _server: server,
+        shutdown: Some(tx),
+        server,
     }
 }
 
@@ -327,7 +351,8 @@ async fn serve_silent_peer() -> TestPeer {
     TestPeer {
         addr,
         connections,
-        _server: server,
+        shutdown: None,
+        server,
     }
 }
 
@@ -752,6 +777,85 @@ async fn concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout() 
         "slowest of {CONCURRENCY} concurrent calls took {slowest:?} with \
          connect_timeout={connect_timeout:?} — queued requests are serialising \
          behind each other's connect attempts instead of sharing one"
+    );
+}
+
+/// The same guarantee, for callers already holding the cached channel when their
+/// peer dies. That is the production sequence; the cohort above is not.
+///
+/// The test above retires the stale channel before it starts, so every member of
+/// its cohort takes the connect path and shares one attempt. Real callers do not
+/// arrive so conveniently. They are holding clones of the cached channel at the
+/// moment the pod goes, and a cached tonic `Channel` reconnects on its own:
+/// `Reconnect` stashes a failed connect, hands it to one queued request, and
+/// re-dials for the next — inside the one `Buffer` worker, serially. An attempt
+/// shared a layer above never sees those requests, so they can still cost
+/// queue_depth x connect_timeout.
+///
+/// This is the shape of S5's 119,781ms: a fresh connect into a blackhole, about
+/// twelve deep against a 10s connect_timeout.
+#[test]
+async fn queued_calls_on_a_dead_cached_channel_share_one_connect_timeout() {
+    if delegated_to_namespace(test_name!()) {
+        return;
+    }
+
+    const CONCURRENCY: usize = 8;
+    let connect_timeout = Duration::from_secs(1);
+
+    let peer = serve_grpc().await;
+    let addr = peer.addr;
+    let port = addr.port().to_string();
+    let uri: Uri = format!("http://{addr}").parse().unwrap();
+
+    let client = executor_client(no_keepalive(connect_timeout));
+
+    // Establish and cache the channel, as production had done long before the
+    // pod died.
+    let first = ping(&client, uri.clone()).await;
+    assert_ne!(
+        first
+            .expect_err("empty router replies Unimplemented")
+            .code(),
+        tonic::Code::Unavailable,
+        "the channel must be cached before the peer dies"
+    );
+
+    // The process exits first, so its sockets close and the next request needs a
+    // fresh connect. Only then does the IP stop routing, so that connect hangs.
+    peer.shutdown().await;
+    let _blackhole = blackhole_port(&port);
+    eprintln!("[QUEUED] peer stopped, port {port} blackholed");
+
+    let started = Instant::now();
+    let mut tasks = Vec::new();
+    for i in 0..CONCURRENCY {
+        let client = client.clone();
+        let uri = uri.clone();
+        tasks.push(tokio::spawn(async move {
+            let t = Instant::now();
+            let r = ping(&client, uri).await;
+            (i, t.elapsed(), r.err().map(|e| e.code()))
+        }));
+    }
+
+    let mut slowest = Duration::ZERO;
+    for t in tasks {
+        let (i, elapsed, code) = t.await.unwrap();
+        eprintln!("[QUEUED] call {i}: elapsed={elapsed:?} code={code:?}");
+        slowest = slowest.max(elapsed);
+    }
+    eprintln!(
+        "[QUEUED] connect_timeout={connect_timeout:?} concurrency={CONCURRENCY} slowest={slowest:?} wall={:?}",
+        started.elapsed()
+    );
+
+    assert!(
+        slowest < connect_timeout * 2,
+        "slowest of {CONCURRENCY} calls queued on the dead cached channel took \
+         {slowest:?} with connect_timeout={connect_timeout:?} — they are \
+         re-dialling one at a time inside the channel's own buffer instead of \
+         sharing a single attempt"
     );
 }
 

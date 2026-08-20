@@ -25,8 +25,10 @@ use std::fmt::Write;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Code, Status};
 use tonic_tracing_opentelemetry::middleware::client::{OtelGrpcLayer, OtelGrpcService};
@@ -72,12 +74,36 @@ fn build_endpoint(
 /// one ahead of it to burn a full `connect_timeout`. Sharing the attempt means an
 /// unreachable peer costs the whole cohort one `connect_timeout` between them,
 /// after which they all fail and the caller can re-resolve.
-type SharedConnect = Shared<BoxFuture<'static, Result<Channel, Status>>>;
+type SharedConnect = Shared<BoxFuture<'static, Result<Connected, Status>>>;
+
+/// An established connection, and what tells it apart from the one that replaces
+/// it.
+#[derive(Clone)]
+struct Connected {
+    channel: Channel,
+    /// Distinguishes this connection from its successor, so a call that fails
+    /// late cannot evict a replacement it never used.
+    id: u64,
+    /// Cancelled when this connection is retired.
+    ///
+    /// A cached `Channel` reconnects on its own, one queued request at a time,
+    /// and nothing above it can see those requests to share an attempt between
+    /// them. Releasing them at the moment the connection is known dead is what
+    /// keeps a cohort to one `connect_timeout` between them.
+    retired: CancellationToken,
+}
 
 fn connect_shared(endpoint: Endpoint, connect_timeout: Duration) -> SharedConnect {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+
     async move {
         match tokio::time::timeout(connect_timeout, endpoint.connect()).await {
-            Ok(Ok(channel)) => Ok(channel),
+            Ok(Ok(channel)) => Ok(Connected {
+                channel,
+                id,
+                retired: CancellationToken::new(),
+            }),
             Ok(Err(err)) => Err(Status::unavailable(format!("tcp connect error: {err}"))),
             Err(_) => Err(Status::unavailable(format!(
                 "connection not established within {connect_timeout:?}"
@@ -107,7 +133,7 @@ impl Connections {
     }
 
     /// Connects to `target`, joining an attempt already under way if there is one.
-    async fn connect(&self, target: Uri, config: &GrpcClientConfig) -> Result<Channel, Status> {
+    async fn connect(&self, target: Uri, config: &GrpcClientConfig) -> Result<Connected, Status> {
         // A shared read first, before anything is built. Every caller but the one
         // that starts an attempt gets its answer here, and `build_endpoint` is
         // not free: with TLS enabled it parses the CA, client certificate and key
@@ -122,7 +148,7 @@ impl Connections {
         {
             match existing.peek() {
                 // Already connected.
-                Some(Ok(channel)) => return Ok(channel.clone()),
+                Some(Ok(connected)) => return Ok(connected.clone()),
                 // Someone else is connecting; wait on theirs.
                 None => return existing.await,
                 // A failed attempt is not worth inheriting, so fall through and
@@ -141,7 +167,7 @@ impl Connections {
         let attempt = match self.by_target.entry_async(target.clone()).await {
             Entry::Occupied(mut entry) => match entry.get().peek() {
                 // Already connected. This is the reuse path.
-                Some(Ok(channel)) => return Ok(channel.clone()),
+                Some(Ok(connected)) => return Ok(connected.clone()),
                 // A failed attempt describes a connection nobody is still making,
                 // so the caller gets its own rather than inheriting that verdict.
                 Some(Err(_)) => {
@@ -189,15 +215,20 @@ impl Connections {
         });
     }
 
-    /// Forgets the connection to `target`, so the next call builds a new one.
-    /// Used when a channel turns out to be dead.
+    /// Forgets connection `id` to `target`, so the next call builds a new one.
+    /// Used when a connection turns out to be dead.
     ///
-    /// Only a settled attempt is dropped. One still in flight belongs to the
-    /// callers waiting on it right now, and taking it from them would send the
-    /// next caller off to open a second connection to the same place.
-    async fn forget(&self, target: &Uri) {
+    /// Matching on the identity rather than the target alone covers two things
+    /// at once. An attempt still in flight never matches, so it is left to the
+    /// callers waiting on it rather than being taken from them. And a connection
+    /// that has already been replaced never matches either, so a call that fails
+    /// late cannot discard the replacement its own retry established.
+    async fn forget(&self, target: &Uri, id: u64) {
         self.by_target
-            .remove_if_async(target, |attempt| attempt.peek().is_some())
+            .remove_if_async(
+                target,
+                |attempt| matches!(attempt.peek(), Some(Ok(connected)) if connected.id == id),
+            )
             .await;
     }
 }
@@ -263,14 +294,13 @@ impl<T: Clone> GrpcClient<T> {
                 },
             };
 
-            match f(&mut entry.client).instrument(attempts.span()).await {
+            match attempt(&mut entry, &f, &attempts).await {
                 Ok(result) => {
                     attempts.succeeded(started.elapsed());
                     break Ok(result);
                 }
                 Err(e) if requires_reconnect(&e) => {
-                    let _ = self.client.lock().await.take();
-                    self.connections.forget(&self.endpoint).await;
+                    self.retire(&entry, &e).await;
                     match attempts.failed("gRPC call", &e).await {
                         NextAttempt::Retry => continue,
                         NextAttempt::GiveUp => break Err(e),
@@ -294,7 +324,7 @@ impl<T: Clone> GrpcClient<T> {
             return Ok(connection);
         }
 
-        let channel = self
+        let connected = self
             .connections
             .connect(self.endpoint.clone(), &self.config)
             .await?;
@@ -303,11 +333,31 @@ impl<T: Clone> GrpcClient<T> {
         if let Some(connection) = &*entry {
             return Ok(connection.clone());
         }
-        let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
+        let channel = ServiceBuilder::new()
+            .layer(OtelGrpcLayer)
+            .service(connected.channel);
         let client = (self.client_factory)(channel, self.config.max_message_size);
-        let connection = GrpcClientConnection { client };
+        let connection = GrpcClientConnection {
+            client,
+            id: connected.id,
+            retired: connected.retired,
+        };
         *entry = Some(connection.clone());
         Ok(connection)
+    }
+
+    /// See [`MultiTargetGrpcClient::retire`].
+    async fn retire(&self, connection: &GrpcClientConnection<T>, cause: &Status) {
+        if transport_failed(cause) {
+            connection.retired.cancel();
+        }
+        {
+            let mut cached = self.client.lock().await;
+            if cached.as_ref().is_some_and(|held| held.id == connection.id) {
+                *cached = None;
+            }
+        }
+        self.connections.forget(&self.endpoint, connection.id).await;
     }
 }
 
@@ -375,14 +425,13 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                 },
             };
 
-            match f(&mut entry.client).instrument(attempts.span()).await {
+            match attempt(&mut entry, &f, &attempts).await {
                 Ok(result) => {
                     attempts.succeeded(started.elapsed());
                     break Ok(result);
                 }
                 Err(e) if requires_reconnect(&e) => {
-                    self.clients.remove_async(&endpoint).await;
-                    self.connections.forget(&endpoint).await;
+                    self.retire(&endpoint, &entry, &e).await;
                     match attempts.failed("gRPC call", &e).await {
                         NextAttempt::Retry => continue,
                         NextAttempt::GiveUp => break Err(e),
@@ -417,7 +466,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             return Ok(existing);
         }
 
-        let channel = self
+        let connected = self
             .connections
             .connect(endpoint.clone(), &self.config)
             .await?;
@@ -425,19 +474,50 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         match self.clients.entry_async(endpoint).await {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
-                let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
+                let channel = ServiceBuilder::new()
+                    .layer(OtelGrpcLayer)
+                    .service(connected.channel);
                 let client = (self.client_factory)(channel, self.config.max_message_size);
-                let connection = GrpcClientConnection { client };
+                let connection = GrpcClientConnection {
+                    client,
+                    id: connected.id,
+                    retired: connected.retired,
+                };
                 entry.insert_entry(connection.clone());
                 Ok(connection)
             }
         }
+    }
+
+    /// Retires the connection a failed call was riding: clears it from the caches
+    /// so the next call builds a new one and, when the transport is what failed,
+    /// releases every other request still on it.
+    ///
+    /// Keyed on the connection's identity rather than on the target alone. Two
+    /// callers can fail on the same connection at different moments, and without
+    /// that the later failure would evict the replacement the earlier one had
+    /// already established.
+    ///
+    /// A status the peer sent back is proof the transport works, however unwelcome
+    /// the answer, so that case evicts the connection without disturbing the
+    /// requests already riding it. Only a transport failure justifies cutting
+    /// those short.
+    async fn retire(&self, endpoint: &Uri, connection: &GrpcClientConnection<T>, cause: &Status) {
+        if transport_failed(cause) {
+            connection.retired.cancel();
+        }
+        self.clients
+            .remove_if_async(endpoint, |cached| cached.id == connection.id)
+            .await;
+        self.connections.forget(endpoint, connection.id).await;
     }
 }
 
 #[derive(Clone)]
 pub struct GrpcClientConnection<T: Clone> {
     client: T,
+    id: u64,
+    retired: CancellationToken,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -620,6 +700,35 @@ impl EnabledGrpcClientTlsConfig {
     }
 }
 
+/// Runs one attempt, and gives up the moment the connection it is riding is
+/// retired.
+///
+/// A request queued inside a dead `Channel` is waiting its turn to re-dial, and
+/// every turn costs a whole `connect_timeout`. tonic does that re-dialling below
+/// anything we can reach, one queued request at a time, so sharing a connection
+/// attempt above it never sees them. Releasing the queue as soon as any one of
+/// them proves the connection dead is what keeps the cohort to one
+/// `connect_timeout` between them rather than one each.
+async fn attempt<T, F, R>(
+    connection: &mut GrpcClientConnection<T>,
+    f: &F,
+    attempts: &CallAttempts<'_>,
+) -> Result<R, Status>
+where
+    T: Clone,
+    F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>> + Send,
+{
+    tokio::select! {
+        // A result that is already there wins over a retirement landing in the
+        // same tick.
+        biased;
+        result = f(&mut connection.client).instrument(attempts.span()) => result,
+        () = connection.retired.cancelled() => Err(Status::unavailable(
+            "connection retired while the request was waiting on it",
+        )),
+    }
+}
+
 /// Whether a `call` loop should go round again.
 enum NextAttempt {
     Retry,
@@ -692,10 +801,18 @@ impl<'a> CallAttempts<'a> {
 }
 
 fn requires_reconnect(e: &Status) -> bool {
-    if e.code() == Code::Unavailable {
-        return true;
-    }
+    e.code() == Code::Unavailable || transport_failed(e)
+}
 
+/// Whether the connection itself failed, as opposed to the peer answering with a
+/// status of its own.
+///
+/// The distinction matters because this is what decides whether the other
+/// requests riding the same connection are cut short. A status the peer sent is
+/// proof the transport works, so an `Unavailable` the executor raised while its
+/// shards are moving must not take every invocation on that connection down with
+/// it.
+fn transport_failed(e: &Status) -> bool {
     // A request that ran out of time, or was cancelled, says nothing about the
     // health of the connection it ran on. tonic reports both as `Cancelled` and
     // still attaches a transport error, so without this the registry client
@@ -712,4 +829,75 @@ fn requires_reconnect(e: &Status) -> bool {
     std::error::Error::source(e)
         .map(|source| source.is::<tonic::transport::Error>())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use test_r::test;
+
+    /// A peer that completes the TCP handshake and then holds the socket open.
+    ///
+    /// `Endpoint::connect` performs the TCP connect and sends its own HTTP/2
+    /// preface without waiting for a reply, so this is enough for a connection to
+    /// establish. Nothing here sends a request over one.
+    async fn silent_peer() -> (Uri, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let held = tokio::spawn(async move {
+            let mut sockets = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                sockets.push(socket);
+            }
+        });
+        (format!("http://{addr}").parse().unwrap(), held)
+    }
+
+    /// Two callers can fail on the same connection at different moments. The
+    /// later failure must not discard the replacement the earlier one's retry has
+    /// already established, which is what keying eviction on the target alone
+    /// used to do: the third caller then opened a third connection.
+    #[test]
+    async fn forget_only_removes_the_connection_it_names() {
+        let (target, _peer) = silent_peer().await;
+        let config = GrpcClientConfig::default();
+        let connections = Connections::new();
+
+        let first = connections.connect(target.clone(), &config).await.unwrap();
+
+        // A failure arriving late, naming a connection that has already been
+        // replaced.
+        connections.forget(&target, first.id + 1).await;
+        let reused = connections.connect(target.clone(), &config).await.unwrap();
+        assert_eq!(
+            reused.id, first.id,
+            "forget discarded a connection whose identity it was not given"
+        );
+
+        // The connection that actually failed does go.
+        connections.forget(&target, first.id).await;
+        let replacement = connections.connect(target.clone(), &config).await.unwrap();
+        assert_ne!(
+            replacement.id, first.id,
+            "forget left in place the very connection it was given"
+        );
+    }
+
+    /// A status the peer sent back is proof the transport works, so it must not
+    /// take down the other requests sharing that connection. An executor raising
+    /// `Unavailable` while its shards move is the case that matters: retiring the
+    /// connection under it would cut short every invocation riding it.
+    #[test]
+    async fn a_status_from_the_peer_is_not_a_transport_failure() {
+        let from_peer = Status::unavailable("shard is being reassigned");
+        assert!(
+            requires_reconnect(&from_peer),
+            "an Unavailable still retires the cached connection"
+        );
+        assert!(
+            !transport_failed(&from_peer),
+            "an Unavailable the peer sent must not cut short the requests \
+             sharing its connection"
+        );
+    }
 }
