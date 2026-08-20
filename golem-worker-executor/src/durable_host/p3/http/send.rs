@@ -189,7 +189,7 @@ where
     let mut handle = CallHandle::<P3HttpClientSend, P>::start_access_with_options(
         store,
         durable_worker_ctx::<Ctx, U>,
-        function_type,
+        function_type.clone(),
         claim_options,
         async |_| Ok(host_request),
     )
@@ -226,7 +226,14 @@ where
         // `ReplayedRequestLeakGuard`. Both arms below hand request ownership
         // over (inline consume / live re-execution) and disarm it first.
         let (disarm_leak_guard_tx, disarm_leak_guard_rx) = oneshot::channel();
-        spawn_replayed_request_leak_guard::<Ctx, U>(store, req.rep(), disarm_leak_guard_rx);
+        let replay_scope = (handle.begin_index() != handle.start_index())
+            .then_some((function_type.clone(), handle.begin_index()));
+        spawn_replayed_request_leak_guard::<Ctx, U>(
+            store,
+            req.rep(),
+            replay_scope,
+            disarm_leak_guard_rx,
+        );
         match handle
             .replay_access_deferred(store, durable_worker_ctx::<Ctx, U>)
             .await

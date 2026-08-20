@@ -1498,6 +1498,19 @@ impl ReplayState {
         }
     }
 
+    /// Waits for every owned cursor operation queued before this call to release the cursor.
+    ///
+    /// An accessor future may be cancelled after spawning an owned operation but before awaiting
+    /// its result. A store-owned cleanup task can use this fence to remain pending until that
+    /// operation finishes, so Wasmtime does not observe an externally-held cursor with no host
+    /// future left to drive.
+    pub(in crate::durable_host) async fn fence_owned_cursor_ops(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        self.run_owned_cursor_op(|state| async move { state.with_tx(async |_| Ok(())).await })
+            .await
+    }
+
     pub async fn switch_to_live(&self) {
         let result = self
             .run_owned_cursor_op(|state| async move {
