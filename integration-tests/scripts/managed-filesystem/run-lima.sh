@@ -39,6 +39,7 @@ for ((run = 1; run <= runs; run++)); do
     GOLEM_MANAGED_XFS_CLEAN="${GOLEM_MANAGED_XFS_CLEAN:-0}" \
     GOLEM_MANAGED_XFS_MIN_FREE_GIB="${GOLEM_MANAGED_XFS_MIN_FREE_GIB:-15}" \
     GOLEM_MANAGED_XFS_VALIDATE_CACHE_ONLY="${GOLEM_MANAGED_XFS_VALIDATE_CACHE_ONLY:-0}" \
+    GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES=0 \
     CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
     "${repo_root}/integration-tests/scripts/managed-filesystem/run-loopback-xfs.sh" "$@"
 done
