@@ -45,8 +45,7 @@
 //! disturbed.
 
 use crate::chaos::ScheduledConfig;
-use crate::chaos::fires::{FireRecord, TargetFireLog};
-use crate::chaos::history::Stream;
+use crate::chaos::history::{FireRecord, Stream, TargetFireLog};
 use crate::chaos::pinned::{owners_by_pod, pod_ip_of};
 use crate::chaos::workload::{
     self, SCHEDULE_COUNTER_AGENT, SCHEDULE_EMITTER_AGENT, WorkloadContext,

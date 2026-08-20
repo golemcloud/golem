@@ -314,6 +314,65 @@ impl OperationRecord {
     }
 }
 
+/// What a scheduled action recorded when it ran, and the log it was recorded
+/// in (GOL-378).
+///
+/// These live here rather than in [`crate::chaos::fires`] for the same reason
+/// [`OperationRecord`] does: they are what was *observed*, and the analysis
+/// that reduces them is a separate thing that a later ticket may want to redo
+/// over an archived run. The first S10 run learned that the expensive way — its
+/// delay percentiles turned out to need a correction that could not be applied
+/// afterwards, because only the reduced numbers had been archived.
+
+/// One fire, as the target agent recorded it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FireRecord {
+    /// The registering invocation's idempotency key.
+    pub token: String,
+    /// When the action was due, as the driver asked for it.
+    pub scheduled_at: DateTime<Utc>,
+    /// When the platform ran it, as the executor's clock saw it.
+    pub observed_at: DateTime<Utc>,
+}
+
+impl FireRecord {
+    /// How far past its due time the action ran. Negative means clock skew
+    /// between the driver and the executor, not an action that fired early.
+    pub fn delay_ms(&self) -> i64 {
+        (self.observed_at - self.scheduled_at).num_milliseconds()
+    }
+}
+
+/// Everything read back from one target agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetFireLog {
+    pub agent: String,
+    /// `ScheduleCounter.polls`, which keeps counting past the log's cap and is
+    /// therefore what says whether the log below is complete.
+    pub polls: Option<u64>,
+    pub fires: Vec<FireRecord>,
+    /// Why the agent could not be read, when it could not be.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl TargetFireLog {
+    /// Whether this log can testify about its own registrations.
+    ///
+    /// Two ways it cannot: the read failed outright, or the component's fire log
+    /// hit its cap and dropped entries. Both leave an absent fire ambiguous.
+    pub fn is_complete(&self) -> bool {
+        match (self.error.is_some(), self.polls) {
+            (true, _) => false,
+            (false, Some(polls)) => self.fires.len() as u64 >= polls,
+            // No `polls` read means no way to tell whether the log is whole.
+            (false, None) => false,
+        }
+    }
+}
+
 /// The persisted history document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -324,6 +383,11 @@ pub struct HistoryDocument {
     /// so a reader never mistakes a partial history for a short one.
     pub partial: bool,
     pub operations: Vec<OperationRecord>,
+    /// Per-target fire logs, for the scenarios that drive scheduled actions.
+    /// Empty for every other scenario rather than absent, so a reader never
+    /// wonders whether the section was dropped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scheduled_fires: Vec<TargetFireLog>,
 }
 
 /// Append-only operation log, shared across the concurrent workload streams.
@@ -335,6 +399,7 @@ pub struct OperationHistory {
     scenario_code: String,
     inner: Arc<Mutex<Vec<OperationRecord>>>,
     next_id: Arc<std::sync::atomic::AtomicU64>,
+    fire_logs: Arc<Mutex<Vec<TargetFireLog>>>,
 }
 
 impl OperationHistory {
@@ -343,6 +408,7 @@ impl OperationHistory {
             scenario_code: scenario_code.into(),
             inner: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            fire_logs: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -383,12 +449,22 @@ impl OperationHistory {
             .count() as u64
     }
 
+    /// Archives the fire logs read back at the end of a scheduled scenario.
+    ///
+    /// Called once, after read-back, before the history is written. Kept here
+    /// rather than in the result because the result is the reduced report and
+    /// this is the raw material it was reduced from.
+    pub fn record_fire_logs(&self, logs: Vec<TargetFireLog>) {
+        *self.fire_logs.lock().unwrap() = logs;
+    }
+
     pub fn document(&self, partial: bool) -> HistoryDocument {
         HistoryDocument {
             schema_version: HISTORY_SCHEMA_VERSION,
             scenario_code: self.scenario_code.clone(),
             partial,
             operations: self.snapshot(),
+            scheduled_fires: self.fire_logs.lock().unwrap().clone(),
         }
     }
 

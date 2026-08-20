@@ -230,10 +230,8 @@ mod tests {
     /// break loudly and locally.
     #[test]
     fn an_s10_result_carries_the_schedule_fire_fields_the_investigation_report_reads() {
-        use crate::chaos::fires::{
-            FaultWindow, FireRecord, ScheduleFireReport, TargetFireLog,
-        };
-        use crate::chaos::history::Stream;
+        use crate::chaos::fires::{FaultWindow, ScheduleFireReport};
+        use crate::chaos::history::{FireRecord, Stream, TargetFireLog};
 
         let now = Utc::now();
         let due = now + chrono::Duration::seconds(10);
@@ -263,9 +261,7 @@ mod tests {
                     injected_at: now,
                     recovered_at: None,
                 }),
-                &std::collections::BTreeSet::from([
-                    "chaos-s10-scheduled-target-0000".to_string(),
-                ]),
+                &std::collections::BTreeSet::from(["chaos-s10-scheduled-target-0000".to_string()]),
                 std::time::Duration::from_secs(60),
             ));
 
@@ -527,7 +523,8 @@ mod sample_artifact {
     /// driver ever writes.
     #[test]
     fn write_sample_s10_result_artifact() {
-        use crate::chaos::fires::{FaultWindow, FireRecord, ScheduleFireReport, TargetFireLog};
+        use crate::chaos::fires::{FaultWindow, ScheduleFireReport};
+        use crate::chaos::history::{FireRecord, TargetFireLog};
         use crate::chaos::scheduled::ScheduledSelection;
 
         let Ok(path) = std::env::var("CHAOS_SAMPLE_RESULT_S10") else {
@@ -573,6 +570,15 @@ mod sample_artifact {
             });
 
             let due = submitted + chrono::Duration::seconds(10);
+            // One registration stalls on the client's attempt timeout and only
+            // lands long after its action was due — the shape the first real run
+            // produced 26 times over.
+            if i == 1 {
+                let stalled = records.last_mut().unwrap();
+                stalled.completed_at = Some(submitted + chrono::Duration::seconds(125));
+                stalled.duration_ms = 125_000;
+                stalled.attempts = 2;
+            }
             if target == killed {
                 // The last one is the action the kill swallowed.
                 if i < 6 {
@@ -584,10 +590,13 @@ mod sample_artifact {
                     });
                 }
             } else {
+                // The stalled registration's action fires the moment it lands,
+                // which the raw arithmetic calls 115s late.
+                let late = if i == 1 { 115_200 } else { 120 };
                 survivor_fires.push(FireRecord {
                     token,
                     scheduled_at: due,
-                    observed_at: due + chrono::Duration::milliseconds(120),
+                    observed_at: due + chrono::Duration::milliseconds(late),
                 });
             }
         }

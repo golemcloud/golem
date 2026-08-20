@@ -81,9 +81,29 @@
 //! is reported against the configured lease budget as SLO evidence, not
 //! asserted: how much a lease recovery may cost is a judgement, and the number
 //! that matters is in the result either way.
+//!
+//! ## What the first run found (2026-08-20)
+//!
+//! All 30,626 accepted registrations fired exactly once. Nothing was lost,
+//! nothing ran twice, no target failed to testify. Reassignment cost the
+//! scheduler almost nothing: the p99 fire delay on the killed executor's targets
+//! during the fault was 2,158ms against a baseline of 2,134ms, and both sit just
+//! under the scheduler's own 2s refresh interval, which is what a due action
+//! waits for when nothing is wrong.
+//!
+//! The delay percentiles needed a correction to say that, and the correction is
+//! now part of the account — see [`crate::chaos::fires`]. The kill stalled 26 of
+//! the 124 registrations that were in flight to that executor on the client's
+//! 120s attempt timeout; each retried and succeeded in about 60ms. Those
+//! actions fired immediately and correctly, and arrived in the percentiles as
+//! ~115s late, evenly split between the two groups because emitters are spread
+//! across both executors. The stall itself is the defect golemcloud/golem#3748
+//! addresses, reproduced here on the registration path.
 
 use crate::chaos::fires::{FaultWindow, ScheduleFireReport};
-use crate::chaos::history::{OperationHistory, OperationRecord, Outcome, Phase, Stream};
+use crate::chaos::history::{
+    OperationHistory, OperationRecord, Outcome, Phase, Stream, TargetFireLog,
+};
 use crate::chaos::prep::ChaosPrepManifest;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
 use crate::chaos::scenarios::{
@@ -402,6 +422,10 @@ pub async fn run(
 
     let records = history.snapshot();
     let logs = scheduled::read_logs(&ctx, &targets).await;
+    // Archived alongside the operations, not just reduced into the report. The
+    // first S10 run needed a correction to its delay percentiles that could not
+    // be applied afterwards, because only the reduced numbers had been kept.
+    history.record_fire_logs(logs.clone());
 
     let report = ScheduleFireReport::build(
         &records,
@@ -522,10 +546,7 @@ pub fn pending_at_injection(
 }
 
 /// Per-target read-back from `polls`, the view every other scenario reports.
-fn readback_from_polls(
-    records: &[OperationRecord],
-    logs: &[crate::chaos::fires::TargetFireLog],
-) -> Vec<AgentReadback> {
+fn readback_from_polls(records: &[OperationRecord], logs: &[TargetFireLog]) -> Vec<AgentReadback> {
     logs.iter()
         .filter_map(|log| {
             let scoped = records

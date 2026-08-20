@@ -63,8 +63,29 @@
 //! executor stamps the fire — so a small negative delay is skew rather than an
 //! action that fired early. `minDelayMs` is reported per group so that skew is
 //! visible instead of silently folded into the percentiles.
+//!
+//! ### Actions that were late before the scheduler saw them
+//!
+//! The due time is minted *before* the registering invocation goes out, so a
+//! registration that takes longer than the lead to complete describes an action
+//! that was already overdue the moment it was accepted. The platform runs it
+//! immediately and correctly, and the arithmetic still reports it as tens of
+//! seconds late.
+//!
+//! This is not hypothetical. The first S10 run (2026-08-20) killed an executor
+//! while 124 registrations were in flight to it; 26 of them stalled on the
+//! client's 120s attempt timeout and then succeeded on retry in about 60ms. All
+//! 26 fired correctly and instantly, and all 26 landed in the percentiles as
+//! ~115s late — 13 in each group, which made the untouched control group look
+//! exactly as damaged as the killed executor's targets.
+//!
+//! So they are separated. A fire whose registration completed after its due time
+//! is counted as `overdueOnArrival` and kept out of the delay cells, because the
+//! delay cells answer "how late was the scheduler" and this is the answer to
+//! "how late was the client". Both are reported; neither is allowed to
+//! impersonate the other.
 
-use crate::chaos::history::{OperationRecord, Outcome, Stream};
+use crate::chaos::history::{FireRecord, OperationRecord, Outcome, Stream, TargetFireLog};
 use crate::chaos::summary::LatencyStats;
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
@@ -78,53 +99,6 @@ use std::time::Duration;
 /// so truncation is stated rather than inferred from a suspiciously round
 /// number of findings.
 const MAX_FINDINGS: usize = 200;
-
-/// One fire, as the target agent recorded it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FireRecord {
-    /// The registering invocation's idempotency key.
-    pub token: String,
-    /// When the action was due, as the driver asked for it.
-    pub scheduled_at: DateTime<Utc>,
-    /// When the platform ran it, as the executor's clock saw it.
-    pub observed_at: DateTime<Utc>,
-}
-
-impl FireRecord {
-    /// How far past its due time the action ran. Negative means clock skew
-    /// between the driver and the executor, not an action that fired early.
-    pub fn delay_ms(&self) -> i64 {
-        (self.observed_at - self.scheduled_at).num_milliseconds()
-    }
-}
-
-/// Everything read back from one target agent.
-#[derive(Debug, Clone)]
-pub struct TargetFireLog {
-    pub agent: String,
-    /// `ScheduleCounter.polls`, which keeps counting past the log's cap and is
-    /// therefore what says whether the log below is complete.
-    pub polls: Option<u64>,
-    pub fires: Vec<FireRecord>,
-    /// Why the agent could not be read, when it could not be.
-    pub error: Option<String>,
-}
-
-impl TargetFireLog {
-    /// Whether this log can testify about its own registrations.
-    ///
-    /// Two ways it cannot: the read failed outright, or the component's fire log
-    /// hit its cap and dropped entries. Both leave an absent fire ambiguous.
-    pub fn is_complete(&self) -> bool {
-        match (self.error.is_some(), self.polls) {
-            (true, _) => false,
-            (false, Some(polls)) => self.fires.len() as u64 >= polls,
-            // No `polls` read means no way to tell whether the log is whole.
-            (false, None) => false,
-        }
-    }
-}
 
 /// The fault window, as the workflow reported it.
 #[derive(Debug, Clone, Copy)]
@@ -287,6 +261,13 @@ pub struct ScheduleFireReport {
     /// Targets whose fire log hit the component's cap.
     pub targets_truncated: Vec<String>,
     pub delay: Vec<FireDelayStats>,
+    /// Fires whose registration only landed after the action was already due, so
+    /// the platform could not have run them on time whatever the scheduler did.
+    /// Held out of [`Self::delay`] — see the module docs.
+    pub overdue_on_arrival: u64,
+    /// How late those were, for the record. This is client-side registration
+    /// latency wearing a scheduler's clothes.
+    pub overdue_delay: LatencyStats,
     pub findings: Vec<FireFinding>,
     /// Findings past [`MAX_FINDINGS`], which the report drops rather than
     /// carries. Non-zero means `findings` is a sample.
@@ -347,16 +328,24 @@ impl ScheduleFireReport {
             targets_unreadable,
             targets_truncated,
             delay: Vec::new(),
+            overdue_on_arrival: 0,
+            overdue_delay: LatencyStats::default(),
             findings: Vec::new(),
             findings_omitted: 0,
         };
 
         let mut claimed: BTreeSet<&str> = BTreeSet::new();
         let mut findings: Vec<FireFinding> = Vec::new();
+        // When each registration actually landed, which is what decides whether
+        // its action still had a chance of being on time.
+        let mut registered_at: BTreeMap<&str, DateTime<Utc>> = BTreeMap::new();
 
         for record in records.iter().filter(|r| r.stream == Stream::Scheduled) {
             let token = record.idempotency_key.as_str();
             claimed.insert(token);
+            if let Some(completed) = record.completed_at {
+                registered_at.insert(token, completed);
+            }
             let fires = fires_by_token.get(token).map(Vec::as_slice).unwrap_or(&[]);
             // The due time comes from the fire itself when there is one, because
             // that is what the platform was actually told. Without a fire the
@@ -432,7 +421,11 @@ impl ScheduleFireReport {
         report.findings_omitted = findings.len().saturating_sub(MAX_FINDINGS) as u64;
         findings.truncate(MAX_FINDINGS);
         report.findings = findings;
-        report.delay = delay_stats(logs, fault, killed_targets, budget_ms);
+        let (delay, overdue) = delay_stats(logs, fault, killed_targets, budget_ms, &registered_at);
+        report.delay = delay;
+        report.overdue_on_arrival = overdue.len() as u64;
+        report.overdue_delay =
+            LatencyStats::from_durations(overdue.iter().map(|d| (*d).max(0) as u64).collect());
         report
     }
 
@@ -489,6 +482,19 @@ impl ScheduleFireReport {
                 self.unknown_tokens
             ));
         }
+        if self.overdue_on_arrival > 0 {
+            lines.push(format!(
+                "{} already overdue when the registration landed (worst {}ms late). That is \
+                 client-side registration latency, not scheduler delay, so they are excluded \
+                 from the delay percentiles and counted here instead",
+                if self.overdue_on_arrival == 1 {
+                    "1 action was".to_string()
+                } else {
+                    format!("{} actions were", self.overdue_on_arrival)
+                },
+                self.overdue_delay.max_ms
+            ));
+        }
         if let Some(p99) = self.fault_window_p99_ms()
             && p99 > self.lease_budget_ms
         {
@@ -501,14 +507,20 @@ impl ScheduleFireReport {
     }
 }
 
-/// Delay percentiles per (group, window) cell.
+/// Delay percentiles per (group, window) cell, and the fires held out of them.
+///
+/// A fire is held out when its registration completed after the action was
+/// already due: nothing the scheduler did could have made it on time, so
+/// counting it as scheduler delay would blame the platform for the client.
 fn delay_stats(
     logs: &[TargetFireLog],
     fault: Option<FaultWindow>,
     killed_targets: &BTreeSet<String>,
     budget_ms: u64,
-) -> Vec<FireDelayStats> {
+    registered_at: &BTreeMap<&str, DateTime<Utc>>,
+) -> (Vec<FireDelayStats>, Vec<i64>) {
     let mut cells: BTreeMap<(TargetGroup, FireWindow), Vec<i64>> = BTreeMap::new();
+    let mut overdue: Vec<i64> = Vec::new();
 
     for log in logs {
         let group = if killed_targets.contains(&log.agent) {
@@ -517,6 +529,13 @@ fn delay_stats(
             TargetGroup::Elsewhere
         };
         for fire in &log.fires {
+            let late_on_arrival = registered_at
+                .get(fire.token.as_str())
+                .is_some_and(|landed| *landed > fire.scheduled_at);
+            if late_on_arrival {
+                overdue.push(fire.delay_ms());
+                continue;
+            }
             cells
                 .entry((group, FireWindow::of(fire.scheduled_at, fault)))
                 .or_default()
@@ -524,7 +543,7 @@ fn delay_stats(
         }
     }
 
-    cells
+    let cells: Vec<FireDelayStats> = cells
         .into_iter()
         .map(|((group, window), delays)| {
             let min = delays.iter().copied().min().unwrap_or(0);
@@ -539,7 +558,8 @@ fn delay_stats(
                 over_budget,
             }
         })
-        .collect()
+        .collect();
+    (cells, overdue)
 }
 
 #[cfg(test)]
@@ -881,6 +901,71 @@ mod tests {
         let report = build(std::slice::from_ref(&durable), &[log("target-0", vec![])]);
         assert_eq!(report.registrations_confirmed, 0);
         assert!(!report.has_violations());
+    }
+
+    /// The correction the first S10 run forced.
+    ///
+    /// An executor kill stalls the invocations in flight to it. Those
+    /// registrations land late, describing actions that were already overdue,
+    /// and the platform then runs them immediately and correctly. Counting that
+    /// as scheduler delay put 13 fires over budget in the killed executor's
+    /// targets and 13 in the control group — which is the tell, since the
+    /// control group's shards never moved.
+    #[test]
+    fn a_fire_whose_registration_landed_late_is_held_out_of_the_delay_cells() {
+        // Registered at t=0 for t=10, but the invocation only returned at t=125
+        // after a stalled attempt and a retry. The action fires at once.
+        let mut r = record("stalled", "target-0", Outcome::Confirmed, at(0));
+        r.completed_at = Some(at(125));
+        r.duration_ms = 125_000;
+        let prompt = record("prompt", "target-0", Outcome::Confirmed, at(20));
+
+        let report = build(
+            &[r, prompt],
+            &[log(
+                "target-0",
+                vec![
+                    fire("stalled", at(10), 115_200),
+                    fire("prompt", at(30), 1_100),
+                ],
+            )],
+        );
+
+        assert_eq!(report.overdue_on_arrival, 1);
+        assert_eq!(report.overdue_delay.max_ms, 115_200);
+        assert_eq!(
+            report.delay.iter().map(|d| d.delay.count).sum::<u64>(),
+            1,
+            "only the registration that landed before its due time belongs in the cells"
+        );
+        assert_eq!(report.delay[0].delay.max_ms, 1_100);
+        assert_eq!(
+            report.delay[0].over_budget, 0,
+            "the stalled registration must not put the scheduler over budget"
+        );
+        assert!(
+            report
+                .attention_lines()
+                .iter()
+                .any(|l| l.contains("client-side registration latency")),
+            "an operator has to be told why the count is held out"
+        );
+        // Still exactly-once: both actions ran once.
+        assert!(!report.has_violations());
+        assert_eq!(report.fired_once, 2);
+    }
+
+    /// The boundary: landing exactly on the due time is not late.
+    #[test]
+    fn a_registration_that_landed_on_its_due_time_stays_in_the_cells() {
+        let mut r = record("t-0", "target-0", Outcome::Confirmed, at(0));
+        r.completed_at = Some(at(10));
+        let report = build(
+            std::slice::from_ref(&r),
+            &[log("target-0", vec![fire("t-0", at(10), 900)])],
+        );
+        assert_eq!(report.overdue_on_arrival, 0);
+        assert_eq!(report.delay[0].delay.count, 1);
     }
 
     /// The p99 an operator is judged on is the fault-window cell for the
