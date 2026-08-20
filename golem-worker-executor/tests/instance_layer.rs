@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! White-box integration tests for the entity execution substrate beneath tool invocation.
+//!
+//! Component storage, owner startup, and ordinary agent calls use [`TestDsl`]. Tests whose
+//! expectations concern an entity Store, owner lane, invocation scope, or pinned activation then
+//! cross the public DSL boundary deliberately: those concepts are executor internals and cannot be
+//! exercised through a public tool call without also testing the routing adapter above them.
+
 use crate::Tracing;
 use async_trait::async_trait;
 use golem_common::base_model::agent::{AgentPrincipal, Principal};
@@ -53,7 +60,7 @@ use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::durable_host::DurableWorkerCtxView;
 use golem_worker_executor::preview2::golem::agent::host::Host as AgentHost;
 use golem_worker_executor::services::HasComponentService;
-use golem_worker_executor::services::active_workers::ActiveAgent;
+use golem_worker_executor::services::active_agents::ActiveAgent;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::oplog::CommitLevel;
 use golem_worker_executor::worker::EvictionClass;
@@ -69,6 +76,8 @@ use golem_worker_executor_test_utils::{
     WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use std::collections::{BTreeSet, HashMap};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
@@ -287,6 +296,53 @@ fn activation_with_provision(
     filesystem: FilesystemCapability,
     provision: ToolProvisionConfig,
 ) -> EntityActivation {
+    activation_with_policy(
+        executable,
+        component_name,
+        agent_type_name,
+        tool_name,
+        account_id,
+        filesystem,
+        provision,
+        SecretKeyScope::All,
+        SecretKeyScope::All,
+    )
+}
+
+fn activation_with_secret_policy(
+    executable: ExecutableTarget,
+    component_name: &str,
+    agent_type_name: AgentTypeName,
+    tool_name: ToolName,
+    account_id: golem_common::model::account::AccountId,
+    secret_keys_readable: SecretKeyScope,
+    secret_keys_revealable: SecretKeyScope,
+) -> EntityActivation {
+    activation_with_policy(
+        executable,
+        component_name,
+        agent_type_name,
+        tool_name,
+        account_id,
+        FilesystemCapability::Incapable,
+        ToolProvisionConfig::default(),
+        secret_keys_readable,
+        secret_keys_revealable,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn activation_with_policy(
+    executable: ExecutableTarget,
+    component_name: &str,
+    agent_type_name: AgentTypeName,
+    tool_name: ToolName,
+    account_id: golem_common::model::account::AccountId,
+    filesystem: FilesystemCapability,
+    provision: ToolProvisionConfig,
+    secret_keys_readable: SecretKeyScope,
+    secret_keys_revealable: SecretKeyScope,
+) -> EntityActivation {
     let deployment_revision = DeploymentRevision::try_from(1_u64).unwrap();
     let source = ToolSource::Component {
         component_id: executable.component_id,
@@ -302,8 +358,8 @@ fn activation_with_provision(
         account_id,
         account_email: AccountEmail::new("test@golem"),
         parameters: NormalizedJsonValue::new(serde_json::json!({})),
-        secret_keys_readable: SecretKeyScope::All,
-        secret_keys_revealable: SecretKeyScope::All,
+        secret_keys_readable,
+        secret_keys_revealable,
         filesystem_access: match filesystem {
             FilesystemCapability::Capable => {
                 golem_common::model::tool::ToolFilesystemAccess::Allowed
@@ -322,6 +378,69 @@ fn activation_with_provision(
         filesystem,
     )
     .unwrap()
+}
+
+/// Runs one synthetic synchronous entity call beneath the public tool-routing layer.
+///
+/// The helper models an already-admitted primary invocation dispatching an entity: it establishes
+/// the parent lane position, installs a live entity scope, starts a fresh entity Store, and waits
+/// for its result. Tests retain the invocation closure so assertions about Store-local host state
+/// remain visible at the call site.
+async fn run_synchronous_entity_invocation<R, F>(
+    active_agent: &ActiveAgent<TestWorkerCtx>,
+    owner_metadata: Arc<golem_service_base::model::component::Component>,
+    owner_id: &OwnedAgentId,
+    entity: &AgentEntity,
+    activation: Arc<EntityActivation>,
+    invoke: F,
+) -> Result<R, WorkerExecutorError>
+where
+    R: Send + 'static,
+    F: Send + 'static,
+    F: for<'a> FnOnce(
+        &'a Instance,
+        &'a mut Store<TestWorkerCtx>,
+        Principal,
+    )
+        -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>,
+{
+    let lane = active_agent.execution().lane();
+    let parent_start = active_agent
+        .execution()
+        .oplog()
+        .current_oplog_index()
+        .await
+        .next();
+    let parent_id = OwnerInvocationId::Agent(parent_start);
+    let parent = lane
+        .enter_primary(parent_start)
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        .acquire()
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    let principal = Principal::Agent(AgentPrincipal {
+        agent_id: owner_id.agent_id.clone(),
+    });
+    let scope = invocation_scope(
+        owner_id,
+        entity,
+        parent_start.next(),
+        parent_start,
+        activation,
+        principal.clone(),
+    );
+    let body = active_agent.start_entity_invocation(
+        parent_id.clone(),
+        scope,
+        owner_metadata,
+        EntityCallMode::Synchronous,
+        move |instance, store| invoke(instance, store, principal),
+        std::future::ready,
+    )?;
+
+    let result = body.await_result(&parent_id).await;
+    drop(parent);
+    result
 }
 
 fn middleware_activation(
@@ -1947,6 +2066,9 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
     let secret_path = CanonicalAgentSecretPath(vec!["secret".to_string()]);
     let nested_secret_path =
         CanonicalAgentSecretPath(vec!["nested".to_string(), "nestedSecret".to_string()]);
+    // Inject deterministic backing values for the two secret declarations in ConfigAgent. The
+    // entity policy below controls whether the guest receives opaque handles and, independently,
+    // whether those handles can reveal these values.
     let secrets = HashMap::from([
         (
             secret_path.clone(),
@@ -2011,6 +2133,8 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    // A normal owner invocation has no tool restriction and proves that the component's complete
+    // config, including both secrets, is otherwise valid before exercising entity policy.
     executor
         .invoke_and_await_agent(&component, &agent_id, "echo_local_config", data_value!())
         .await?;
@@ -2024,62 +2148,25 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         owner_component_metadata(&active_agent, component.id, component.revision).await?;
     let tool_name = ToolName::try_from("restricted-secret-tool").unwrap();
     let entity = AgentEntity::Tool(tool_name.clone());
-    let deployment_revision = DeploymentRevision::try_from(1_u64).unwrap();
-    let activation = Arc::new(
-        EntityActivation::new(
-            ExecutableTarget::new(component.id, component.revision),
-            deployment_revision,
-            EntityActivationPolicy::Tool {
-                provision: ToolProvisionConfig::default(),
-                binding: CompiledToolBinding {
-                    deployment_revision,
-                    agent_type_name: agent_id.agent_type.clone(),
-                    tool_name,
-                    version: "1.0.0".to_string(),
-                    metadata_version: "0.1.0".to_string(),
-                    account_id: context.account_id,
-                    account_email: AccountEmail::new("test@golem"),
-                    parameters: NormalizedJsonValue::new(serde_json::json!({})),
-                    secret_keys_readable: SecretKeyScope::Keys(BTreeSet::new()),
-                    secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::new()),
-                    filesystem_access: ToolFilesystemAccess::Denied,
-                    source: ToolSource::Component {
-                        component_id: component.id,
-                        component_revision: component.revision,
-                        component_name: ComponentName("test:restricted-secret-tool".to_string()),
-                    },
-                },
-            },
-            FilesystemCapability::Incapable,
-        )
-        .unwrap(),
-    );
-    let lane = active_agent.execution().lane();
-    let parent_start = active_agent
-        .execution()
-        .oplog()
-        .current_oplog_index()
-        .await
-        .next();
-    let parent_id = OwnerInvocationId::Agent(parent_start);
-    let parent = lane.enter_primary(parent_start)?.acquire().await?;
-    let scope = invocation_scope(
+    // An empty readable scope must stop the entity at config resolution: the owner has valid
+    // secrets and the executable knows their declarations, but no opaque handle may be minted for
+    // this invocation.
+    let activation = Arc::new(activation_with_secret_policy(
+        ExecutableTarget::new(component.id, component.revision),
+        "test:restricted-secret-tool",
+        agent_id.agent_type.clone(),
+        tool_name.clone(),
+        context.account_id,
+        SecretKeyScope::Keys(BTreeSet::new()),
+        SecretKeyScope::Keys(BTreeSet::new()),
+    ));
+    let result = run_synchronous_entity_invocation(
+        &active_agent,
+        owner_metadata.clone(),
         &owner_id,
         &entity,
-        parent_start.next(),
-        parent_start,
         activation,
-        Principal::Agent(AgentPrincipal {
-            agent_id: owner_id.agent_id.clone(),
-        }),
-    );
-    let principal = scope.calling_principal().clone();
-    let body = active_agent.start_entity_invocation(
-        parent_id.clone(),
-        scope,
-        owner_metadata.clone(),
-        EntityCallMode::Synchronous,
-        move |instance, store| {
+        move |instance, store, principal| {
             Box::pin(async move {
                 let parsed_agent_id = store
                     .data()
@@ -2097,105 +2184,59 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
                 .await
             })
         },
-        std::future::ready,
-    )?;
-
-    let result = body.await_result(&parent_id).await;
-    drop(parent);
+    )
+    .await;
     assert!(
         result.is_err(),
         "an entity with an empty readable-secret scope must not receive the owner's secret handles"
     );
 
-    let reveal_tool_name = ToolName::try_from("restricted-secret-tool").unwrap();
-    let reveal_activation = Arc::new(
-        EntityActivation::new(
-            ExecutableTarget::new(component.id, component.revision),
-            deployment_revision,
-            EntityActivationPolicy::Tool {
-                provision: ToolProvisionConfig::default(),
-                binding: CompiledToolBinding {
-                    deployment_revision,
-                    agent_type_name: agent_id.agent_type.clone(),
-                    tool_name: reveal_tool_name,
-                    version: "1.0.0".to_string(),
-                    metadata_version: "0.1.0".to_string(),
-                    account_id: context.account_id,
-                    account_email: AccountEmail::new("test@golem"),
-                    parameters: NormalizedJsonValue::new(serde_json::json!({})),
-                    secret_keys_readable: SecretKeyScope::Keys(BTreeSet::from([
-                        CanonicalAgentSecretPath(vec!["secret".to_string()]),
-                        CanonicalAgentSecretPath(vec![
-                            "nested".to_string(),
-                            "nestedSecret".to_string(),
-                        ]),
-                    ])),
-                    secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::new()),
-                    filesystem_access: ToolFilesystemAccess::Denied,
-                    source: ToolSource::Component {
-                        component_id: component.id,
-                        component_revision: component.revision,
-                        component_name: ComponentName("test:restricted-secret-tool".to_string()),
-                    },
-                },
-            },
-            FilesystemCapability::Incapable,
-        )
-        .unwrap(),
-    );
-    let reveal_parent_start = active_agent
-        .execution()
-        .oplog()
-        .current_oplog_index()
-        .await
-        .next();
-    let reveal_parent_id = OwnerInvocationId::Agent(reveal_parent_start);
-    let reveal_parent = lane.enter_primary(reveal_parent_start)?.acquire().await?;
-    let reveal_scope = invocation_scope(
-        &owner_id,
-        &entity,
-        reveal_parent_start.next(),
-        reveal_parent_start,
-        reveal_activation,
-        Principal::Agent(AgentPrincipal {
-            agent_id: owner_id.agent_id.clone(),
-        }),
-    );
-    let reveal_principal = reveal_scope.calling_principal().clone();
+    // Reading and revealing are separate permissions. This activation may resolve both owner
+    // secrets into opaque handles, but the empty revealable scope must reject the guest method
+    // when it tries to extract their values.
+    let reveal_activation = Arc::new(activation_with_secret_policy(
+        ExecutableTarget::new(component.id, component.revision),
+        "test:restricted-secret-tool",
+        agent_id.agent_type.clone(),
+        tool_name,
+        context.account_id,
+        SecretKeyScope::Keys(BTreeSet::from([
+            CanonicalAgentSecretPath(vec!["secret".to_string()]),
+            CanonicalAgentSecretPath(vec!["nested".to_string(), "nestedSecret".to_string()]),
+        ])),
+        SecretKeyScope::Keys(BTreeSet::new()),
+    ));
     let config_loaded = Arc::new(AtomicBool::new(false));
     let config_loaded_in_call = config_loaded.clone();
-    let reveal_body = active_agent.start_entity_invocation(
-        reveal_parent_id.clone(),
-        reveal_scope,
+    let reveal_result = run_synchronous_entity_invocation(
+        &active_agent,
         owner_metadata.clone(),
-        EntityCallMode::Synchronous,
-        move |instance, store| {
+        &owner_id,
+        &entity,
+        reveal_activation,
+        move |instance, store, principal| {
             Box::pin(async move {
                 let parsed_agent_id = store
                     .data()
                     .parsed_agent_id()
                     .expect("entity context keeps the owner routing identity");
-                initialize_entity(instance, store, &parsed_agent_id, reveal_principal.clone())
-                    .await?;
+                initialize_entity(instance, store, &parsed_agent_id, principal.clone()).await?;
                 config_loaded_in_call.store(true, Ordering::SeqCst);
                 invoke_entity_method(
                     instance,
                     store,
                     &parsed_agent_id,
-                    reveal_principal,
+                    principal,
                     "echo_local_config",
                     data_value!().value().clone(),
                 )
                 .await
             })
         },
-        std::future::ready,
-    )?;
-    let reveal_error = reveal_body
-        .await_result(&reveal_parent_id)
-        .await
-        .expect_err("an empty revealable-secret scope must reject secret reveal");
-    drop(reveal_parent);
+    )
+    .await;
+    let reveal_error =
+        reveal_result.expect_err("an empty revealable-secret scope must reject secret reveal");
     assert!(
         config_loaded.load(Ordering::SeqCst),
         "readable secret handles must load successfully before reveal policy rejects them: {reveal_error}"
@@ -2215,6 +2256,8 @@ async fn entity_agent_config_uses_owner_component_declarations(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
+    // Keep the declaring owner and the executable tool in separate components so consulting the
+    // wrong component metadata cannot accidentally produce the expected value.
     let owner_component = executor
         .component_dep(&context.default_environment_id, agent_sdk_rust)
         .with_agent_config(
@@ -2248,6 +2291,8 @@ async fn entity_agent_config_uses_owner_component_declarations(
     let worker_id = executor
         .start_agent(&owner_component.id, agent_id.clone())
         .await?;
+    // Establish that the owner declaration and configured value are valid through the public DSL
+    // before asking the separate entity Store to resolve that same owner-scoped value.
     executor
         .invoke_and_await_agent(
             &owner_component,
@@ -2275,32 +2320,17 @@ async fn entity_agent_config_uses_owner_component_declarations(
         context.account_id,
         FilesystemCapability::Incapable,
     ));
-    let lane = active_agent.execution().lane();
-    let parent_start = active_agent
-        .execution()
-        .oplog()
-        .current_oplog_index()
-        .await
-        .next();
-    let parent_id = OwnerInvocationId::Agent(parent_start);
-    let parent = lane.enter_primary(parent_start)?.acquire().await?;
-    let scope = invocation_scope(
+    // The executable deliberately has no LocalConfigAgent declaration. A successful lookup proves
+    // the entity host resolves configuration through the owner component and owner agent state,
+    // rather than accidentally consulting the executable component's metadata.
+    let expected = encode_graph(&SchemaGraph::anonymous(SchemaType::s32()))?;
+    run_synchronous_entity_invocation(
+        &active_agent,
+        owner_metadata,
         &owner_id,
         &entity,
-        parent_start.next(),
-        parent_start,
         activation,
-        Principal::Agent(AgentPrincipal {
-            agent_id: owner_id.agent_id.clone(),
-        }),
-    );
-    let expected = encode_graph(&SchemaGraph::anonymous(SchemaType::s32()))?;
-    let body = active_agent.start_entity_invocation(
-        parent_id.clone(),
-        scope,
-        owner_metadata.clone(),
-        EntityCallMode::Synchronous,
-        move |_instance, store| {
+        move |_instance, store, _principal| {
             Box::pin(async move {
                 AgentHost::get_config_value(
                     store.data_mut().durable_ctx_mut(),
@@ -2312,11 +2342,7 @@ async fn entity_agent_config_uses_owner_component_declarations(
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
             })
         },
-        std::future::ready,
-    )?;
-
-    let result = body.await_result(&parent_id).await;
-    drop(parent);
-    result?;
+    )
+    .await?;
     Ok(())
 }

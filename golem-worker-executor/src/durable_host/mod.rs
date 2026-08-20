@@ -54,7 +54,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
-use crate::services::active_workers::MemoryGrant;
+use crate::services::active_agents::MemoryGrant;
 use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
@@ -82,7 +82,7 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
-    HasActiveWorkers, HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration,
+    HasActiveAgents, HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration,
 };
 use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_host;
@@ -845,7 +845,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             OwnerRuntime::Entity(_) => (
                 Arc::new(Mutex::new(
                     worker
-                        .active_workers()
+                        .active_agents()
                         .acquire_memory(initial_linear_memory)
                         .await,
                 )),
@@ -1850,7 +1850,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn try_acquire_linear_memory(&self, delta: u64) -> Option<MemoryGrant> {
         self.public_state
             .worker()
-            .active_workers()
+            .active_agents()
             .try_acquire(delta)
             .await
     }

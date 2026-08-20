@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::active_workers::MemoryGrant;
+use crate::services::active_agents::MemoryGrant;
 use crate::services::agent_memory_meter::AgentMemoryMeter;
 use crate::services::resource_limits::AtomicResourceEntry;
 use golem_common::model::agent::AgentMode;
@@ -287,10 +287,10 @@ pub fn desired_total_after_growth(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::active_workers::admission::{
+    use crate::services::active_agents::admission::{
         AdmissionController, AdmissionPolicy, NoEvictionSource,
     };
-    use crate::services::active_workers::memory_probe::FixedProbe;
+    use crate::services::active_agents::memory_probe::FixedProbe;
     use crate::services::resource_limits::AtomicResourceEntry;
     use golem_common::model::agent::AgentMode;
     use std::sync::atomic::{AtomicBool, Ordering};

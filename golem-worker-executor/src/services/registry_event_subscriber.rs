@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::active_workers::ActiveWorkers;
+use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::card::{CardService, CardState};
 use crate::services::component::ComponentService;
@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 pub(crate) struct WorkerExecutorRegistryInvalidationHandler<Ctx: WorkerCtx> {
-    active_workers: Arc<ActiveWorkers<Ctx>>,
+    active_agents: Arc<ActiveAgents<Ctx>>,
     card_service: Arc<dyn CardService>,
     component_service: Arc<dyn ComponentService>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
@@ -36,7 +36,7 @@ pub(crate) struct WorkerExecutorRegistryInvalidationHandler<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
     pub async fn run(
         registry_service: Arc<dyn RegistryService>,
-        active_workers: Arc<ActiveWorkers<Ctx>>,
+        active_agents: Arc<ActiveAgents<Ctx>>,
         card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
@@ -48,7 +48,7 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
                 "worker-executor",
                 Some(shutdown_token),
                 Arc::new(Self {
-                    active_workers,
+                    active_agents,
                     card_service,
                     component_service,
                     environment_state_service,
@@ -67,7 +67,7 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
     /// registry) and reuses the standard revocation propagation path for any
     /// card that is no longer live.
     async fn reevaluate_tracked_cards(&self) {
-        let card_ids = self.active_workers.tracked_card_ids().await;
+        let card_ids = self.active_agents.tracked_card_ids().await;
         if card_ids.is_empty() {
             return;
         }
@@ -95,7 +95,7 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
                 card_count = revoked.len(),
                 "Cursor expiry re-validation found revoked cards, notifying running workers"
             );
-            self.active_workers.notify_revoked_cards(&revoked).await;
+            self.active_agents.notify_revoked_cards(&revoked).await;
         }
     }
 }
@@ -196,7 +196,7 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                     "Received card revocation event, recording revoked card ids"
                 );
                 self.card_service.record_revoked_cards(&card_ids).await;
-                self.active_workers.notify_revoked_cards(&card_ids).await;
+                self.active_agents.notify_revoked_cards(&card_ids).await;
             }
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,
@@ -215,7 +215,7 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                 // Invalidate each environment individually using the provided UUIDs
                 // rather than flushing all caches.
                 for env_id in environment_ids {
-                    self.active_workers.unload_environment(*env_id).await;
+                    self.active_agents.unload_environment(*env_id).await;
                     self.component_service
                         .invalidate_all_metadata_for_environment(*env_id)
                         .await;
@@ -239,9 +239,7 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                     env_name,
                     "Received environment deleted event, invalidating environment caches"
                 );
-                self.active_workers
-                    .unload_environment(*environment_id)
-                    .await;
+                self.active_agents.unload_environment(*environment_id).await;
                 self.component_service
                     .invalidate_all_metadata_for_environment(*environment_id)
                     .await;

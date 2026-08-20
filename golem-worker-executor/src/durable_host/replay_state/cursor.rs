@@ -1895,7 +1895,54 @@ fn scope_entry_owner(
         | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
         | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
         | OplogEntry::RolledBackRemoteTransaction { begin_index, .. } => Some(*begin_index),
-        _ => None,
+        OplogEntry::Create { .. }
+        | OplogEntry::AgentInvocationStarted { .. }
+        | OplogEntry::AgentInvocationFinished { .. }
+        | OplogEntry::Suspend { .. }
+        | OplogEntry::NoOp { .. }
+        | OplogEntry::Jump { .. }
+        | OplogEntry::Interrupted { .. }
+        | OplogEntry::Exited { .. }
+        | OplogEntry::BeginAtomicRegion { .. }
+        | OplogEntry::EndAtomicRegion { .. }
+        | OplogEntry::PendingAgentInvocation { .. }
+        | OplogEntry::PendingUpdate { .. }
+        | OplogEntry::SuccessfulUpdate { .. }
+        | OplogEntry::FailedUpdate { .. }
+        | OplogEntry::GrowMemory { .. }
+        | OplogEntry::FilesystemStorageUsageUpdate { .. }
+        | OplogEntry::CreateResource { .. }
+        | OplogEntry::DropResource { .. }
+        | OplogEntry::Log {
+            parent_start_index: None,
+            ..
+        }
+        | OplogEntry::Restart { .. }
+        | OplogEntry::ActivatePlugin { .. }
+        | OplogEntry::DeactivatePlugin { .. }
+        | OplogEntry::Revert { .. }
+        | OplogEntry::CancelPendingInvocation { .. }
+        | OplogEntry::StartSpan {
+            parent_start_index: None,
+            ..
+        }
+        | OplogEntry::FinishSpan {
+            parent_start_index: None,
+            ..
+        }
+        | OplogEntry::SetSpanAttribute {
+            parent_start_index: None,
+            ..
+        }
+        | OplogEntry::Snapshot { .. }
+        | OplogEntry::OplogProcessorCheckpoint { .. }
+        | OplogEntry::SetRetryPolicy { .. }
+        | OplogEntry::RemoveRetryPolicy { .. }
+        | OplogEntry::CardEventQueued { .. }
+        | OplogEntry::CardInstalled { .. }
+        | OplogEntry::CardInstallFailed { .. }
+        | OplogEntry::CardRevoked { .. }
+        | OplogEntry::CardExpired { .. } => None,
     }
 }
 
@@ -1906,6 +1953,50 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. } => {
             Some(*start_index)
         }
-        _ => None,
+        OplogEntry::Create { .. }
+        | OplogEntry::Start { .. }
+        | OplogEntry::CompletionDiscarded { .. }
+        | OplogEntry::AgentInvocationStarted { .. }
+        | OplogEntry::AgentInvocationFinished { .. }
+        | OplogEntry::Suspend { .. }
+        | OplogEntry::Error { .. }
+        | OplogEntry::NoOp { .. }
+        | OplogEntry::Jump { .. }
+        | OplogEntry::Interrupted { .. }
+        | OplogEntry::Exited { .. }
+        | OplogEntry::BeginAtomicRegion { .. }
+        | OplogEntry::EndAtomicRegion { .. }
+        | OplogEntry::PendingAgentInvocation { .. }
+        | OplogEntry::PendingUpdate { .. }
+        | OplogEntry::SuccessfulUpdate { .. }
+        | OplogEntry::FailedUpdate { .. }
+        | OplogEntry::GrowMemory { .. }
+        | OplogEntry::FilesystemStorageUsageUpdate { .. }
+        | OplogEntry::CreateResource { .. }
+        | OplogEntry::DropResource { .. }
+        | OplogEntry::Log { .. }
+        | OplogEntry::Restart { .. }
+        | OplogEntry::ActivatePlugin { .. }
+        | OplogEntry::DeactivatePlugin { .. }
+        | OplogEntry::Revert { .. }
+        | OplogEntry::CancelPendingInvocation { .. }
+        | OplogEntry::StartSpan { .. }
+        | OplogEntry::FinishSpan { .. }
+        | OplogEntry::SetSpanAttribute { .. }
+        | OplogEntry::BeginRemoteTransaction { .. }
+        | OplogEntry::PreCommitRemoteTransaction { .. }
+        | OplogEntry::PreRollbackRemoteTransaction { .. }
+        | OplogEntry::CommittedRemoteTransaction { .. }
+        | OplogEntry::RolledBackRemoteTransaction { .. }
+        | OplogEntry::Snapshot { .. }
+        | OplogEntry::OplogProcessorCheckpoint { .. }
+        | OplogEntry::SetRetryPolicy { .. }
+        | OplogEntry::RemoveRetryPolicy { .. }
+        | OplogEntry::CardEventQueued { .. }
+        | OplogEntry::CardInstalled { .. }
+        | OplogEntry::CardInstallFailed { .. }
+        | OplogEntry::CardRevoked { .. }
+        | OplogEntry::CardExpired { .. }
+        | OplogEntry::HostStreamFrame { .. } => None,
     }
 }

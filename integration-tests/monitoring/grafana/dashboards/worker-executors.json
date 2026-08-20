@@ -5231,7 +5231,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "cache_size{cache=\"active_workers\"}",
+          "expr": "cache_size{cache=\"active_agents\"}",
           "hide": false,
           "instant": false,
           "legendFormat": "{{pod}}",
@@ -5329,7 +5329,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(cache_hit_total{cache=\"active_workers\"}[5m]))/(sum(rate(cache_hit_total{cache=\"active_workers\"}[5m]))+sum(rate(cache_miss_total{cache=\"active_workers\"}[5m])))",
+          "expr": "sum(rate(cache_hit_total{cache=\"active_agents\"}[5m]))/(sum(rate(cache_hit_total{cache=\"active_agents\"}[5m]))+sum(rate(cache_miss_total{cache=\"active_agents\"}[5m])))",
           "instant": false,
           "range": true,
           "refId": "A"

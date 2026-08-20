@@ -327,7 +327,7 @@ The scope is installed only for the duration of one export call. Nested durable 
 
 ## Active-agent ownership model
 
-Rename the conceptual `ActiveWorkers` service to `ActiveAgents` and key it by `OwnedAgentId`:
+Rename the conceptual active-worker service to `ActiveAgents` and key it by `OwnedAgentId`:
 
 ```rust
 pub struct ActiveAgent<Ctx: WorkerCtx> {

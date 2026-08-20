@@ -381,10 +381,6 @@ pub struct ActiveAgents<Ctx: WorkerCtx> {
     status_flush_queue: Arc<AgentStatusFlushQueue>,
 }
 
-/// Compatibility name for services whose API has not yet adopted the conceptual rename. The
-/// underlying registry and all lookups are owner-keyed [`ActiveAgent`] groups.
-pub type ActiveWorkers<Ctx> = ActiveAgents<Ctx>;
-
 /// Identifies a compiled component for module-charge accounting.
 type ComponentChargeKey = (ComponentId, ComponentRevision);
 
@@ -432,12 +428,12 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             None,
             FullCacheEvictionMode::None,
             BackgroundEvictionMode::None,
-            "active_workers",
+            "active_agents",
         );
         let component_charges = ComponentChargeRegistry::new(GateChargeSource {
             admission: admission.clone(),
         });
-        let active_workers = Self {
+        let active_agents = Self {
             agents,
             card_interest_index: Arc::new(CardInterestIndex::new()),
             worker_filesystem_storage: Arc::new(FilesystemStorageSemaphore::new(
@@ -455,8 +451,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 shutdown_token,
             ),
         };
-        active_workers.initialize_metrics();
-        active_workers
+        active_agents.initialize_metrics();
+        active_agents
     }
 
     /// The per-executor queue used to batch cached agent status blob writes in the background.
@@ -1059,7 +1055,7 @@ impl<Ctx: WorkerCtx> EvictionSource for WorkerEvictionSource<Ctx> {
 }
 
 /// Single attempt of the charge-first admission ordering used by
-/// [`ActiveWorkers::acquire_with_component_charge`]: reserve the component's
+/// [`ActiveAgents::acquire_with_component_charge`]: reserve the component's
 /// shared module, then admit the worker's own memory once.
 ///
 /// Returns the worker's [`MemoryGrant`] and its [`WorkerComponentCharge`], or
@@ -1067,7 +1063,7 @@ impl<Ctx: WorkerCtx> EvictionSource for WorkerEvictionSource<Ctx> {
 /// releases the module again). Exists so the composition of the admission gate
 /// and the component-charge registry — the heart of the first-worker
 /// memory + module gating — can be exercised without constructing a full
-/// `ActiveWorkers<Ctx>`. The production method runs this same ordering with the
+/// `ActiveAgents<Ctx>`. The production method runs this same ordering with the
 /// memory admission wrapped in its blocking retry loop.
 #[cfg(test)]
 async fn acquire_memory_and_component_charge(

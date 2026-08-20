@@ -18,12 +18,12 @@ use super::owner_lane::OwnerLane;
 use super::state_actor::OwnerCommitController;
 use crate::durable_host::replay_state::ReplayState;
 use crate::model::ExecutionStatus;
-use crate::services::active_workers::WorkerComponentCharge;
+use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::oplog::{CommitLevel, Oplog};
 use crate::services::resource_limits::AtomicResourceEntry;
-use crate::services::{HasActiveWorkers, HasComponentService, HasWasmtimeEngine};
+use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
 use golem_common::model::OwnedAgentId;
@@ -863,7 +863,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         };
         if grant_is_tracked && required_grant_bytes > granted_bytes {
             let additional_grant = owner
-                .active_workers()
+                .active_agents()
                 .acquire_memory(required_grant_bytes - granted_bytes)
                 .await;
             retained_grant.lock().unwrap().merge(additional_grant);
@@ -935,7 +935,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let owner = self.owner()?;
         let (component, component_metadata) = self.activate().await?;
         let component_charge = owner
-            .active_workers()
+            .active_agents()
             .acquire_component_charge(
                 component_metadata.id,
                 component_metadata.revision,

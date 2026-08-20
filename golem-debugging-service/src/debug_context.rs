@@ -51,7 +51,7 @@ use golem_worker_executor::preview2::golem::agent::host::{
     InvocationMetadata, InvocationResultWithMetadata, RpcError, ScheduledInvocationReceipt,
     WasmRpc,
 };
-use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::active_agents::ActiveAgents;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
@@ -582,7 +582,7 @@ impl WorkerCtx for DebugContext {
         rdbms_service: Arc<dyn RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
-        _active_workers: Arc<ActiveWorkers<Self>>,
+        _active_agents: Arc<ActiveAgents<Self>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Self>>,

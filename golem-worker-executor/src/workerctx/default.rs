@@ -26,7 +26,7 @@ use crate::preview2::golem::agent::host::{
     HostWasmRpc, InvocationMetadata, InvocationResultWithMetadata, RpcError,
     ScheduledInvocationReceipt, WasmRpc,
 };
-use crate::services::active_workers::ActiveWorkers;
+use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -903,7 +903,7 @@ impl WorkerCtx for Context {
         rdbms_service: Arc<dyn RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
-        _active_workers: Arc<ActiveWorkers<Self>>,
+        _active_agents: Arc<ActiveAgents<Self>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Self>>,

@@ -26,7 +26,7 @@ use crate::services::worker_activator::{
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
+    All, HasActiveAgents, HasAll, HasComponentService, HasEvents, HasOplogService,
     HasPromiseService, HasRunningWorkerEnumerationService, HasSchedulerService,
     HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService,
     UsesAllDeps,
@@ -339,7 +339,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })?;
 
         if !request.ignore_already_existing {
-            if let Some(existing) = self.active_workers().try_get(&owned_agent_id).await {
+            if let Some(existing) = self.active_agents().try_get(&owned_agent_id).await {
                 if !Self::is_same_worker_creation_request(
                     &existing.get_initial_worker_metadata(),
                     &env,
@@ -481,7 +481,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         worker.start_deleting().await?;
 
         self.worker_service().remove(&owned_agent_id).await;
-        self.active_workers().remove(&owned_agent_id).await;
+        self.active_agents().remove(&owned_agent_id).await;
 
         // ensure we are holding the worker while we are doing cleanup.
         drop(worker);
@@ -703,7 +703,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         await_interruption.recv().await.unwrap();
                     };
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_agent_id).await;
+                    self.active_agents().remove(&owned_agent_id).await;
                 }
                 AgentStatus::Retrying => {
                     debug!("Marking worker scheduled to be retried as interrupted");
@@ -725,7 +725,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         await_interruption.recv().await.unwrap();
                     };
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_agent_id).await;
+                    self.active_agents().remove(&owned_agent_id).await;
                 }
                 AgentStatus::Running => {
                     let worker = Worker::get_or_create_suspended(
@@ -751,7 +751,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     };
 
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_agent_id).await;
+                    self.active_agents().remove(&owned_agent_id).await;
                 }
             }
         }
@@ -958,7 +958,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.shard_service().revoke_shards(&shard_ids)?;
 
-        for (agent_id, worker_details) in self.active_workers().snapshot().await {
+        for (agent_id, worker_details) in self.active_agents().snapshot().await {
             if self.shard_service().check_worker(&agent_id).is_err()
                 && let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)
@@ -998,7 +998,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.shard_service()
             .set_shard_assignment(number_of_shards, &shard_ids)?;
 
-        for (agent_id, worker_details) in self.active_workers().snapshot().await {
+        for (agent_id, worker_details) in self.active_agents().snapshot().await {
             if self.shard_service().check_worker(&agent_id).is_err()
                 && let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)

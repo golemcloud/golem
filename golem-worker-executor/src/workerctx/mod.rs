@@ -17,7 +17,7 @@ pub mod default;
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
-use crate::services::active_workers::ActiveWorkers;
+use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -125,7 +125,7 @@ pub trait WorkerCtx:
     /// - `key_value_service`: The service for storing key-value pairs
     /// - `blob_store_service`: The service for storing arbitrary blobs
     /// - `event_service`: The service for publishing worker events
-    /// - `active_workers`: The service for managing active workers
+    /// - `active_agents`: The service for managing active agents
     /// - `oplog_service`: The service for reading and writing the oplog
     /// - `scheduler_service`: The scheduler implementation responsible for waking up suspended workers
     /// - `recovery_management`: The service for deciding if a worker should be recovered
@@ -149,7 +149,7 @@ pub trait WorkerCtx:
         rdbms_service: Arc<dyn RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
-        active_workers: Arc<ActiveWorkers<Self>>,
+        active_agents: Arc<ActiveAgents<Self>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Self>>,

@@ -132,7 +132,51 @@ impl OplogEntry {
             // result marker is not itself a remote side effect, so it must
             // not make the owning durable scope unreplayable.
             OplogEntry::AgentInvocationFinished { .. } => true,
-            _ => true,
+            // Keep this classification exhaustive: a new oplog entry must not be assumed to be
+            // free of concurrent side effects until its semantics have been reviewed.
+            OplogEntry::Create { .. }
+            | OplogEntry::CompletionDiscarded { .. }
+            | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::Suspend { .. }
+            | OplogEntry::Error { .. }
+            | OplogEntry::NoOp { .. }
+            | OplogEntry::Jump { .. }
+            | OplogEntry::Interrupted { .. }
+            | OplogEntry::Exited { .. }
+            | OplogEntry::BeginAtomicRegion { .. }
+            | OplogEntry::EndAtomicRegion { .. }
+            | OplogEntry::PendingAgentInvocation { .. }
+            | OplogEntry::PendingUpdate { .. }
+            | OplogEntry::SuccessfulUpdate { .. }
+            | OplogEntry::FailedUpdate { .. }
+            | OplogEntry::GrowMemory { .. }
+            | OplogEntry::FilesystemStorageUsageUpdate { .. }
+            | OplogEntry::CreateResource { .. }
+            | OplogEntry::DropResource { .. }
+            | OplogEntry::Log { .. }
+            | OplogEntry::Restart { .. }
+            | OplogEntry::ActivatePlugin { .. }
+            | OplogEntry::DeactivatePlugin { .. }
+            | OplogEntry::Revert { .. }
+            | OplogEntry::CancelPendingInvocation { .. }
+            | OplogEntry::StartSpan { .. }
+            | OplogEntry::FinishSpan { .. }
+            | OplogEntry::SetSpanAttribute { .. }
+            | OplogEntry::BeginRemoteTransaction { .. }
+            | OplogEntry::PreCommitRemoteTransaction { .. }
+            | OplogEntry::PreRollbackRemoteTransaction { .. }
+            | OplogEntry::CommittedRemoteTransaction { .. }
+            | OplogEntry::RolledBackRemoteTransaction { .. }
+            | OplogEntry::Snapshot { .. }
+            | OplogEntry::OplogProcessorCheckpoint { .. }
+            | OplogEntry::SetRetryPolicy { .. }
+            | OplogEntry::RemoveRetryPolicy { .. }
+            | OplogEntry::CardEventQueued { .. }
+            | OplogEntry::CardInstalled { .. }
+            | OplogEntry::CardInstallFailed { .. }
+            | OplogEntry::CardRevoked { .. }
+            | OplogEntry::CardExpired { .. }
+            | OplogEntry::HostStreamFrame { .. } => true,
         }
     }
 
@@ -163,7 +207,53 @@ impl OplogEntry {
             OplogEntry::SuccessfulUpdate {
                 target_revision, ..
             } => Some(*target_revision),
-            _ => None,
+            // Keep this exhaustive so a new entry cannot silently fail to update the revision used
+            // to interpret the entries that follow it.
+            OplogEntry::Start { .. }
+            | OplogEntry::End { .. }
+            | OplogEntry::Cancelled { .. }
+            | OplogEntry::CompletionDiscarded { .. }
+            | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::Suspend { .. }
+            | OplogEntry::Error { .. }
+            | OplogEntry::NoOp { .. }
+            | OplogEntry::Jump { .. }
+            | OplogEntry::Interrupted { .. }
+            | OplogEntry::Exited { .. }
+            | OplogEntry::BeginAtomicRegion { .. }
+            | OplogEntry::EndAtomicRegion { .. }
+            | OplogEntry::PendingAgentInvocation { .. }
+            | OplogEntry::PendingUpdate { .. }
+            | OplogEntry::FailedUpdate { .. }
+            | OplogEntry::GrowMemory { .. }
+            | OplogEntry::FilesystemStorageUsageUpdate { .. }
+            | OplogEntry::CreateResource { .. }
+            | OplogEntry::DropResource { .. }
+            | OplogEntry::Log { .. }
+            | OplogEntry::Restart { .. }
+            | OplogEntry::ActivatePlugin { .. }
+            | OplogEntry::DeactivatePlugin { .. }
+            | OplogEntry::Revert { .. }
+            | OplogEntry::CancelPendingInvocation { .. }
+            | OplogEntry::StartSpan { .. }
+            | OplogEntry::FinishSpan { .. }
+            | OplogEntry::SetSpanAttribute { .. }
+            | OplogEntry::BeginRemoteTransaction { .. }
+            | OplogEntry::PreCommitRemoteTransaction { .. }
+            | OplogEntry::PreRollbackRemoteTransaction { .. }
+            | OplogEntry::CommittedRemoteTransaction { .. }
+            | OplogEntry::RolledBackRemoteTransaction { .. }
+            | OplogEntry::Snapshot { .. }
+            | OplogEntry::OplogProcessorCheckpoint { .. }
+            | OplogEntry::SetRetryPolicy { .. }
+            | OplogEntry::RemoveRetryPolicy { .. }
+            | OplogEntry::CardEventQueued { .. }
+            | OplogEntry::CardInstalled { .. }
+            | OplogEntry::CardInstallFailed { .. }
+            | OplogEntry::CardRevoked { .. }
+            | OplogEntry::CardExpired { .. }
+            | OplogEntry::HostStreamFrame { .. } => None,
         }
     }
 }
@@ -263,7 +353,56 @@ impl OplogScopeProjection {
             | OplogEntry::RolledBackRemoteTransaction { begin_index, .. } => {
                 self.starts.contains(begin_index)
             }
-            _ => false,
+            // Keep exclusions explicit so adding an oplog variant requires deciding whether and
+            // how it belongs to a durable invocation scope.
+            OplogEntry::Create { .. }
+            | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::Suspend { .. }
+            | OplogEntry::NoOp { .. }
+            | OplogEntry::Jump { .. }
+            | OplogEntry::Interrupted { .. }
+            | OplogEntry::Exited { .. }
+            | OplogEntry::BeginAtomicRegion { .. }
+            | OplogEntry::EndAtomicRegion { .. }
+            | OplogEntry::PendingAgentInvocation { .. }
+            | OplogEntry::PendingUpdate { .. }
+            | OplogEntry::SuccessfulUpdate { .. }
+            | OplogEntry::FailedUpdate { .. }
+            | OplogEntry::GrowMemory { .. }
+            | OplogEntry::FilesystemStorageUsageUpdate { .. }
+            | OplogEntry::CreateResource { .. }
+            | OplogEntry::DropResource { .. }
+            | OplogEntry::Log {
+                parent_start_index: None,
+                ..
+            }
+            | OplogEntry::Restart { .. }
+            | OplogEntry::ActivatePlugin { .. }
+            | OplogEntry::DeactivatePlugin { .. }
+            | OplogEntry::Revert { .. }
+            | OplogEntry::CancelPendingInvocation { .. }
+            | OplogEntry::StartSpan {
+                parent_start_index: None,
+                ..
+            }
+            | OplogEntry::FinishSpan {
+                parent_start_index: None,
+                ..
+            }
+            | OplogEntry::SetSpanAttribute {
+                parent_start_index: None,
+                ..
+            }
+            | OplogEntry::Snapshot { .. }
+            | OplogEntry::OplogProcessorCheckpoint { .. }
+            | OplogEntry::SetRetryPolicy { .. }
+            | OplogEntry::RemoveRetryPolicy { .. }
+            | OplogEntry::CardEventQueued { .. }
+            | OplogEntry::CardInstalled { .. }
+            | OplogEntry::CardInstallFailed { .. }
+            | OplogEntry::CardRevoked { .. }
+            | OplogEntry::CardExpired { .. } => false,
         };
         self.previous_index = Some(index);
         self.previous_included_start = included_start.then_some(index);
