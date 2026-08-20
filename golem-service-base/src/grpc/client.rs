@@ -335,14 +335,15 @@ impl<T: Clone> GrpcClient<T> {
                 description = description
             ),
         );
+        // Timed from before the first attempt, because that is the whole of what
+        // the caller waits for: a call that failed to connect, backed off and
+        // succeeded on its third attempt cost them all three. Establishment used
+        // to happen inside the RPC, so timing from any point below here drops a
+        // whole `connect_timeout` out of `internal_grpc_success_seconds` on
+        // exactly the reconnecting calls this is about.
+        let started = Instant::now();
         loop {
             attempts.start();
-            // Timed from before the connection is established, because the caller
-            // waits for that too. Establishment used to happen inside the RPC, so
-            // leaving the timer below it would quietly drop a whole
-            // `connect_timeout` out of `internal_grpc_success_seconds` on exactly
-            // the cold and reconnecting attempts this change is about.
-            let started = Instant::now();
             // A failed connection attempt goes through the same retry path as a
             // failed call, so `retries_on_unavailable` still governs it.
             let mut entry = match self.connected_client().await {
@@ -475,14 +476,15 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                 description = description
             ),
         );
+        // Timed from before the first attempt, because that is the whole of what
+        // the caller waits for: a call that failed to connect, backed off and
+        // succeeded on its third attempt cost them all three. Establishment used
+        // to happen inside the RPC, so timing from any point below here drops a
+        // whole `connect_timeout` out of `internal_grpc_success_seconds` on
+        // exactly the reconnecting calls this is about.
+        let started = Instant::now();
         loop {
             attempts.start();
-            // Timed from before the connection is established, because the caller
-            // waits for that too. Establishment used to happen inside the RPC, so
-            // leaving the timer below it would quietly drop a whole
-            // `connect_timeout` out of `internal_grpc_success_seconds` on exactly
-            // the cold and reconnecting attempts this change is about.
-            let started = Instant::now();
             // A failed connection attempt goes through the same retry path as a
             // failed call, so `retries_on_unavailable` still governs it.
             let mut entry = match self.connected_client(endpoint.clone()).await {
@@ -923,7 +925,7 @@ fn requires_reconnect(e: &Status) -> bool {
 ///
 /// Excluding `Cancelled` wholesale, as this once did, threw away the commonest
 /// evidence a connection has died: killing a pod with requests in flight reports
-/// most of them that way, and none of them reached `retire`.
+/// most of them that way.
 fn request_timed_out(e: &Status) -> bool {
     let mut source = std::error::Error::source(e);
     while let Some(err) = source {
@@ -1026,6 +1028,87 @@ mod test {
         assert_ne!(
             replacement.id, first.id,
             "forget left in place the very connection it was given"
+        );
+    }
+
+    /// Counts how many times the client factory ran, which is once per
+    /// connection actually installed.
+    fn counting_client() -> (MultiTargetGrpcClient<()>, Arc<AtomicU64>) {
+        let built = Arc::new(AtomicU64::new(0));
+        let counter = built.clone();
+        let client = MultiTargetGrpcClient::new(
+            "test",
+            move |_, _| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            },
+            GrpcClientConfig::default(),
+        );
+        (client, built)
+    }
+
+    /// The other half of [`forget_only_removes_the_connection_it_names`]. Two
+    /// callers can fail on the same connection at different moments, and the
+    /// later failure must leave the replacement the earlier one's retry
+    /// established alone.
+    ///
+    /// Counted by connections built rather than by identity, because identity
+    /// alone cannot see this: `Connections` still holds the replacement, so an
+    /// over-eager eviction here is served the same connection back and only shows
+    /// up as the wasted rebuild.
+    #[test]
+    async fn a_late_failure_does_not_evict_the_replacement_client() {
+        let (target, _peer) = silent_peer().await;
+        let (client, built) = counting_client();
+        let cause = Status::unavailable("peer went away");
+
+        let first = client.connected_client(target.clone()).await.unwrap();
+        client.retire(&target, &first, &cause).await;
+
+        let replacement = client.connected_client(target.clone()).await.unwrap();
+        assert_ne!(
+            replacement.id, first.id,
+            "the first failure evicted nothing"
+        );
+
+        // A second caller, still holding the original, fails late.
+        client.retire(&target, &first, &cause).await;
+        let handed_out = client.connected_client(target.clone()).await.unwrap();
+
+        assert_eq!(
+            handed_out.id, replacement.id,
+            "a failure on the old connection sent the next caller elsewhere"
+        );
+        assert_eq!(
+            built.load(Ordering::SeqCst),
+            2,
+            "a failure on the old connection threw away the replacement, so it \
+             had to be built again"
+        );
+    }
+
+    /// A connection retired in the window between being established and being
+    /// installed must not reach the cache: every later caller would be handed a
+    /// connection that fails the moment it is used.
+    #[test]
+    async fn a_connection_retired_before_it_was_used_is_not_cached() {
+        let (target, _peer) = silent_peer().await;
+        let (client, _built) = counting_client();
+
+        // Stand in for a sibling caller failing during that window.
+        let connected = client
+            .connections
+            .connect(target.clone(), &client.config)
+            .await
+            .unwrap();
+        connected.retired.cancel();
+
+        assert!(
+            client.connected_client(target.clone()).await.is_err(),
+            "a connection that had already been retired was handed to a caller"
+        );
+        assert!(
+            !client.clients.contains_async(&target).await,
+            "a retired connection was left in the cache for the next caller"
         );
     }
 
