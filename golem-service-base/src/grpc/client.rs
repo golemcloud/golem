@@ -624,6 +624,12 @@ pub struct GrpcClientConfig {
     /// How often to send an HTTP/2 PING on an established connection. Without
     /// this, a peer that disappears while a connection is open is only noticed
     /// when the kernel gives up retransmitting, which takes minutes.
+    ///
+    /// The default suits golem talking to golem, where both ends are `h2`, which
+    /// enforces no minimum ping interval. Servers that do enforce one answer a
+    /// faster idle ping with GOAWAY: grpc-core defaults to 300s and grpc-go's
+    /// server to 5 minutes. Pointing one of these clients at a non-Rust gRPC
+    /// server, or through a proxy that enforces the policy, wants this raised.
     #[serde(default, with = "humantime_serde::option")]
     pub http2_keep_alive_interval: Option<Duration>,
     /// How long to wait for the PING ack before considering the connection dead.
@@ -888,24 +894,45 @@ impl<'a> CallAttempts<'a> {
 }
 
 fn requires_reconnect(e: &Status) -> bool {
+    // A request that ran out of its own time says nothing about the health of
+    // the connection it ran on. Without this the registry client
+    // (request_timeout = 30s) would tear down the channel every caller shares
+    // each time one request ran long.
+    if request_timed_out(e) {
+        return false;
+    }
+
     if e.code() == Code::Unavailable {
         return true;
     }
 
-    // A request that ran out of time, or was cancelled, says nothing about the
-    // health of the connection it ran on. tonic reports both as `Cancelled` and
-    // still attaches a transport error, so without this the registry client
-    // (request_timeout = 30s) would tear down a healthy channel every caller
-    // shares each time one request ran long.
-    if e.code() == Code::Cancelled {
-        return false;
-    }
-
     // A dead connection surfaces as a transport error, which tonic reports as
-    // `Unknown` rather than `Unavailable`. Matching only on `Unavailable` left
-    // such channels cached indefinitely, so every later request queued onto a
-    // connection that could never work again.
+    // `Unknown` or `Cancelled` rather than `Unavailable`. Matching only on
+    // `Unavailable` left such channels cached indefinitely, so every later
+    // request queued onto a connection that could never work again.
     has_transport_source(e)
+}
+
+/// Whether the request ran out of its own time, rather than the connection
+/// having failed under it.
+///
+/// tonic reports both as `Cancelled` with a transport error attached, so the
+/// source chain is the only thing separating them. A `request_timeout` carries a
+/// `tonic::TimeoutExpired`; a connection that closed with the request still on it
+/// carries a hyper error reporting itself cancelled.
+///
+/// Excluding `Cancelled` wholesale, as this once did, threw away the commonest
+/// evidence a connection has died: killing a pod with requests in flight reports
+/// most of them that way, and none of them reached `retire`.
+fn request_timed_out(e: &Status) -> bool {
+    let mut source = std::error::Error::source(e);
+    while let Some(err) = source {
+        if err.is::<tonic::TimeoutExpired>() {
+            return true;
+        }
+        source = err.source();
+    }
+    false
 }
 
 /// Whether the connection carrying this request is gone, as opposed to one
@@ -919,17 +946,29 @@ fn requires_reconnect(e: &Status) -> bool {
 /// The source alone cannot answer it. `Channel` reports every failure as a
 /// `tonic::transport::Error`, a single reset stream included, so the code is what
 /// separates them. Measured against a real peer: a connect into a blackhole and
-/// an expired keep-alive ping both arrive as `Unavailable`, and a connection the
-/// kernel gives up on arrives as `Unknown`. Every other code tonic derives from
-/// an HTTP/2 reset — `Internal`, `Cancelled`, `ResourceExhausted`,
-/// `PermissionDenied` — describes one stream, and the connection under it is
-/// still carrying everyone else.
+/// an expired keep-alive ping arrive as `Unavailable`, a connection the kernel
+/// gives up on arrives as `Unknown`, and a connection that closes with requests
+/// still on it arrives as `Cancelled` — the commonest of the three, because it is
+/// what killing a busy pod looks like.
+///
+/// `Internal`, `ResourceExhausted` and `PermissionDenied` are left out. tonic
+/// derives those from an HTTP/2 reset, which ends one stream and leaves the
+/// connection carrying everyone else.
+///
+/// The split is not clean, and cannot be. `REFUSED_STREAM` also resets a single
+/// stream and also arrives as `Unavailable`, where an expired keep-alive ping
+/// arrives too, so no code tells those two apart. Reading a refused stream as a
+/// dead connection costs a reconnect and a retry, which is the cheaper way to be
+/// wrong.
 fn connection_is_gone(e: &Status) -> bool {
+    if request_timed_out(e) {
+        return false;
+    }
     code_means_connection_gone(e.code()) && has_transport_source(e)
 }
 
 fn code_means_connection_gone(code: Code) -> bool {
-    matches!(code, Code::Unavailable | Code::Unknown)
+    matches!(code, Code::Unavailable | Code::Unknown | Code::Cancelled)
 }
 
 fn has_transport_source(e: &Status) -> bool {
@@ -1075,18 +1114,19 @@ mod test {
     async fn only_a_dead_connection_releases_the_requests_riding_it() {
         // Measured against a real peer: a blackholed connect and an expired
         // keep-alive ping arrive as Unavailable, a connection the kernel gives up
-        // on arrives as Unknown.
-        for code in [Code::Unavailable, Code::Unknown] {
+        // on arrives as Unknown, and a connection closing with requests still on
+        // it arrives as Cancelled.
+        for code in [Code::Unavailable, Code::Unknown, Code::Cancelled] {
             assert!(
                 code_means_connection_gone(code),
                 "{code:?} is what a dead connection arrives as"
             );
         }
 
-        // What tonic maps HTTP/2 reset reasons to. Each describes one stream.
+        // What tonic maps the other HTTP/2 reset reasons to. Each ends one
+        // stream and leaves the connection carrying everyone else.
         for code in [
             Code::Internal,
-            Code::Cancelled,
             Code::ResourceExhausted,
             Code::PermissionDenied,
         ] {
@@ -1096,5 +1136,20 @@ mod test {
                  carrying it"
             );
         }
+    }
+
+    /// `Cancelled` covers both a connection that closed under the request and a
+    /// request that ran out of its own time, and only the source chain separates
+    /// them. Reading a request timeout as a dead connection would tear down the
+    /// channel every caller shares — the registry client sets a 30s
+    /// `request_timeout` — and cut short everything riding it.
+    #[test]
+    async fn a_request_that_ran_out_of_time_is_not_a_dead_connection() {
+        let timed_out = Status::from_error(Box::new(tonic::TimeoutExpired(())));
+        assert_eq!(timed_out.code(), Code::Cancelled);
+
+        assert!(request_timed_out(&timed_out));
+        assert!(!requires_reconnect(&timed_out));
+        assert!(!connection_is_gone(&timed_out));
     }
 }
