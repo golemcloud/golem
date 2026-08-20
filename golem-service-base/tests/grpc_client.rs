@@ -58,6 +58,27 @@ fn config() -> GrpcClientConfig {
     }
 }
 
+/// The name of the test this is called from.
+///
+/// Derived rather than written out. [`delegated_to_namespace`] passes it to a
+/// child process as a filter, the harness filters by substring, and a filter
+/// matching nothing exits successfully — so a name that drifts from the function
+/// it names turns that test into a silent no-op. This has already happened once.
+macro_rules! test_name {
+    () => {{
+        fn marker() {}
+        fn type_name_of<T>(_: T) -> &'static str {
+            std::any::type_name::<T>()
+        }
+        let path = type_name_of(marker);
+        let path = path.strip_suffix("::marker").unwrap_or(path);
+        // An `async fn` body puts a closure between the function and the items
+        // declared inside it.
+        let path = path.strip_suffix("::{{closure}}").unwrap_or(path);
+        path.rsplit("::").next().unwrap()
+    }};
+}
+
 /// The client type the incident involved: worker-service's client for the
 /// worker-executor API.
 type ExecutorClient = WorkerExecutorClient<OtelGrpcService<Channel>>;
@@ -116,8 +137,7 @@ async fn ping_single(client: &GrpcClient<ExecutorClient>) -> Result<(), tonic::S
 /// operations for two minutes each.
 #[test]
 async fn multi_target_call_to_blackholed_pod_gives_up_within_connect_timeout() {
-    if delegated_to_namespace("multi_target_call_to_blackholed_pod_gives_up_within_connect_timeout")
-    {
+    if delegated_to_namespace(test_name!()) {
         return;
     }
     let (uri, _blackhole) = blackholed_target();
@@ -142,9 +162,7 @@ async fn multi_target_call_to_blackholed_pod_gives_up_within_connect_timeout() {
 /// registry clients use.
 #[test]
 async fn single_target_call_to_blackholed_pod_gives_up_within_connect_timeout() {
-    if delegated_to_namespace(
-        "single_target_call_to_blackholed_pod_gives_up_within_connect_timeout",
-    ) {
+    if delegated_to_namespace(test_name!()) {
         return;
     }
     let (uri, _blackhole) = blackholed_target();
@@ -296,8 +314,36 @@ async fn serve_grpc() -> TestPeer {
     }
 }
 
+/// A peer that completes the TCP handshake and then says nothing at all: no
+/// HTTP/2 preface, no settings, no close. A request to it hangs until something
+/// else bounds it, which is what a pod mid-teardown looks like.
+async fn serve_silent_peer() -> TestPeer {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let counter = connections.clone();
+    let server = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((sock, _)) = listener.accept().await {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            held.push(sock);
+        }
+    });
+
+    TestPeer {
+        addr,
+        connections,
+        _server: server,
+    }
+}
+
 /// The marker the parent sets on the child it spawns in [`delegated_to_namespace`].
 const IN_OWN_NAMESPACE: &str = "GOLEM_TEST_NET_NAMESPACE";
+
+/// Printed by the child so the parent can tell "ran and passed" apart from "no
+/// test of that name existed, so nothing ran and nothing failed".
+const RAN_MARKER: &str = "[namespace] running";
 
 /// Runs a test that needs to drop packets inside a network namespace of its own.
 ///
@@ -319,6 +365,7 @@ fn delegated_to_namespace(test: &str) -> bool {
             "{test} was spawned into a namespace that still has a default route, \
              so its firewall rules could reach a real network"
         );
+        eprintln!("{RAN_MARKER} {test}");
         return false;
     }
 
@@ -351,15 +398,22 @@ fn delegated_to_namespace(test: &str) -> bool {
             panic!("could not run `unshare` to isolate {test}: {err}. It ships with util-linux.")
         });
 
+    let stdout = String::from_utf8_lossy(&child.stdout);
+    let stderr = String::from_utf8_lossy(&child.stderr);
+
     // Held back unless it is needed, so concurrent children do not interleave
     // their output into nonsense.
     assert!(
         child.status.success(),
         "{test} failed inside its own network namespace. If `unshare` itself \
          failed, this kernel may have unprivileged user namespaces switched off: \
-         check `sysctl kernel.unprivileged_userns_clone`.\n\n{}\n{}",
-        String::from_utf8_lossy(&child.stdout),
-        String::from_utf8_lossy(&child.stderr),
+         check `sysctl kernel.unprivileged_userns_clone`.\n\n{stdout}\n{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("{RAN_MARKER} {test}")),
+        "{test} never ran in its namespace. The harness filters by substring and \
+         exits successfully when nothing matches, so without this a run that \
+         tested nothing would be reported as a pass.\n\n{stdout}\n{stderr}"
     );
     true
 }
@@ -457,7 +511,7 @@ impl Drop for Sysctl {
 
 #[test]
 async fn an_established_connection_to_a_blackholed_peer_still_stalls() {
-    if delegated_to_namespace("established_connection_to_blackholed_peer") {
+    if delegated_to_namespace(test_name!()) {
         return;
     }
 
@@ -525,7 +579,7 @@ async fn an_established_connection_to_a_blackholed_peer_still_stalls() {
 ///                Custom { kind: TimedOut, error: Elapsed(()) })
 #[test]
 async fn peer_dies_then_blackholes_fresh_connect_is_bounded() {
-    if delegated_to_namespace("peer_dies_then_blackholes_fresh_connect_is_bounded") {
+    if delegated_to_namespace(test_name!()) {
         return;
     }
 
@@ -595,9 +649,7 @@ async fn peer_dies_then_blackholes_fresh_connect_is_bounded() {
 /// executor. Reproduced here at 8 x connect_timeout before the fix.
 #[test]
 async fn concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout() {
-    if delegated_to_namespace(
-        "concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout",
-    ) {
+    if delegated_to_namespace(test_name!()) {
         return;
     }
 
@@ -708,8 +760,7 @@ async fn concurrent_calls_to_healthy_peer_share_one_connection() {
 /// drives.
 #[test]
 async fn waiter_survives_cancellation_of_the_caller_that_started_the_connect() {
-    if delegated_to_namespace("waiter_survives_cancellation_of_the_caller_that_started_the_connect")
-    {
+    if delegated_to_namespace(test_name!()) {
         return;
     }
     let connect_timeout = Duration::from_secs(2);
@@ -752,7 +803,7 @@ async fn waiter_survives_cancellation_of_the_caller_that_started_the_connect() {
 /// in-flight attempt. The next caller for that target then inherits it.
 #[test]
 async fn abandoned_connect_attempt_is_not_replayed_to_the_next_caller() {
-    if delegated_to_namespace("abandoned_connect_attempt_is_not_replayed_to_the_next_caller") {
+    if delegated_to_namespace(test_name!()) {
         return;
     }
     let connect_timeout = Duration::from_secs(1);
@@ -890,9 +941,7 @@ async fn client_recovers_when_a_cleanly_killed_peer_returns() {
 /// does go red without it.
 #[test]
 async fn a_dead_transport_still_carries_a_transport_error_source() {
-    if delegated_to_namespace(
-        "blackholed_channel_is_evicted_and_recovers_when_the_peer_answers_again",
-    ) {
+    if delegated_to_namespace(test_name!()) {
         return;
     }
 
@@ -1015,7 +1064,7 @@ async fn a_cohort_that_retries_opens_one_connection_per_round() {
 /// because a blackholed peer accepts nothing that could be counted at the far end.
 #[test]
 async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
-    if delegated_to_namespace("a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round") {
+    if delegated_to_namespace(test_name!()) {
         return;
     }
     // One SYN per attempt, so the count is attempts rather than retransmits.
@@ -1097,7 +1146,7 @@ async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
 /// to use it, pinging away, until some later call happens to replace it.
 #[test]
 async fn a_connection_nobody_waited_for_is_still_reused() {
-    if delegated_to_namespace("a_connection_nobody_waited_for_is_still_reused") {
+    if delegated_to_namespace(test_name!()) {
         return;
     }
     // Slow the loopback so a connect can be cancelled while it is still in
@@ -1157,43 +1206,44 @@ async fn a_connection_nobody_waited_for_is_still_reused() {
 /// A request that ran out of time says nothing about the connection it ran on.
 ///
 /// tonic reports a `request_timeout` as `Cancelled` and still attaches a
-/// transport error to it, which is indistinguishable by source alone from a
-/// genuinely dead connection. Treating it as one would tear down a healthy
-/// channel that every other caller is sharing, and worker-executor's registry
-/// client really does set request_timeout (30s).
+/// transport error to it, which by source alone is indistinguishable from a
+/// genuinely dead connection. Treating it as one tears down a channel every
+/// other caller is sharing, and worker-executor's registry client really does
+/// set request_timeout (30s).
 #[test]
 async fn a_request_timeout_does_not_tear_down_the_shared_connection() {
-    let peer = serve_grpc().await;
+    let peer = serve_silent_peer().await;
     let uri: Uri = format!("http://{}", peer.addr).parse().unwrap();
 
-    let mut cfg = config();
-    cfg.request_timeout = Some(Duration::from_millis(300));
+    // The peer accepts TCP and then goes quiet, so the connection establishes
+    // and the request itself is what runs out of time. Keep-alive is off so the
+    // timeout is unambiguously the cause.
+    let request_timeout = Duration::from_millis(500);
+    let mut cfg = no_keepalive(Duration::from_secs(5));
+    cfg.request_timeout = Some(request_timeout);
     let client = executor_client(cfg);
 
-    // The empty router answers immediately, so this establishes and caches a
-    // connection without timing anything out.
+    let started = Instant::now();
+    let first = ping(&client, uri.clone()).await.expect_err("must time out");
+    let elapsed = started.elapsed();
+    eprintln!("[TIMEOUT] first call: {:?} after {elapsed:?}", first.code());
     assert_eq!(
-        ping(&client, uri.clone()).await.err().map(|e| e.code()),
-        Some(tonic::Code::Unimplemented)
+        first.code(),
+        tonic::Code::Cancelled,
+        "expected the request timeout to surface as Cancelled"
     );
-
-    // A call that does time out, against a peer that is perfectly healthy.
-    let timed_out = single_target_executor_client(uri.clone(), {
-        let mut cfg = no_keepalive(Duration::from_secs(2));
-        cfg.request_timeout = Some(Duration::from_millis(300));
-        cfg
-    });
-    let _ = ping_single(&timed_out).await;
-
-    assert_eq!(
-        ping(&client, uri).await.err().map(|e| e.code()),
-        Some(tonic::Code::Unimplemented)
-    );
-    let connections = peer.connections.load(std::sync::atomic::Ordering::SeqCst);
-    eprintln!("[TIMEOUT] connections opened by the client that timed out: {connections}");
     assert!(
-        connections <= 2,
-        "a request timeout reconnected instead of reusing the channel: \
-         {connections} connections opened"
+        elapsed >= request_timeout,
+        "returned in {elapsed:?}, faster than the {request_timeout:?} timeout it \
+         is supposed to be waiting for, so nothing actually timed out"
+    );
+
+    let _ = ping(&client, uri).await;
+    let connections = peer.connections.load(std::sync::atomic::Ordering::SeqCst);
+    eprintln!("[TIMEOUT] connections opened across two timing-out calls: {connections}");
+    assert_eq!(
+        connections, 1,
+        "a request timeout was treated as a dead connection: the second call \
+         reconnected instead of reusing the channel"
     );
 }
