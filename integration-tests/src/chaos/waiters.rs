@@ -550,4 +550,34 @@ mod tests {
     fn an_agent_timestamp_of_zero_stays_visible_as_the_epoch() {
         assert_eq!(from_millis(0).timestamp_millis(), 0);
     }
+
+    /// A promise id has to survive the trip back *into* an agent.
+    ///
+    /// The driver parses what `arm` returns into a [`PromiseId`] so it can call
+    /// the external completion API with it, and passes that same parsed value
+    /// into `wait`. Only the first of those directions is exercised anywhere
+    /// else in this repository — the density benchmark keeps the raw
+    /// `ValueAndType` for its agent calls and never re-encodes one. So the
+    /// encoding side is pinned here rather than discovered on a cluster: a
+    /// `PromiseId` that does not round-trip would fail every round of S11 after
+    /// the run had already spent its baseline.
+    #[test]
+    fn a_promise_id_survives_the_round_trip_back_into_an_agent() {
+        use golem_common::model::{AgentId, OplogIndex};
+        use golem_wasm::IntoValue;
+
+        let parsed: ParsedAgentId = agent_id!(PROMISE_WAITER_AGENT, "w-0001".to_string());
+        let promise_id = PromiseId {
+            agent_id: AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+                agent_id: parsed.to_string(),
+            },
+            oplog_idx: OplogIndex::from_u64(42),
+        };
+
+        let encoded = promise_id.clone().into_value();
+        let decoded = PromiseId::from_value(encoded).expect("promise id should decode");
+        assert_eq!(decoded, promise_id);
+        assert_eq!(decoded.oplog_idx.as_u64(), 42);
+    }
 }
