@@ -44,6 +44,7 @@ bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
+cap-fs-ext = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
 chrono = { workspace = true }
@@ -110,6 +111,11 @@ zstd = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+linux-raw-sys = { workspace = true }
+rustix = { workspace = true }
 
 [[bench]]
 name = "invocation_lowering"

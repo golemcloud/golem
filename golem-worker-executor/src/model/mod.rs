@@ -69,7 +69,6 @@ impl ShardAssignmentCheck for ShardAssignment {
 pub struct AgentConfig {
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
-    pub current_filesystem_storage_usage: u64,
     pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
     pub created_by_email: AccountEmail,
@@ -82,7 +81,6 @@ impl AgentConfig {
     pub fn new(
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
-        current_filesystem_storage_usage: u64,
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
         created_by_email: AccountEmail,
@@ -93,7 +91,6 @@ impl AgentConfig {
         AgentConfig {
             deleted_regions,
             total_linear_memory_size,
-            current_filesystem_storage_usage,
             component_revision_for_replay,
             created_by,
             created_by_email,
@@ -366,12 +363,6 @@ impl TrapType {
                         }
                         Some(GolemSpecificWasmTrap::WorkerExceededRpcCallLimit) => {
                             make_error(AgentError::ExceededRpcCallLimit)
-                        }
-                        Some(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage) => {
-                            make_error(AgentError::NodeOutOfFilesystemStorage)
-                        }
-                        Some(GolemSpecificWasmTrap::WorkerAgentExceededFilesystemStorageLimit) => {
-                            make_error(AgentError::AgentExceededFilesystemStorageLimit)
                         }
                         Some(GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted) => {
                             match agent_mode {

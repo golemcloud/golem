@@ -27,6 +27,7 @@ use crate::preview2::golem::agent::host::{
     ScheduledInvocationReceipt, WasmRpc,
 };
 use crate::services::active_workers::ActiveWorkers;
+use crate::services::agent_filesystem::AgentFilesystemRuntime;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -880,6 +881,8 @@ impl WorkerCtx for Context {
         component_service: Arc<dyn ComponentService>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
+        filesystem_root: std::path::PathBuf,
+        filesystem_runtime: AgentFilesystemRuntime,
         worker_config: AgentConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
@@ -917,6 +920,8 @@ impl WorkerCtx for Context {
             component_service,
             account_resource_limits.clone(),
             config.clone(),
+            filesystem_root,
+            filesystem_runtime,
             worker_config.clone(),
             execution_status,
             file_loader,

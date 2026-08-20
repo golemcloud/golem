@@ -13,11 +13,14 @@
 // limitations under the License.
 
 pub mod active_workers;
+pub mod agent_filesystem;
 pub mod agent_memory_meter;
+pub mod agent_resource_billing;
 pub mod agent_storage_meter;
 pub mod agent_types;
 pub mod agent_webhooks;
 pub mod blob_store;
+mod byte_time_accumulator;
 pub mod card;
 pub mod card_interest;
 pub mod compilation_limiter;

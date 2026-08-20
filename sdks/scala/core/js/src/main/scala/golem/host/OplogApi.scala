@@ -150,11 +150,6 @@ object OplogApi {
     name: String
   )
 
-  final case class FilesystemStorageUsageUpdateParameters(
-    timestamp: ContextApi.DateTime,
-    delta: BigInt
-  )
-
   final case class EndAtomicRegionParameters(
     timestamp: ContextApi.DateTime,
     beginIndex: OplogIndex
@@ -369,9 +364,6 @@ object OplogApi {
     final case class RemoveRetryPolicy(params: RemoveRetryPolicyParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
-    final case class FilesystemStorageUsageUpdate(params: FilesystemStorageUsageUpdateParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
     final case class BeginAtomicRegion(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
@@ -494,10 +486,6 @@ object OplogApi {
           SetRetryPolicy(parseSetRetryPolicyParameters(v.asInstanceOf[JsSetRetryPolicyParameters]))
         case "remove-retry-policy" =>
           RemoveRetryPolicy(parseRemoveRetryPolicyParameters(v.asInstanceOf[JsRemoveRetryPolicyParameters]))
-        case "filesystem-storage-usage-update" =>
-          FilesystemStorageUsageUpdate(
-            parseFilesystemStorageUsageUpdateParameters(v.asInstanceOf[JsFilesystemStorageUsageUpdateParameters])
-          )
         case "begin-atomic-region" => BeginAtomicRegion(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "end-atomic-region"   =>
           EndAtomicRegion(parseEndAtomicRegionParameters(v.asInstanceOf[JsEndAtomicRegionParameters]))
@@ -798,14 +786,6 @@ object OplogApi {
     RemoveRetryPolicyParameters(
       timestamp = parseDateTime(raw.timestamp),
       name = raw.name
-    )
-
-  private def parseFilesystemStorageUsageUpdateParameters(
-    raw: JsFilesystemStorageUsageUpdateParameters
-  ): FilesystemStorageUsageUpdateParameters =
-    FilesystemStorageUsageUpdateParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      delta = BigInt(raw.delta.toString)
     )
 
   private def parseEndAtomicRegionParameters(raw: JsEndAtomicRegionParameters): EndAtomicRegionParameters =

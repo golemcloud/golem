@@ -339,7 +339,7 @@ pub mod workers {
         .unwrap();
         pub static ref WORKER_ADMISSION_WAIT_SECONDS: HistogramVec = register_histogram_vec!(
             "worker_admission_wait_seconds",
-            "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory, filesystem_storage). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
+            "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
             &["executor_id", "phase"],
             crate::metrics::ADMISSION_WAIT_BUCKETS.to_vec()
         )
@@ -417,6 +417,13 @@ pub mod workers {
             &["reason"]
         )
         .unwrap();
+        static ref AGENT_FILESYSTEM_LIFECYCLE_SECONDS: HistogramVec = register_histogram_vec!(
+            "golem_agent_filesystem_lifecycle_seconds",
+            "Time spent creating or deleting an agent runtime filesystem, labelled by operation and outcome",
+            &["operation", "outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
     }
 
     pub fn record_worker_call(api_name: &'static str) {
@@ -478,6 +485,16 @@ pub mod workers {
         AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL
             .with_label_values(&[reason])
             .inc();
+    }
+
+    pub fn record_agent_filesystem_lifecycle(
+        operation: &'static str,
+        success: bool,
+        elapsed: Duration,
+    ) {
+        AGENT_FILESYSTEM_LIFECYCLE_SECONDS
+            .with_label_values(&[operation, if success { "success" } else { "failure" }])
+            .observe(elapsed.as_secs_f64());
     }
 
     pub fn set_worker_count_by_status(status: &'static str, count: f64) {
@@ -554,7 +571,6 @@ pub mod workers {
         ResolveComponentCharge,
         ConcurrencySlot,
         Memory,
-        FilesystemStorage,
     }
 
     impl AdmissionPhase {
@@ -563,7 +579,6 @@ pub mod workers {
                 AdmissionPhase::ResolveComponentCharge => "resolve_component_charge",
                 AdmissionPhase::ConcurrencySlot => "concurrency_slot",
                 AdmissionPhase::Memory => "memory",
-                AdmissionPhase::FilesystemStorage => "filesystem_storage",
             }
         }
     }

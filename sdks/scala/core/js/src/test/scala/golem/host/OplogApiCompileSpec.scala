@@ -95,7 +95,6 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.Exited(t)                       => s"exited(${t.seconds})"
     case OplogEntry.SetRetryPolicy(p)               => s"set-retry(${p.name})"
     case OplogEntry.RemoveRetryPolicy(p)            => s"remove-retry(${p.name})"
-    case OplogEntry.FilesystemStorageUsageUpdate(p) => s"fs-usage(${p.delta})"
     case OplogEntry.BeginAtomicRegion(t)            => s"begin-atomic(${t.seconds})"
     case OplogEntry.EndAtomicRegion(p)              => s"end-atomic(${p.beginIndex})"
     case OplogEntry.BeginRemoteWrite(t)             => s"begin-rw(${t.seconds})"
@@ -158,7 +157,6 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         SetRetryPolicyParameters(ts, "default", 0, """{"nodes":[]}""", """{"nodes":[]}""")
       ),
       OplogEntry.RemoveRetryPolicy(RemoveRetryPolicyParameters(ts, "default")),
-      OplogEntry.FilesystemStorageUsageUpdate(FilesystemStorageUsageUpdateParameters(ts, BigInt(4096))),
       OplogEntry.EndAtomicRegion(EndAtomicRegionParameters(ts, BigInt(1))),
       OplogEntry.EndRemoteWrite(EndRemoteWriteParameters(ts, BigInt(2))),
       OplogEntry.GrowMemory(GrowMemoryParameters(ts, BigInt(65536))),
@@ -222,9 +220,9 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     )
 
   def spec = suite("OplogApiCompileSpec")(
-    test("all 41 OplogEntry variants constructed") {
+    test("all 40 OplogEntry variants constructed") {
       val distinctTags = allEntries.map(describeEntry).map(_.takeWhile(_ != '(')).distinct
-      assertTrue(distinctTags.size >= 41)
+      assertTrue(distinctTags.size >= 40)
     },
     test("exhaustive OplogEntry match compiles") {
       allEntries.foreach(e => Predef.assert(describeEntry(e).nonEmpty))

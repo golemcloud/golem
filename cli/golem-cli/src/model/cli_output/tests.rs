@@ -1972,10 +1972,6 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             delta: 64,
         }),
-        PublicOplogEntry::FilesystemStorageUsageUpdate(FilesystemStorageUsageUpdateParams {
-            timestamp: timestamp(),
-            delta: -5,
-        }),
         PublicOplogEntry::CreateResource(CreateResourceParams {
             timestamp: timestamp(),
             id: AgentResourceId(1),

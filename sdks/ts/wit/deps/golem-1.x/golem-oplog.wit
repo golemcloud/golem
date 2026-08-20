@@ -406,11 +406,6 @@ interface oplog {
         delta: u64
     }
 
-    record filesystem-storage-usage-update-parameters {
-        timestamp: datetime,
-        delta: s64
-    }
-
     type agent-resource-id = u64;
 
     record create-resource-parameters {
@@ -566,8 +561,6 @@ interface oplog {
         exceeded-table-limit,
         exceeded-http-call-limit,
         exceeded-rpc-call-limit,
-        node-out-of-filesystem-storage,
-        agent-exceeded-filesystem-storage-limit,
         agent-terminated-by-quota(agent-terminated-by-quota-error),
         ephemeral-sleep-too-long(ephemeral-sleep-too-long),
         ephemeral-fuel-exhausted(ephemeral-fuel-exhausted),
@@ -786,8 +779,6 @@ interface oplog {
         failed-update(failed-update-parameters),
         /// Increased total linear memory size
         grow-memory(grow-memory-parameters),
-        /// Updated filesystem usage by a signed delta
-        filesystem-storage-usage-update(filesystem-storage-usage-update-parameters),
         /// Created a resource instance
         create-resource(raw-create-resource-parameters),
         /// Dropped a resource instance
@@ -895,8 +886,6 @@ interface oplog {
         failed-update(failed-update-parameters),
         /// Increased total linear memory size
         grow-memory(grow-memory-parameters),
-        /// Updated filesystem usage by a signed delta
-        filesystem-storage-usage-update(filesystem-storage-usage-update-parameters),
         /// Created a resource instance
         create-resource(create-resource-parameters),
         /// Dropped a resource instance

@@ -20,21 +20,30 @@ use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::stream;
 use golem_common::agent_id;
+use golem_common::model::OwnedAgentId;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::worker::{
-    AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
+    AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind, RevertToOplogIndex,
+    RevertWorkerTarget,
 };
-use golem_common::model::{AgentStatus, IdempotencyKey, RetryConfig};
+use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex, RetryConfig};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
-use golem_test_framework::dsl::{TestDsl, drain_connection, stderr_events, stdout_events};
-use golem_test_framework::model::IFSEntry;
-use golem_worker_executor::metrics::storage::{
-    STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_TYPE_FILESYSTEM,
+use golem_test_framework::dsl::{
+    TestDsl, count_agent_invocation_pair_since, drain_connection, stderr_events, stdout_events,
 };
+use golem_test_framework::model::IFSEntry;
+use golem_worker_executor::services::golem_config::SnapshotPolicy;
+#[cfg(target_os = "linux")]
+use golem_worker_executor_test_utils::start_with_agent_storage_quota_on_managed_xfs;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_with_overrides,
+};
+#[cfg(target_os = "linux")]
+use golem_worker_executor_test_utils::{
+    start_with_agent_storage_and_object_quota_on_managed_xfs,
+    start_with_mutable_agent_storage_quota_on_managed_xfs,
 };
 use http::{HeaderMap, StatusCode};
 use pretty_assertions::assert_eq;
@@ -78,6 +87,56 @@ fn sorted_config_entries(value: SchemaValue) -> SchemaValue {
     elements.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
 
     SchemaValue::List { elements }
+}
+
+fn schema_string_list(result: SchemaValue) -> Vec<String> {
+    let SchemaValue::List { elements } = result else {
+        panic!("expected list, got {result:?}")
+    };
+    elements
+        .into_iter()
+        .map(|element| match element {
+            SchemaValue::String(entry) => entry,
+            other => panic!("expected string, got {other:?}"),
+        })
+        .collect()
+}
+
+async fn assert_reconstructed_writable_file(
+    executor: &TestWorkerExecutor,
+    component: &golem_common::base_model::component::ComponentDto,
+    agent_id: &golem_common::model::agent::ParsedAgentId,
+) -> anyhow::Result<()> {
+    let result = executor
+        .invoke_and_await_agent(
+            component,
+            agent_id,
+            "inspect_writable",
+            golem_common::data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(
+        schema_string_list(result),
+        vec![
+            "p2_read=p3-to-p2".to_string(),
+            "p3_read=p3-to-p2".to_string(),
+        ]
+    );
+    Ok(())
+}
+
+fn full_replay_config(config: &mut golem_worker_executor::services::golem_config::GolemConfig) {
+    config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
+    config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+}
+
+#[cfg(target_os = "linux")]
+fn managed_xfs_test_root() -> PathBuf {
+    std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
+        .map(PathBuf::from)
+        .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root")
 }
 
 #[test]
@@ -401,10 +460,691 @@ async fn initial_file_p3_parity(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    initial_file_p3_parity_with_backend(last_unique_id, deps, initial_file_system, None).await
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[tracing::instrument]
+async fn initial_file_p2_p3_parity_on_managed_xfs(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let root = managed_xfs_test_root();
+    initial_file_p3_parity_with_backend(last_unique_id, deps, initial_file_system, Some(root)).await
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[tracing::instrument]
+async fn p2_p3_quota_exhaustion_on_managed_xfs(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let root = managed_xfs_test_root();
+    let context = TestContext::new(last_unique_id);
+    let executor =
+        start_with_agent_storage_quota_on_managed_xfs(deps, &context, 1024 * 1024, root).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let p2_agent = agent_id!("P3FileSystem", "managed-quota-p2");
+
+    let result = executor
+        .invoke_and_await_agent(&component, &p2_agent, "run_p2_quota_surface", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let SchemaValue::List { elements } = result else {
+        panic!("expected list, got {result:?}")
+    };
+    assert_eq!(
+        elements,
+        vec![
+            SchemaValue::String("p2_wrote_before_limit=true".to_string()),
+            SchemaValue::String("p2_growth_denied=true".to_string()),
+        ]
+    );
+
+    let p3_within_quota_agent = agent_id!("P3FileSystem", "managed-quota-p3-within-limit");
+    let p3_within_quota = executor
+        .invoke_and_await_agent(
+            &component,
+            &p3_within_quota_agent,
+            "run_p3_with_quota",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(p3_within_quota, SchemaValue::Bool(true));
+
+    let p2_exhaustion_agent = agent_id!("P3FileSystem", "managed-quota-p2-exhaustion");
+    let p2_exhaustion_worker = executor
+        .start_agent(&component.id, p2_exhaustion_agent.clone())
+        .await?;
+    let p2_exhaustion = schema_string_list(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &p2_exhaustion_agent,
+                "exhaust_p2_quota",
+                data_value!(),
+            )
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected P2 exhaustion result"))?,
+    );
+    assert_eq!(
+        p2_exhaustion.first().map(String::as_str),
+        Some("completion=err:quota"),
+        "P2 growth must fail specifically because the project quota is exhausted"
+    );
+    assert_eq!(
+        p2_exhaustion.get(1).map(String::as_str),
+        Some("prefix-persisted=true")
+    );
+    let persisted_p2_prefix = schema_string_list(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &p2_exhaustion_agent,
+                "inspect_p2_exhaustion",
+                data_value!(),
+            )
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected persisted P2 failure prefix"))?,
+    );
+    let p2_size = persisted_p2_prefix
+        .first()
+        .and_then(|size| size.strip_prefix("size="))
+        .and_then(|size| size.parse::<u64>().ok())
+        .expect("P2 exhaustion inspection must report a numeric size");
+    assert!((4096..=1024 * 1024).contains(&p2_size));
+    assert_eq!(
+        &persisted_p2_prefix[1..],
+        ["prefix-complete=true", "suffix-bytes=0"]
+    );
+    executor.simulated_crash(&p2_exhaustion_worker).await?;
+    let reconstructed_p2_prefix = executor
+        .invoke_and_await_agent(
+            &component,
+            &p2_exhaustion_agent,
+            "inspect_p2_exhaustion",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected reconstructed P2 failure prefix"))?;
+    assert_eq!(
+        schema_string_list(reconstructed_p2_prefix),
+        persisted_p2_prefix
+    );
+
+    let p3_exhaustion_agent = agent_id!("P3FileSystem", "managed-quota-p3-exhaustion");
+    let p3_exhaustion_worker = executor
+        .start_agent(&component.id, p3_exhaustion_agent.clone())
+        .await?;
+    let p3_exhaustion = executor
+        .invoke_and_await_agent(
+            &component,
+            &p3_exhaustion_agent,
+            "exhaust_p3_quota",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected P3 exhaustion result"))?;
+    let p3_exhaustion = schema_string_list(p3_exhaustion);
+    assert_eq!(
+        p3_exhaustion.first().map(String::as_str),
+        Some("completion=err:quota"),
+        "P3 growth must fail specifically because the project quota is exhausted"
+    );
+    let unwritten_bytes = p3_exhaustion
+        .get(2)
+        .and_then(|value| value.strip_prefix("unwritten-bytes="))
+        .ok_or_else(|| anyhow!("P3 stream input result was not reported: {p3_exhaustion:?}"))?
+        .parse::<usize>()?;
+    assert_eq!(
+        p3_exhaustion.get(1).map(String::as_str),
+        Some("prefix-persisted=true"),
+        "P3 stream must acknowledge data persisted before quota denial"
+    );
+    assert!(
+        unwritten_bytes > 0,
+        "P3 quota failure must return the input suffix that was not persisted"
+    );
+    let persisted_prefix = executor
+        .invoke_and_await_agent(
+            &component,
+            &p3_exhaustion_agent,
+            "inspect_p3_exhaustion",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected persisted P3 failure prefix"))?;
+    let persisted_prefix = schema_string_list(persisted_prefix);
+    assert_eq!(
+        persisted_prefix.get(1).map(String::as_str),
+        Some("prefix-complete=true")
+    );
+    executor.simulated_crash(&p3_exhaustion_worker).await?;
+    let reconstructed_prefix = executor
+        .invoke_and_await_agent(
+            &component,
+            &p3_exhaustion_agent,
+            "inspect_p3_exhaustion",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected reconstructed P3 failure prefix"))?;
+    assert_eq!(schema_string_list(reconstructed_prefix), persisted_prefix);
+
+    for (agent, method, expected) in [
+        (
+            agent_id!("P3FileSystem", "managed-quota-p2-matrix"),
+            "run_p2_quota_matrix",
+            vec![
+                "direct=true",
+                "positioned-stream=true",
+                "append=true",
+                "sparse-resize=true",
+                "overwrite=true",
+                "truncate=true",
+                "splice=true",
+                "hard-link=true",
+                "first-unlink=true",
+                "open-unlinked=true",
+                "rename-replace=true",
+                "grew=true",
+                "growth-denied=true",
+            ],
+        ),
+        (
+            agent_id!("P3FileSystem", "managed-quota-p3-matrix"),
+            "run_p3_quota_matrix",
+            vec![
+                "positioned-stream=true",
+                "append=true",
+                "sparse-resize=true",
+                "overwrite=true",
+                "truncate=true",
+                "hard-link=true",
+                "first-unlink=true",
+                "open-unlinked=true",
+                "rename-replace=true",
+                "growth-denied=true",
+            ],
+        ),
+    ] {
+        let result = executor
+            .invoke_and_await_agent(&component, &agent, method, data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value from {method}"))?;
+        assert_eq!(schema_string_list(result), expected);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn fill_filesystem_leaving(path: &std::path::Path, reserve_bytes: u64) -> anyhow::Result<()> {
+    use std::io::Write;
+
+    let mut filler = std::fs::File::create(path)?;
+    let block = vec![0x7f; 1024 * 1024];
+    let mut length = 0u64;
+    loop {
+        match filler.write(&block) {
+            Ok(0) => break,
+            Ok(written) => length += written as u64,
+            Err(error) if error.raw_os_error() == Some(28) => break,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    filler.sync_all()?;
+    filler.set_len(length.saturating_sub(reserve_bytes))?;
+    filler.sync_all()?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn p2_p3_mid_effect_enospc_reconstructs_on_unmanaged_filesystem(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let mount_root = managed_xfs_test_root();
+    let runtime_root = mount_root.join("unmanaged-mid-effect-runtime");
+    let filler_path = mount_root.join("unmanaged-mid-effect-filler");
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.deterministic_root_dir = Some(runtime_root.clone());
+                full_replay_config(config);
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+
+    for (agent_id, exhaust_method, inspect_method) in [
+        (
+            agent_id!("P3FileSystem", "unmanaged-enospc-p2"),
+            "exhaust_p2_quota",
+            "inspect_p2_exhaustion",
+        ),
+        (
+            agent_id!("P3FileSystem", "unmanaged-enospc-p3"),
+            "exhaust_p3_quota",
+            "inspect_p3_exhaustion",
+        ),
+    ] {
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+        fill_filesystem_leaving(&filler_path, 256 * 1024)?;
+        let failure = schema_string_list(
+            executor
+                .invoke_and_await_agent(&component, &agent_id, exhaust_method, data_value!())
+                .await?
+                .into_return_value()
+                .ok_or_else(|| anyhow!("expected {exhaust_method} result"))?,
+        );
+        assert_eq!(
+            failure.get(1).map(String::as_str),
+            Some("prefix-persisted=true")
+        );
+        std::fs::remove_file(&filler_path)?;
+
+        let persisted = schema_string_list(
+            executor
+                .invoke_and_await_agent(&component, &agent_id, inspect_method, data_value!())
+                .await?
+                .into_return_value()
+                .ok_or_else(|| anyhow!("expected {inspect_method} result"))?,
+        );
+        assert_eq!(
+            persisted.get(1).map(String::as_str),
+            Some("prefix-complete=true")
+        );
+        assert!(
+            persisted
+                .first()
+                .and_then(|entry| entry.strip_prefix("size="))
+                .and_then(|size| size.parse::<u64>().ok())
+                .is_some_and(|size| (4096..2 * 1024 * 1024 + 4096).contains(&size)),
+            "{exhaust_method} did not retain only its completed prefix: {persisted:?}"
+        );
+
+        executor.simulated_crash(&worker_id).await?;
+        let reconstructed = executor
+            .invoke_and_await_agent(&component, &agent_id, inspect_method, data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected reconstructed {inspect_method} result"))?;
+        assert_eq!(schema_string_list(reconstructed), persisted);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[tracing::instrument]
+async fn p2_p3_object_quota_on_managed_xfs(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let root = managed_xfs_test_root();
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_agent_storage_and_object_quota_on_managed_xfs(
+        deps,
+        &context,
+        16 * 1024 * 1024,
+        32,
+        root,
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let expected = vec![
+        "hard-link-same-inode=true",
+        "object-denied=true",
+        "directory-denied=true",
+        "symlink-denied=true",
+        "denied-while-open=true",
+    ];
+    for (agent, method, completion_method) in [
+        (
+            agent_id!("P3FileSystem", "managed-object-quota-p2"),
+            "run_p2_object_quota",
+            "complete_p2_object_quota_release",
+        ),
+        (
+            agent_id!("P3FileSystem", "managed-object-quota-p3"),
+            "run_p3_object_quota",
+            "complete_p3_object_quota_release",
+        ),
+    ] {
+        let result = executor
+            .invoke_and_await_agent(&component, &agent, method, data_value!())
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value from {method}"))?;
+        assert_eq!(schema_string_list(result), expected);
+        let admitted_after_close = executor
+            .invoke_and_await_agent(&component, &agent, completion_method, data_value!())
+            .await?
+            .into_return_value();
+        assert_eq!(admitted_after_close, Some(SchemaValue::Bool(true)));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let root = managed_xfs_test_root();
+    let context = TestContext::new(last_unique_id);
+    let (executor, quota) = start_with_mutable_agent_storage_quota_on_managed_xfs(
+        deps,
+        &context,
+        1024 * 1024,
+        root.clone(),
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .with_files(
+            "P3FileSystem",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo-copy.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
+        .store()
+        .await?;
+    let agent = agent_id!("P3FileSystem", "managed-quota-downgrade");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    let initial_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "confirm_invocation_started",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(
+        initial_result.into_return_value(),
+        Some(SchemaValue::String("executed".to_string()))
+    );
+    let runtime_path = root
+        .join(context.default_environment_id.to_string())
+        .join(component.id.to_string())
+        .join(worker_id.agent_name_encoded());
+    assert!(runtime_path.exists());
+
+    quota.set_limit(4096).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while runtime_path.exists() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("over-limit runtime filesystem was not deleted");
+
+    let before_blocked_invocation = executor.oplog_max_index(&worker_id).await?;
+    let blocked_key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent,
+            &blocked_key,
+            "confirm_invocation_started",
+            data_value!(),
+        )
+        .await?;
+    let blocked = tokio::time::timeout(
+        Duration::from_secs(1),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &blocked_key,
+            "confirm_invocation_started",
+            data_value!(),
+        ),
+    )
+    .await;
+    assert!(
+        !matches!(blocked, Ok(Ok(_))),
+        "pending invocation completed while reconstruction exceeded its installed quota"
+    );
+    let blocked_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        count_agent_invocation_pair_since(&blocked_oplog, before_blocked_invocation),
+        (0, 0),
+        "over-limit reconstruction must not start the pending guest invocation"
+    );
+
+    quota.set_limit(1024 * 1024).await?;
+    executor.resume(&worker_id, false).await?;
+    let recovered = tokio::time::timeout(
+        Duration::from_secs(20),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &blocked_key,
+            "confirm_invocation_started",
+            data_value!(),
+        ),
+    )
+    .await
+    .expect("pending invocation did not recover after raising the limit")?;
+    assert_eq!(
+        recovered.into_return_value(),
+        Some(SchemaValue::String("executed".to_string()))
+    );
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    assert!(runtime_path.exists());
+    let recovered_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        count_agent_invocation_pair_since(&recovered_oplog, before_blocked_invocation),
+        (1, 1)
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn managed_xfs_resource_billing_survives_idle_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
     use golem_common::{agent_id, data_value};
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let (executor, billing) = start_with_mutable_agent_storage_quota_on_managed_xfs(
+        deps,
+        &context,
+        1024 * 1024,
+        managed_xfs_test_root(),
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent = agent_id!("P3FileSystem", "managed-xfs-resource-billing");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let mutation = executor
+        .invoke_and_await_agent(&component, &agent, "run_writable", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected run_writable return value"))?;
+    assert_eq!(
+        schema_string_list(mutation),
+        vec![
+            "p2_write_p3_read=p2-to-p3".to_string(),
+            "p3_write_p2_read=p3-to-p2".to_string(),
+        ]
+    );
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    let after_mutation = billing.flush_durable_storage_byte_seconds();
+    let mut after_active_window = after_mutation;
+    for _ in 0..32 {
+        assert_reconstructed_writable_file(&executor, &component, &agent).await?;
+        executor
+            .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+            .await?;
+        after_active_window = billing.flush_durable_storage_byte_seconds();
+        if after_active_window > after_mutation {
+            break;
+        }
+    }
+    assert!(
+        after_active_window > after_mutation,
+        "authoritative managed-XFS allocation remained zero-billed across active windows"
+    );
+
+    let mut idle_start = billing.flush_durable_storage_byte_seconds();
+    let mut stable_samples = 0;
+    while stable_samples < 3 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let current = billing.flush_durable_storage_byte_seconds();
+        if current == idle_start {
+            stable_samples += 1;
+        } else {
+            idle_start = current;
+            stable_samples = 0;
+        }
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let idle_end = billing.flush_durable_storage_byte_seconds();
+    assert_eq!(
+        idle_end, idle_start,
+        "loaded-idle managed-XFS storage continued billing"
+    );
+
+    executor.simulated_crash(&worker_id).await?;
+    assert_reconstructed_writable_file(&executor, &component, &agent).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    let after_replay = billing.flush_durable_storage_byte_seconds();
+    assert!(
+        after_replay > idle_end,
+        "replay and its following invocation produced no managed-XFS storage billing"
+    );
+
+    let before_delete = billing.flush_durable_storage_byte_seconds();
+    executor.delete_worker(&worker_id).await?;
+    let after_delete = billing.flush_durable_storage_byte_seconds();
+    assert!(after_delete >= before_delete);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        billing.flush_durable_storage_byte_seconds(),
+        after_delete,
+        "deleted managed-XFS storage continued billing"
+    );
+    Ok(())
+}
+
+async fn initial_file_p3_parity_with_backend(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    initial_file_system: &PrecompiledComponent,
+    managed_xfs_root: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = match managed_xfs_root {
+        Some(root) => {
+            start_with_overrides(
+                deps,
+                &context,
+                TestExecutorOverrides {
+                    configure: Some(Arc::new(move |config| {
+                        config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
+                    })),
+                    ..TestExecutorOverrides::default()
+                },
+            )
+            .await?
+        }
+        None => start(deps, &context).await?,
+    };
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
@@ -414,6 +1154,11 @@ async fn initial_file_p3_parity(
                 IFSEntry {
                     source_path: PathBuf::from("initial-file-system/files/foo.txt"),
                     target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo-copy.txt").unwrap(),
                     permissions: AgentFilePermissions::ReadOnly,
                 },
                 IFSEntry {
@@ -431,6 +1176,17 @@ async fn initial_file_p3_parity(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
+    let abandoned_completion = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "abandon_p3_write_completion",
+            data_value!(),
+        )
+        .await?
+        .into_return_value();
+    assert_eq!(abandoned_completion, Some(SchemaValue::Bool(true)));
+
     let expected = vec![
         "ro_flags_p2_write=false".to_string(),
         "ro_flags_p3_write=false".to_string(),
@@ -447,25 +1203,28 @@ async fn initial_file_p3_parity(
         "ro_symlink_at_p3=err:not-permitted".to_string(),
         "ro_unlink_file_at_p2=err:not-permitted".to_string(),
         "ro_unlink_file_at_p3=err:not-permitted".to_string(),
+        "ro_parent_open_write_p2=err:not-permitted".to_string(),
+        "ro_parent_open_write_p3=err:not-permitted".to_string(),
+        "ro_parent_unlink_p2=err:not-permitted".to_string(),
+        "ro_parent_unlink_p3=err:not-permitted".to_string(),
+        "ro_parent_rename_p2=err:not-permitted".to_string(),
+        "ro_parent_rename_p3=err:not-permitted".to_string(),
+        "ro_parent_link_p2=err:not-permitted".to_string(),
+        "ro_parent_link_p3=err:not-permitted".to_string(),
+        "ro_alias_create_p2=ok".to_string(),
+        "ro_alias_open_write_p2=err:not-permitted".to_string(),
+        "ro_alias_unlink_p2=ok".to_string(),
+        "ro_alias_create_p3=ok".to_string(),
+        "ro_alias_open_write_p3=err:not-permitted".to_string(),
+        "ro_alias_unlink_p3=ok".to_string(),
         "rw_flags_p2_write=true".to_string(),
         "rw_flags_p3_write=true".to_string(),
         "rw_hash_parity=true".to_string(),
         "rw_set_times_p2=ok".to_string(),
         "rw_set_times_p3=ok".to_string(),
+        "p2_write_p3_read=p2-to-p3".to_string(),
+        "p3_write_p2_read=p3-to-p2".to_string(),
     ];
-
-    fn as_entries(result: SchemaValue) -> Vec<String> {
-        let SchemaValue::List { elements } = result else {
-            panic!("expected list, got {result:?}")
-        };
-        elements
-            .into_iter()
-            .map(|element| match element {
-                SchemaValue::String(entry) => entry,
-                other => panic!("expected string, got {other:?}"),
-            })
-            .collect::<Vec<_>>()
-    }
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
@@ -475,21 +1234,580 @@ async fn initial_file_p3_parity(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert_eq!(as_entries(result), expected);
+    assert_eq!(schema_string_list(result), expected);
 
     // Crash the worker so the next invocation replays the recorded oplog first,
     // verifying the P3 metadata-hash -> durable stat call sequence is replay-stable
+    // and that replay reconstructed the mutable initial file without help from
+    // the verification invocation.
     executor.simulated_crash(&worker_id).await?;
 
     let result_after_crash = executor
-        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "inspect_run", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    assert_eq!(as_entries(result_after_crash), expected);
+    assert_eq!(
+        schema_string_list(result_after_crash),
+        vec![
+            "p2_read=p3-to-p2".to_string(),
+            "p3_read=p3-to-p2".to_string(),
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn filesystem_mutation_histories_reconstruct_from_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    filesystem_mutation_histories_reconstruct_with_backend(
+        last_unique_id,
+        deps,
+        initial_file_system,
+        None,
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn filesystem_mutation_histories_reconstruct_on_managed_xfs(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    filesystem_mutation_histories_reconstruct_with_backend(
+        last_unique_id,
+        deps,
+        initial_file_system,
+        Some(managed_xfs_test_root()),
+    )
+    .await
+}
+
+async fn filesystem_mutation_histories_reconstruct_with_backend(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    initial_file_system: &PrecompiledComponent,
+    managed_xfs_root: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                if let Some(root) = &managed_xfs_root {
+                    config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
+                }
+                full_replay_config(config);
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent_id = agent_id!("P3FileSystem", "filesystem-reconstruction-matrix");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let expected = schema_string_list(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "run_reconstruction_matrix",
+                data_value!(),
+            )
+            .await?
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected reconstruction matrix"))?,
+    );
+    assert_eq!(
+        expected,
+        vec![
+            "p2-resize=abcdef",
+            "p2-times=946684800:0",
+            "p2-append=p2-append",
+            "p2-directory=true:removed=true",
+            "p2-splice=splice-data",
+            "p2-hard=hard-p2:2",
+            "p2-hard-link=hard-p2:2",
+            "p2-symlink=replay-p2-hard.bin:hard-p2",
+            "p2-replacement=new-p2",
+            "p2-open-unlinked-absent=true",
+            "p3-resize=uvwxyz",
+            "p3-times=978307200:0",
+            "p3-append=p3-append",
+            "p3-directory=true:removed=true",
+            "p3-hard=hard-p3:2",
+            "p3-hard-link=hard-p3:2",
+            "p3-symlink=replay-p3-hard.bin:hard-p3",
+            "p3-replacement=new-p3",
+            "p3-open-unlinked-absent=true",
+        ]
+    );
+
+    executor.simulated_crash(&worker_id).await?;
+    let reconstructed = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "inspect_reconstruction_matrix",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected reconstructed matrix"))?;
+    assert_eq!(schema_string_list(reconstructed), expected);
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn filesystem_reconstruction_stops_at_exact_revert_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    filesystem_reconstruction_stops_at_exact_revert_target_with_backend(
+        last_unique_id,
+        deps,
+        initial_file_system,
+        None,
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn filesystem_reconstruction_stops_at_exact_revert_target_on_managed_xfs(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    filesystem_reconstruction_stops_at_exact_revert_target_with_backend(
+        last_unique_id,
+        deps,
+        initial_file_system,
+        Some(managed_xfs_test_root()),
+    )
+    .await
+}
+
+async fn filesystem_reconstruction_stops_at_exact_revert_target_with_backend(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    initial_file_system: &PrecompiledComponent,
+    managed_xfs_root: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                if let Some(root) = &managed_xfs_root {
+                    config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
+                }
+                full_replay_config(config);
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent_id = agent_id!("P3FileSystem", "filesystem-exact-replay-target");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_replay_target",
+            data_value!("first"),
+        )
+        .await?;
+    let first_target = executor.oplog_max_index(&worker_id).await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_replay_target",
+            data_value!("second"),
+        )
+        .await?;
+
+    executor
+        .revert(
+            &worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: first_target,
+            }),
+        )
+        .await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "inspect_path",
+            data_value!("replay-target.txt"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected replay target contents"))?;
+    assert_eq!(
+        schema_string_list(result),
+        vec!["p2_read=first", "p3_read=first"]
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn filesystem_reconstruction_uses_updated_initial_files(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    filesystem_reconstruction_uses_updated_initial_files_with_backend(
+        last_unique_id,
+        deps,
+        initial_file_system,
+        None,
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn filesystem_reconstruction_uses_updated_initial_files_on_managed_xfs(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    filesystem_reconstruction_uses_updated_initial_files_with_backend(
+        last_unique_id,
+        deps,
+        initial_file_system,
+        Some(managed_xfs_test_root()),
+    )
+    .await
+}
+
+async fn filesystem_reconstruction_uses_updated_initial_files_with_backend(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    initial_file_system: &PrecompiledComponent,
+    managed_xfs_root: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                if let Some(root) = &managed_xfs_root {
+                    config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
+                }
+                full_replay_config(config);
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .with_files(
+            "P3FileSystem",
+            &[IFSEntry {
+                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                target_path: CanonicalFilePath::from_abs_str("/versioned.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+            }],
+        )
+        .store()
+        .await?;
+    let agent_id = agent_id!("P3FileSystem", "filesystem-updated-initial-files");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/versioned.txt")
+            .await?,
+        Bytes::from_static(b"baz\n")
+    );
+
+    let updated = executor
+        .update_component_with_files(
+            &component.id,
+            "P3FileSystem",
+            &initial_file_system.wasm_name,
+            vec![IFSEntry {
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                target_path: CanonicalFilePath::from_abs_str("/versioned.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+            }],
+        )
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, updated.revision, false)
+        .await?;
+
+    let updated_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "inspect_path",
+            data_value!("versioned.txt"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected updated initial file"))?;
+    assert_eq!(
+        schema_string_list(updated_result),
+        vec!["p2_read=foo\n", "p3_read=foo\n"]
+    );
+
+    executor.simulated_crash(&worker_id).await?;
+    let reconstructed = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "inspect_path",
+            data_value!("versioned.txt"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected reconstructed updated initial file"))?;
+    assert_eq!(
+        schema_string_list(reconstructed),
+        vec!["p2_read=foo\n", "p3_read=foo\n"]
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn filesystem_full_replay_survives_lifecycle_transitions(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    filesystem_full_replay_survives_lifecycle_transitions_with_backend(
+        last_unique_id,
+        deps,
+        initial_file_system,
+        None,
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the privileged managed XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn filesystem_full_replay_survives_managed_xfs_lifecycle_transitions(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    filesystem_full_replay_survives_lifecycle_transitions_with_backend(
+        last_unique_id,
+        deps,
+        initial_file_system,
+        Some(managed_xfs_test_root()),
+    )
+    .await
+}
+
+async fn filesystem_full_replay_survives_lifecycle_transitions_with_backend(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    initial_file_system: &PrecompiledComponent,
+    managed_xfs_root: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
+    };
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let first_root = tempfile::tempdir()?;
+    let second_root = tempfile::tempdir()?;
+    let managed = managed_xfs_root.is_some();
+    let (first_backend_root, second_backend_root) = match managed_xfs_root {
+        Some(root) => {
+            let first = root.join("lifecycle-first-executor");
+            let second = root.join("lifecycle-second-executor");
+            std::fs::create_dir_all(&first)?;
+            std::fs::create_dir_all(&second)?;
+            (first, second)
+        }
+        None => (
+            first_root.path().to_path_buf(),
+            second_root.path().to_path_buf(),
+        ),
+    };
+    let root = first_backend_root;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                if managed {
+                    config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
+                } else {
+                    config.filesystem_storage.deterministic_root_dir = Some(root.clone());
+                }
+                full_replay_config(config);
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent_id = agent_id!("P3FileSystem", "filesystem-full-replay-lifecycles");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "run_writable", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(
+        schema_string_list(result),
+        vec![
+            "p2_write_p3_read=p2-to-p3".to_string(),
+            "p3_write_p2_read=p3-to-p2".to_string(),
+        ]
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_eviction_class(&owned_agent_id).await
+            != Some(golem_worker_executor::worker::EvictionClass::LoadedIdle)
+        {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("worker did not become loaded-idle after its billing window closed"))?;
+    assert!(executor.stop_worker_if_idle(&owned_agent_id).await?);
+    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+    assert_reconstructed_writable_file(&executor, &component, &agent_id).await?;
+
+    let shard = ShardId { value: 0 };
+    let mut client = executor.client.clone();
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![shard],
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("worker remained loaded after its shard was revoked"))?;
+    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+    let assigned = client
+        .assign_shards(AssignShardsRequest {
+            shard_ids: vec![shard],
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        assigned.result,
+        Some(assign_shards_response::Result::Success(_))
+    ));
+    assert_reconstructed_writable_file(&executor, &component, &agent_id).await?;
+
+    drop(client);
+    drop(executor);
+
+    let root = second_backend_root;
+    let relocated = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                if managed {
+                    config.filesystem_storage.managed_xfs_root_dir = Some(root.clone());
+                } else {
+                    config.filesystem_storage.deterministic_root_dir = Some(root.clone());
+                }
+                full_replay_config(config);
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    assert_reconstructed_writable_file(&relocated, &component, &agent_id).await?;
+    relocated.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }
@@ -4724,54 +6042,6 @@ async fn http_timeout_and_restart(
 
     http_server.abort();
     drop(executor);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn filesystem_write_increments_storage_bytes_written_metric(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
-
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    let agent_id = agent_id!("FileSystem", "fs-metrics-test-1");
-    let account_id = context.account_id.to_string();
-    let environment_id = context.default_environment_id.to_string();
-
-    let bytes_before = STORAGE_BYTES_WRITTEN_TOTAL
-        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
-        .get();
-
-    executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "write_file",
-            data_value!("/fs-metrics-test.txt", "hello from metrics test"),
-        )
-        .await?;
-
-    drop(executor);
-
-    let bytes_after = STORAGE_BYTES_WRITTEN_TOTAL
-        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
-        .get();
-
-    assert!(
-        bytes_after > bytes_before,
-        "filesystem bytes_written should have increased: before={bytes_before}, after={bytes_after}"
-    );
-
     Ok(())
 }
 

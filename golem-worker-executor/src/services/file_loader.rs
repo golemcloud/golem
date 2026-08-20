@@ -28,9 +28,6 @@ use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
 
-use crate::metrics::storage::record_filesystem_pool_released;
-use crate::services::active_workers::{FilesystemStoragePermit, FilesystemStorageSemaphore};
-
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
 // Make sure to not drop this token until you are done with the file.
 #[derive(Debug, Clone)]
@@ -38,10 +35,24 @@ pub struct FileUseToken {
     _handle: Arc<CacheEntry>,
 }
 
-/// Interface for loading files and making them available to workers.
-///
-/// This will hardlink to a temporary directory to avoid copying files between workers. Beware
-/// that hardlinking is only possible within the same filesystem.
+#[derive(Debug, Clone)]
+pub(crate) struct InitialFileSource {
+    path: PathBuf,
+    size: u64,
+    _token: FileUseToken,
+}
+
+impl InitialFileSource {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn size(&self) -> u64 {
+        self.size
+    }
+}
+
+/// Interface for loading immutable, content-addressed initial-file sources.
 pub struct FileLoader {
     initial_agent_files_service: Arc<InitialAgentFilesService>,
     cache_dir: TempDir,
@@ -52,156 +63,63 @@ pub struct FileLoader {
     // We need to ensure that no one else is using the file while we are deleting it.
     // To do that, give every file a unique number.
     item_counter: AtomicU64,
-    /// Executor-wide storage semaphore. When `Some`, acquiring a new cache
-    /// entry (i.e. downloading the file for the first time) also acquires
-    /// semaphore permits proportional to the file size. The permit is embedded
-    /// in the cache entry and released automatically when the last
-    /// `FileUseToken` holding that entry is dropped. Subsequent workers that
-    /// hardlink to the same cached file do not acquire additional permits.
-    filesystem_storage_semaphore: Option<Arc<FilesystemStorageSemaphore>>,
 }
 
 impl FileLoader {
     pub fn new(
         initial_agent_files_service: Arc<InitialAgentFilesService>,
-        filesystem_storage_semaphore: Option<Arc<FilesystemStorageSemaphore>>,
+        cache_parent: Option<&Path>,
     ) -> Result<Self, anyhow::Error> {
-        let cache_dir = tempfile::Builder::new()
-            .prefix("golem-initial-component-files")
-            .tempdir()?;
+        let mut cache = tempfile::Builder::new();
+        cache.prefix("golem-initial-component-files");
+        let cache_dir = match cache_parent {
+            Some(parent) => cache.tempdir_in(parent)?,
+            None => cache.tempdir()?,
+        };
 
         Ok(Self {
             initial_agent_files_service,
             cache: Mutex::new(HashMap::new()),
             cache_dir,
             item_counter: AtomicU64::new(0),
-            filesystem_storage_semaphore,
         })
     }
 
-    /// Read-only files can be safely shared between workers. Download once to cache and hardlink to target.
-    /// The file will only be valid until the token is dropped.
-    ///
-    /// `file_size` is the size of the file in bytes. It is used to acquire the
-    /// executor-wide storage semaphore permit on the first download (cache miss).
-    /// Cache hits (hardlinks) do not acquire additional permits.
-    pub async fn get_read_only_to(
+    pub(crate) async fn get_source(
         &self,
         environment_id: EnvironmentId,
         key: AgentFileContentHash,
-        target: &PathBuf,
         file_size: u64,
-    ) -> Result<FileUseToken, WorkerExecutorError> {
-        self.get_read_only_to_impl(environment_id, key, target, file_size)
-            .await
-            .map_err(|e| {
-                WorkerExecutorError::initial_file_download_failed(
-                    target.display().to_string(),
-                    e.to_string(),
-                )
-            })
-    }
-
-    /// Read-write files are copied to target.
-    pub async fn get_read_write_to(
-        &self,
-        environment_id: EnvironmentId,
-        key: AgentFileContentHash,
-        target: &PathBuf,
-    ) -> Result<(), WorkerExecutorError> {
-        self.get_read_write_to_impl(environment_id, key, target)
-            .await
-            .map_err(|e| {
-                WorkerExecutorError::initial_file_download_failed(
-                    target.display().to_string(),
-                    e.to_string(),
-                )
-            })
-    }
-
-    async fn get_read_only_to_impl(
-        &self,
-        environment_id: EnvironmentId,
-        key: AgentFileContentHash,
-        target: &PathBuf,
-        file_size: u64,
-    ) -> Result<FileUseToken, anyhow::Error> {
-        if let Some(parent) = target.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        };
-
+    ) -> Result<InitialFileSource, WorkerExecutorError> {
         let cache_entry = self
             .get_or_add_cache_entry(environment_id, key, file_size)
-            .await?;
-
-        // peek at the cache entry. It's fine to not hold the lock here.
-        // as long as we keep a ref to the cache entry, the file will not be deleted
-        let cache_entry_path = {
+            .await
+            .map_err(|error| {
+                WorkerExecutorError::initial_file_download_failed(
+                    key.to_string(),
+                    error.to_string(),
+                )
+            })?;
+        let (path, size) = {
             let cache_entry_guard = cache_entry.lock().await;
-            cache_entry_guard
-                .as_ref()
-                .map_err(|e| anyhow!(e.clone()))?
-                .path
-                .clone()
+            let entry = cache_entry_guard.as_ref().map_err(|error| {
+                WorkerExecutorError::initial_file_download_failed(key.to_string(), error.clone())
+            })?;
+            (entry.path.clone(), entry.size)
         };
-
-        debug!(
-            "Hardlinking {} to {}",
-            cache_entry_path.display(),
-            target.display()
-        );
-        tokio::fs::hard_link(&cache_entry_path, target).await?;
-
-        Ok(FileUseToken {
-            _handle: cache_entry,
-        })
-    }
-
-    async fn get_read_write_to_impl(
-        &self,
-        environment_id: EnvironmentId,
-        key: AgentFileContentHash,
-        target: &PathBuf,
-    ) -> Result<(), anyhow::Error> {
-        if let Some(parent) = target.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        };
-
-        // fast path for files that are already in cache
-        {
-            let cache_guard = self.cache.lock().await;
-            let cache_entry = cache_guard.get(&key).and_then(|weak| weak.upgrade());
-
-            // make sure we drop the lock to not block other threads
-            drop(cache_guard);
-
-            if let Some(cache_entry) = cache_entry {
-                // peek at the cache entry. It's fine to not hold the lock here.
-                // as long as we keep a ref to the cache entry, the file will not be deleted
-                let cache_entry_path = {
-                    let cache_entry_guard = cache_entry.lock().await;
-                    cache_entry_guard
-                        .as_ref()
-                        .map_err(|e| anyhow!(e.clone()))?
-                        .path
-                        .clone()
-                };
-
-                // copy the file to the target
-                debug!(
-                    "Copying {} to {}",
-                    cache_entry_path.display(),
-                    target.display()
-                );
-                tokio::fs::copy(&cache_entry_path, target).await?;
-                return Ok(());
-            }
+        if size != file_size {
+            return Err(WorkerExecutorError::initial_file_download_failed(
+                key.to_string(),
+                format!("Cached initial file size {size} does not match declared size {file_size}"),
+            ));
         }
-
-        // alternative, download the file directly to the target
-        self.download_file_to_path(environment_id, target, key)
-            .await?;
-        Ok(())
+        Ok(InitialFileSource {
+            path,
+            size,
+            _token: FileUseToken {
+                _handle: cache_entry,
+            },
+        })
     }
 
     async fn get_or_add_cache_entry(
@@ -243,53 +161,19 @@ impl FileLoader {
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let path = self.cache_dir.path().join(counter.to_string());
 
-                // Acquire the executor-wide storage permit before touching the
-                // filesystem. This is a cache miss: we are about to write
-                // `file_size` new bytes to the shared cache directory. If the
-                // pool is exhausted we fail immediately; the worker will be
-                // retried once space is freed.
-                let filesystem_storage_permit = {
-                    if let Some(sem) = &self.filesystem_storage_semaphore {
-                        match sem.try_acquire(file_size).await {
-                            Some(permit) => Some(permit),
-                            None => {
-                                *prelocked_entry =
-                                    Err("Executor storage pool exhausted".to_string());
-                                self.cache.lock().await.remove(&key);
-                                return Err(anyhow!(
-                                    "Executor storage pool exhausted for initial component file"
-                                ));
-                            }
-                        }
-                    } else {
-                        None
-                    }
-                };
-
                 match self
-                    .download_file_to_path_as_read_only(environment_id, &path, key)
+                    .download_file_to_path_as_read_only(environment_id, &path, key, file_size)
                     .await
                 {
                     Ok(()) => {
                         // we successfully downloaded the file and set it to read-only, set the cache entry to the file
                         *prelocked_entry = Ok(InitializedCacheEntry {
                             path: path.clone(),
-                            filesystem_storage_permit_bytes: if filesystem_storage_permit.is_some()
-                            {
-                                // Round up to permit granularity (1 permit = 1 KB) so the
-                                // released byte count matches what was actually acquired.
-                                crate::services::active_workers::filesystem_storage_bytes_rounded_up(
-                                    file_size,
-                                )
-                            } else {
-                                0
-                            },
-                            filesystem_storage_permit,
+                            size: file_size,
                         });
                     }
                     Err(e) => {
                         // we failed to set the file to read-only, we need to fail the entry, remove it from the cache and return the error
-                        // filesystem_storage_permit is dropped here, returning permits to the semaphore
                         *prelocked_entry = Err(format!("Other thread failed to download: {e}"));
                         self.cache.lock().await.remove(&key);
 
@@ -307,21 +191,27 @@ impl FileLoader {
         environment_id: EnvironmentId,
         path: &Path,
         key: AgentFileContentHash,
+        expected_size: u64,
     ) -> Result<(), anyhow::Error> {
-        self.download_file_to_path(environment_id, path, key)
+        let temporary = tempfile::NamedTempFile::new_in(self.cache_dir.path())?;
+        self.download_file(environment_id, &temporary, key, expected_size)
             .await?;
-        self.set_path_read_only(path).await?;
+        crate::services::agent_filesystem::set_initial_file_permissions(temporary.as_file(), true)?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist_noclobber(path)
+            .map_err(|error| error.error)?;
         Ok(())
     }
 
-    async fn download_file_to_path(
+    async fn download_file(
         &self,
         environment_id: EnvironmentId,
-        path: &Path,
+        temporary: &tempfile::NamedTempFile,
         key: AgentFileContentHash,
+        expected_size: u64,
     ) -> Result<(), anyhow::Error> {
-        debug!("Downloading {} to {}", key, path.display());
-
+        debug!("Downloading {} to immutable cache", key);
         let mut data = self
             .initial_agent_files_service
             .get(environment_id, key)
@@ -329,21 +219,37 @@ impl FileLoader {
             .map_err(|e| anyhow!(e))?
             .ok_or_else(|| anyhow!("File not found"))?;
 
-        let file = tokio::fs::File::create(path).await?;
+        let file = tokio::fs::File::from_std(temporary.reopen()?);
         let mut writer = tokio::io::BufWriter::new(file);
+        let mut hasher = blake3::Hasher::new();
+        let mut actual_size = 0u64;
 
         while let Some(chunk) = data.try_next().await.map_err(|e| anyhow!(e))? {
+            actual_size = actual_size
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| anyhow!("Downloaded initial file size overflowed"))?;
+            if actual_size > expected_size {
+                return Err(anyhow!(
+                    "Downloaded initial file size exceeds declared size {expected_size}"
+                ));
+            }
+            hasher.update(&chunk);
             writer.write_all(&chunk).await?;
         }
 
         writer.flush().await?;
-        Ok(())
-    }
-
-    async fn set_path_read_only(&self, path: &Path) -> Result<(), anyhow::Error> {
-        let mut perms = tokio::fs::metadata(path).await?.permissions();
-        perms.set_readonly(true);
-        tokio::fs::set_permissions(path, perms).await?;
+        writer.get_ref().sync_all().await?;
+        let actual = hasher.finalize();
+        if actual != *key.0.as_blake3_hash() {
+            return Err(anyhow!(
+                "Downloaded initial file content hash does not match {key}"
+            ));
+        }
+        if actual_size != expected_size {
+            return Err(anyhow!(
+                "Downloaded initial file size {actual_size} does not match declared size {expected_size}"
+            ));
+        }
         Ok(())
     }
 }
@@ -363,27 +269,13 @@ type CacheEntry = Mutex<Result<InitializedCacheEntry, String>>;
 #[derive(Debug)]
 struct InitializedCacheEntry {
     path: PathBuf,
-    /// Storage semaphore permit held for the lifetime of this cache entry.
-    /// Acquired on cache miss (first download); `None` when no semaphore is
-    /// configured. Only returned to the executor pool if the file is
-    /// successfully deleted
-    filesystem_storage_permit: Option<FilesystemStoragePermit>,
-    /// Byte count corresponding to `filesystem_storage_permit`, for metrics.
-    filesystem_storage_permit_bytes: u64,
+    size: u64,
 }
 
 impl InitializedCacheEntry {
     #[cfg(test)]
-    fn new_for_test(
-        path: PathBuf,
-        permit: Option<FilesystemStoragePermit>,
-        permit_bytes: u64,
-    ) -> Self {
-        Self {
-            path,
-            filesystem_storage_permit: permit,
-            filesystem_storage_permit_bytes: permit_bytes,
-        }
+    fn new_for_test(path: PathBuf) -> Self {
+        Self { path, size: 0 }
     }
 }
 
@@ -391,42 +283,24 @@ impl Drop for InitializedCacheEntry {
     fn drop(&mut self) {
         debug!("Removing file {}", self.path.display());
         std::fs::remove_file(&self.path).expect("Failed to remove cached component file — executor filesystem is in an inconsistent state");
-        // File deleted successfully — disk space is freed, return permits to the pool.
-        let permit = self.filesystem_storage_permit.take();
-        if permit.is_some() && self.filesystem_storage_permit_bytes > 0 {
-            record_filesystem_pool_released(self.filesystem_storage_permit_bytes);
-        }
-        drop(permit);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::active_workers::FilesystemStorageSemaphore;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::widen_infallible;
     use golem_service_base::replayable_stream::ReplayableStream as _;
     use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use std::time::Duration;
     use test_r::test;
 
     test_r::enable!();
 
-    /// Build a `FileLoader` + semaphore sharing a single in-memory blob store,
-    /// and upload `content` so it can be fetched via `get_read_only_to`.
-    ///
-    /// Returns `(loader, semaphore, content_hash, env_id)`.
-    async fn setup(
-        pool_bytes: usize,
-        content: &[u8],
-    ) -> (
-        FileLoader,
-        Arc<FilesystemStorageSemaphore>,
-        AgentFileContentHash,
-        EnvironmentId,
-    ) {
+    /// Build a `FileLoader` sharing a single in-memory blob store,
+    /// and upload `content` so it can be fetched as a verified source.
+    async fn setup(content: &[u8]) -> (FileLoader, AgentFileContentHash, EnvironmentId) {
         let blob = Arc::new(InMemoryBlobStorage::new());
 
         // One service instance for uploading, one for the loader — both share
@@ -434,11 +308,7 @@ mod tests {
         let upload_svc = Arc::new(InitialAgentFilesService::new(blob.clone()));
         let loader_svc = Arc::new(InitialAgentFilesService::new(blob));
 
-        let semaphore = Arc::new(FilesystemStorageSemaphore::new(
-            pool_bytes,
-            Duration::from_millis(1),
-        ));
-        let loader = FileLoader::new(loader_svc, Some(semaphore.clone())).unwrap();
+        let loader = FileLoader::new(loader_svc, None).unwrap();
 
         let env_id = EnvironmentId::new();
         let data: Vec<u8> = content.to_vec();
@@ -451,107 +321,28 @@ mod tests {
             .await
             .unwrap();
 
-        (loader, semaphore, hash, env_id)
+        (loader, hash, env_id)
     }
 
-    /// A single `get_read_only_to` for a fresh file acquires permits equal to
-    /// the file size (rounded up to KB).
     #[test]
-    async fn ro_first_load_acquires_semaphore_permits() {
-        let content = b"hello world"; // 11 bytes → rounds up to 1 KB = 1 permit
-        let pool_bytes = 4 * 1024;
-        let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
-
-        let dir = tempfile::tempdir().unwrap();
-        let _token = loader
-            .get_read_only_to(
-                env_id,
-                hash,
-                &dir.path().join("f.txt"),
-                content.len() as u64,
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(semaphore.available_bytes(), 3 * 1024);
-    }
-
-    /// A second `get_read_only_to` for the **same content hash** must NOT
-    /// consume additional semaphore permits — the file is already in the local
-    /// filesystem cache and only a hardlink is created, adding zero disk blocks.
-    #[test]
-    async fn ro_second_load_of_same_file_does_not_consume_additional_permits() {
+    async fn source_leases_keep_the_verified_cache_entry_alive() {
         let content = b"hello world";
-        let pool_bytes = 4 * 1024;
-        let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
+        let (loader, hash, env_id) = setup(content).await;
 
-        let dir = tempfile::tempdir().unwrap();
-        let _t1 = loader
-            .get_read_only_to(
-                env_id,
-                hash,
-                &dir.path().join("f1.txt"),
-                content.len() as u64,
-            )
+        let source1 = loader
+            .get_source(env_id, hash, content.len() as u64)
             .await
             .unwrap();
-
-        let permits_after_first = semaphore.available_bytes();
-
-        let _t2 = loader
-            .get_read_only_to(
-                env_id,
-                hash,
-                &dir.path().join("f2.txt"),
-                content.len() as u64,
-            )
+        let path = source1.path().to_path_buf();
+        let source2 = loader
+            .get_source(env_id, hash, content.len() as u64)
             .await
             .unwrap();
-
-        assert_eq!(
-            semaphore.available_bytes(),
-            permits_after_first,
-            "second load of cached RO file must not consume extra semaphore permits"
-        );
-    }
-
-    /// When all `FileUseToken`s for a cached entry are dropped, the semaphore
-    /// permits are returned to the pool.
-    #[test]
-    async fn ro_permits_released_when_all_tokens_dropped() {
-        let content = b"hello world";
-        let pool_bytes = 4 * 1024;
-        let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
-
-        let dir = tempfile::tempdir().unwrap();
-        let t1 = loader
-            .get_read_only_to(
-                env_id,
-                hash,
-                &dir.path().join("f1.txt"),
-                content.len() as u64,
-            )
-            .await
-            .unwrap();
-        let t2 = loader
-            .get_read_only_to(
-                env_id,
-                hash,
-                &dir.path().join("f2.txt"),
-                content.len() as u64,
-            )
-            .await
-            .unwrap();
-
-        let after_load = semaphore.available_bytes();
-        drop(t1);
-        assert_eq!(semaphore.available_bytes(), after_load, "t2 still alive");
-        drop(t2);
-        assert_eq!(
-            semaphore.available_bytes(),
-            pool_bytes as u64,
-            "all tokens dropped — full pool must be restored"
-        );
+        assert_eq!(source2.path(), path);
+        drop(source1);
+        assert!(path.exists());
+        drop(source2);
+        assert!(!path.exists());
     }
 
     /// When file deletion fails on drop (e.g. the file was already removed by
@@ -563,7 +354,7 @@ mod tests {
         let result = std::panic::catch_unwind(|| {
             let nonexistent =
                 std::path::PathBuf::from("/tmp/golem-test-nonexistent-file-12345.wasm");
-            let entry = InitializedCacheEntry::new_for_test(nonexistent, None, 0);
+            let entry = InitializedCacheEntry::new_for_test(nonexistent);
             drop(entry);
         });
         assert!(
@@ -572,30 +363,15 @@ mod tests {
         );
     }
 
-    /// When the semaphore pool is exhausted, `get_read_only_to` fails with an
-    /// error and the cache entry is cleaned up — a subsequent load of the same
-    /// hash (after the pool is freed) must succeed and download fresh.
     #[test]
-    async fn ro_load_fails_and_cleans_up_when_pool_exhausted() {
+    async fn source_load_rejects_incorrect_declared_size() {
         let content = b"hello world";
-        let pool_bytes = 0; // 0 bytes → 0 permits → all acquires fail immediately
-        let (loader, semaphore, hash, env_id) = setup(pool_bytes, content).await;
+        let (loader, hash, env_id) = setup(content).await;
 
-        let dir = tempfile::tempdir().unwrap();
-
-        // Load must fail because the pool is empty.
         let result = loader
-            .get_read_only_to(
-                env_id,
-                hash,
-                &dir.path().join("f.txt"),
-                content.len() as u64,
-            )
+            .get_source(env_id, hash, content.len() as u64 + 1)
             .await;
-        assert!(result.is_err(), "expected failure when pool is exhausted");
 
-        // The failed load must have cleaned up the stale cache entry so the
-        // pool is still at 0 permits (no leak).
-        assert_eq!(semaphore.available_bytes(), 0);
+        assert!(result.is_err());
     }
 }

@@ -2060,7 +2060,6 @@ async fn long_running_poll_loop_http_failures_are_retried(
         deps,
         &context,
         None,
-        None,
         Some(RetryConfig {
             max_attempts: 30,
             min_delay: Duration::from_millis(100),

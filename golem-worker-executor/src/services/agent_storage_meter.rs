@@ -12,232 +12,197 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Per-agent byte-second metering. Clones share one meter; dropping the last clone records any
-//! whole byte-seconds accumulated since the previous flush.
-
+use crate::services::byte_time_accumulator::{ByteTimeAccumulator, ByteTimeSettlement};
 use crate::services::resource_limits::AtomicResourceEntry;
 use golem_common::model::agent::AgentMode;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
-#[derive(Clone, Debug)]
-pub struct AgentStorageMeter {
-    inner: Arc<Inner>,
+const BYTE_NANOSECONDS_PER_BYTE_SECOND: u128 = 1_000_000_000;
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FilesystemUsageObservation {
+    pub(crate) generation: u64,
+    pub(crate) sequence: u64,
 }
 
-impl AgentStorageMeter {
-    /// Whether both handles refer to the same underlying meter.
-    ///
-    /// Deliberately not `PartialEq`: this is identity, not value equality — two meters
-    /// holding identical byte counts are still different meters, and unregistration must
-    /// only remove the exact handle it was given.
-    pub fn is_same_meter(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
-    }
-}
-
+/// Leaf meter for authoritative filesystem-storage levels and byte-time integration.
+///
+/// `AgentResourceBilling` invokes lifecycle methods under the transition lock shared with
+/// memory accounting. Observation generations and sequences reject stale asynchronous results.
 #[derive(Debug)]
-struct Inner {
+pub(crate) struct AgentStorageMeter {
     mode: AgentMode,
     entry: Weak<AtomicResourceEntry>,
-    state: Mutex<State>,
+    generation: AtomicU64,
+    sequence: AtomicU64,
+    state: Mutex<AgentStorageMeterState>,
 }
 
 #[derive(Debug)]
-struct State {
-    bytes: u64,
-    last_sample: Instant,
-    pending_byte_nanoseconds: u128,
+struct AgentStorageMeterState {
+    active: bool,
+    closing: bool,
+    allocated_bytes: Option<u64>,
+    generation: u64,
+    applied_sequence: u64,
+    usage: ByteTimeAccumulator,
 }
 
 impl AgentStorageMeter {
-    pub fn new(mode: AgentMode, bytes: u64, entry: Arc<AtomicResourceEntry>, now: Instant) -> Self {
+    pub(crate) fn new(mode: AgentMode, entry: Arc<AtomicResourceEntry>, now: Instant) -> Self {
         Self {
-            inner: Arc::new(Inner {
-                mode,
-                entry: Arc::downgrade(&entry),
-                state: Mutex::new(State {
-                    bytes,
-                    last_sample: now,
-                    pending_byte_nanoseconds: 0,
-                }),
+            mode,
+            entry: Arc::downgrade(&entry),
+            generation: AtomicU64::new(0),
+            sequence: AtomicU64::new(0),
+            state: Mutex::new(AgentStorageMeterState {
+                active: false,
+                closing: false,
+                allocated_bytes: None,
+                generation: 0,
+                applied_sequence: 0,
+                usage: ByteTimeAccumulator::new(BYTE_NANOSECONDS_PER_BYTE_SECOND, now),
             }),
         }
     }
 
-    pub fn on_acquire(&self, bytes: u64, now: Instant) {
-        self.inner.update_bytes(bytes, true, now);
+    pub(crate) fn is_active(&self) -> bool {
+        self.state.lock().unwrap().active
     }
 
-    pub fn on_release(&self, bytes: u64, now: Instant) {
-        self.inner.update_bytes(bytes, false, now);
+    pub(crate) fn open(&self, allocated_bytes: Option<u64>, now: Instant) {
+        let generation = self
+            .generation
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(1)
+            })
+            .expect("resource-window generation overflowed")
+            + 1;
+        let sequence = self.next_sequence();
+        let mut state = self.state.lock().unwrap();
+        state.accrue(now);
+        state.active = true;
+        state.closing = false;
+        state.allocated_bytes = allocated_bytes;
+        state.generation = generation;
+        state.applied_sequence = sequence;
     }
 
-    pub fn flush(&self, now: Instant) {
-        self.inner.integrate(now);
-    }
-}
-
-impl Inner {
-    fn update_bytes(&self, bytes: u64, acquire: bool, now: Instant) {
-        let byte_seconds = {
-            let mut state = self.state.lock().unwrap();
-            let byte_seconds = state.take_whole_byte_seconds(now);
-            state.bytes = if acquire {
-                state.bytes.saturating_add(bytes)
-            } else {
-                state.bytes.saturating_sub(bytes)
-            };
-            byte_seconds
-        };
-        self.record(byte_seconds);
-    }
-
-    fn integrate(&self, now: Instant) {
-        let byte_seconds = self.state.lock().unwrap().take_whole_byte_seconds(now);
-        self.record(byte_seconds);
-    }
-
-    fn record(&self, byte_seconds: i64) {
-        if byte_seconds == 0 {
-            return;
+    pub(crate) fn begin_observation(&self) -> FilesystemUsageObservation {
+        FilesystemUsageObservation {
+            generation: self.generation.load(Ordering::Acquire),
+            sequence: self.next_sequence(),
         }
+    }
+
+    pub(crate) fn begin_close(&self) -> Option<FilesystemUsageObservation> {
+        let mut state = self.state.lock().unwrap();
+        if !state.active || state.closing {
+            return None;
+        }
+        state.closing = true;
+        Some(FilesystemUsageObservation {
+            generation: state.generation,
+            sequence: self.next_sequence(),
+        })
+    }
+
+    pub(crate) fn complete_observation(
+        &self,
+        observation: FilesystemUsageObservation,
+        allocated_bytes: Option<u64>,
+        now: Instant,
+    ) -> bool {
+        let mut state = self.state.lock().unwrap();
+        let accepted = state.active
+            && !state.closing
+            && observation.generation == state.generation
+            && observation.sequence > state.applied_sequence;
+        if accepted {
+            state.accrue(now);
+            state.allocated_bytes = allocated_bytes;
+            state.applied_sequence = observation.sequence;
+        }
+        accepted
+    }
+
+    pub(crate) fn close(
+        &self,
+        observation: FilesystemUsageObservation,
+        allocated_bytes: Option<u64>,
+        now: Instant,
+    ) -> Option<ByteTimeSettlement> {
+        let mut state = self.state.lock().unwrap();
+        let accepted = state.active && state.closing && observation.generation == state.generation;
+        if !accepted {
+            return None;
+        }
+        state.accrue(now);
+        state.allocated_bytes = allocated_bytes;
+        state.applied_sequence = state.applied_sequence.max(observation.sequence);
+        state.active = false;
+        state.closing = false;
+        Some(state.usage.take_settlement())
+    }
+
+    pub(crate) fn fail_observation(
+        &self,
+        observation: FilesystemUsageObservation,
+    ) -> Option<ByteTimeSettlement> {
+        let mut state = self.state.lock().unwrap();
+        let accepted = state.active
+            && !state.closing
+            && observation.generation == state.generation
+            && observation.sequence > state.applied_sequence;
+        accepted.then(|| {
+            state.active = false;
+            state.usage.take_settlement()
+        })
+    }
+
+    pub(crate) fn flush(&self, now: Instant) -> i64 {
+        let mut state = self.state.lock().unwrap();
+        state.accrue(now);
+        state.usage.take_units()
+    }
+
+    pub(crate) fn abort(&self) -> Option<ByteTimeSettlement> {
+        let mut state = self.state.lock().unwrap();
+        state.active.then(|| {
+            state.active = false;
+            state.closing = false;
+            state.usage.take_settlement()
+        })
+    }
+
+    fn next_sequence(&self) -> u64 {
+        self.sequence
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(1)
+            })
+            .expect("filesystem usage observation sequence overflowed")
+            + 1
+    }
+
+    fn record_settlement(&self, settlement: ByteTimeSettlement) {
         if let Some(entry) = self.entry.upgrade() {
-            entry.record_storage_byte_seconds(self.mode, byte_seconds);
+            entry.record_storage_settlement(self.mode, settlement);
         }
     }
 }
 
-impl State {
-    fn take_whole_byte_seconds(&mut self, now: Instant) -> i64 {
-        if now <= self.last_sample {
-            return 0;
-        }
-
-        let elapsed_nanoseconds = now.saturating_duration_since(self.last_sample).as_nanos();
-        self.last_sample = now;
-        if self.bytes == 0 {
-            return 0;
-        }
-        self.pending_byte_nanoseconds = self
-            .pending_byte_nanoseconds
-            .saturating_add((self.bytes as u128).saturating_mul(elapsed_nanoseconds));
-        if self.pending_byte_nanoseconds < 1_000_000_000 {
-            return 0;
-        }
-
-        let byte_seconds = self.pending_byte_nanoseconds / 1_000_000_000;
-        self.pending_byte_nanoseconds %= 1_000_000_000;
-        byte_seconds.min(i64::MAX as u128) as i64
+impl AgentStorageMeterState {
+    fn accrue(&mut self, now: Instant) {
+        let allocated_bytes = self.active.then_some(self.allocated_bytes).flatten();
+        self.usage.accrue(now, allocated_bytes);
     }
 }
 
-impl Drop for Inner {
+impl Drop for AgentStorageMeter {
     fn drop(&mut self) {
-        self.integrate(Instant::now());
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use proptest::prelude::*;
-    use std::time::Duration;
-    use test_r::test;
-
-    #[test]
-    fn integrates_acquire_release_and_flush() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
-
-        meter.on_acquire(5, now + Duration::from_secs(2));
-        meter.on_release(3, now + Duration::from_secs(4));
-        meter.flush(now + Duration::from_secs(5));
-
-        assert_eq!(entry.durable_byte_seconds_delta(), 62);
-    }
-
-    #[test]
-    fn meters_ephemeral_storage_separately() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Ephemeral, 10, entry.clone(), now);
-
-        meter.flush(now + Duration::from_secs(3));
-
-        assert_eq!(entry.ephemeral_byte_seconds_delta(), 30);
-        assert_eq!(entry.durable_byte_seconds_delta(), 0);
-    }
-
-    #[test]
-    fn ignores_a_stale_flush_timestamp() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
-
-        meter.on_acquire(5, now + Duration::from_secs(2));
-        meter.flush(now + Duration::from_secs(1));
-        meter.flush(now + Duration::from_secs(4));
-
-        assert_eq!(entry.durable_byte_seconds_delta(), 50);
-    }
-
-    #[test]
-    fn retains_sub_byte_second_remainder_without_division() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 1024, entry.clone(), now);
-
-        meter.flush(now + Duration::from_micros(1));
-        assert_eq!(entry.durable_byte_seconds_delta(), 0);
-
-        meter.flush(now + Duration::from_secs(1));
-        assert_eq!(entry.durable_byte_seconds_delta(), 1024);
-    }
-
-    #[test]
-    fn cloned_meter_flushes_shared_state() {
-        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-        let now = Instant::now();
-        let meter = AgentStorageMeter::new(AgentMode::Durable, 0, entry.clone(), now);
-        let flusher = meter.clone();
-
-        meter.on_acquire(10, now + Duration::from_secs(1));
-        flusher.flush(now + Duration::from_secs(3));
-
-        assert_eq!(entry.durable_byte_seconds_delta(), 20);
-    }
-
-    proptest! {
-        #[test]
-        fn integrates_arbitrary_monotonic_storage_changes(
-            operations in prop::collection::vec((0u8..3, 0u64..1024, 1u64..5), 1..100),
-        ) {
-            let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
-            let mut now = Instant::now();
-            let meter = AgentStorageMeter::new(AgentMode::Durable, 10, entry.clone(), now);
-            let mut bytes = 10u64;
-            let mut expected = 0u64;
-
-            for (operation, amount, elapsed_seconds) in operations {
-                now += Duration::from_secs(elapsed_seconds);
-                expected += bytes * elapsed_seconds;
-
-                match operation {
-                    0 => {
-                        meter.on_acquire(amount, now);
-                        bytes = bytes.saturating_add(amount);
-                    }
-                    1 => {
-                        meter.on_release(amount, now);
-                        bytes = bytes.saturating_sub(amount);
-                    }
-                    _ => meter.flush(now),
-                }
-            }
-
-            prop_assert_eq!(entry.durable_byte_seconds_delta(), expected as i64);
-        }
+        let settlement = self.state.get_mut().unwrap().usage.take_settlement();
+        self.record_settlement(settlement);
     }
 }

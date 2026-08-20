@@ -16,39 +16,36 @@ pub mod admission;
 pub mod component_charge;
 pub mod concurrent_agents_scheduler;
 pub mod concurrent_agents_semaphore;
-pub mod fs_semaphore;
 pub mod memory_probe;
 #[cfg(test)]
 mod tests;
-
-pub use concurrent_agents_scheduler::{ConcurrentAgentPermit, ConcurrentAgentsScheduler};
-pub use concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
-pub use fs_semaphore::{
-    FILESYSTEM_STORAGE_PERMIT_SIZE_KB, FilesystemStoragePermit, FilesystemStorageSemaphore,
-    bytes_to_filesystem_storage_permits, filesystem_storage_bytes_rounded_up,
-    filesystem_storage_permits_to_bytes, filesystem_storage_pool_bytes_to_permits,
-};
 
 pub(crate) use admission::MemoryGrant;
 use admission::{AdmissionController, EvictionPriority, EvictionSource};
 use async_trait::async_trait;
 pub use component_charge::HeldComponentCharge;
 use component_charge::{ChargeSource, ComponentChargeGuard, ComponentChargeRegistry};
+pub use concurrent_agents_scheduler::{ConcurrentAgentPermit, ConcurrentAgentsScheduler};
+pub use concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
 use memory_probe::{MemoryProbe, default_probe};
+use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 use tracing::{Instrument, debug};
 
 use crate::services::HasAll;
+use crate::services::agent_filesystem::{
+    AgentFilesystems, FilesystemCapacity, FilesystemStorageError, MutationOperation,
+};
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::golem_config::{
-    AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
+    AgentStatusFlushConfig, FilesystemPressureConfig, FilesystemStorageConfig, MemoryConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
-use crate::worker::Worker;
 use crate::worker::status_flusher::AgentStatusFlushQueue;
+use crate::worker::{EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, Worker};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
@@ -80,7 +77,7 @@ impl RegisteredConcurrentAccount {
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
     workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
     card_interest_index: Arc<CardInterestIndex>,
-    worker_filesystem_storage: Arc<FilesystemStorageSemaphore>,
+    agent_filesystems: Arc<AgentFilesystems>,
     concurrent_agents: Arc<ConcurrentAgentsScheduler>,
     acquire_retry_delay: Duration,
     /// Authoritative measured-headroom admission gate, and the sole admission
@@ -97,6 +94,7 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     /// module charge.
     component_size_coefficient: f64,
     status_flush_queue: Arc<AgentStatusFlushQueue>,
+    filesystem_pressure_recovery: tokio::sync::Mutex<()>,
 }
 
 /// Identifies a compiled component for module-charge accounting.
@@ -111,7 +109,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         storage_config: &FilesystemStorageConfig,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
-    ) -> Self {
+    ) -> Result<Self, FilesystemStorageError> {
         // Build the probe once and hand it to the measured-headroom gate, which
         // bases its decision on the pod's cgroup limit when constrained (not host
         // RAM).
@@ -135,7 +133,8 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         storage_config: &FilesystemStorageConfig,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
-    ) -> Self {
+    ) -> Result<Self, FilesystemStorageError> {
+        let agent_filesystems = Arc::new(AgentFilesystems::new(storage_config)?);
         let admission = memory_config.enable_measured_admission.then(|| {
             Arc::new(AdmissionController::new(
                 probe,
@@ -154,10 +153,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         let active_workers = Self {
             workers,
             card_interest_index: Arc::new(CardInterestIndex::new()),
-            worker_filesystem_storage: Arc::new(FilesystemStorageSemaphore::new(
-                storage_config.worker_filesystem_storage(),
-                storage_config.acquire_retry_delay,
-            )),
+            agent_filesystems,
             concurrent_agents: Arc::new(ConcurrentAgentsScheduler::new()),
             acquire_retry_delay: memory_config.acquire_retry_delay,
             admission,
@@ -168,14 +164,41 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 agent_status_flush_config.max_concurrency,
                 shutdown_token,
             ),
+            filesystem_pressure_recovery: tokio::sync::Mutex::new(()),
         };
         active_workers.initialize_metrics();
-        active_workers
+        Ok(active_workers)
     }
 
     /// The per-executor queue used to batch cached agent status blob writes in the background.
     pub fn status_flush_queue(&self) -> Arc<AgentStatusFlushQueue> {
         self.status_flush_queue.clone()
+    }
+
+    pub(crate) fn agent_filesystems(&self) -> Arc<AgentFilesystems> {
+        Arc::clone(&self.agent_filesystems)
+    }
+
+    pub(crate) async fn recover_filesystem_pressure(
+        &self,
+        operation: MutationOperation,
+        deadline: Instant,
+    ) -> bool {
+        let Ok(_recovery) = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            self.filesystem_pressure_recovery.lock(),
+        )
+        .await
+        else {
+            return false;
+        };
+        recover_filesystem_pressure_from(
+            self,
+            self.agent_filesystems.pressure_policy(),
+            operation,
+            deadline,
+        )
+        .await
     }
 
     /// Acquire (or share) the per-component module charge for a worker of the
@@ -410,36 +433,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         }
     }
 
-    /// Blocking acquire of storage semaphore permits. Loops until the requested
-    /// number of bytes is available, evicting idle workers as needed.
-    pub async fn acquire_filesystem_storage(&self, storage_bytes: u64) -> FilesystemStoragePermit {
-        let workers = self.workers.clone();
-        self.worker_filesystem_storage
-            .acquire(storage_bytes, || {
-                let workers = workers.clone();
-                async move { Self::try_free_up_filesystem_storage(&workers, storage_bytes).await }
-            })
-            .await
-    }
-
-    /// Non-blocking, priority storage acquire. Grabs the allocation lock to
-    /// interrupt any ongoing blocking `acquire_storage` loops, then attempts once.
-    ///
-    /// Returns `None` if the requested storage is not available even after
-    /// interrupting waiting acquires.
-    pub async fn try_acquire_filesystem_storage(
-        &self,
-        storage_bytes: u64,
-    ) -> Option<FilesystemStoragePermit> {
-        self.worker_filesystem_storage
-            .try_acquire(storage_bytes)
-            .await
-    }
-
-    pub fn filesystem_storage_semaphore(&self) -> Arc<FilesystemStorageSemaphore> {
-        self.worker_filesystem_storage.clone()
-    }
-
     /// Register an account with the per-account concurrent agent semaphore.
     ///
     /// Must be called (from `Worker::new`) before any concurrent-agent permit
@@ -459,76 +452,216 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         }
     }
 
-    async fn try_free_up_filesystem_storage(
-        workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
-        storage_bytes: u64,
-    ) -> bool {
-        let mut idle_candidates = Vec::new();
-        let mut warm_candidates = Vec::new();
-
-        debug!("Collecting storage eviction candidates");
-        for (agent_id, worker) in workers.iter().await {
-            if let Some(class) = worker.eviction_class().await
-                && let Ok(storage) = worker.filesystem_storage_requirement().await
-            {
-                let last_changed = worker.last_execution_state_change();
-                let entry = (agent_id, worker, storage, last_changed);
-                match class {
-                    crate::worker::EvictionClass::LoadedIdle => idle_candidates.push(entry),
-                    crate::worker::EvictionClass::WarmRunnable => warm_candidates.push(entry),
-                }
-            }
-        }
-
-        // Sort each bucket — newest first so we pop oldest
-        idle_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
-        idle_candidates.reverse();
-        warm_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
-        warm_candidates.reverse();
-
-        let mut freed: u64 = 0;
-
-        // First evict LoadedIdle workers
-        while freed < storage_bytes && !idle_candidates.is_empty() {
-            let (agent_id, worker, storage, _) = idle_candidates.pop().unwrap();
-            debug!("Trying to stop idle {agent_id} to free up storage");
-            if worker
-                .stop_if_evictable(crate::worker::EvictionClass::LoadedIdle)
-                .await
-            {
-                debug!("Stopped idle {agent_id}, freed {storage} bytes of storage");
-                crate::metrics::workers::record_worker_eviction("LoadedIdle");
-                freed += storage;
-            }
-        }
-
-        // Then evict WarmRunnable workers if still under pressure
-        while freed < storage_bytes && !warm_candidates.is_empty() {
-            let (agent_id, worker, storage, _) = warm_candidates.pop().unwrap();
-            debug!("Trying to stop warm-runnable {agent_id} to free up storage");
-            if worker
-                .stop_if_evictable(crate::worker::EvictionClass::WarmRunnable)
-                .await
-            {
-                debug!("Stopped warm-runnable {agent_id}, freed {storage} bytes of storage");
-                crate::metrics::workers::record_worker_eviction("WarmRunnable");
-                freed += storage;
-            }
-        }
-
-        if freed > 0 {
-            debug!("Freed {freed} bytes by evicting worker(s); re-checking availability");
-        }
-        freed >= storage_bytes
-    }
-
     /// Initializes worker gauges. Subsequent changes are recorded inline at the mutation sites.
     fn initialize_metrics(&self) {
         crate::metrics::workers::initialize_worker_metrics();
-        crate::metrics::workers::set_filesystem_semaphore_available(
-            self.worker_filesystem_storage.available_bytes(),
-        );
     }
+}
+
+struct WorkerFilesystemPressureCandidate<Ctx: WorkerCtx> {
+    agent_id: AgentId,
+    worker: Arc<Worker<Ctx>>,
+    eligibility: FilesystemPressureEligibility,
+}
+
+#[async_trait]
+trait FilesystemPressureRecoverySource {
+    type Candidate: Send;
+
+    async fn capacity(&self) -> Result<FilesystemCapacity, String>;
+    async fn candidates(&self) -> Vec<Self::Candidate>;
+    fn candidate_name(&self, candidate: &Self::Candidate) -> String;
+    async fn evict(
+        &self,
+        candidate: Self::Candidate,
+        deadline: Instant,
+    ) -> Option<EvictionStopOutcome>;
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> FilesystemPressureRecoverySource for ActiveWorkers<Ctx> {
+    type Candidate = WorkerFilesystemPressureCandidate<Ctx>;
+
+    async fn capacity(&self) -> Result<FilesystemCapacity, String> {
+        self.agent_filesystems
+            .observe_capacity()
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn candidates(&self) -> Vec<Self::Candidate> {
+        let mut candidates = Vec::new();
+        for (agent_id, worker) in self.workers.iter().await {
+            if worker.eviction_class().await == Some(EvictionClass::LoadedIdle) {
+                let Some(eligibility) = worker.filesystem_pressure_eligibility().await else {
+                    continue;
+                };
+                candidates.push((
+                    Worker::<Ctx>::filesystem_pressure_eligible_since(eligibility),
+                    agent_id.to_string(),
+                    WorkerFilesystemPressureCandidate {
+                        agent_id,
+                        worker,
+                        eligibility,
+                    },
+                ));
+            }
+        }
+        sort_filesystem_pressure_candidates(&mut candidates);
+        candidates
+            .into_iter()
+            .map(|(_, _, candidate)| candidate)
+            .collect()
+    }
+
+    fn candidate_name(&self, candidate: &Self::Candidate) -> String {
+        candidate.agent_id.to_string()
+    }
+
+    async fn evict(
+        &self,
+        candidate: Self::Candidate,
+        deadline: Instant,
+    ) -> Option<EvictionStopOutcome> {
+        let eviction = async move {
+            let outcome = candidate
+                .worker
+                .stop_if_evictable_with_outcome(
+                    EvictionClass::LoadedIdle,
+                    Some(candidate.eligibility),
+                )
+                .await;
+            if outcome == EvictionStopOutcome::Unloaded {
+                crate::metrics::workers::record_worker_eviction("FilesystemPressureLoadedIdle");
+            }
+            outcome
+        };
+        match spawn_before_deadline(deadline, eviction).await {
+            Some(Ok(outcome)) => Some(outcome),
+            Some(Err(error)) => {
+                tracing::warn!(error = %error, "Filesystem pressure eviction task failed");
+                None
+            }
+            None => None,
+        }
+    }
+}
+
+fn sort_filesystem_pressure_candidates<T>(candidates: &mut [(u64, String, T)]) {
+    candidates.sort_by(|left, right| (left.0, left.1.as_str()).cmp(&(right.0, right.1.as_str())));
+}
+
+async fn recover_filesystem_pressure_from<S: FilesystemPressureRecoverySource>(
+    source: &S,
+    policy: &FilesystemPressureConfig,
+    operation: MutationOperation,
+    deadline: Instant,
+) -> bool {
+    if Instant::now() >= deadline {
+        return false;
+    }
+    let initial = match before_deadline(deadline, source.capacity()).await {
+        Some(Ok(capacity)) => capacity,
+        Some(Err(error)) => {
+            tracing::warn!(
+                error,
+                "Failed to observe filesystem capacity before pressure recovery"
+            );
+            return false;
+        }
+        None => return false,
+    };
+    let Some(mut pressure) = policy.pressure(operation, initial) else {
+        return false;
+    };
+
+    let Some(candidates) = before_deadline(deadline, source.candidates()).await else {
+        return false;
+    };
+    for candidate in candidates {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        let candidate_name = source.candidate_name(&candidate);
+        let before = match before_deadline(deadline, source.capacity()).await {
+            Some(Ok(capacity)) => capacity,
+            Some(Err(error)) => {
+                tracing::warn!(
+                    error,
+                    "Failed to observe filesystem capacity before pressure eviction"
+                );
+                return false;
+            }
+            None => return false,
+        };
+        pressure = pressure.include(policy.pressure(operation, before));
+        if policy.target_reached(pressure, before) {
+            return true;
+        }
+
+        let Some(outcome) = source.evict(candidate, deadline).await else {
+            return false;
+        };
+        match outcome {
+            EvictionStopOutcome::Ineligible => continue,
+            EvictionStopOutcome::CleanupFailed => {
+                tracing::warn!(
+                    agent_id = candidate_name,
+                    "Filesystem pressure victim cleanup failed"
+                );
+                continue;
+            }
+            EvictionStopOutcome::Unloaded => {}
+        }
+
+        if Instant::now() >= deadline {
+            return false;
+        }
+
+        for attempt in 0..policy.reclamation_observation_attempts {
+            let after = match before_deadline(deadline, source.capacity()).await {
+                Some(Ok(capacity)) => capacity,
+                Some(Err(error)) => {
+                    tracing::warn!(
+                        error,
+                        agent_id = candidate_name,
+                        "Failed to observe filesystem capacity after pressure eviction"
+                    );
+                    return false;
+                }
+                None => return false,
+            };
+            pressure = pressure.include(policy.pressure(operation, after));
+            if policy.target_reached(pressure, after) {
+                return true;
+            }
+            if attempt + 1 < policy.reclamation_observation_attempts
+                && before_deadline(
+                    deadline,
+                    tokio::time::sleep(policy.reclamation_observation_delay),
+                )
+                .await
+                .is_none()
+            {
+                return false;
+            }
+        }
+    }
+
+    false
+}
+
+async fn before_deadline<T>(deadline: Instant, future: impl Future<Output = T>) -> Option<T> {
+    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), future)
+        .await
+        .ok()
+}
+
+async fn spawn_before_deadline<T: Send + 'static>(
+    deadline: Instant,
+    future: impl Future<Output = T> + Send + 'static,
+) -> Option<Result<T, tokio::task::JoinError>> {
+    before_deadline(deadline, tokio::spawn(future)).await
 }
 
 impl From<EvictionPriority> for crate::worker::EvictionClass {

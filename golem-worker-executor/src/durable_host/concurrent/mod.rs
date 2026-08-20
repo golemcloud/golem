@@ -28,7 +28,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::marker::PhantomData;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -62,7 +61,7 @@ use crate::durable_host::durability::{
 };
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::durable_host::{
-    AtomicRegionLease, DurableScopeKind, DurableWorkerCtx, IFSWorkerFile, PublicDurableWorkerState,
+    AtomicRegionLease, DurableScopeKind, DurableWorkerCtx, PublicDurableWorkerState,
 };
 use crate::services::HasWorker;
 use crate::services::component::ComponentService;
