@@ -259,6 +259,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     let mut pending_input_request = None;
     let mut fatal_input_failure = None;
     let mut session_identity = SessionIdentity::default();
+    let mut wire_complete = false;
 
     'session: while !state.is_complete() {
         tokio::select! {
@@ -279,7 +280,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     "invocation interrupted by the client",
                 );
                 drop(wire_tx);
-                if tokio::time::timeout(Duration::from_secs(3), &mut wire_writer).await.is_err() {
+                if !wire_complete && tokio::time::timeout(Duration::from_secs(3), &mut wire_writer).await.is_err() {
                     wire_writer.abort();
                 }
                 bail!(PipedExitCode(130));
@@ -291,9 +292,17 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     break 'session;
                 }
             }
-            result = &mut wire_writer => {
+            result = &mut wire_writer, if !wire_complete => {
                 match result {
                     Ok(Ok(())) => bail!("agent invocation session connection closed before completion"),
+                    Ok(Err(error)) if is_connection_closed(&error) => {
+                        wire_complete = true;
+                        input_cancelled.cancel();
+                        input_rx.close();
+                        while input_rx.try_recv().is_ok() {}
+                        pending_input_request = None;
+                        stdin_open = false;
+                    }
                     Ok(Err(error)) => return Err(error.into()),
                     Err(error) => return Err(error.into()),
                 }
@@ -317,7 +326,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                             "invocation output was closed by the consumer",
                         );
                         drop(wire_tx);
-                        if tokio::time::timeout(Duration::from_secs(3), &mut wire_writer).await.is_err() {
+                        if !wire_complete && tokio::time::timeout(Duration::from_secs(3), &mut wire_writer).await.is_err() {
                             wire_writer.abort();
                         }
                         return Err(error);
@@ -421,9 +430,10 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
             &failure.error.to_string(),
         );
         drop(wire_tx);
-        if tokio::time::timeout(Duration::from_secs(3), &mut wire_writer)
-            .await
-            .is_err()
+        if !wire_complete
+            && tokio::time::timeout(Duration::from_secs(3), &mut wire_writer)
+                .await
+                .is_err()
         {
             wire_writer.abort();
         }
@@ -453,9 +463,10 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
             "invocation session stopped while waiting for the server to close",
         );
         drop(wire_tx);
-        if tokio::time::timeout(Duration::from_secs(3), &mut wire_writer)
-            .await
-            .is_err()
+        if !wire_complete
+            && tokio::time::timeout(Duration::from_secs(3), &mut wire_writer)
+                .await
+                .is_err()
         {
             wire_writer.abort();
         }
@@ -467,7 +478,6 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     drop(output_tx);
     input_rx.close();
 
-    let mut wire_complete = false;
     let mut output_complete = false;
     while !wire_complete || !output_complete {
         tokio::select! {
@@ -2000,7 +2010,7 @@ fn is_connection_closed(error: &tungstenite::Error) -> bool {
     matches!(
         error,
         tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed
-    )
+    ) || matches!(error, tungstenite::Error::Io(error) if error.kind() == ErrorKind::BrokenPipe)
 }
 
 #[cfg(test)]
