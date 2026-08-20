@@ -26,8 +26,11 @@
 
 use crate::chaos::pinned::PinnedSelection;
 use crate::chaos::scheduled::ScheduledSelection;
+use crate::chaos::split::PodSplit;
 use crate::chaos::summary::{ChaosSummary, TerminationReason};
-use crate::chaos::{FaultConfig, PinnedConfig, RetryPolicy, ScheduledConfig, WorkloadConfig};
+use crate::chaos::{
+    FaultConfig, PinnedConfig, PromiseConfig, RetryPolicy, ScheduledConfig, WorkloadConfig,
+};
 use chrono::{DateTime, Utc};
 use golem_test_framework::benchmark::RunMetadata;
 use serde::{Deserialize, Serialize};
@@ -140,6 +143,15 @@ pub struct ChaosResult {
     /// control group.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduled_selection: Option<ScheduledSelection>,
+    /// The suspended-waiter workload the run was configured with, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promise: Option<PromiseConfig>,
+    /// How the promise waiters divided around the executor the fault was aimed
+    /// at. Present only for S11, and load-bearing for the same reason as
+    /// `scheduledSelection`: without it there is no way to tell the affected
+    /// population from the control group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promise_selection: Option<PodSplit>,
     pub retry_policy: RetryPolicy,
     pub scope: RunScope,
     pub summary: ChaosSummary,
@@ -209,6 +221,8 @@ mod tests {
             pinned_selection: None,
             scheduled: None,
             scheduled_selection: None,
+            promise: None,
+            promise_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "env-1".to_string(),
@@ -219,6 +233,94 @@ mod tests {
             summary: ChaosSummary::build(&[], Vec::new(), Vec::new(), None),
             run_metadata: None,
         }
+    }
+
+    /// The S11 shape. Same contract as the S10 test below, for the same reason:
+    /// `ci-scripts/chaos-investigation-report.py` in golem-cloud reads these by
+    /// name, and the two repositories cannot be changed atomically.
+    #[test]
+    fn an_s11_result_carries_the_promise_wakeup_fields_the_investigation_report_reads() {
+        use crate::chaos::history::{WaiterWakeupLog, WakeupRecord};
+        use crate::chaos::split::{FaultWindow, PodSplit};
+        use crate::chaos::wakeups::WakeupReport;
+
+        let now = Utc::now();
+        let waiter = "chaos-s11-promise-waiter-0000".to_string();
+        let split = PodSplit {
+            pod_address: "10.0.1.1:9000".to_string(),
+            pod_ip: "10.0.1.1".to_string(),
+            on_pod: vec![waiter.clone()],
+            elsewhere: Vec::new(),
+            targets_per_pod: std::collections::BTreeMap::new(),
+            number_of_shards: 1024,
+        };
+
+        let mut result = sample_result(TerminationReason::Completed);
+        result.scenario_code = "S11".to_string();
+        result.promise = Some(crate::chaos::PromiseConfig {
+            waiters: 200,
+            dwell_millis: 5000,
+            wakeup_budget_secs: 60,
+        });
+        result.promise_selection = Some(split.clone());
+        result.summary = ChaosSummary::build(&[], Vec::new(), Vec::new(), Some(now))
+            .with_promise_wakeups(WakeupReport::build(
+                &[],
+                &[WaiterWakeupLog {
+                    agent: waiter.clone(),
+                    wakes: Some(1),
+                    wakeups: vec![WakeupRecord {
+                        token: format!("{waiter}-00000001"),
+                        armed_at: now,
+                        woken_at: now + chrono::Duration::seconds(6),
+                    }],
+                    error: None,
+                }],
+                &split,
+                Some(FaultWindow {
+                    injected_at: now,
+                    recovered_at: None,
+                }),
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(60),
+                0,
+            ));
+
+        let json = serde_json::to_value(&result).unwrap();
+        let wakeups = &json["summary"]["promiseWakeups"];
+        for key in [
+            "wakeupBudgetMs",
+            "dwellMs",
+            "completionsConfirmed",
+            "completionsIndeterminate",
+            "completionsRejected",
+            "wakeupsRecorded",
+            "wokeOnce",
+            "indeterminateThatWoke",
+            "inconclusive",
+            "unverifiable",
+            "unknownTokens",
+            "waitersUnreadable",
+            "waitersTruncated",
+            "waitersStoodDown",
+            "waitersWedged",
+            "delay",
+            "findings",
+            "findingsOmitted",
+        ] {
+            assert!(
+                !wakeups[key].is_null(),
+                "summary.promiseWakeups.{key} is what the investigation report reads"
+            );
+        }
+        assert_eq!(json["promise"]["wakeupBudgetSecs"], 60);
+        assert_eq!(json["promiseSelection"]["podIp"], "10.0.1.1");
+
+        // And it still round-trips, so an archived S11 result stays readable.
+        let parsed: ChaosResult = serde_json::from_str(&json.to_string()).unwrap();
+        assert_eq!(parsed.scenario_code, "S11");
+        assert!(parsed.summary.promise_wakeups.is_some());
+        assert!(parsed.promise_selection.is_some());
     }
 
     /// The S10 shape, whose report is read by a script in another repository.
@@ -554,6 +656,8 @@ mod sample_artifact {
             pinned_selection: None,
             scheduled: None,
             scheduled_selection: None,
+            promise: None,
+            promise_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),
@@ -766,6 +870,8 @@ mod sample_artifact {
                 .collect(),
                 number_of_shards: 1024,
             }),
+            promise: None,
+            promise_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),

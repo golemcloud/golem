@@ -46,18 +46,12 @@
 
 use crate::chaos::ScheduledConfig;
 use crate::chaos::history::{FireRecord, Stream, TargetFireLog};
-use crate::chaos::pinned::{owners_by_pod, pod_ip_of};
-use crate::chaos::workload::{
-    self, SCHEDULE_COUNTER_AGENT, SCHEDULE_EMITTER_AGENT, WorkloadContext,
-};
-use anyhow::Context;
+use crate::chaos::workload::{self, SCHEDULE_EMITTER_AGENT, WorkloadContext};
 use chrono::{DateTime, Utc};
 use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
+use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -78,157 +72,36 @@ pub const MAX_IN_FLIGHT_PER_TARGET: usize = 8;
 /// maintenance window.
 const READ_CONCURRENCY: usize = 16;
 
-/// The smallest share of targets one executor must own for the run to mean
-/// anything, as a divisor of the target count.
+/// The executor S10 aims at, and how its targets divide around it.
 ///
-/// A two-executor cluster splits a hashed population roughly evenly, so a quarter
-/// is a floor rather than an expectation. Below it the "affected" group is too
-/// small for its percentile to say anything, and a run that reported one anyway
-/// would be worse than one that refused.
-const MIN_TARGET_SHARE_DIVISOR: usize = 4;
+/// An alias rather than a type of its own: S11 splits its waiters exactly the
+/// same way, the logic lives in [`crate::chaos::split`], and the name is kept
+/// here because `scheduledSelection` is the key the archived result and the
+/// golem-cloud report both read.
+pub type ScheduledSelection = crate::chaos::split::PodSplit;
 
-/// The executor the fault will be aimed at, and how the targets divide around
-/// it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScheduledSelection {
-    /// The executor endpoint as the shard-manager names it, e.g.
-    /// `10.0.14.207:9000`.
-    pub pod_address: String,
-    /// Host part of the address, which is what a Kubernetes `status.podIP`
-    /// field selector matches.
-    pub pod_ip: String,
-    /// Targets this executor owns. The population whose actions have to survive
-    /// a lease recovery.
-    pub on_pod: Vec<String>,
-    /// Targets owned by any other executor: the run's own control group.
-    pub elsewhere: Vec<String>,
-    /// How the targets spread across executors, so a run that refused to
-    /// proceed says whether the cluster was lopsided or the pool too small.
-    pub targets_per_pod: BTreeMap<String, usize>,
-    /// Shard count the routing table reported. Ownership is a hash modulo this,
-    /// so a selection cannot be re-derived later without it.
-    pub number_of_shards: usize,
-}
-
-/// Chooses the executor to aim at: the one owning the largest share of targets.
-///
-/// Fails rather than proceeding unaimed. Chaos Mesh's `mode: one` would pick a
-/// pod at random, and a run that killed an executor owning six targets out of a
-/// hundred would still produce a confident-looking report about lease recovery.
+/// Chooses the executor to aim at. See [`crate::chaos::split::select`].
 pub async fn select(
     ctx: &WorkloadContext,
     deps: &BenchmarkTestDependencies,
     targets: &[String],
 ) -> anyhow::Result<ScheduledSelection> {
-    let table = deps
-        .shard_manager()
-        .get_routing_table()
-        .await
-        .context("reading the routing table to aim the scheduled fault")?;
-
-    let by_pod = owners_by_pod(ctx, &table, SCHEDULE_COUNTER_AGENT, targets);
-    let targets_per_pod: BTreeMap<String, usize> = by_pod
-        .iter()
-        .map(|(pod, xs)| (pod.clone(), xs.len()))
-        .collect();
-
-    let (pod_address, on_pod) = by_pod
-        .iter()
-        .max_by_key(|(_, agents)| agents.len())
-        .map(|(pod, agents)| (pod.clone(), agents.clone()))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "routing table assigned none of the {} schedule targets to any executor",
-                targets.len()
-            )
-        })?;
-
-    let floor = (targets.len() / MIN_TARGET_SHARE_DIVISOR).max(1);
-    if on_pod.len() < floor {
-        anyhow::bail!(
-            "the most-loaded executor owns only {} of {} schedule targets, below the {floor} \
-             needed for its share to be worth measuring: {targets_per_pod:?}",
-            on_pod.len(),
-            targets.len()
-        );
-    }
-
-    let elsewhere: Vec<String> = targets
-        .iter()
-        .filter(|t| !on_pod.contains(t))
-        .cloned()
-        .collect();
-
-    info!(
-        "S10: aiming at executor {pod_address}, which owns {} of {} schedule targets ({} \
-         elsewhere, across {} executors)",
-        on_pod.len(),
-        targets.len(),
-        elsewhere.len(),
-        targets_per_pod.len()
-    );
-
-    Ok(ScheduledSelection {
-        pod_ip: pod_ip_of(&pod_address),
-        pod_address,
-        on_pod,
-        elsewhere,
-        targets_per_pod,
-        number_of_shards: table.number_of_shards.value,
-    })
+    crate::chaos::split::select(crate::chaos::split::schedule_subject(ctx), deps, targets).await
 }
 
-/// Re-checks, against a freshly read routing table, that the targets are still
-/// divided the way the selection says.
-///
-/// Called immediately before the readiness signal, for the same reason S8 does
-/// it: a rebalance between selection and injection would leave the run reporting
-/// a control group that was actually the affected one.
+/// Re-checks the division immediately before injection. See
+/// [`crate::chaos::split::verify_ownership`].
 pub async fn verify_ownership(
     ctx: &WorkloadContext,
     deps: &BenchmarkTestDependencies,
     selection: &ScheduledSelection,
 ) -> anyhow::Result<()> {
-    let table = deps
-        .shard_manager()
-        .get_routing_table()
-        .await
-        .context("re-reading the routing table to verify scheduled target ownership")?;
-
-    let mut drifted = Vec::new();
-    for agent in &selection.on_pod {
-        let owner = table
-            .lookup(&crate::chaos::pinned::routing_agent_id(
-                ctx,
-                SCHEDULE_COUNTER_AGENT,
-                agent,
-            ))
-            .map(|pod| pod.to_string());
-        if owner.as_deref() != Some(selection.pod_address.as_str()) {
-            drifted.push(format!(
-                "{agent} now owned by {}",
-                owner.unwrap_or_else(|| "nobody".to_string())
-            ));
-        }
-    }
-
-    if !drifted.is_empty() {
-        anyhow::bail!(
-            "{} of {} schedule targets are no longer owned by {}: {}",
-            drifted.len(),
-            selection.on_pod.len(),
-            selection.pod_address,
-            drifted.join(", ")
-        );
-    }
-
-    info!(
-        "S10: verified all {} schedule targets are still owned by {}",
-        selection.on_pod.len(),
-        selection.pod_address
-    );
-    Ok(())
+    crate::chaos::split::verify_ownership(
+        crate::chaos::split::schedule_subject(ctx),
+        deps,
+        selection,
+    )
+    .await
 }
 
 /// A running registration workload. As elsewhere, dropping the handle does not

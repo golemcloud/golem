@@ -52,6 +52,7 @@ use crate::chaos::fires::ScheduleFireReport;
 use crate::chaos::history::{Outcome, Phase, Stream};
 use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::probe::KeyProbe;
+use crate::chaos::wakeups::WakeupReport;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -566,6 +567,11 @@ pub struct ChaosSummary {
     /// found".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_fires: Option<ScheduleFireReport>,
+    /// The promise-wakeup account, for scenarios that pair completions against
+    /// the waiters they were supposed to resume. Absent for scenarios that do
+    /// not, for the same reason as `scheduleFires`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promise_wakeups: Option<WakeupReport>,
     /// Shard-ownership samples, in the order they were taken. Empty for
     /// scenarios that do not sample executor assignments.
     ///
@@ -696,6 +702,7 @@ impl ChaosSummary {
             routing_snapshots,
             exactly_once: None,
             schedule_fires: None,
+            promise_wakeups: None,
             ownership: Vec::new(),
             attention,
             notes: Vec::new(),
@@ -737,6 +744,21 @@ impl ChaosSummary {
         self.attention.extend(report.attention_lines());
         self.notes.extend(report.note_lines());
         self.schedule_fires = Some(report);
+        self
+    }
+
+    /// Attaches the promise-wakeup account and hoists everything it wants a
+    /// human to see into [`Self::attention`].
+    ///
+    /// Same split as [`Self::with_schedule_fires`], and one extra reason for it:
+    /// a waiter that could not be read is normally the weakest outcome there is,
+    /// but for a suspended waiter it can be the strongest evidence in the run.
+    /// The report decides which, and only what it classifies as attention lands
+    /// there.
+    pub fn with_promise_wakeups(mut self, report: WakeupReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.promise_wakeups = Some(report);
         self
     }
 
@@ -794,6 +816,12 @@ pub enum TerminationReason {
     /// action paired with one named registration, with no band of doubt around
     /// it. See [`crate::chaos::fires`].
     ScheduledFireViolated { findings: u64, first: String },
+    /// A promise completion the platform accepted never woke its waiter, woke it
+    /// twice, or woke it after being refused. Asserted for the same reason as
+    /// [`Self::ScheduledFireViolated`]: each is a statement about one named
+    /// completion paired with one named waiter, with no band of doubt around it.
+    /// See [`crate::chaos::wakeups`].
+    PromiseWakeupViolated { findings: u64, first: String },
     /// An agent's durable state did not survive a component update. Asserted
     /// because an update is supposed to change what an agent runs and nothing
     /// about what it remembers — state that moved is the one outcome an update
@@ -1066,12 +1094,19 @@ mod tests {
 
     /// A reader must never have to wonder whether a stream was skipped or just
     /// had nothing to say.
+    ///
+    /// The waiter stream is here for a different reason from the other two, and
+    /// the distinction is worth keeping straight: those two have no durable
+    /// count to read, while this one has a count that is *weaker* than what the
+    /// scenario already does with it. Its absence from the count-based read-back
+    /// means the token pairing in `promiseWakeups` is the account, not that
+    /// nothing was checked.
     #[test]
     fn streams_without_readback_are_named_rather_than_omitted() {
         let summary = ChaosSummary::build(&[], Vec::new(), Vec::new(), None);
         assert_eq!(
             summary.streams_without_readback,
-            vec![Stream::Ephemeral, Stream::Promise]
+            vec![Stream::Ephemeral, Stream::Promise, Stream::PromiseWait]
         );
     }
 

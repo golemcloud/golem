@@ -43,7 +43,10 @@ pub mod result;
 pub mod scenarios;
 pub mod scheduled;
 pub mod signal;
+pub mod split;
 pub mod summary;
+pub mod waiters;
+pub mod wakeups;
 pub mod workload;
 
 use anyhow::Context;
@@ -67,6 +70,8 @@ pub enum ScenarioCode {
     S13,
     /// Executor pod kill while scheduled actions are between claim and fire.
     S10,
+    /// Executor pod kill while agents are suspended on promises being completed.
+    S11,
 }
 
 impl ScenarioCode {
@@ -78,17 +83,19 @@ impl ScenarioCode {
             ScenarioCode::S12 => "S12",
             ScenarioCode::S13 => "S13",
             ScenarioCode::S10 => "S10",
+            ScenarioCode::S11 => "S11",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 6] = [
+    pub const ALL: [ScenarioCode; 7] = [
         ScenarioCode::S1,
         ScenarioCode::S5,
         ScenarioCode::S8,
         ScenarioCode::S10,
+        ScenarioCode::S11,
         ScenarioCode::S12,
         ScenarioCode::S13,
     ];
@@ -352,6 +359,50 @@ impl ScheduledConfig {
     }
 }
 
+/// Shape of the suspended-waiter workload (GOL-377).
+///
+/// The fourth experiment shape, and the only one whose agents are *asleep* when
+/// the fault lands. [`ScheduledConfig`] leaves work with the platform and walks
+/// away; this one leaves an agent parked mid-invocation on a promise, so the
+/// thing that has to survive the kill is not a queued action but a suspended
+/// worker and the completion on its way to it.
+///
+/// The number that decides whether the run measures anything is `waiters`: each
+/// one holds exactly one promise at a time, so the pool size *is* the population
+/// standing parked at the instant the pod dies. `dwellMillis` decides how much
+/// of that population is also mid-completion — see [`crate::chaos::waiters`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromiseConfig {
+    /// Waiter agents, each parked on at most one promise at a time. Also the
+    /// resolution of the report: a finding localises to one waiter out of this
+    /// many.
+    pub waiters: u32,
+    /// How long a waiter stays parked before its promise is completed.
+    ///
+    /// Sets the completion rate — `waiters / dwell` — and, with it, how many
+    /// completions are genuinely in flight when the pod dies. It has to
+    /// comfortably exceed the workflow's inject-and-verify path (signal poll,
+    /// `kubectl apply`, waiting for `AllInjected`) or every promise armed before
+    /// the kill would already have been completed by the time it landed.
+    pub dwell_millis: u64,
+    /// What resuming a suspended waiter is allowed to cost, which the wakeup
+    /// delay percentiles are reported against. An SLO the run records rather
+    /// than a threshold it fails on: the floor is a shard reassignment plus the
+    /// worker recovery that replays the waiter's oplog, and how much more than
+    /// that is acceptable is a judgement.
+    pub wakeup_budget_secs: u64,
+}
+
+impl PromiseConfig {
+    pub fn dwell(&self) -> Duration {
+        Duration::from_millis(self.dwell_millis)
+    }
+    pub fn wakeup_budget(&self) -> Duration {
+        Duration::from_secs(self.wakeup_budget_secs)
+    }
+}
+
 /// One step of the executor scale schedule the workflow runs during the fault.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -427,6 +478,9 @@ pub struct ScenarioConfig {
     /// run one.
     #[serde(default)]
     pub scheduled: Option<ScheduledConfig>,
+    /// The suspended-waiter workload. Absent for scenarios that do not run one.
+    #[serde(default)]
+    pub promise: Option<PromiseConfig>,
     /// Shard-ownership oracle settings. Absent for scenarios that do not sample
     /// executor assignments.
     #[serde(default)]
@@ -485,6 +539,16 @@ impl ScenarioConfig {
         self.scheduled.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "chaos scenario {} needs a `scheduled` block in the suite YAML",
+                self.code
+            )
+        })
+    }
+
+    /// The suspended-waiter block. See [`Self::require_workload`].
+    pub fn require_promise(&self) -> anyhow::Result<&PromiseConfig> {
+        self.promise.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs a `promise` block in the suite YAML",
                 self.code
             )
         })
@@ -624,6 +688,7 @@ mod tests {
                 }),
                 pinned: None,
                 scheduled: None,
+                promise: None,
                 ownership: None,
                 scale_during_fault: None,
                 retry_policy: RetryPolicy::default(),
@@ -724,6 +789,9 @@ mod tests {
                 }
                 ScenarioCode::S10 => {
                     entry.require_scheduled().unwrap();
+                }
+                ScenarioCode::S11 => {
+                    entry.require_promise().unwrap();
                 }
             }
         }

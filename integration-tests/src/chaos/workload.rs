@@ -181,6 +181,12 @@ impl WorkloadContext {
         format!("{}-scheduled-target-{index:04}", self.key_prefix)
     }
 
+    /// The suspended-waiter scenario's agent, in the promise component rather
+    /// than the counters one (GOL-377).
+    pub fn waiter_name(&self, index: u32) -> String {
+        format!("{}-promise-waiter-{index:04}", self.key_prefix)
+    }
+
     /// The deterministic key for one operation. Same inputs, same key — that is
     /// what makes a retry the same operation rather than a new one.
     pub fn idempotency_key(&self, agent: &str, seq: u64) -> String {
@@ -484,6 +490,12 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
         // means a caller wired it up by hand.
         Stream::PinnedHttp => {
             warn!("Chaos mixed workload cannot drive the pinned stream; see chaos::pinned");
+        }
+        // Driven by `crate::chaos::waiters` for the same reason: its agents run
+        // a round at their own pace rather than at a shared rate, and each one
+        // is blocked until its promise resolves.
+        Stream::PromiseWait => {
+            warn!("Chaos mixed workload cannot drive the waiter stream; see chaos::waiters");
         }
         Stream::Durable => {
             let agent = ctx.agent_name(Stream::Durable, index);

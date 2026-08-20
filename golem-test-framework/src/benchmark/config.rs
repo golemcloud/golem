@@ -244,6 +244,8 @@ pub enum ChaosScenarioArg {
     S13,
     /// Executor pod kill while scheduled actions are between claim and fire.
     S10,
+    /// Executor pod kill while agents are suspended on promises being completed.
+    S11,
 }
 
 /// Density subcommand action.

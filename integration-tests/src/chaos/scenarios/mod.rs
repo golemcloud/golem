@@ -27,6 +27,7 @@
 
 pub mod s1;
 pub mod s10;
+pub mod s11;
 pub mod s12;
 pub mod s13;
 pub mod s5;
@@ -81,6 +82,9 @@ pub struct ScenarioOutcome {
     /// Present only for S10, which divides its targets around the executor the
     /// fault was aimed at rather than driving only the ones it owns.
     pub scheduled_selection: Option<ScheduledSelection>,
+    /// Present only for S11, which divides its waiters around the executor the
+    /// fault was aimed at the same way S10 divides its targets.
+    pub promise_selection: Option<crate::chaos::split::PodSplit>,
 }
 
 /// Assembles the archived result.
@@ -106,6 +110,8 @@ pub fn build_result(config: &ScenarioConfig, outcome: ScenarioOutcome) -> ChaosR
         pinned_selection: outcome.pinned_selection,
         scheduled: config.scheduled.clone(),
         scheduled_selection: outcome.scheduled_selection,
+        promise: config.promise.clone(),
+        promise_selection: outcome.promise_selection,
         retry_policy: config.retry_policy.clone(),
         scope: outcome.scope,
         summary: outcome.summary,
