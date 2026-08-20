@@ -1185,54 +1185,51 @@ async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
 /// A connection attempt outlives its callers by design, so that losing them does
 /// not strand it mid-connect. This is the other half of that bargain: when the
 /// attempt succeeds after everyone has gone, the connection it made must end up
-/// somewhere the next caller can find it. Otherwise it sits open with nobody able
-/// to use it, pinging away, until some later call happens to replace it.
+/// somewhere the next caller can find it, rather than sitting open with nobody
+/// able to use it.
+///
+/// Getting a connect to succeed slowly, so it can be cancelled while still in
+/// flight, is done by dropping the first SYN and then letting the retransmit
+/// through. `netem` would be the obvious tool and is not usable here: the
+/// `sch_netem` module cannot be loaded from inside a user namespace, so CI has
+/// no qdisc to offer.
 #[test]
 async fn a_connection_nobody_waited_for_is_still_reused() {
     if delegated_to_namespace(test_name!()) {
         return;
     }
-    // Slow the loopback so a connect can be cancelled while it is still in
-    // flight. Without this the handshake completes far too fast to interleave.
-    let tc = std::process::Command::new("tc")
-        .args([
-            "qdisc", "add", "dev", "lo", "root", "netem", "delay", "300ms",
-        ])
-        .output()
-        .expect("tc must be available; it comes with iproute2");
-    assert!(
-        tc.status.success(),
-        "tc: {}",
-        String::from_utf8_lossy(&tc.stderr)
-    );
 
     let peer = serve_grpc().await;
+    let port = peer.addr.port().to_string();
     let uri: Uri = format!("http://{}", peer.addr).parse().unwrap();
+
+    // Comfortably longer than the ~1s the kernel waits before retransmitting the
+    // first SYN, so the attempt is still alive when the rule is lifted.
     let mut cfg = config();
     cfg.connect_timeout = Duration::from_secs(5);
     let client = executor_client(cfg);
 
-    let abandoned = tokio::spawn({
+    let silenced = blackhole_port(&port);
+    let caller = tokio::spawn({
         let client = client.clone();
         let uri = uri.clone();
         async move { ping(&client, uri).await }
     });
-    // Cancel while the handshake is still crossing the delayed loopback.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    abandoned.abort();
 
-    // Long enough for the attempt to finish on its own.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // Cancelled while its SYN is still going unanswered, so the attempt is left
+    // with nobody waiting on it.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    caller.abort();
+
+    // The peer starts answering again. The retransmitted SYN gets through and
+    // the attempt, still being driven, connects with no caller left to want it.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(silenced);
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     let outcome = ping(&client, uri).await;
     let connections = peer.connections.load(std::sync::atomic::Ordering::SeqCst);
-    eprintln!(
-        "[ORPHAN] call after the abandoned one used {connections} connection(s): {outcome:?}"
-    );
-
-    let _ = std::process::Command::new("tc")
-        .args(["qdisc", "del", "dev", "lo", "root"])
-        .output();
+    eprintln!("[ORPHAN] call after the abandoned one used {connections} connection(s)");
 
     assert_eq!(
         outcome.err().map(|e| e.code()),
@@ -1241,8 +1238,8 @@ async fn a_connection_nobody_waited_for_is_still_reused() {
     );
     assert_eq!(
         connections, 1,
-        "the abandoned attempt's connection was not reused; it opened \
-         {connections} connections where one would do"
+        "the abandoned attempt's connection was not reused: {connections} \
+         connections were opened where one would do"
     );
 }
 
