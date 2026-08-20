@@ -174,18 +174,16 @@ fn reveal_error_to_wit(error: SecretRevealError) -> SecretError {
 }
 
 impl<T: Send + 'static, Ctx: WorkerCtx> HostSecretWithStore<T> for CoreTypesHost<Ctx> {
-    fn drop(
+    async fn drop(
         accessor: &Accessor<T, Self>,
         rep: Resource<SecretHandleRep>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send {
-        async move {
-            accessor.with(|mut access| {
-                let ctx = access.get();
-                DurabilityHost::observe_function_call(ctx, "golem::core::secret", "drop");
-                ctx.table().delete(rep)?;
-                Ok(())
-            })
-        }
+    ) -> anyhow::Result<()> {
+        accessor.with(|mut access| {
+            let ctx = access.get();
+            DurabilityHost::observe_function_call(ctx, "golem::core::secret", "drop");
+            ctx.table().delete(rep)?;
+            Ok(())
+        })
     }
 }
 

@@ -849,7 +849,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             observational_owner,
         };
         let is_live = durable_execution_state.is_live;
-        let unpersisted = durable_execution_state.is_unpersisted_execution;
+        let unpersisted = durable_execution_state.snapshotting_mode
+            || durable_execution_state.is_unpersisted_execution;
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
         // A live persisted call initiated inside an open atomic region joins the region's member
@@ -2733,7 +2734,7 @@ where
         (
             opens_scope,
             is_live,
-            ctx.is_unpersisted_execution(),
+            ctx.state.durability_is_suppressed(),
             replay_handle,
             ctx.state.replay_state.clone(),
             ctx.state.oplog.clone(),
@@ -2890,22 +2891,24 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (is_live, is_unpersisted_execution, worker, replay_state) = store.with(|mut access| {
+    let (is_live, durability_is_suppressed, worker, replay_state) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
         (
             ctx.state.is_live(),
-            ctx.is_unpersisted_execution(),
+            ctx.state.durability_is_suppressed(),
             ctx.public_state.worker(),
             ctx.state.replay_state.clone(),
         )
     });
 
-    if is_live && !is_unpersisted_execution {
-        worker
-            .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
-            .await;
-    } else if !is_live {
-        crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
+    if !durability_is_suppressed {
+        if is_live {
+            worker
+                .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
+                .await;
+        } else {
+            crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
+        }
     }
 
     store.with(|mut access| {
@@ -3382,23 +3385,22 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     }
 
     /// Second phase on the live path: upload the request and append the eager host-call `Start`
-    /// (or, during an unpersisted execution, persist nothing).
+    /// (or, while durability is suppressed, persist nothing).
     pub async fn start_live<Ctx: WorkerCtx>(
         self,
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
     ) -> Result<CallHandle<Pair, P>, WorkerExecutorError> {
         debug_assert!(self.is_live(), "start_live() called on a replay handle");
-        let is_unpersisted_execution = self
-            .retry
-            .durable_execution_state()
-            .is_unpersisted_execution;
+        let durable_execution_state = self.retry.durable_execution_state();
+        let durability_is_suppressed = durable_execution_state.snapshotting_mode
+            || durable_execution_state.is_unpersisted_execution;
         // The host-call `Start` nests inside the enclosing durable scope captured at initiation
         // (its own opened scope, or the scope encoded in the function type), derived explicitly —
         // never from the set of temporally-open sibling scopes. `None` for a top-level unscoped call.
         let parent_start_index = self.execution_scope.parent_start_index;
-        let (start_idx, persisted, request_upload) = if is_unpersisted_execution {
-            // Unpersisted execution writes no durable call records.
+        let (start_idx, persisted, request_upload) = if durability_is_suppressed {
+            // Snapshot and unpersisted execution write no durable call records.
             let oplog = ctx.state.oplog.clone();
             (
                 oplog.current_oplog_index().await,

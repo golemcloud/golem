@@ -161,7 +161,7 @@ fn invocation_session_websocket_config() -> WebSocketConfig {
 
 #[derive(Debug)]
 enum PublicSessionMessage {
-    Request(PublicInvocationRequest),
+    Request(Box<PublicInvocationRequest>),
     Ping(Vec<u8>),
     Pong,
     Close,
@@ -169,7 +169,7 @@ enum PublicSessionMessage {
 
 enum InitialPublicInvocation {
     Start(
-        PublicInvocationStart,
+        Box<PublicInvocationStart>,
         Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
     ),
     Closed,
@@ -187,6 +187,7 @@ fn decode_public_session_message(
 ) -> std::result::Result<PublicSessionMessage, PublicSessionFrameError> {
     match message {
         Message::Binary(bytes) => PublicInvocationRequest::decode(bytes.as_slice())
+            .map(Box::new)
             .map(PublicSessionMessage::Request)
             .map_err(|error| PublicSessionFrameError {
                 close_code: CloseCode::Protocol,
@@ -225,7 +226,7 @@ async fn proxy_public_invocation_session(
     )
     .await
     {
-        InitialPublicInvocation::Start(start, idempotency_key) => (start, idempotency_key),
+        InitialPublicInvocation::Start(start, idempotency_key) => (*start, idempotency_key),
         InitialPublicInvocation::Closed => {
             drop(websocket_sender);
             let _ = writer.await;
@@ -291,7 +292,7 @@ where
     tokio::select! {
         result = &mut receive => match result {
             Some((start, idempotency_key)) => {
-                InitialPublicInvocation::Start(start, idempotency_key)
+                InitialPublicInvocation::Start(Box::new(start), idempotency_key)
             }
             None => InitialPublicInvocation::Closed,
         },
@@ -313,7 +314,7 @@ where
     let first_request = loop {
         match websocket_stream.next().await {
             Some(Ok(message)) => match decode_public_session_message(message) {
-                Ok(PublicSessionMessage::Request(request)) => break request,
+                Ok(PublicSessionMessage::Request(request)) => break *request,
                 Ok(PublicSessionMessage::Ping(payload)) => {
                     if matches!(
                         websocket_sender.try_send(Message::pong(payload)),
@@ -503,7 +504,7 @@ async fn read_public_requests<S>(
             Err(_) => return,
         };
         let request = match decode_public_session_message(message) {
-            Ok(PublicSessionMessage::Request(request)) => request,
+            Ok(PublicSessionMessage::Request(request)) => *request,
             Ok(PublicSessionMessage::Ping(payload)) => {
                 if matches!(
                     websocket_sender.try_send(Message::pong(payload)),
@@ -891,7 +892,7 @@ mod tests {
 
         assert!(matches!(
             decoded,
-            PublicSessionMessage::Request(PublicInvocationRequest {
+            PublicSessionMessage::Request(request) if matches!(*request, PublicInvocationRequest {
                 request: Some(public_invocation_request::Request::InputEnd(
                     InputStreamEnd {
                         stream_id: 7,

@@ -2672,7 +2672,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .write()
             .await
             .push_back(QueuedWorkerInvocation::LiveStreamingInvocation {
-                invocation,
+                invocation: Box::new(invocation),
                 sender,
                 cancellation: cancellation.clone(),
             });
@@ -5210,12 +5210,12 @@ mod tests {
         let (sender, receiver) = oneshot::channel();
         let mut queue = VecDeque::from([
             QueuedWorkerInvocation::LiveStreamingInvocation {
-                invocation: AgentInvocation::AgentInitialization {
+                invocation: Box::new(AgentInvocation::AgentInitialization {
                     idempotency_key: IdempotencyKey::fresh(),
                     input: golem_common::schema::SchemaValue::Record { fields: Vec::new() },
                     invocation_context: InvocationContextStack::fresh(),
                     principal: Principal::anonymous(),
-                },
+                }),
                 sender,
                 cancellation: tokio_util::sync::CancellationToken::new(),
             },
@@ -5403,7 +5403,7 @@ pub enum QueuedWorkerInvocation {
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
     LiveStreamingInvocation {
-        invocation: AgentInvocation,
+        invocation: Box<AgentInvocation>,
         sender: oneshot::Sender<Result<golem_common::schema::SchemaValue, WorkerExecutorError>>,
         cancellation: tokio_util::sync::CancellationToken,
     },

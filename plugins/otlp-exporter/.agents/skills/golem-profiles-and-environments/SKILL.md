@@ -42,7 +42,9 @@ Profiles are global CLI configuration stored in `~/.golem/config.json`. They def
 
 ```shell
 golem profile new                          # Interactive setup
-golem profile new my-staging --url https://staging.example.com --static-token "..."
+golem profile new my-staging --url https://staging.example.com                 # OAuth2 (default)
+golem profile new my-staging --url https://staging.example.com --auth static   # static token (prompted, masked)
+golem profile new my-staging --url https://staging.example.com --static-token "..."  # static token inline
 golem profile list                         # List all profiles
 golem profile switch my-staging            # Set active profile
 golem profile get                          # Show active profile
@@ -50,6 +52,11 @@ golem profile get my-staging               # Show specific profile
 golem profile delete my-staging            # Delete a profile
 golem profile config my-staging set-format json  # Set default output format
 ```
+
+Authentication mode is explicit via `--auth`: `oauth2` (default — interactive
+browser login on first use) or `static` (a pre-issued token). Passing
+`--static-token` implies `--auth static`; `--auth static` without a token
+prompts for one (masked). A token cannot be combined with `--auth oauth2`.
 
 ### Global flags
 
@@ -118,7 +125,7 @@ environments:
 
 ### Server options
 
-- `local` — built-in local server (`http://localhost:9881`)
+- `local` — built-in local server (`http://localhost:9881` by default, configurable through manifest `localServer.routerAddr` and `localServer.routerPort`)
 - `cloud` — Golem Cloud (`https://release.api.golem.cloud`) with OAuth2
 - Custom object with `url`, optional `workerUrl`, optional `allowInsecure`, and `auth` (`oauth2: true` or `staticToken: "..."`)
 

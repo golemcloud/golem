@@ -590,10 +590,12 @@ fn subtree_client_macro_keep_param(
         let name = canonical_value_name(ir, cmd, param, tool_name);
         let aliases = canonical_param_aliases(ir, cmd, param, tool_name);
         let aliases = aliases.iter();
+        let short = option_char_tokens(canonical_param_short(ir, cmd, param, tool_name));
         quote! {
             $inherited_prefix.push(golem_rust::agentic::CanonicalInputValue {
                 name: #name.to_string(),
                 aliases: ::std::vec![#(#aliases.to_string()),*],
+                short: #short,
                 schema: <#ty as golem_rust::agentic::Schema>::get_type()
                     .get_schema_graph()
                     .expect("tool parameter must have a concrete schema graph"),
@@ -921,10 +923,12 @@ fn prefix_value_builders(
             let name = canonical_value_name(ir, cmd, param, tool_name);
             let aliases = canonical_param_aliases(ir, cmd, param, tool_name);
             let aliases = aliases.iter();
+            let short = option_char_tokens(canonical_param_short(ir, cmd, param, tool_name));
             Some(quote! {
                 __inherited_prefix.push(golem_rust::agentic::CanonicalInputValue {
                     name: #name.to_string(),
                     aliases: ::std::vec![#(#aliases.to_string()),*],
+                    short: #short,
                     schema: <#ty as golem_rust::agentic::Schema>::get_type()
                         .get_schema_graph()
                         .expect("tool parameter must have a concrete schema graph"),
@@ -1025,6 +1029,36 @@ fn canonical_param_aliases(
     param_aliases(cmd, param)
 }
 
+fn canonical_param_short(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    param: &ParamIr,
+    tool_name: &str,
+) -> Option<char> {
+    let own_name = to_kebab_case(&param.ident.to_string());
+    if let Some(root) = ir
+        .commands
+        .iter()
+        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
+    {
+        for root_param in &root.params {
+            if !is_global_param(root, root_param) {
+                continue;
+            }
+            let root_name = to_kebab_case(&root_param.ident.to_string());
+            if param_surfaces_intersect(
+                &root_name,
+                &param_aliases(root, root_param),
+                &own_name,
+                &param_aliases(cmd, param),
+            ) {
+                return param_short(root, root_param);
+            }
+        }
+    }
+    param_short(cmd, param)
+}
+
 fn param_surfaces_intersect(
     left_name: &str,
     left_aliases: &[String],
@@ -1045,6 +1079,20 @@ fn param_aliases(cmd: &CommandIr, param: &ParamIr) -> Vec<String> {
         .find(|arg| arg.param == param.ident)
         .map(|arg| arg.aliases.clone())
         .unwrap_or_default()
+}
+
+fn param_short(cmd: &CommandIr, param: &ParamIr) -> Option<char> {
+    cmd.args
+        .iter()
+        .find(|arg| arg.param == param.ident)
+        .and_then(|arg| arg.short)
+}
+
+fn option_char_tokens(value: Option<char>) -> TokenStream {
+    match value {
+        Some(value) => quote! { ::std::option::Option::Some(#value) },
+        None => quote! { ::std::option::Option::None },
+    }
 }
 
 fn is_global_param(cmd: &CommandIr, param: &ParamIr) -> bool {

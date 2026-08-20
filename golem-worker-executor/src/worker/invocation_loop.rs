@@ -1070,7 +1070,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 sender,
                 cancellation,
             } => {
-                self.invoke_live_streaming(invocation, sender, cancellation)
+                self.invoke_live_streaming(*invocation, sender, cancellation)
                     .await
             }
             QueuedWorkerInvocation::SaveSnapshot => self.save_snapshot().await,

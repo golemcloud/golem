@@ -1844,7 +1844,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
     fn durable_execution_state(&self) -> DurableExecutionState {
         let is_unpersisted_execution = self.is_unpersisted_execution();
         DurableExecutionState {
-            is_live: self.state.is_live() || is_unpersisted_execution,
+            is_live: self.state.is_live() || self.state.durability_is_suppressed(),
             snapshotting_mode: self.state.snapshotting_mode,
             is_unpersisted_execution,
             assume_idempotence: self.state.assume_idempotence,
@@ -1868,7 +1868,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
-        if self.is_unpersisted_execution() {
+        if self.state.durability_is_suppressed() {
             return;
         }
 
@@ -1930,7 +1930,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
         self.end_function(function_type, begin_index).await?;
-        if !self.is_unpersisted_execution()
+        if !self.state.durability_is_suppressed()
             && (function_type == &DurableFunctionType::WriteRemote
                 || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
                 || matches!(

@@ -83,7 +83,7 @@ struct OutputStream {
 enum OutputJob {
     Text(String),
     Raw(Vec<u8>),
-    Event(AgentInvocationSessionEvent),
+    Event(Box<AgentInvocationSessionEvent>),
 }
 
 struct OutputChannel {
@@ -1344,8 +1344,8 @@ async fn handle_response(
 fn event(
     kind: AgentInvocationSessionEventKind,
     idempotency_key: &str,
-) -> AgentInvocationSessionEvent {
-    AgentInvocationSessionEvent::new(kind, idempotency_key)
+) -> Box<AgentInvocationSessionEvent> {
+    Box::new(AgentInvocationSessionEvent::new(kind, idempotency_key))
 }
 
 async fn emit(output: &OutputChannel, job: OutputJob) -> anyhow::Result<()> {
@@ -1392,7 +1392,7 @@ fn render_output_job(job: OutputJob, format: Format, colorize: bool) -> anyhow::
         }
         OutputJob::Raw(bytes) => Ok(bytes),
         OutputJob::Event(event) => {
-            let mut document = render_command_output_document(format, colorize, event)?;
+            let mut document = render_command_output_document(format, colorize, *event)?;
             document.push('\n');
             Ok(document.into_bytes())
         }

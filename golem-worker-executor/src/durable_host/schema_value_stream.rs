@@ -264,20 +264,18 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
             .map_err(|error| anyhow::anyhow!(error.to_string()))
     }
 
-    fn drop(
+    async fn drop(
         accessor: &Accessor<T, Self>,
         rep: Resource<SchemaValueStreamHandleRep>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send {
-        async move {
-            accessor.with(|mut access| {
-                access
-                    .get()
-                    .table()
-                    .delete(rep)
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))
-            })?;
-            Ok(())
-        }
+    ) -> anyhow::Result<()> {
+        accessor.with(|mut access| {
+            access
+                .get()
+                .table()
+                .delete(rep)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))
+        })?;
+        Ok(())
     }
 }
 

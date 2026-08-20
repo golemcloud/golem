@@ -1530,7 +1530,7 @@ async fn persist_http_response<Ctx: WorkerCtx>(
     serializable_response: &SerializableHttpResponse,
     begin_index: golem_common::model::oplog::OplogIndex,
 ) {
-    if !ctx.is_unpersisted_execution() {
+    if !ctx.state.durability_is_suppressed() {
         ctx.append_completed_child_call(
             HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
             &HostRequest::HttpRequest(request),

@@ -53,6 +53,7 @@ use std::collections::BTreeSet;
 pub struct CanonicalInputField {
     pub name: String,
     pub aliases: Vec<String>,
+    pub short: Option<char>,
     pub type_: SchemaType,
 }
 
@@ -70,6 +71,7 @@ pub struct CanonicalInputModel {
 pub struct CanonicalInputValue {
     pub name: String,
     pub aliases: Vec<String>,
+    pub short: Option<char>,
     pub type_: SchemaType,
     pub value: SchemaValue,
 }
@@ -156,6 +158,7 @@ impl CanonicalInputModel {
             .map(|(field, value)| CanonicalInputValue {
                 name: field.name,
                 aliases: field.aliases,
+                short: field.short,
                 type_: field.type_,
                 value,
             })
@@ -324,6 +327,7 @@ impl Tool {
                 Some(CanonicalInputField {
                     name: option.long.clone(),
                     aliases: option.aliases.clone(),
+                    short: option.short,
                     type_: option_collected_type(&option.shape),
                 })
             }
@@ -332,6 +336,7 @@ impl Tool {
                 Some(CanonicalInputField {
                     name: flag.long.clone(),
                     aliases: flag.aliases.clone(),
+                    short: flag.short,
                     type_: flag_type(flag),
                 })
             }
@@ -340,6 +345,7 @@ impl Tool {
                 Some(CanonicalInputField {
                     name: positional.name.clone(),
                     aliases: Vec::new(),
+                    short: None,
                     type_: positional.type_.clone(),
                 })
             }
@@ -348,6 +354,7 @@ impl Tool {
                 Some(CanonicalInputField {
                     name: tail.name.clone(),
                     aliases: Vec::new(),
+                    short: None,
                     type_: tail_collected_type(tail),
                 })
             }
@@ -356,6 +363,7 @@ impl Tool {
                 Some(CanonicalInputField {
                     name: option.long.clone(),
                     aliases: option.aliases.clone(),
+                    short: option.short,
                     type_: option_collected_type(&option.shape),
                 })
             }
@@ -364,6 +372,7 @@ impl Tool {
                 Some(CanonicalInputField {
                     name: flag.long.clone(),
                     aliases: flag.aliases.clone(),
+                    short: flag.short,
                     type_: flag_type(flag),
                 })
             }
@@ -865,6 +874,23 @@ mod tests {
                 "max-count",
                 "verbosity",
             ]
+        );
+    }
+
+    #[test]
+    fn canonical_input_fields_preserve_short_options() {
+        let mut tool = grep_tool();
+        tool.commands.nodes[0].globals.options[0].short = Some('c');
+        tool.commands.nodes[0].globals.flags[0].short = Some('i');
+        tool.commands.nodes[0].body.as_mut().unwrap().options[1].short = Some('n');
+        tool.commands.nodes[0].body.as_mut().unwrap().flags[0].short = Some('v');
+
+        let fields = tool.canonical_input_fields(0);
+        let shorts: Vec<Option<char>> = fields.iter().map(|field| field.short).collect();
+
+        assert_eq!(
+            shorts,
+            vec![Some('c'), Some('i'), None, None, None, Some('n'), Some('v'),]
         );
     }
 

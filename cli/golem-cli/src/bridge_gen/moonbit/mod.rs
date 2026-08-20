@@ -2925,6 +2925,12 @@ fn moonbit_string_literal(value: &str) -> String {
     escaped
 }
 
+fn moonbit_char_option_literal(value: Option<char>) -> String {
+    value
+        .map(|value| format!("Some('\\u{{{:x}}}')", value as u32))
+        .unwrap_or_else(|| "None".to_string())
+}
+
 /// Whether a (ref-resolved) schema type becomes a generated MoonBit definition
 /// (struct / enum). Other named defs are inlined at their use sites.
 fn is_named_composite(resolved: &SchemaType) -> bool {

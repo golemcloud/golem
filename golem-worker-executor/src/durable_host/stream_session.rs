@@ -113,8 +113,8 @@ enum SessionFrames {
 }
 
 enum OutboundStreamMessage {
-    Request(invocation_request::Request),
-    Response(invocation_response::Response),
+    Request(Box<invocation_request::Request>),
+    Response(Box<invocation_response::Response>),
 }
 
 #[derive(Default)]
@@ -238,6 +238,7 @@ impl LiveValueSession {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn encode(&self, value: &SchemaValue) -> Result<ProtoSchemaValue, String> {
         let (value, stream_ids) = self.encode_with_registered_streams(value)?;
         self.activate_exported_streams(&stream_ids);
@@ -596,9 +597,9 @@ impl LiveValueSession {
                             format!("input stream {} ACK offset overflow", ack.stream_id)
                         })?;
                     if !self
-                        .send_outbound(OutboundStreamMessage::Response(
+                        .send_outbound(OutboundStreamMessage::Response(Box::new(
                             invocation_response::Response::InputAck(ack),
-                        ))
+                        )))
                         .await
                     {
                         return Err(
@@ -1184,13 +1185,13 @@ impl LiveValueSession {
         match (&self.inner.frames, message) {
             (SessionFrames::Requests(frames), OutboundStreamMessage::Request(request)) => {
                 tokio::select! {
-                    result = frames.send(InvocationRequest { request: Some(request) }) => result.is_ok(),
+                    result = frames.send(InvocationRequest { request: Some(*request) }) => result.is_ok(),
                     _ = self.inner.cancelled.cancelled() => false,
                 }
             }
             (SessionFrames::Responses(frames), OutboundStreamMessage::Response(response)) => {
                 tokio::select! {
-                    result = frames.send(InvocationResponse { response: Some(response) }) => result.is_ok(),
+                    result = frames.send(InvocationResponse { response: Some(*response) }) => result.is_ok(),
                     _ = self.inner.cancelled.cancelled() => false,
                 }
             }
@@ -1239,12 +1240,12 @@ impl LiveValueSession {
             details: Some(details.to_string()),
         };
         let message = match self.inner.side {
-            SessionSide::Client => {
-                OutboundStreamMessage::Request(invocation_request::Request::StreamCancel(cancel))
-            }
-            SessionSide::Server => {
-                OutboundStreamMessage::Response(invocation_response::Response::StreamCancel(cancel))
-            }
+            SessionSide::Client => OutboundStreamMessage::Request(Box::new(
+                invocation_request::Request::StreamCancel(cancel),
+            )),
+            SessionSide::Server => OutboundStreamMessage::Response(Box::new(
+                invocation_response::Response::StreamCancel(cancel),
+            )),
         };
         let _ = self.send_outbound(message).await;
         if self.inner.side == SessionSide::Client {
@@ -1383,12 +1384,12 @@ impl LiveValueSession {
 
     fn exported_end(&self, stream_id: u64, offset: u64) -> OutboundStreamMessage {
         match self.inner.side {
-            SessionSide::Client => OutboundStreamMessage::Request(
+            SessionSide::Client => OutboundStreamMessage::Request(Box::new(
                 invocation_request::Request::InputEnd(InputStreamEnd { stream_id, offset }),
-            ),
-            SessionSide::Server => OutboundStreamMessage::Response(
+            )),
+            SessionSide::Server => OutboundStreamMessage::Response(Box::new(
                 invocation_response::Response::OutputEnd(OutputStreamEnd { stream_id, offset }),
-            ),
+            )),
         }
     }
 
@@ -1399,7 +1400,7 @@ impl LiveValueSession {
         details: String,
     ) -> OutboundStreamMessage {
         match self.inner.side {
-            SessionSide::Client => OutboundStreamMessage::Request(
+            SessionSide::Client => OutboundStreamMessage::Request(Box::new(
                 invocation_request::Request::StreamCancel(StreamCancel {
                     stream_id,
                     offset,
@@ -1407,14 +1408,14 @@ impl LiveValueSession {
                     reason: StreamCancelReason::Cancelled as i32,
                     details: Some(details),
                 }),
-            ),
-            SessionSide::Server => OutboundStreamMessage::Response(
+            )),
+            SessionSide::Server => OutboundStreamMessage::Response(Box::new(
                 invocation_response::Response::OutputError(OutputStreamError {
                     stream_id,
                     offset,
                     details,
                 }),
-            ),
+            )),
         }
     }
 
@@ -1482,7 +1483,7 @@ impl LiveValueSession {
                                     match session.encode_with_registered_streams(&value) {
                                         Ok((value, registered_stream_ids)) => {
                                             let message = match session.inner.side {
-                                        SessionSide::Client => OutboundStreamMessage::Request(
+                                        SessionSide::Client => OutboundStreamMessage::Request(Box::new(
                                             invocation_request::Request::InputItem(
                                                 InputStreamItem {
                                                     stream_id: id,
@@ -1492,8 +1493,8 @@ impl LiveValueSession {
                                                     ),
                                                 },
                                             ),
-                                        ),
-                                        SessionSide::Server => OutboundStreamMessage::Response(
+                                        )),
+                                        SessionSide::Server => OutboundStreamMessage::Response(Box::new(
                                             invocation_response::Response::OutputItem(
                                                 OutputStreamItem {
                                                     stream_id: id,
@@ -1501,7 +1502,7 @@ impl LiveValueSession {
                                                     value: Some(value),
                                                 },
                                             ),
-                                        ),
+                                        )),
                                     };
                                             (
                                                 message,

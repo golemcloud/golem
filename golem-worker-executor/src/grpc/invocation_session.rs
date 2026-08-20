@@ -182,39 +182,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_agent_id =
             extract_owned_agent_id(request, |r| &r.agent_id, |r| &r.environment_id)?;
 
-        let existing_metadata =
-            if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
-                None
-            } else {
-                Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await
-            };
-        let component_revision = existing_metadata
-            .as_ref()
-            .map(|metadata| metadata.last_known_status.component_revision);
-        let component = self
-            .component_service()
-            .get_metadata(owned_agent_id.component_id(), component_revision)
-            .await?;
-        let parsed_agent_id =
-            ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
-                .map_err(WorkerExecutorError::invalid_request)?;
-        let streaming = validate_agent_method_invocation(
-            &component.metadata,
-            Some(&parsed_agent_id),
-            &method_name,
-            &method_parameters,
-        )?;
-        if streaming
-            && matches!(
-                mode,
-                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule
-            )
-        {
-            return Err(WorkerExecutorError::invalid_request(
-                "live streams require an attached Await invocation session",
-            ));
-        }
-
         Worker::<Ctx>::validate_invocation_freshness(
             self,
             &owned_agent_id,
@@ -250,13 +217,65 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let worker = self
                     .get_or_create_pending_with_freshness(request, freshness_disposition)
                     .await?;
+                let status = worker.get_last_known_status().await;
+                let queued_manual_update_revision = status
+                    .pending_invocations
+                    .iter()
+                    .rev()
+                    .find_map(|invocation| invocation.manual_update_target_revision);
+                let pending_update_revision = queued_manual_update_revision.or_else(|| {
+                    status
+                        .pending_updates
+                        .back()
+                        .map(|update| update.target_revision)
+                });
+                let current_component = self
+                    .component_service()
+                    .get_metadata(
+                        owned_agent_id.component_id(),
+                        Some(status.component_revision),
+                    )
+                    .await?;
+                let (component, streaming) = if let Some(pending_revision) = pending_update_revision
+                    && pending_revision != status.component_revision
+                    && let Ok(pending_component) = self
+                        .component_service()
+                        .get_metadata(owned_agent_id.component_id(), Some(pending_revision))
+                        .await
+                    && let Ok(parsed_agent_id) = ParsedAgentId::parse(
+                        &owned_agent_id.agent_id.agent_id,
+                        &pending_component.metadata,
+                    )
+                    && let Ok(streaming) = validate_agent_method_invocation(
+                        &pending_component.metadata,
+                        Some(&parsed_agent_id),
+                        &method_name,
+                        &method_parameters,
+                    ) {
+                    (pending_component, streaming)
+                } else {
+                    let parsed_agent_id = ParsedAgentId::parse(
+                        &owned_agent_id.agent_id.agent_id,
+                        &current_component.metadata,
+                    )
+                    .map_err(WorkerExecutorError::invalid_request)?;
+                    let streaming = validate_agent_method_invocation(
+                        &current_component.metadata,
+                        Some(&parsed_agent_id),
+                        &method_name,
+                        &method_parameters,
+                    )?;
+                    (current_component, streaming)
+                };
+                let accepted_revision =
+                    (worker.agent_mode() == AgentMode::Ephemeral).then_some(component.revision);
                 let mut invocation_output = if streaming {
                     let fingerprint = worker.get_initial_worker_metadata().fingerprint;
                     let invocation = worker
                         .clone()
                         .enqueue_live_streaming(invocation, cancellation)
                         .await?;
-                    publish_acceptance(accepted, Some(component.revision))?;
+                    publish_acceptance(accepted, accepted_revision)?;
                     AgentInvocationOutput {
                         result: AgentInvocationResult::AgentMethod {
                             output: invocation.result().await?,
@@ -270,18 +289,54 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         agent_fingerprint: Some(fingerprint),
                     }
                 } else {
-                    let result = worker.clone().invoke(invocation).await?;
-                    if let crate::worker::ResultOrSubscription::Finished(Err(error)) = &result {
-                        return Err(error.clone());
-                    }
-                    publish_acceptance(accepted, Some(component.revision))?;
-                    worker.await_invocation_result(ik.clone(), result).await?
+                    publish_acceptance(accepted, accepted_revision)?;
+                    worker.invoke_and_await(invocation).await?
                 };
                 invocation_output.agent_id = Some(final_agent_id);
                 invocation_output.idempotency_key = Some(ik);
                 Ok(invocation_output)
             }
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule => {
+                let existing_metadata =
+                    if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+                        None
+                    } else {
+                        Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await
+                    };
+                let component_revision = existing_metadata.as_ref().map(|metadata| {
+                    let status = &metadata.last_known_status;
+                    status
+                        .pending_invocations
+                        .iter()
+                        .rev()
+                        .find_map(|invocation| invocation.manual_update_target_revision)
+                        .or_else(|| {
+                            status
+                                .pending_updates
+                                .back()
+                                .map(|update| update.target_revision)
+                        })
+                        .unwrap_or(status.component_revision)
+                });
+                let component = self
+                    .component_service()
+                    .get_metadata(owned_agent_id.component_id(), component_revision)
+                    .await?;
+                let parsed_agent_id =
+                    ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
+                        .map_err(WorkerExecutorError::invalid_request)?;
+                let streaming = validate_agent_method_invocation(
+                    &component.metadata,
+                    Some(&parsed_agent_id),
+                    &method_name,
+                    &method_parameters,
+                )?;
+                if streaming {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "live streams require an attached Await invocation session",
+                    ));
+                }
+
                 match schedule_at {
                     Some(scheduled_time) => {
                         let agent_mode = component
@@ -445,12 +500,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let outward_forwarder = outward.clone();
         let forwarder = tokio::spawn(async move {
             while let Some(response) = response_rx.recv().await {
-                if response_state
-                    .lock()
-                    .await
-                    .validate_response(&response)
-                    .is_err()
-                {
+                if let Err(error) = response_state.lock().await.validate_response(&response) {
+                    tracing::error!(error, ?response, "Invalid invocation session response");
                     return;
                 }
                 if outward_forwarder.send(response).await.is_err() {
@@ -500,27 +551,26 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let invocation = self.invoke_agent_internal(&start, input, cancellation, accepted_tx);
         tokio::pin!(invocation);
         let mut early_output = None;
-        let accepted_revision = loop {
-            tokio::select! {
-                biased;
-                accepted = &mut accepted_rx => match accepted {
-                    Ok(revision) => break revision,
-                    Err(_) => {
-                        send_rejection(
-                            &responses,
-                            InvocationRejectionReason::Internal,
-                            "invocation ended without reaching acceptance".to_string(),
-                            &start,
-                        ).await;
-                        session.cancel();
-                        return;
-                    }
-                },
-                result = &mut invocation => {
-                    if let Ok(revision) = accepted_rx.try_recv() {
-                        early_output = Some(result);
-                        break revision;
-                    }
+        let accepted_revision = tokio::select! {
+            biased;
+            accepted = &mut accepted_rx => match accepted {
+                Ok(revision) => revision,
+                Err(_) => {
+                    send_rejection(
+                        &responses,
+                        InvocationRejectionReason::Internal,
+                        "invocation ended without reaching acceptance".to_string(),
+                        &start,
+                    ).await;
+                    session.cancel();
+                    return;
+                }
+            },
+            result = &mut invocation => {
+                if let Ok(revision) = accepted_rx.try_recv() {
+                    early_output = Some(result);
+                    revision
+                } else {
                     let (reason, error) = match result {
                         Ok(_) => (
                             InvocationRejectionReason::Internal,
@@ -535,25 +585,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     session.cancel();
                     return;
                 }
-                request = inbound.message() => {
-                    let error = match request {
-                        Ok(Some(request)) => state
-                            .lock()
-                            .await
-                            .validate_trusted_request(&request)
-                            .unwrap_err(),
-                        Ok(None) => "invocation request transport closed before acceptance".to_string(),
-                        Err(error) => error.to_string(),
-                    };
-                    send_rejection(
-                        &responses,
-                        InvocationRejectionReason::Protocol,
-                        error,
-                        &start,
-                    ).await;
-                    session.cancel();
-                    return;
-                }
+            }
+            request = inbound.message() => {
+                let error = match request {
+                    Ok(Some(request)) => state
+                        .lock()
+                        .await
+                        .validate_trusted_request(&request)
+                        .unwrap_err(),
+                    Ok(None) => "invocation request transport closed before acceptance".to_string(),
+                    Err(error) => error.to_string(),
+                };
+                send_rejection(
+                    &responses,
+                    InvocationRejectionReason::Protocol,
+                    error,
+                    &start,
+                ).await;
+                session.cancel();
+                return;
             }
         };
 

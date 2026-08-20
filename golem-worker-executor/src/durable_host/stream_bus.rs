@@ -222,10 +222,12 @@ impl<T: Clone> PrimaryLiveStreamSubscriber<T> {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) struct AuxiliaryLiveStreamSubscriber<T> {
     receiver: Receiver<LiveStreamEvent<T>>,
 }
 
+#[allow(dead_code)]
 impl<T: Clone> AuxiliaryLiveStreamSubscriber<T> {
     pub(crate) async fn recv(&mut self) -> Result<LiveStreamEvent<T>, LiveStreamReceiveError> {
         receive(&mut self.receiver).await

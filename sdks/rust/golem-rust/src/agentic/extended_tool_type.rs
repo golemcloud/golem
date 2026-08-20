@@ -505,6 +505,7 @@ pub struct EffectiveCommandBody {
 pub struct CanonicalInputField {
     pub name: String,
     pub aliases: Vec<String>,
+    pub short: Option<char>,
     pub schema: SchemaGraph,
 }
 
@@ -518,6 +519,7 @@ pub struct CanonicalInputModel {
 pub struct CanonicalInputValue {
     pub name: String,
     pub aliases: Vec<String>,
+    pub short: Option<char>,
     pub schema: SchemaGraph,
     pub value: SchemaValue,
 }
@@ -552,6 +554,7 @@ impl CanonicalInputModel {
             .map(|(field, value)| CanonicalInputValue {
                 name: field.name,
                 aliases: field.aliases,
+                short: field.short,
                 schema: field.schema,
                 value,
             })
@@ -833,6 +836,7 @@ impl ExtendedToolType {
                 Some(CanonicalInputField {
                     name: option.long.clone(),
                     aliases: option.aliases.clone(),
+                    short: option.short,
                     schema: option_collected_graph(&option.shape),
                 })
             }
@@ -841,6 +845,7 @@ impl ExtendedToolType {
                 Some(CanonicalInputField {
                     name: flag.long.clone(),
                     aliases: flag.aliases.clone(),
+                    short: flag.short,
                     schema: flag_graph(flag),
                 })
             }
@@ -849,6 +854,7 @@ impl ExtendedToolType {
                 Some(CanonicalInputField {
                     name: positional.name.clone(),
                     aliases: Vec::new(),
+                    short: None,
                     schema: positional.type_.clone(),
                 })
             }
@@ -857,6 +863,7 @@ impl ExtendedToolType {
                 Some(CanonicalInputField {
                     name: tail.name.clone(),
                     aliases: Vec::new(),
+                    short: None,
                     schema: list_wrapper_graph(&tail.item_type),
                 })
             }
@@ -865,6 +872,7 @@ impl ExtendedToolType {
                 Some(CanonicalInputField {
                     name: option.long.clone(),
                     aliases: option.aliases.clone(),
+                    short: option.short,
                     schema: option_collected_graph(&option.shape),
                 })
             }
@@ -873,6 +881,7 @@ impl ExtendedToolType {
                 Some(CanonicalInputField {
                     name: flag.long.clone(),
                     aliases: flag.aliases.clone(),
+                    short: flag.short,
                     schema: flag_graph(flag),
                 })
             }
@@ -1028,6 +1037,7 @@ pub fn build_canonical_input_with_prefix(
         .map(|value| CanonicalInputField {
             name: value.name.clone(),
             aliases: value.aliases.clone(),
+            short: value.short,
             schema: value.schema.clone(),
         })
         .collect();
@@ -3938,11 +3948,13 @@ mod tests {
             CanonicalInputField {
                 name: "same".to_string(),
                 aliases: Vec::new(),
+                short: None,
                 schema: str_graph(),
             },
             CanonicalInputField {
                 name: "same".to_string(),
                 aliases: Vec::new(),
+                short: None,
                 schema: u32_graph(),
             },
         ])
@@ -3977,6 +3989,7 @@ mod tests {
         let error = CanonicalInputModel::from_fields(vec![CanonicalInputField {
             name: "field".to_string(),
             aliases: Vec::new(),
+            short: None,
             schema: graph,
         }])
         .unwrap_err();

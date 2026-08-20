@@ -62,17 +62,18 @@ use tracing::debug;
 pub type InvocationRequestStream = Pin<Box<dyn Stream<Item = InvocationRequest> + Send + 'static>>;
 pub type InvocationResponseStream =
     Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
-
-fn invoke_agent_session_once<'a>(
-    client: &'a mut WorkerServiceClient<OtelGrpcService<Channel>>,
-    request: Option<InvocationRequestStream>,
-) -> Pin<
+type InvocationSessionCall<'a> = Pin<
     Box<
         dyn Future<Output = Result<tonic::Response<tonic::Streaming<InvocationResponse>>, Status>>
             + Send
             + 'a,
     >,
-> {
+>;
+
+fn invoke_agent_session_once<'a>(
+    client: &'a mut WorkerServiceClient<OtelGrpcService<Channel>>,
+    request: Option<InvocationRequestStream>,
+) -> InvocationSessionCall<'a> {
     match request {
         Some(request) => Box::pin(client.invoke_agent_session(request)),
         None => Box::pin(std::future::ready(Err(Status::aborted(

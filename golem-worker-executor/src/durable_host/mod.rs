@@ -266,6 +266,8 @@ struct UnpersistedExecution {
     kind: UnpersistedExecutionKind,
 }
 
+type PreparedFilesystemStorageReservation<Ctx> = (Arc<Worker<Ctx>>, u64, bool);
+
 impl Drop for WorkerDir {
     fn drop(&mut self) {
         if let WorkerDir::Deterministic(p) = self
@@ -1673,7 +1675,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) fn prepare_filesystem_storage_reservation(
         &mut self,
         new_bytes: u64,
-    ) -> anyhow::Result<Option<(Arc<Worker<Ctx>>, u64, bool)>> {
+    ) -> anyhow::Result<Option<PreparedFilesystemStorageReservation<Ctx>>> {
         if new_bytes == 0 || self.state.is_replay() {
             return Ok(None);
         }
@@ -2132,7 +2134,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
-        if self.state.is_unpersisted_execution() {
+        if self.state.durability_is_suppressed() {
             let begin_index = self.state.current_oplog_index().await;
             self.state.current_retry_point = begin_index;
             return Ok(begin_index);
@@ -2318,7 +2320,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.is_unpersisted_execution() {
+        if self.state.durability_is_suppressed() {
             return Ok(());
         }
 
@@ -2493,7 +2495,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     where
         Err: From<WorkerExecutorError>,
     {
-        if self.state.is_unpersisted_execution() {
+        if self.state.durability_is_suppressed() {
             let (_, tx) = handler.create_new().await?;
             let begin_index = self.state.current_oplog_index().await;
             Ok((begin_index, tx))
@@ -2722,7 +2724,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.is_unpersisted_execution() {
+        if self.state.durability_is_suppressed() {
             Ok(())
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
@@ -2751,7 +2753,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.is_unpersisted_execution() {
+        if self.state.durability_is_suppressed() {
             Ok(())
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
@@ -2780,7 +2782,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.is_unpersisted_execution() {
+        if self.state.durability_is_suppressed() {
             return Ok(());
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
@@ -2831,7 +2833,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
-        if self.state.is_unpersisted_execution() {
+        if self.state.durability_is_suppressed() {
             return Ok(());
         } else if self.is_live() {
             // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
@@ -3955,7 +3957,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         mut invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
-        if !self.is_unpersisted_execution() {
+        if !self.state.durability_is_suppressed() {
             let stack = self.get_current_invocation_context().await;
 
             match &mut invocation {
@@ -4001,6 +4003,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
         if self.state.is_live()
+            && !self.state.snapshotting_mode
             && !is_unpersisted_execution
             && let Err(err) = concurrent::drain_queued_dropped_call_events(self).await
         {
@@ -4157,7 +4160,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         }
 
         if is_live {
-            if !self.is_unpersisted_execution() {
+            if !self.state.durability_is_suppressed() {
                 let component_revision = output.component_revision.ok_or_else(|| {
                     WorkerExecutorError::runtime(
                         "component_revision missing in AgentInvocationOutput during replay",
@@ -7212,7 +7215,7 @@ impl PrivateDurableWorkerState {
     /// An unpersisted execution never straddles a single scope's begin/end, so guarding both ends
     /// with the same predicate keeps the durable-scope stack balanced.
     fn opens_durable_scope(&self, function_type: &DurableFunctionType) -> bool {
-        !self.is_unpersisted_execution()
+        !self.durability_is_suppressed()
             && ((*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
                 || matches!(
                     *function_type,
@@ -7563,6 +7566,10 @@ impl PrivateDurableWorkerState {
         self.unpersisted_execution.is_some()
     }
 
+    fn durability_is_suppressed(&self) -> bool {
+        self.snapshotting_mode || self.is_unpersisted_execution()
+    }
+
     /// Whether the current oplog tip is a structurally clean boundary at which a mid-invocation
     /// status checkpoint may be taken: we are live, no rollback-capable region is open (so no later
     /// trap/replay can append a jump that deletes the tip), and snapshotting is not active. The
@@ -7573,7 +7580,7 @@ impl PrivateDurableWorkerState {
             !self.is_live(),
             !self.active_atomic_regions.is_empty(),
             !self.active_durable_scopes.is_empty(),
-            self.snapshotting_mode || self.is_unpersisted_execution(),
+            self.durability_is_suppressed(),
         )
     }
 

@@ -1751,11 +1751,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 span_id,
                 cancel_token,
             } => {
+                let interrupt_signal = accessor.with(|mut access| {
+                    let ctx = access.get();
+                    ctx.create_interrupt_signal()
+                });
                 let task_result = {
                     let mut guard = task.lock().await;
                     tokio::select! {
                         biased;
                         _ = cancel_token.cancelled() => None,
+                        interrupt_kind = interrupt_signal => {
+                            drop(guard);
+                            drop(task);
+                            return Err(interrupt_kind.into());
+                        }
                         result = &mut *guard => Some(result),
                     }
                 };
@@ -1809,11 +1818,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 let (response, delivery) = if handle.is_live() {
                     let task =
                         task.expect("a live future-invoke-result must own its background task");
+                    let interrupt_signal = accessor.with(|mut access| {
+                        let ctx = access.get();
+                        ctx.create_interrupt_signal()
+                    });
                     let task_result = {
                         let mut guard = task.lock().await;
                         tokio::select! {
                             biased;
                             _ = cancel_token.cancelled() => None,
+                            interrupt_kind = interrupt_signal => {
+                                drop(guard);
+                                drop(task);
+                                return Err(handle.trap(interrupt_kind));
+                            }
                             result = &mut *guard => Some(result),
                         }
                     };
@@ -1882,9 +1900,17 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                     InvocationFreshnessDisposition::MayExist,
                                 )
                             });
+                            let interrupt_signal = accessor.with(|mut access| {
+                                let ctx = access.get();
+                                ctx.create_interrupt_signal()
+                            });
                             let task_result = tokio::select! {
                                 biased;
                                 _ = cancel_token.cancelled() => None,
+                                interrupt_kind = interrupt_signal => {
+                                    drop(task);
+                                    return Err(live.trap(interrupt_kind));
+                                }
                                 result = &mut task => Some(result),
                             };
                             match task_result {

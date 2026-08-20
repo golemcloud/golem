@@ -449,18 +449,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 /// interface declares for it is `drop`, which releases the underlying lease
 /// state back to the executor pool.
 impl<T: Send + 'static, Ctx: WorkerCtx> HostQuotaTokenWithStore<T> for CoreTypesHost<Ctx> {
-    fn drop(
+    async fn drop(
         accessor: &Accessor<T, Self>,
         rep: Resource<QuotaTokenHandleRep>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send {
-        async move {
-            accessor.with(|mut access| {
-                let ctx = access.get();
-                DurabilityHost::observe_function_call(ctx, "golem::core::quota-token", "drop");
-                ctx.table().delete(rep)?;
-                Ok(())
-            })
-        }
+    ) -> anyhow::Result<()> {
+        accessor.with(|mut access| {
+            let ctx = access.get();
+            DurabilityHost::observe_function_call(ctx, "golem::core::quota-token", "drop");
+            ctx.table().delete(rep)?;
+            Ok(())
+        })
     }
 }
 

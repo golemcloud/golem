@@ -128,7 +128,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let named_policy: NamedRetryPolicy = policy.into();
 
-        if self.state.is_unpersisted_execution() {
+        if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
         } else if self.state.is_live() {
             self.public_state
@@ -146,7 +146,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn remove_retry_policy(&mut self, name: String) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::retry", "remove_retry_policy");
 
-        if self.state.is_unpersisted_execution() {
+        if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
         } else if self.state.is_live() {
             self.public_state

@@ -131,7 +131,11 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
     let (_, input) = data_value!(vec![1_u32, 2, 3]).into_parts();
     let input: golem_api_grpc::proto::golem::schema::SchemaValue =
         input.try_into().map_err(anyhow::Error::msg)?;
-    let blobs_before = files_below(&deps.blob_storage_root())?;
+    let component_id = component.id.to_string();
+    let blobs_before = files_below(&deps.blob_storage_root())?
+        .into_iter()
+        .filter(|path| path.to_string_lossy().contains(&component_id))
+        .collect::<HashSet<_>>();
 
     for schedule_at in [
         None,
@@ -182,7 +186,10 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
         "rejection must not create an immediate or delayed scheduled action"
     );
     assert_eq!(
-        files_below(&deps.blob_storage_root())?,
+        files_below(&deps.blob_storage_root())?
+            .into_iter()
+            .filter(|path| path.to_string_lossy().contains(&component_id))
+            .collect::<HashSet<_>>(),
         blobs_before,
         "rejection must not upload an invocation or result payload"
     );
@@ -597,7 +604,7 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
             agent_id: Some(worker_id.into()),
             method_name: Some("changeAndGet".to_string()),
             input: Some(
-                SchemaValue::Tuple { elements: vec![] }
+                SchemaValue::Record { fields: vec![] }
                     .try_into()
                     .map_err(anyhow::Error::msg)?,
             ),
@@ -700,7 +707,7 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             agent_id: Some(worker_id.clone().into()),
             method_name: Some("changeAndGet".to_string()),
             input: Some(
-                SchemaValue::Tuple { elements: vec![] }
+                SchemaValue::Record { fields: vec![] }
                     .try_into()
                     .map_err(anyhow::Error::msg)?,
             ),

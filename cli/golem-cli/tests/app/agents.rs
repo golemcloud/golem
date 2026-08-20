@@ -80,6 +80,8 @@ async fn streaming_invocation_context() -> TestContext {
               golem-it:agent-rpc-rust:
                 dir: component
                 templates: rust-streaming-test
+                presets:
+                  release: {{}}
 
             environments:
               local:

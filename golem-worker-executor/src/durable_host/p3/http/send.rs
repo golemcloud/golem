@@ -398,7 +398,7 @@ where
     let recording_enabled = store.with(|mut access| {
         !durable_worker_ctx::<Ctx, U>(access.data_mut())
             .state
-            .snapshotting_mode
+            .durability_is_suppressed()
     });
     let converted = match convert_physical_send_request::<Ctx, U>(
         store,
