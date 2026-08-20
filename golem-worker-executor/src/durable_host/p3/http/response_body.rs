@@ -641,13 +641,14 @@ async fn transfer_data_chunk(
     activity: &TailActivity,
     demand: oneshot::Sender<HttpBodyChunkReply>,
     bytes: Bytes,
-    delivery: CompletionDelivery,
+    mut delivery: CompletionDelivery,
     delivered_bytes: &mut u64,
 ) -> Result<DataChunkTransfer, WorkerExecutorError> {
     if delivery.is_replay_discarded() {
         park_replay_discarded_delivery(activity, demand).await;
         return Ok(DataChunkTransfer::Abandoned);
     }
+    delivery.prepare_delivery().await?;
     let chunk_len = bytes.len() as u64;
     if demand.send(HttpBodyChunkReply::Data(bytes)).is_ok() {
         *delivered_bytes += chunk_len;
@@ -934,7 +935,7 @@ where
             // `End` records the child's `CompletionDiscarded` marker instead of
             // replay redelivering a chunk the recorded run never handed to the
             // guest.
-            let (produced, delivery) = if !child.is_live() {
+            let (produced, mut delivery) = if !child.is_live() {
                 match child
                     .replay_access_deferred(accessor, durable_worker_ctx::<Ctx, U>)
                     .await
@@ -1412,6 +1413,18 @@ where
                         park_replay_discarded_delivery(&activity, demand).await;
                         break;
                     }
+                    if let Err(error) = delivery.prepare_delivery().await {
+                        let trap_context = parent.trap_context();
+                        parent.abandon_for_trap();
+                        return fail_consume_body_task(
+                            trailers_tx,
+                            wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
+                                anyhow::Error::from(error),
+                                trap_context,
+                            )),
+                            Some(trap_context),
+                        );
+                    }
                     let (ack_tx, ack_rx) = oneshot::channel();
                     if demand.send(HttpBodyChunkReply::End { ack: ack_tx }).is_ok() {
                         delivery.delivered();
@@ -1440,6 +1453,18 @@ where
                     if delivery.is_replay_discarded() {
                         park_replay_discarded_delivery(&activity, demand).await;
                         break;
+                    }
+                    if let Err(error) = delivery.prepare_delivery().await {
+                        let trap_context = parent.trap_context();
+                        parent.abandon_for_trap();
+                        return fail_consume_body_task(
+                            trailers_tx,
+                            wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
+                                anyhow::Error::from(error),
+                                trap_context,
+                            )),
+                            Some(trap_context),
+                        );
                     }
                     if demand.send(HttpBodyChunkReply::Cancelled).is_ok() {
                         delivery.delivered();
@@ -1482,7 +1507,7 @@ where
         // finalize failure can tag the guest-facing trailers trap for correct
         // retry grouping.
         let parent_trap_context = parent.trap_context();
-        let (outcome, delivery) = if parent.is_live() {
+        let (outcome, mut delivery) = if parent.is_live() {
             match parent
                 .complete_access_deferred(
                     accessor,
@@ -1589,6 +1614,12 @@ where
             activity.park(trailers_tx.closed()).await;
             drop(trailers_tx);
         } else {
+            delivery.prepare_delivery().await.map_err(|error| {
+                wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
+                    anyhow::Error::from(error),
+                    parent_trap_context,
+                ))
+            })?;
             match trailers_tx.send(HttpTrailersResolution::Outcome(outcome)) {
                 Ok(()) => delivery.delivered(),
                 Err(_) => {

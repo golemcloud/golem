@@ -99,6 +99,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}start index:       {}", params.start_index);
         }
+        PublicOplogEntry::CompletionDelivered(params) => {
+            let _ = writeln!(result, "COMPLETION DELIVERED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}start index:       {}", params.start_index);
+        }
         PublicOplogEntry::AgentInvocationStarted(params) => {
             let _ = writeln!(result, "AGENT INVOCATION STARTED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);

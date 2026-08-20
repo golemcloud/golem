@@ -234,10 +234,28 @@ impl ReplayState {
         &self,
         claim: StartClaim,
     ) -> Result<(ReplayCallHandle, Box<OplogEntry>), WorkerExecutorError> {
-        self.run_owned_cursor_op(move |state| async move {
-            state.with_tx(async |tx| tx.claim_start(&claim).await).await
-        })
-        .await
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+
+            let owned_claim = claim.clone();
+            let (claimed, blocked_on_completion_delivery) = self
+                .run_owned_cursor_op(move |state| async move {
+                    state
+                        .with_tx(async |tx| {
+                            let claimed = tx.claim_start(&owned_claim).await?;
+                            Ok((claimed, tx.blocked_on_completion_delivery))
+                        })
+                        .await
+                })
+                .await?;
+            if let Some(claimed) = claimed {
+                return Ok(claimed);
+            }
+            debug_assert!(blocked_on_completion_delivery);
+            progress.await;
+        }
     }
 
     /// Claims the next top-level (unowned) durable-call `Start` matching the expected identity
@@ -426,18 +444,23 @@ impl ReplayState {
         expected_invocation_id: uuid::Uuid,
         expected_request: &HostRequest,
     ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
-        let expected_function_name = expected_function_name.clone();
-        let expected_function_type = expected_function_type.clone();
-        let expected_request = expected_request.clone();
-        let (handle, entry) = self
-            .run_owned_cursor_op(move |state| async move {
-                state
-                    .with_tx(async |tx| {
-                        if tx
-                            .st
-                            .claimed_custom_invocation_ids
-                            .contains(&expected_invocation_id)
-                        {
+        let (handle, entry) = loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+
+            let expected_function_name = expected_function_name.clone();
+            let expected_function_type = expected_function_type.clone();
+            let expected_request = expected_request.clone();
+            let (claimed, blocked_on_completion_delivery) = self
+                .run_owned_cursor_op(move |state| async move {
+                    state
+                        .with_tx(async |tx| {
+                            if tx
+                                .st
+                                .claimed_custom_invocation_ids
+                                .contains(&expected_invocation_id)
+                            {
                             return Err(WorkerExecutorError::unexpected_oplog_entry(
                                 format!(
                                     "unused custom durable invocation id {expected_invocation_id}"
@@ -594,16 +617,24 @@ impl ReplayState {
                                 ));
                             }
                         };
-                        tx.st
-                            .claimed_custom_invocation_ids
-                            .insert(expected_invocation_id);
-                        let root = result.0.start_idx();
-                        tx.register_custom_subtree_root(root);
-                        Ok(result)
+                        if let Some(result) = &result {
+                            tx.st
+                                .claimed_custom_invocation_ids
+                                .insert(expected_invocation_id);
+                            let root = result.0.start_idx();
+                            tx.register_custom_subtree_root(root);
+                        }
+                        Ok((result, tx.blocked_on_completion_delivery))
                     })
                     .await
             })
             .await?;
+            if let Some(claimed) = claimed {
+                break claimed;
+            }
+            debug_assert!(blocked_on_completion_delivery);
+            progress.await;
+        };
         let OplogEntry::Start {
             timestamp,
             function_name,

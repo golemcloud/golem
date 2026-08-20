@@ -211,8 +211,17 @@ impl CustomBeginTerminalGuard {
             .expect("custom begin terminal observer is invoked at most once");
         match consumption {
             TerminalConsumption::Delivered => lifecycle.settle(CustomBeginVerdict::Delivered),
-            TerminalConsumption::Discarded | TerminalConsumption::Cancelled => {
-                lifecycle.settle(CustomBeginVerdict::Cancelled)
+            TerminalConsumption::NotDelivered => lifecycle.settle(CustomBeginVerdict::Cancelled),
+            // Observer replacement on the custom-begin subtask is a forbidden pattern: the begin
+            // host function registers exactly one terminal observer and performs no further
+            // observable sub-operations on the same subtask. Settle as suppressed (the same
+            // verdict as a dropped guard) so the coordinator treats the begin as unobserved.
+            TerminalConsumption::Superseded => {
+                tracing::error!(
+                    "custom-begin terminal observer was superseded by a newer observer on the \
+                     same host subtask; this is an invariant breach"
+                );
+                lifecycle.settle(CustomBeginVerdict::Suppressed);
             }
         }
     }

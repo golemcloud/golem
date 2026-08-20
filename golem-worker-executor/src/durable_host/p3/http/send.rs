@@ -323,7 +323,10 @@ where
                             std::future::pending::<()>().await;
                             unreachable!("std::future::pending never completes")
                         }
-                        delivery.delivered();
+                        delivery
+                            .deliver_at_accessor_terminal(store)
+                            .await
+                            .map_err(HttpError::trap)?;
                         return Ok(response);
                     }
                     Err(error) => {
@@ -350,7 +353,10 @@ where
                             std::future::pending::<()>().await;
                             unreachable!("std::future::pending never completes")
                         }
-                        delivery.delivered();
+                        delivery
+                            .deliver_at_accessor_terminal(store)
+                            .await
+                            .map_err(HttpError::trap)?;
                         return Err(error);
                     }
                 }
@@ -450,7 +456,10 @@ where
                 // The guest-visible error return below still crosses Wasmtime's lowering
                 // and terminal-consumption boundary: hand the token to the terminal
                 // observer instead of consuming it here.
-                delivery.deliver_at_accessor_terminal(store);
+                delivery
+                    .deliver_at_accessor_terminal(store)
+                    .await
+                    .map_err(HttpError::trap)?;
             } else {
                 // Unpersisted live call (snapshotting): the original span handling
                 // applies.
@@ -759,7 +768,10 @@ where
             // Everything since the `End` was synchronous, so no tear window remains between
             // here and handing the token to Wasmtime's terminal observer, which settles it
             // when the guest actually consumes (or discards) the lowered response.
-            delivery.deliver_at_accessor_terminal(store);
+            delivery
+                .deliver_at_accessor_terminal(store)
+                .await
+                .map_err(HttpError::trap)?;
             Ok(response)
         }
         Err(error_code) => {
@@ -847,7 +859,10 @@ where
             // The guest-visible error return below still crosses Wasmtime's lowering and
             // terminal-consumption boundary: hand the token to the terminal observer instead
             // of consuming it here.
-            delivery.deliver_at_accessor_terminal(store);
+            delivery
+                .deliver_at_accessor_terminal(store)
+                .await
+                .map_err(HttpError::trap)?;
             Err(error_code.into())
         }
     }

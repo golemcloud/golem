@@ -33,6 +33,10 @@ pub enum Resolution {
     Completed {
         end_idx: OplogIndex,
         response: Option<OplogPayload<HostResponse>>,
+        /// The physical guest-delivery boundary for oplogs recorded with completion markers.
+        /// Host-side replay continues after `End`, but the result may not cross to the guest until
+        /// the matching token positionally consumes this marker.
+        delivery_marker: Option<OplogIndex>,
         #[expect(
             dead_code,
             reason = "preserved for the concurrent-durability replay model"
@@ -115,6 +119,10 @@ pub enum DeferredCallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
 pub struct ConcurrentReplayResolver {
     /// Awaiters that have registered but whose resolution has not been observed yet.
     pending: HashMap<OplogIndex, ReplayableOneshot<ResolutionOutcome>>,
+    /// Marked successful completions whose payload has been read ahead and delivered to their host
+    /// continuation without advancing the positional cursor. The matching terminal still has to
+    /// be auto-drained when the cursor reaches its recorded index.
+    prefetched_terminals: HashMap<OplogIndex, OplogIndex>,
     /// Resolutions observed before their awaiter registered. The await-resolution guard
     /// guarantees a call's `Start` is claimed before its `End`/`Cancelled` is consumed, so on the
     /// replay path this stays empty; it covers the resolver's own unit tests and any future entry
@@ -167,13 +175,38 @@ impl ConcurrentReplayResolver {
     /// for a call nobody is awaiting — e.g. the guest-facing manual durability pair written by
     /// `persist_durable_function_invocation`, which is consumed through the same cursor but never
     /// registers an awaiter — is silently ignored rather than buffered forever.
-    pub fn resolve_if_pending(&mut self, start_idx: OplogIndex, resolution: Resolution) -> bool {
+    pub fn resolve_if_pending(
+        &mut self,
+        start_idx: OplogIndex,
+        terminal_idx: OplogIndex,
+        resolution: Resolution,
+    ) -> bool {
         if let Some(tx) = self.pending.remove(&start_idx) {
             let _ = tx.send(ResolutionOutcome::Resolved(resolution));
+            true
+        } else if self.prefetched_terminals.get(&start_idx) == Some(&terminal_idx) {
+            self.prefetched_terminals.remove(&start_idx);
             true
         } else {
             false
         }
+    }
+
+    /// Resolves an already-registered marked completion from a non-consuming oplog lookahead.
+    /// The terminal index remains registered so the positional cursor auto-drains that exact entry
+    /// later instead of exposing it to another reader.
+    pub fn resolve_prefetched(
+        &mut self,
+        start_idx: OplogIndex,
+        terminal_idx: OplogIndex,
+        resolution: Resolution,
+    ) {
+        let tx = self
+            .pending
+            .remove(&start_idx)
+            .expect("a completion is prefetched only while registering its claimed Start");
+        self.prefetched_terminals.insert(start_idx, terminal_idx);
+        let _ = tx.send(ResolutionOutcome::Resolved(resolution));
     }
 
     /// Resolves every still-registered awaiter as [`ResolutionOutcome::Incomplete`].
@@ -188,6 +221,7 @@ impl ConcurrentReplayResolver {
         for (_start_idx, tx) in self.pending.drain() {
             let _ = tx.send(ResolutionOutcome::Incomplete);
         }
+        self.prefetched_terminals.clear();
     }
 
     /// Removes a registered awaiter without resolving it. Used when a claimed call turns out to be
@@ -197,14 +231,26 @@ impl ConcurrentReplayResolver {
         self.pending.remove(&start_idx);
     }
 
-    /// Returns whether an awaiter is currently registered for `start_idx`.
+    /// Returns whether the terminal at `terminal_idx` belongs to an active resolver claim. This is
+    /// true both for an unresolved awaiter and for a marked completion that was prefetched without
+    /// consuming its terminal.
     ///
     /// The replay cursor uses this to decide which `End`/`Cancelled` entries are *awaited
     /// terminals* it may auto-drain (and route back to their awaiter) versus the ones it must leave
     /// for their own positional consumer: scope `End`s, unclaimed `Start`s, and deterministic
     /// markers.
+    pub fn owns_terminal(&self, start_idx: OplogIndex, terminal_idx: OplogIndex) -> bool {
+        self.pending.contains_key(&start_idx)
+            || self.prefetched_terminals.get(&start_idx) == Some(&terminal_idx)
+    }
+
+    #[cfg(test)]
     pub fn is_pending(&self, start_idx: OplogIndex) -> bool {
         self.pending.contains_key(&start_idx)
+    }
+
+    pub fn has_claim(&self, start_idx: OplogIndex) -> bool {
+        self.pending.contains_key(&start_idx) || self.prefetched_terminals.contains_key(&start_idx)
     }
 }
 

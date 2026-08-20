@@ -65,6 +65,7 @@ message RawOplogEntry {
     RawCardExpiredParameters card_expired = 50;
     RawHostStreamFrameParameters host_stream_frame = 51;
     RawCompletionDiscardedParameters completion_discarded = 52;
+    RawCompletionDeliveredParameters completion_delivered = 53;
   }
 }
 
@@ -171,6 +172,10 @@ message RawCancelledParameters {
 }
 
 message RawCompletionDiscardedParameters {
+  uint64 start_index = 1;
+}
+
+message RawCompletionDeliveredParameters {
   uint64 start_index = 1;
 }
 

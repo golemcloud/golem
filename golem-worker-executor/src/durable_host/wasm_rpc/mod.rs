@@ -1739,7 +1739,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             // The wire result returned below still crosses Wasmtime's lowering
                             // and terminal-consumption boundary: hand the token to the terminal
                             // observer instead of consuming it here.
-                            delivery.deliver_at_accessor_terminal(accessor);
+                            delivery.deliver_at_accessor_terminal(accessor).await?;
                             Ok(wire)
                         }
                         Err(err) => {
@@ -1772,7 +1772,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     let wire = accessor.with(|mut access| {
                         invoke_and_await_response_to_wire(response.result, access.get())
                     });
-                    delivery.delivered();
+                    delivery.deliver_at_accessor_terminal(accessor).await?;
                     wire
                 }
             }
