@@ -393,6 +393,76 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
+  # S11 — executor pod kill while agents are suspended on promises (GOL-377).
+  #
+  # The only scenario whose agents are asleep when the fault lands. Each waiter
+  # creates a promise, parks inside an invocation awaiting it, and is resolved
+  # from outside a few seconds later. Killing the executor that owns them asks
+  # whether a completion the platform accepted still reaches the agent it was
+  # meant to wake, exactly once, after the shards move.
+  #
+  # Like S10 the driver names the pod and keeps driving the waiters on the other
+  # executor as a control group. Unlike every other scenario, its agents live in
+  # the promise component rather than the counters one.
+  - code: S11
+    name: executor-crash-during-promise-completion
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # The workflow narrows the selector to the pod the driver named; `one`
+      # stays as the belt-and-braces bound, exactly as in S8 and S10.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Long enough for cold starts and route warm-up to settle, so the kill
+      # lands on a population that has been cycling steadily rather than one
+      # still arriving.
+      baselineSecs: 180
+      # Covers the kill, the reschedule, and the shard reassignment that has to
+      # happen before anything can resume a waiter the dead executor owned.
+      faultSecs: 120
+      # Rounds continue throughout. Long enough that waiters disturbed by the
+      # kill get several whole rounds afterwards, so a waiter that recovered
+      # late is distinguishable from one that never did.
+      recoverySecs: 300
+
+    promise:
+      # 200 waiters, each parked on at most one promise, so 200 agents are
+      # suspended at any instant. Also the resolution of the report: a lost
+      # wakeup localises to one waiter out of two hundred.
+      waiters: 200
+      # 5s parked before the completion goes out, so ~40 completions a second
+      # across the pool. It has to comfortably exceed the workflow's
+      # inject-and-verify path — signal poll (5s) plus `kubectl apply` plus
+      # waiting for `AllInjected` — or every promise armed before the kill would
+      # already have been completed by the time the pod died.
+      dwellMillis: 5000
+      # What resuming a suspended waiter may cost, and the number the wakeup
+      # delay percentiles are reported against. Derived rather than picked: a
+      # shard reassignment has to complete before anything owns the waiter, and
+      # then the worker has to be recovered and its oplog replayed to the point
+      # it was parked at. 60s covers both without being so generous that a
+      # regression would sit inside it.
+      #
+      # Recorded, not asserted. A p99 past it is an attention line and a number
+      # in the result, because how much a reassignment may cost is a judgement.
+      wakeupBudgetSecs: 60
+
+    retryPolicy:
+      # Identical to the others. One extra consequence here, spelled out in
+      # integration-tests/src/chaos/waiters.rs: a completion retry can repair a
+      # wakeup that was lost, but only for a completion that had *not* already
+      # been accepted — so the question this scenario asks, about completions the
+      # platform confirmed, is untouched by it.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
   # S13 — rolling executor restarts under load (GOL-367).
   #
   # One executor killed every 60 seconds for five minutes while the mixed

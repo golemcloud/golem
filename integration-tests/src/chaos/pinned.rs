@@ -63,6 +63,7 @@ use crate::chaos::history::Stream;
 use crate::chaos::workload::{self, WorkloadContext};
 use anyhow::Context;
 use golem_common::base_model::agent::ParsedAgentId;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentId, RoutingTable};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -123,9 +124,20 @@ pub fn candidate_agent_name(key_prefix: &str, index: u32) -> String {
 /// ownership calculation would be answering a different question from the one
 /// the platform answers.
 pub fn routing_agent_id(ctx: &WorkloadContext, agent_type: &str, agent: &str) -> AgentId {
+    routing_agent_id_in(&ctx.counters, agent_type, agent)
+}
+
+/// [`routing_agent_id`] against a named component rather than the counters one.
+///
+/// Ownership is per agent id and an agent id contains its component, so an agent
+/// type that lives in a different component — S11's waiters are in the promise
+/// component — hashes to a different shard than the same name would under
+/// `counters`. Looking one up against the wrong component would silently aim a
+/// kill at whichever executor happened to own a name nothing uses.
+pub fn routing_agent_id_in(component: &ComponentDto, agent_type: &str, agent: &str) -> AgentId {
     let parsed: ParsedAgentId = agent_id!(agent_type, agent.to_string());
     AgentId {
-        component_id: ctx.counters.id,
+        component_id: component.id,
         agent_id: parsed.to_string(),
     }
 }
@@ -142,9 +154,19 @@ pub fn owners_by_pod(
     agent_type: &str,
     agents: &[String],
 ) -> BTreeMap<String, Vec<String>> {
+    owners_by_pod_in(&ctx.counters, table, agent_type, agents)
+}
+
+/// [`owners_by_pod`] against a named component. See [`routing_agent_id_in`].
+pub fn owners_by_pod_in(
+    component: &ComponentDto,
+    table: &RoutingTable,
+    agent_type: &str,
+    agents: &[String],
+) -> BTreeMap<String, Vec<String>> {
     let mut by_pod: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for agent in agents {
-        if let Some(pod) = table.lookup(&routing_agent_id(ctx, agent_type, agent)) {
+        if let Some(pod) = table.lookup(&routing_agent_id_in(component, agent_type, agent)) {
             by_pod
                 .entry(pod.to_string())
                 .or_default()

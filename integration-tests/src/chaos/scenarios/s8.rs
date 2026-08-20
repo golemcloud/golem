@@ -153,6 +153,7 @@ pub async fn run(
                     termination_reason: $reason,
                     pinned_selection: selection.clone(),
                     scheduled_selection: None,
+                    promise_selection: None,
                 },
             );
             write_outputs(&result, &history, outputs)?;

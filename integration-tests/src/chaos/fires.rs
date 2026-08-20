@@ -101,54 +101,16 @@ use std::time::Duration;
 /// number of findings.
 const MAX_FINDINGS: usize = 200;
 
-/// The fault window, as the workflow reported it.
-#[derive(Debug, Clone, Copy)]
-pub struct FaultWindow {
-    pub injected_at: DateTime<Utc>,
-    /// Absent for a run that never saw the fault clear.
-    pub recovered_at: Option<DateTime<Utc>>,
-}
+/// The fault window, as the workflow reported it. See
+/// [`crate::chaos::split::FaultWindow`].
+pub type FaultWindow = crate::chaos::split::FaultWindow;
 
 /// Which side of the fault an action was due on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum FireWindow {
-    BeforeFault,
-    DuringFault,
-    AfterFault,
-    /// The run never learned when the fault was injected, so no action can be
-    /// placed relative to it.
-    Unknown,
-}
-
-impl FireWindow {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            FireWindow::BeforeFault => "before-fault",
-            FireWindow::DuringFault => "during-fault",
-            FireWindow::AfterFault => "after-fault",
-            FireWindow::Unknown => "unknown",
-        }
-    }
-
-    fn of(due: DateTime<Utc>, fault: Option<FaultWindow>) -> Self {
-        match fault {
-            None => FireWindow::Unknown,
-            Some(window) if due < window.injected_at => FireWindow::BeforeFault,
-            Some(FaultWindow {
-                recovered_at: Some(recovered),
-                ..
-            }) if due >= recovered => FireWindow::AfterFault,
-            Some(_) => FireWindow::DuringFault,
-        }
-    }
-}
-
-impl std::fmt::Display for FireWindow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+///
+/// An alias rather than a type of its own: every scenario that reports against a
+/// fault window asks the same question, and `fireWindow` is the key an archived
+/// S10 result already carries.
+pub type FireWindow = crate::chaos::split::Window;
 
 /// Whether an action's target was on the executor the fault killed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

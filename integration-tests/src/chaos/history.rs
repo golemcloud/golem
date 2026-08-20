@@ -67,6 +67,12 @@ pub enum Stream {
     /// one known executor, so mixing them into the durable population would
     /// blur two different experiments.
     PinnedHttp,
+    /// `PromiseWaiter.arm` / `wait` / the external completion that resolves it
+    /// (GOL-377). Distinct from `Promise` even though both land on the promise
+    /// component: that stream creates and resolves a promise in one breath with
+    /// nobody suspended on it, and this one exists precisely to leave an agent
+    /// parked across a fault.
+    PromiseWait,
 }
 
 impl Stream {
@@ -78,6 +84,7 @@ impl Stream {
             Stream::Promise => "promise",
             Stream::Quota => "quota",
             Stream::PinnedHttp => "pinned-http",
+            Stream::PromiseWait => "promise-wait",
         }
     }
 
@@ -91,6 +98,11 @@ impl Stream {
     /// - `Promise` operations resolve a one-shot promise rather than advancing a
     ///   counter, so there is no accumulated number to read. They are reported
     ///   on created/completed counts and latency.
+    /// - `PromiseWait` agents *do* keep a durable count, but comparing totals
+    ///   would be strictly weaker than what S11 already does with them: every
+    ///   completion carries a token into the waiter's wakeup log, so the report
+    ///   pairs individual completions against individual wakeups instead of
+    ///   arguing about sums. See [`crate::chaos::wakeups`].
     pub fn has_readback(self) -> bool {
         matches!(
             self,
@@ -98,13 +110,14 @@ impl Stream {
         )
     }
 
-    pub const ALL: [Stream; 6] = [
+    pub const ALL: [Stream; 7] = [
         Stream::Durable,
         Stream::Ephemeral,
         Stream::Scheduled,
         Stream::Promise,
         Stream::Quota,
         Stream::PinnedHttp,
+        Stream::PromiseWait,
     ];
 }
 
@@ -388,6 +401,71 @@ pub struct HistoryDocument {
     /// wonders whether the section was dropped.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scheduled_fires: Vec<TargetFireLog>,
+    /// Per-waiter wakeup logs, for the scenarios that park agents on promises.
+    /// Empty for every other scenario rather than absent, for the same reason as
+    /// `scheduled_fires`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promise_wakeups: Vec<WaiterWakeupLog>,
+}
+
+/// One wakeup, as the waiter agent recorded it (GOL-377).
+///
+/// The times are the *cluster's*, stamped inside the agent, which is what makes
+/// this log the authority on whether a completion landed. The driver's own view
+/// is in the operation record for the `wait` invocation, and during the fault
+/// that view is frequently just a broken connection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WakeupRecord {
+    /// The round's idempotency key, carried in by `arm` and back out by the
+    /// wakeup. This is what pairs a completion to the wakeup it caused.
+    pub token: String,
+    /// When the waiter armed the promise.
+    pub armed_at: DateTime<Utc>,
+    /// When the platform resumed the waiter.
+    pub woken_at: DateTime<Utc>,
+}
+
+impl WakeupRecord {
+    /// How long the waiter was parked, on one clock.
+    ///
+    /// Both ends are stamped by the executor, so this is free of the driver ↔
+    /// cluster skew that the completion-to-wakeup delay carries. It is not the
+    /// delay itself — it also contains the round's deliberate dwell — but it is
+    /// what lets a reader tell a slow wakeup from a skewed clock.
+    pub fn parked_ms(&self) -> i64 {
+        (self.woken_at - self.armed_at).num_milliseconds()
+    }
+}
+
+/// Everything read back from one waiter agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaiterWakeupLog {
+    pub agent: String,
+    /// `PromiseWaiter.wakes`, which keeps counting past the log's cap and is
+    /// therefore what says whether the log below is complete.
+    pub wakes: Option<u64>,
+    pub wakeups: Vec<WakeupRecord>,
+    /// Why the agent could not be read, when it could not be.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl WaiterWakeupLog {
+    /// Whether this log can testify about its own completions.
+    ///
+    /// Same two ways it cannot as [`TargetFireLog::is_complete`], and the same
+    /// consequence: without a whole log an absent wakeup is ambiguous between a
+    /// lost completion and a dropped log entry, and S11 must not call the second
+    /// one a finding.
+    pub fn is_complete(&self) -> bool {
+        match (self.error.is_some(), self.wakes) {
+            (true, _) => false,
+            (false, Some(wakes)) => self.wakeups.len() as u64 >= wakes,
+            (false, None) => false,
+        }
+    }
 }
 
 /// Append-only operation log, shared across the concurrent workload streams.
@@ -400,6 +478,7 @@ pub struct OperationHistory {
     inner: Arc<Mutex<Vec<OperationRecord>>>,
     next_id: Arc<std::sync::atomic::AtomicU64>,
     fire_logs: Arc<Mutex<Vec<TargetFireLog>>>,
+    wakeup_logs: Arc<Mutex<Vec<WaiterWakeupLog>>>,
 }
 
 impl OperationHistory {
@@ -409,6 +488,7 @@ impl OperationHistory {
             inner: Arc::new(Mutex::new(Vec::new())),
             next_id: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             fire_logs: Arc::new(Mutex::new(Vec::new())),
+            wakeup_logs: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -458,6 +538,10 @@ impl OperationHistory {
         *self.fire_logs.lock().unwrap() = logs;
     }
 
+    pub fn record_wakeup_logs(&self, logs: Vec<WaiterWakeupLog>) {
+        *self.wakeup_logs.lock().unwrap() = logs;
+    }
+
     pub fn document(&self, partial: bool) -> HistoryDocument {
         HistoryDocument {
             schema_version: HISTORY_SCHEMA_VERSION,
@@ -465,6 +549,7 @@ impl OperationHistory {
             partial,
             operations: self.snapshot(),
             scheduled_fires: self.fire_logs.lock().unwrap().clone(),
+            promise_wakeups: self.wakeup_logs.lock().unwrap().clone(),
         }
     }
 
