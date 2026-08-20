@@ -247,6 +247,12 @@ impl<T: Clone> GrpcClient<T> {
         );
         loop {
             attempts.start();
+            // Timed from before the connection is established, because the caller
+            // waits for that too. Establishment used to happen inside the RPC, so
+            // leaving the timer below it would quietly drop a whole
+            // `connect_timeout` out of `internal_grpc_success_seconds` on exactly
+            // the cold and reconnecting attempts this change is about.
+            let started = Instant::now();
             // A failed connection attempt goes through the same retry path as a
             // failed call, so `retries_on_unavailable` still governs it.
             let mut entry = match self.connected_client().await {
@@ -257,7 +263,6 @@ impl<T: Clone> GrpcClient<T> {
                 },
             };
 
-            let started = Instant::now();
             match f(&mut entry.client).instrument(attempts.span()).await {
                 Ok(result) => {
                     attempts.succeeded(started.elapsed());
@@ -354,6 +359,12 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         );
         loop {
             attempts.start();
+            // Timed from before the connection is established, because the caller
+            // waits for that too. Establishment used to happen inside the RPC, so
+            // leaving the timer below it would quietly drop a whole
+            // `connect_timeout` out of `internal_grpc_success_seconds` on exactly
+            // the cold and reconnecting attempts this change is about.
+            let started = Instant::now();
             // A failed connection attempt goes through the same retry path as a
             // failed call, so `retries_on_unavailable` still governs it.
             let mut entry = match self.connected_client(endpoint.clone()).await {
@@ -364,7 +375,6 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                 },
             };
 
-            let started = Instant::now();
             match f(&mut entry.client).instrument(attempts.span()).await {
                 Ok(result) => {
                     attempts.succeeded(started.elapsed());
