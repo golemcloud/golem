@@ -618,19 +618,8 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             if let Some(event) = event {
                 self.emit_log_event(event).await;
                 Ok::<(), StreamError>(())
-            } else if !self.state.open_filesystem_output_streams.contains_key(&rep) {
-                HostOutputStream::write(self.table(), self_, contents).await
             } else {
-                let stream_rep = self_.rep();
-                if filesystem_stream_effect_is_active(self, stream_rep)? {
-                    return HostOutputStream::write(self.table(), self_, contents).await;
-                }
-                let effect = begin_filesystem_stream_effect(self, stream_rep).await?;
-                prepare_filesystem_stream_effect(self, stream_rep, effect)?;
-
-                let result = HostOutputStream::write(self.table(), self_, contents).await;
-                clear_unused_filesystem_stream_effect(self, stream_rep)?;
-                result
+                HostOutputStream::write(self.table(), self_, contents).await
             }
         }
     }
@@ -923,27 +912,6 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         } else {
             self.observe_function_call("io::streams::output_stream", "write_zeroes");
 
-            // Only file-backed streams participate in filesystem effect coordination.
-            let is_console = {
-                let output = self.table().get(&self_)?;
-                output.as_any().downcast_ref::<ManagedStdOut>().is_some()
-                    || output.as_any().downcast_ref::<ManagedStdErr>().is_some()
-            };
-
-            let is_file_stream = self.state.open_filesystem_output_streams.contains_key(&rep);
-            if !is_console && is_file_stream {
-                let stream_rep = self_.rep();
-                if filesystem_stream_effect_is_active(self, stream_rep)? {
-                    return HostOutputStream::write_zeroes(self.table(), self_, len).await;
-                }
-                let effect = begin_filesystem_stream_effect(self, stream_rep).await?;
-                prepare_filesystem_stream_effect(self, stream_rep, effect)?;
-
-                let result = HostOutputStream::write_zeroes(self.table(), self_, len).await;
-                clear_unused_filesystem_stream_effect(self, stream_rep)?;
-                return result;
-            }
-
             HostOutputStream::write_zeroes(self.table(), self_, len).await
         }
     }
@@ -1068,23 +1036,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
         } else {
             self.observe_function_call("io::streams::output_stream", "splice");
 
-            let stream_rep = self_.rep();
-            if !self
-                .state
-                .open_filesystem_output_streams
-                .contains_key(&stream_rep)
-            {
-                return HostOutputStream::splice(self.table(), self_, src, len).await;
-            }
-            if filesystem_stream_effect_is_active(self, stream_rep)? {
-                return HostOutputStream::splice(self.table(), self_, src, len).await;
-            }
-            let effect = begin_filesystem_stream_effect(self, stream_rep).await?;
-            prepare_filesystem_stream_effect(self, stream_rep, effect)?;
-
-            let result = HostOutputStream::splice(self.table(), self_, src, len).await;
-            clear_unused_filesystem_stream_effect(self, stream_rep)?;
-            result
+            HostOutputStream::splice(self.table(), self_, src, len).await
         }
     }
 
@@ -1141,23 +1093,16 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             self.observe_function_call("io::streams::output_stream", "blocking_splice");
 
             let stream_rep = self_.rep();
-            if !self
+            if self
                 .state
                 .open_filesystem_output_streams
                 .contains_key(&stream_rep)
+                && filesystem_stream_effect_is_active(self, stream_rep)?
             {
-                return HostOutputStream::blocking_splice(self.table(), self_, src, len).await;
-            }
-            if filesystem_stream_effect_is_active(self, stream_rep)? {
                 let readiness = self.table().get_mut(&self_)?.write_ready().await;
                 readiness?;
             }
-            let effect = begin_filesystem_stream_effect(self, stream_rep).await?;
-            prepare_filesystem_stream_effect(self, stream_rep, effect)?;
-
-            let result = HostOutputStream::blocking_splice(self.table(), self_, src, len).await;
-            clear_unused_filesystem_stream_effect(self, stream_rep)?;
-            result
+            HostOutputStream::blocking_splice(self.table(), self_, src, len).await
         }
     }
 
@@ -1540,60 +1485,4 @@ fn filesystem_stream_effect_is_active<Ctx: WorkerCtx>(
         .as_any()
         .downcast_ref::<crate::services::agent_filesystem::ClassifiedFileOutputStream>()
         .is_some_and(|stream| stream.is_active()))
-}
-
-async fn begin_filesystem_stream_effect<Ctx: WorkerCtx>(
-    ctx: &DurableWorkerCtx<Ctx>,
-    stream_rep: u32,
-) -> Result<crate::services::agent_filesystem::AgentFilesystemEffectLease, StreamError> {
-    let append = ctx
-        .state
-        .open_filesystem_output_streams
-        .get(&stream_rep)
-        .is_some_and(|state| state.position.is_none());
-    if append {
-        ctx.filesystem_runtime()
-            .begin_append_effect()
-            .await
-            .map_err(StreamError::Trap)
-    } else {
-        ctx.filesystem_runtime()
-            .begin_effect()
-            .await
-            .map_err(StreamError::Trap)
-    }
-}
-
-fn prepare_filesystem_stream_effect<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    stream_rep: u32,
-    effect: crate::services::agent_filesystem::AgentFilesystemEffectLease,
-) -> Result<(), StreamError> {
-    let stream = Resource::<OutputStream>::new_borrow(stream_rep);
-    let output = ctx.table().get(&stream)?;
-    let stream = output
-        .as_any()
-        .downcast_ref::<crate::services::agent_filesystem::ClassifiedFileOutputStream>()
-        .ok_or_else(|| {
-            StreamError::Trap(wasmtime::Error::msg(
-                "filesystem output stream is not coordinated",
-            ))
-        })?;
-    stream.prepare_effect(effect);
-    Ok(())
-}
-
-fn clear_unused_filesystem_stream_effect<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    stream_rep: u32,
-) -> Result<(), StreamError> {
-    let stream = Resource::<OutputStream>::new_borrow(stream_rep);
-    let output = ctx.table().get(&stream)?;
-    if let Some(stream) = output
-        .as_any()
-        .downcast_ref::<crate::services::agent_filesystem::ClassifiedFileOutputStream>(
-    ) {
-        stream.clear_unused_effect();
-    }
-    Ok(())
 }

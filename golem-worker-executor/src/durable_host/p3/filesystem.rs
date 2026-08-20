@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -30,24 +29,24 @@ use crate::durable_host::tail_work::TailActivity;
 #[cfg(test)]
 use crate::services::agent_filesystem::state_postcondition;
 use crate::services::agent_filesystem::{
-    AgentFilesystemRuntime, FILESYSTEM_MUTATION_MAX_ATTEMPTS, FILESYSTEM_MUTATION_RETRY_TIMEOUT,
-    MutationDecision, MutationEffect, MutationFailure, MutationOperation, MutationPostcondition,
-    NativeMutationGuestError, NativeOpenOptions, NativeOpenResult, PathObjectType, RequestedTime,
-    create_directory as native_create_directory, create_directory_postcondition, descriptor_state,
-    descriptor_times, hard_link as native_hard_link, link_postcondition,
-    native_write_failure_effect, open as native_open, open_postcondition, path_state,
-    path_state_with_follow, path_times, proven_write_progress_effect,
-    remove_directory as native_remove_directory, remove_postcondition, rename as native_rename,
-    rename_postcondition, resize_file as native_resize_file, resize_postcondition,
-    run_blocking_filesystem_mutation, set_descriptor_times as native_set_descriptor_times,
-    set_path_times as native_set_path_times, symlink as native_symlink, symlink_postcondition,
-    symlink_state, sync_descriptor as native_sync_descriptor, times_postcondition,
+    AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemRuntime,
+    AgentFilesystemWriteMode, AgentFilesystemWriter, FILESYSTEM_MUTATION_MAX_ATTEMPTS,
+    FILESYSTEM_MUTATION_RETRY_TIMEOUT, MutationDecision, MutationEffect, MutationFailure,
+    MutationOperation, MutationPostcondition, NativeMutationGuestError, NativeOpenOptions,
+    NativeOpenResult, PathObjectType, RequestedTime, create_directory as native_create_directory,
+    create_directory_postcondition, descriptor_state, descriptor_times,
+    hard_link as native_hard_link, link_postcondition, open as native_open, open_postcondition,
+    path_state, path_state_with_follow, path_times, remove_directory as native_remove_directory,
+    remove_postcondition, rename as native_rename, rename_postcondition,
+    resize_file as native_resize_file, resize_postcondition, run_blocking_filesystem_mutation,
+    set_descriptor_times as native_set_descriptor_times, set_path_times as native_set_path_times,
+    symlink as native_symlink, symlink_postcondition, symlink_state,
+    sync_descriptor as native_sync_descriptor, times_postcondition,
     unlink_file as native_unlink_file, validate_descriptor_times, validate_directory_mutation,
     validate_open, validate_resize, validate_two_directory_mutation,
 };
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
-use cap_std::fs::FileExt;
 use golem_common::model::oplog::host_functions::{
     P3FilesystemTypesDescriptorStat, P3FilesystemTypesDescriptorStatAt,
 };
@@ -68,9 +67,8 @@ use wasmtime_wasi::runtime::spawn_blocking;
 use wasmtime_wasi::{DirPerms, FilePerms, ResourceTableError};
 
 struct FilesystemWriteChunk {
-    contents: Vec<u8>,
     result_tx: tokio::sync::oneshot::Sender<(usize, FilesystemWriteResult)>,
-    admission: crate::services::agent_filesystem::AgentFilesystemEffectAdmission,
+    admitted: AdmittedFilesystemWrite,
     cancellation: tokio_util::sync::CancellationToken,
 }
 
@@ -292,6 +290,7 @@ struct FilesystemWriteConsumer {
     pending_chunk: Option<PendingFilesystemWriteChunk>,
     pending_invalidation: Option<Pin<Box<dyn Future<Output = ()> + Send>>>,
     filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
+    writer: AgentFilesystemWriter,
 }
 
 struct PendingFilesystemWriteChunk {
@@ -303,12 +302,14 @@ impl FilesystemWriteConsumer {
     fn new(
         chunks_tx: tokio::sync::mpsc::UnboundedSender<FilesystemWriteChunk>,
         filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
+        writer: AgentFilesystemWriter,
     ) -> Self {
         Self {
             chunks_tx: Some(chunks_tx),
             pending_chunk: None,
             pending_invalidation: None,
             filesystem_runtime,
+            writer,
         }
     }
 
@@ -424,13 +425,17 @@ impl<D> StreamConsumer<D> for FilesystemWriteConsumer {
             };
 
             let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-            let admission = self.filesystem_runtime.admit_effect()?;
+            let admitted = self
+                .writer
+                .admit(Bytes::copy_from_slice(bytes))
+                .map_err(|_| {
+                    wasmtime::Error::msg("agent filesystem mutation invalidated the runtime")
+                })?;
             let cancellation = tokio_util::sync::CancellationToken::new();
             chunks_tx
                 .send(FilesystemWriteChunk {
-                    contents: bytes.to_vec(),
                     result_tx,
-                    admission,
+                    admitted,
                     cancellation: cancellation.clone(),
                 })
                 .map_err(|_| wasmtime::Error::msg("filesystem write task dropped"))?;
@@ -449,15 +454,7 @@ impl Drop for FilesystemWriteConsumer {
     }
 }
 
-#[derive(Clone, Copy)]
-enum FilesystemWriteMode {
-    At(types::Filesize),
-    Append,
-}
-
 struct FilesystemWriteTask<Ctx> {
-    file: File,
-    mode: FilesystemWriteMode,
     chunks_rx: tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
     result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
     filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
@@ -467,16 +464,12 @@ struct FilesystemWriteTask<Ctx> {
 
 impl<Ctx> FilesystemWriteTask<Ctx> {
     fn new(
-        file: File,
-        mode: FilesystemWriteMode,
         chunks_rx: tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
         result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
         filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
         activity: TailActivity,
     ) -> Self {
         Self {
-            file,
-            mode,
             chunks_rx,
             result_tx,
             filesystem_runtime,
@@ -493,22 +486,14 @@ where
 {
     async fn run(self, _accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
         let FilesystemWriteTask {
-            file,
-            mode,
             mut chunks_rx,
             result_tx,
             filesystem_runtime,
             activity,
             _phantom,
         } = self;
-        let result = run_streaming_filesystem_write(
-            &file,
-            mode,
-            &mut chunks_rx,
-            &filesystem_runtime,
-            &activity,
-        )
-        .await;
+        let result =
+            run_streaming_filesystem_write(&mut chunks_rx, &filesystem_runtime, &activity).await;
         if !result_tx.is_closed() {
             let _ = result_tx.send(result);
         }
@@ -989,57 +974,19 @@ async fn wait_filesystem_task_result(
 // the guest re-issues the same writes which deterministically rebuild the
 // transient worker filesystem.
 async fn run_streaming_filesystem_write(
-    file: &File,
-    mode: FilesystemWriteMode,
     chunks_rx: &mut tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
     filesystem_runtime: &crate::services::agent_filesystem::AgentFilesystemRuntime,
     activity: &TailActivity,
 ) -> wasmtime::Result<Result<(), types::ErrorCode>> {
     let mut result: FilesystemWriteResult = Ok(());
-    let mut position = match mode {
-        FilesystemWriteMode::At(offset) => Some(offset),
-        FilesystemWriteMode::Append => None,
-    };
     // Safe park: each chunk is guest-produced stream data.
     while let Some(chunk) = activity.park(chunks_rx.recv()).await {
         let cancellation = chunk.cancellation.clone();
         let written_len = if result.is_ok() {
-            let effect = match position {
-                Some(_) => chunk.admission.begin().await?,
-                None => chunk.admission.begin_append().await?,
-            };
-            let chunk_mode = match position {
-                Some(offset) => FilesystemWriteMode::At(offset),
-                None => FilesystemWriteMode::Append,
-            };
-            let (written_len, mut write_result) = run_live_filesystem_write_chunk(
-                file.clone(),
-                filesystem_runtime,
-                chunk_mode,
-                chunk.contents,
-                effect,
-                chunk.cancellation,
-            )
-            .await;
-            if let Some(offset) = &mut position {
-                let next_offset = u64::try_from(written_len)
-                    .ok()
-                    .and_then(|written_len| offset.checked_add(written_len));
-                match next_offset {
-                    Some(next_offset) => *offset = next_offset,
-                    None if write_result.is_ok() => {
-                        (_, write_result) = invariant_write_failure(
-                            filesystem_runtime,
-                            written_len,
-                            "filesystem stream write offset overflowed",
-                        )
-                        .await;
-                    }
-                    None => {}
-                }
-            }
+            let (written, write_result) =
+                p3_write_result(chunk.admitted.execute(chunk.cancellation).await);
             result = write_result;
-            written_len
+            written
         } else {
             0
         };
@@ -1057,6 +1004,41 @@ async fn run_streaming_filesystem_write(
     filesystem_write_result_to_wasi(result)
 }
 
+fn p3_write_result(
+    result: Result<u64, AgentFilesystemMutationError>,
+) -> (usize, FilesystemWriteResult) {
+    match result {
+        Ok(completed) | Err(AgentFilesystemMutationError::Cancelled { completed }) => (
+            usize::try_from(completed).expect("completed write length must fit usize"),
+            Ok(()),
+        ),
+        Err(AgentFilesystemMutationError::Native { error, completed }) => (
+            usize::try_from(completed).expect("completed write length must fit usize"),
+            Err(FilesystemWriteFailure::Guest(types::ErrorCode::from(
+                &error.into_io_error(),
+            ))),
+        ),
+        Err(AgentFilesystemMutationError::QuotaExhausted { completed, .. }) => (
+            usize::try_from(completed).expect("completed write length must fit usize"),
+            Err(FilesystemWriteFailure::Guest(types::ErrorCode::Quota)),
+        ),
+        Err(AgentFilesystemMutationError::InsufficientSpace { completed, .. }) => (
+            usize::try_from(completed).expect("completed write length must fit usize"),
+            Err(FilesystemWriteFailure::Guest(
+                types::ErrorCode::InsufficientSpace,
+            )),
+        ),
+        Err(AgentFilesystemMutationError::RuntimeInvalidated { completed, .. }) => (
+            completed
+                .and_then(|completed| usize::try_from(completed).ok())
+                .unwrap_or(0),
+            Err(FilesystemWriteFailure::Trap(
+                "agent filesystem mutation invalidated the runtime".to_string(),
+            )),
+        ),
+    }
+}
+
 async fn deliver_filesystem_write_result(
     filesystem_runtime: &AgentFilesystemRuntime,
     result_tx: tokio::sync::oneshot::Sender<(usize, FilesystemWriteResult)>,
@@ -1071,271 +1053,6 @@ async fn deliver_filesystem_write_result(
         ));
     }
     Ok(())
-}
-
-async fn run_live_filesystem_write_chunk(
-    file: File,
-    filesystem_runtime: &crate::services::agent_filesystem::AgentFilesystemRuntime,
-    mode: FilesystemWriteMode,
-    contents: Vec<u8>,
-    effect: crate::services::agent_filesystem::AgentFilesystemEffectLease,
-    cancellation: tokio_util::sync::CancellationToken,
-) -> (usize, FilesystemWriteResult) {
-    run_classified_filesystem_write_chunk(
-        &LiveFilesystemChunkWriter { file },
-        filesystem_runtime,
-        mode,
-        contents,
-        effect,
-        cancellation,
-    )
-    .await
-}
-
-struct FilesystemWriteAttempt {
-    written: usize,
-    result: std::io::Result<()>,
-}
-
-#[async_trait::async_trait]
-trait FilesystemChunkWriter: Sync {
-    async fn write(
-        &self,
-        mode: FilesystemWriteMode,
-        contents: Bytes,
-        start: usize,
-        effect: Arc<crate::services::agent_filesystem::AgentFilesystemEffectLease>,
-    ) -> FilesystemWriteAttempt;
-}
-
-struct LiveFilesystemChunkWriter {
-    file: File,
-}
-
-#[async_trait::async_trait]
-impl FilesystemChunkWriter for LiveFilesystemChunkWriter {
-    async fn write(
-        &self,
-        mode: FilesystemWriteMode,
-        contents: Bytes,
-        start: usize,
-        effect: Arc<crate::services::agent_filesystem::AgentFilesystemEffectLease>,
-    ) -> FilesystemWriteAttempt {
-        let file = Arc::clone(&self.file.file);
-        spawn_blocking(move || {
-            let _effect = effect;
-            let suffix = &contents[start..];
-            let result = match mode {
-                FilesystemWriteMode::At(offset) => file.write_at(suffix, offset),
-                FilesystemWriteMode::Append => {
-                    let mut file = file.as_ref();
-                    file.seek(SeekFrom::End(0)).and_then(|_| file.write(suffix))
-                }
-            };
-            match result {
-                Ok(written) => FilesystemWriteAttempt {
-                    written,
-                    result: Ok(()),
-                },
-                Err(error) => FilesystemWriteAttempt {
-                    written: 0,
-                    result: Err(error),
-                },
-            }
-        })
-        .await
-    }
-}
-
-async fn run_classified_filesystem_write_chunk<W: FilesystemChunkWriter>(
-    writer: &W,
-    filesystem_runtime: &crate::services::agent_filesystem::AgentFilesystemRuntime,
-    mode: FilesystemWriteMode,
-    contents: Vec<u8>,
-    effect: crate::services::agent_filesystem::AgentFilesystemEffectLease,
-    cancellation: tokio_util::sync::CancellationToken,
-) -> (usize, FilesystemWriteResult) {
-    let effect = Arc::new(effect);
-    let contents = Bytes::from(contents);
-    let started = Instant::now();
-    let mut completed = 0usize;
-    let mut failed_attempts = 0;
-
-    while completed < contents.len() {
-        if cancellation.is_cancelled() {
-            return (completed, Ok(()));
-        }
-        let attempt_mode = match mode {
-            FilesystemWriteMode::At(offset) => {
-                let completed_offset = match u64::try_from(completed) {
-                    Ok(completed) => completed,
-                    Err(_) => {
-                        return invariant_write_failure(
-                            filesystem_runtime,
-                            completed,
-                            "filesystem write length exceeds u64",
-                        )
-                        .await;
-                    }
-                };
-                match offset.checked_add(completed_offset) {
-                    Some(offset) => FilesystemWriteMode::At(offset),
-                    None => {
-                        return invariant_write_failure(
-                            filesystem_runtime,
-                            completed,
-                            "filesystem write offset overflowed",
-                        )
-                        .await;
-                    }
-                }
-            }
-            FilesystemWriteMode::Append => FilesystemWriteMode::Append,
-        };
-        let attempt = writer
-            .write(
-                attempt_mode,
-                contents.clone(),
-                completed,
-                Arc::clone(&effect),
-            )
-            .await;
-        let remaining = contents.len() - completed;
-        if attempt.written > remaining {
-            return invariant_write_failure(
-                filesystem_runtime,
-                completed,
-                "filesystem writer reported more bytes than requested",
-            )
-            .await;
-        }
-        completed += attempt.written;
-
-        let (error, effect) = match attempt.result {
-            Ok(()) if attempt.written != 0 => {
-                if cancellation.is_cancelled() {
-                    return (completed, Ok(()));
-                }
-                continue;
-            }
-            Ok(()) => (
-                std::io::Error::from(std::io::ErrorKind::WriteZero),
-                proven_write_progress_effect(completed),
-            ),
-            Err(error) => {
-                let effect = native_write_failure_effect(&error, completed);
-                (error, effect)
-            }
-        };
-        failed_attempts += 1;
-        let raw_os_error = error.raw_os_error();
-        let error_kind = error.kind();
-        let error_message = error.to_string();
-        let decision = filesystem_runtime
-            .classify_mutation_failure_for(
-                MutationOperation::Write,
-                crate::services::agent_filesystem::MutationFailure::<types::ErrorCode>::Io(error),
-                effect,
-            )
-            .await;
-
-        use crate::services::agent_filesystem::MutationDecision;
-        match decision {
-            MutationDecision::BoundedRetry if cancellation.is_cancelled() => {
-                return (completed, Ok(()));
-            }
-            MutationDecision::BoundedRetry
-                if failed_attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                    && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT => {}
-            MutationDecision::BoundedRetry => {
-                let error = raw_os_error.map_or_else(
-                    || std::io::Error::new(error_kind, error_message),
-                    std::io::Error::from_raw_os_error,
-                );
-                return (completed, Err(FilesystemWriteFailure::Guest(error.into())));
-            }
-            MutationDecision::PreserveRaw => {
-                let error = raw_os_error.map_or_else(
-                    || std::io::Error::new(error_kind, error_message),
-                    std::io::Error::from_raw_os_error,
-                );
-                return (completed, Err(FilesystemWriteFailure::Guest(error.into())));
-            }
-            MutationDecision::PreserveGuest(error) => {
-                return (completed, Err(FilesystemWriteFailure::Guest(error)));
-            }
-            MutationDecision::Quota => {
-                return (
-                    completed,
-                    Err(FilesystemWriteFailure::Guest(types::ErrorCode::Quota)),
-                );
-            }
-            MutationDecision::InsufficientSpace => {
-                return (
-                    completed,
-                    Err(FilesystemWriteFailure::Guest(
-                        types::ErrorCode::InsufficientSpace,
-                    )),
-                );
-            }
-            MutationDecision::PhysicalPressure if cancellation.is_cancelled() => {
-                return (completed, Ok(()));
-            }
-            MutationDecision::PhysicalPressure
-                if failed_attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                    && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT
-                    && filesystem_runtime
-                        .recover_physical_pressure(
-                            MutationOperation::Write,
-                            started + FILESYSTEM_MUTATION_RETRY_TIMEOUT,
-                        )
-                        .await
-                    && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT => {}
-            MutationDecision::PhysicalPressure => {
-                return (
-                    completed,
-                    Err(FilesystemWriteFailure::Guest(
-                        types::ErrorCode::InsufficientSpace,
-                    )),
-                );
-            }
-            MutationDecision::Success => return (completed, Ok(())),
-            MutationDecision::Invalidate => {
-                return (completed, Err(FilesystemWriteFailure::Trap(error_message)));
-            }
-        }
-    }
-
-    (completed, Ok(()))
-}
-
-async fn invariant_write_failure(
-    filesystem_runtime: &crate::services::agent_filesystem::AgentFilesystemRuntime,
-    completed: usize,
-    message: &'static str,
-) -> (usize, FilesystemWriteResult) {
-    let effect = u64::try_from(completed).map_or(
-        crate::services::agent_filesystem::MutationEffect::Unknown,
-        |bytes| {
-            if bytes == 0 {
-                crate::services::agent_filesystem::MutationEffect::ProvenNoEffect
-            } else {
-                crate::services::agent_filesystem::MutationEffect::KnownCompletedPrefix { bytes }
-            }
-        },
-    );
-    let _ = filesystem_runtime
-        .classify_mutation_failure::<types::ErrorCode>(
-            crate::services::agent_filesystem::MutationFailure::Infrastructure(
-                std::io::Error::new(std::io::ErrorKind::InvalidData, message),
-            ),
-            effect,
-        )
-        .await;
-    (
-        completed,
-        Err(FilesystemWriteFailure::Trap(message.to_string())),
-    )
 }
 
 fn filesystem_write_result_to_wasi(
@@ -1420,10 +1137,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let filesystem_runtime = accessor.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
+        let writer = filesystem_runtime
+            .mutations()
+            .writer(file, AgentFilesystemWriteMode::Position(offset));
         accessor.with(|mut store| {
             data.pipe(
                 &mut store,
-                FilesystemWriteConsumer::new(chunks_tx, filesystem_runtime.clone()),
+                FilesystemWriteConsumer::new(chunks_tx, filesystem_runtime.clone(), writer),
             )
         })?;
 
@@ -1433,8 +1153,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 .tail_work_tracker()
                 .activity();
             store.spawn(FilesystemWriteTask::<Ctx>::new(
-                file,
-                FilesystemWriteMode::At(offset),
                 chunks_rx,
                 result_tx,
                 filesystem_runtime,
@@ -1474,10 +1192,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let filesystem_runtime = accessor.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
+        let writer = filesystem_runtime
+            .mutations()
+            .writer(file, AgentFilesystemWriteMode::Append);
         accessor.with(|mut store| {
             data.pipe(
                 &mut store,
-                FilesystemWriteConsumer::new(chunks_tx, filesystem_runtime.clone()),
+                FilesystemWriteConsumer::new(chunks_tx, filesystem_runtime.clone(), writer),
             )
         })?;
 
@@ -1487,8 +1208,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 .tail_work_tracker()
                 .activity();
             store.spawn(FilesystemWriteTask::<Ctx>::new(
-                file,
-                FilesystemWriteMode::Append,
                 chunks_rx,
                 result_tx,
                 filesystem_runtime,
@@ -2487,78 +2206,8 @@ mod tests {
     use crate::services::agent_filesystem::{FilesystemCapacity, ObjectIdentity, PathState};
     use fs_set_times::{SystemTimeSpec, set_symlink_times, set_times};
     use golem_common::model::oplog::types::SerializableDateTime;
-    use std::collections::VecDeque;
-    use std::sync::Mutex as StdMutex;
     use std::time::{Duration, SystemTime};
     use test_r::test;
-
-    struct InjectedWriter {
-        attempts: StdMutex<VecDeque<(usize, Option<i32>)>>,
-        suffixes: StdMutex<Vec<Vec<u8>>>,
-        started: Option<Arc<tokio::sync::Notify>>,
-        release: Option<Arc<tokio::sync::Semaphore>>,
-    }
-
-    impl InjectedWriter {
-        fn new(attempts: impl IntoIterator<Item = (usize, Option<i32>)>) -> Self {
-            Self {
-                attempts: StdMutex::new(attempts.into_iter().collect()),
-                suffixes: StdMutex::new(Vec::new()),
-                started: None,
-                release: None,
-            }
-        }
-
-        fn delayed_first(
-            attempts: impl IntoIterator<Item = (usize, Option<i32>)>,
-            started: Arc<tokio::sync::Notify>,
-            release: Arc<tokio::sync::Semaphore>,
-        ) -> Self {
-            Self {
-                attempts: StdMutex::new(attempts.into_iter().collect()),
-                suffixes: StdMutex::new(Vec::new()),
-                started: Some(started),
-                release: Some(release),
-            }
-        }
-
-        fn suffixes(&self) -> Vec<Vec<u8>> {
-            self.suffixes.lock().unwrap().clone()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl FilesystemChunkWriter for InjectedWriter {
-        async fn write(
-            &self,
-            _mode: FilesystemWriteMode,
-            contents: Bytes,
-            start: usize,
-            _effect: Arc<crate::services::agent_filesystem::AgentFilesystemEffectLease>,
-        ) -> FilesystemWriteAttempt {
-            let attempt_index = {
-                let mut suffixes = self.suffixes.lock().unwrap();
-                let attempt_index = suffixes.len();
-                suffixes.push(contents[start..].to_vec());
-                attempt_index
-            };
-            if attempt_index == 0 {
-                if let Some(started) = &self.started {
-                    started.notify_one();
-                }
-                if let Some(release) = &self.release {
-                    release.acquire().await.unwrap().forget();
-                }
-            }
-            let (written, errno) = self.attempts.lock().unwrap().pop_front().unwrap();
-            FilesystemWriteAttempt {
-                written,
-                result: errno
-                    .map(std::io::Error::from_raw_os_error)
-                    .map_or(Ok(()), Err),
-            }
-        }
-    }
 
     fn test_file(path: std::path::PathBuf) -> File {
         File::new(
@@ -2997,241 +2646,24 @@ mod tests {
     }
 
     #[test]
-    async fn p3_fs_live_write_chunk_at_offset_writes_bytes() {
-        let tempdir = tempfile::TempDir::new().unwrap();
-        let path = tempdir.path().join("out");
-        let file = test_file(path.clone());
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
-
-        let (written, result) = run_live_filesystem_write_chunk(
-            file.clone(),
-            &runtime,
-            FilesystemWriteMode::At(0),
-            b"hello".to_vec(),
-            runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-        assert_eq!(written, 5);
+    fn p3_write_result_maps_completion_cancellation_and_invalidation() {
+        let (completed, result) = p3_write_result(Ok(4));
+        assert_eq!(completed, 4);
         assert!(result.is_ok());
 
-        let (written, result) = run_live_filesystem_write_chunk(
-            file,
-            &runtime,
-            FilesystemWriteMode::At(5),
-            b" world".to_vec(),
-            runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-        assert_eq!(written, 6);
+        let (completed, result) = p3_write_result(Err(AgentFilesystemMutationError::Cancelled {
+            completed: 2,
+        }));
+        assert_eq!(completed, 2);
         assert!(result.is_ok());
 
-        assert_eq!(std::fs::read(&path).unwrap(), b"hello world");
-    }
-
-    #[test]
-    async fn p3_fs_live_write_chunk_append_writes_bytes() {
-        let tempdir = tempfile::TempDir::new().unwrap();
-        let path = tempdir.path().join("out");
-        let file = test_file(path.clone());
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
-
-        for chunk in [b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()] {
-            let len = chunk.len();
-            let (written, result) = run_live_filesystem_write_chunk(
-                file.clone(),
-                &runtime,
-                FilesystemWriteMode::Append,
-                chunk,
-                runtime.begin_append_effect().await.unwrap(),
-                tokio_util::sync::CancellationToken::new(),
-            )
-            .await;
-            assert_eq!(written, len);
-            assert!(result.is_ok());
-        }
-
-        assert_eq!(std::fs::read(&path).unwrap(), b"foobarbaz");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn p3_fs_stream_write_retries_transient_before_effect_once() {
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
-        let writer = InjectedWriter::new([(0, Some(libc::EAGAIN)), (5, None)]);
-
-        let (written, result) = run_classified_filesystem_write_chunk(
-            &writer,
-            &runtime,
-            FilesystemWriteMode::At(7),
-            b"hello".to_vec(),
-            runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-
-        assert_eq!(written, 5);
-        assert!(result.is_ok());
-        assert_eq!(writer.suffixes(), [b"hello".to_vec(), b"hello".to_vec()]);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn p3_fs_stream_write_retries_only_partial_failure_suffix() {
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
-        let writer = InjectedWriter::new([(2, Some(libc::EBUSY)), (3, None)]);
-
-        let (written, result) = run_classified_filesystem_write_chunk(
-            &writer,
-            &runtime,
-            FilesystemWriteMode::At(11),
-            b"hello".to_vec(),
-            runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-
-        assert_eq!(written, 5);
-        assert!(result.is_ok());
-        assert_eq!(writer.suffixes(), [b"hello".to_vec(), b"llo".to_vec()]);
-    }
-
-    #[test]
-    async fn p3_fs_stream_write_continues_after_short_success_with_remainder() {
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
-        let writer = InjectedWriter::new([(2, None), (3, None)]);
-
-        let (written, result) = run_classified_filesystem_write_chunk(
-            &writer,
-            &runtime,
-            FilesystemWriteMode::At(11),
-            b"hello".to_vec(),
-            runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-
-        assert_eq!(written, 5);
-        assert!(result.is_ok());
-        assert_eq!(writer.suffixes(), [b"hello".to_vec(), b"llo".to_vec()]);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn cancelling_p3_fs_stream_stops_retry_and_releases_effect_lease() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let started = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Semaphore::new(0));
-        let writer = Arc::new(InjectedWriter::delayed_first(
-            [(0, Some(libc::EAGAIN)), (5, None)],
-            Arc::clone(&started),
-            Arc::clone(&release),
-        ));
-        let cancellation = tokio_util::sync::CancellationToken::new();
-        let (chunks_tx, _chunks_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (_result_tx, result_rx) = tokio::sync::oneshot::channel();
-        let mut consumer = FilesystemWriteConsumer {
-            chunks_tx: Some(chunks_tx),
-            pending_chunk: Some(PendingFilesystemWriteChunk {
-                result_rx,
-                cancellation: cancellation.clone(),
-            }),
-            pending_invalidation: None,
-            filesystem_runtime: runtime.clone(),
-        };
-        let write = tokio::spawn({
-            let runtime = runtime.clone();
-            let writer = Arc::clone(&writer);
-            let cancellation = cancellation.clone();
-            async move {
-                run_classified_filesystem_write_chunk(
-                    writer.as_ref(),
-                    &runtime,
-                    FilesystemWriteMode::At(0),
-                    b"hello".to_vec(),
-                    runtime.begin_effect().await.unwrap(),
-                    cancellation,
-                )
-                .await
-            }
-        });
-        started.notified().await;
-
-        consumer.cancel();
-        assert!(cancellation.is_cancelled());
-        let update = tokio::spawn({
-            let runtime = runtime.clone();
-            async move { runtime.begin_update_effect().await }
-        });
-        tokio::task::yield_now().await;
-        assert!(!write.is_finished());
-        assert!(!update.is_finished());
-
-        release.add_permits(1);
-        let (written, result) = write.await.unwrap();
-        assert_eq!(written, 0);
-        assert!(result.is_ok());
-        assert!(update.await.unwrap().is_ok());
-        assert_eq!(writer.suffixes(), [b"hello".to_vec()]);
-        assert!(runtime.begin_effect().await.is_ok());
-    }
-
-    #[test]
-    async fn dropping_p3_fs_consumer_stops_suffix_and_releases_append_lease() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let started = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Semaphore::new(0));
-        let writer = Arc::new(InjectedWriter::delayed_first(
-            [(2, None), (3, None)],
-            Arc::clone(&started),
-            Arc::clone(&release),
-        ));
-        let cancellation = tokio_util::sync::CancellationToken::new();
-        let (chunks_tx, _chunks_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (_result_tx, result_rx) = tokio::sync::oneshot::channel();
-        let consumer = FilesystemWriteConsumer {
-            chunks_tx: Some(chunks_tx),
-            pending_chunk: Some(PendingFilesystemWriteChunk {
-                result_rx,
-                cancellation: cancellation.clone(),
-            }),
-            pending_invalidation: None,
-            filesystem_runtime: runtime.clone(),
-        };
-        let write = tokio::spawn({
-            let runtime = runtime.clone();
-            let writer = Arc::clone(&writer);
-            async move {
-                run_classified_filesystem_write_chunk(
-                    writer.as_ref(),
-                    &runtime,
-                    FilesystemWriteMode::Append,
-                    b"hello".to_vec(),
-                    runtime.begin_append_effect().await.unwrap(),
-                    cancellation,
-                )
-                .await
-            }
-        });
-        started.notified().await;
-
-        drop(consumer);
-        let next_append = tokio::spawn({
-            let runtime = runtime.clone();
-            async move { runtime.begin_append_effect().await }
-        });
-        tokio::task::yield_now().await;
-        assert!(!write.is_finished());
-        assert!(!next_append.is_finished());
-
-        release.add_permits(1);
-        let (written, result) = write.await.unwrap();
-        assert_eq!(written, 2);
-        assert!(result.is_ok());
-        assert!(next_append.await.unwrap().is_ok());
-        assert_eq!(writer.suffixes(), [b"hello".to_vec()]);
-        assert!(runtime.begin_effect().await.is_ok());
+        let (completed, result) =
+            p3_write_result(Err(AgentFilesystemMutationError::RuntimeInvalidated {
+                error: None,
+                completed: Some(3),
+            }));
+        assert_eq!(completed, 3);
+        assert!(matches!(result, Err(FilesystemWriteFailure::Trap(_))));
     }
 
     #[test]
@@ -3251,6 +2683,11 @@ mod tests {
                 })
             }
         })));
+        let tempdir = tempfile::TempDir::new().unwrap();
+        let writer = runtime.mutations().writer(
+            test_file(tempdir.path().join("out")),
+            AgentFilesystemWriteMode::Position(0),
+        );
         let (chunks_tx, _chunks_rx) = tokio::sync::mpsc::unbounded_channel();
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let mut consumer = FilesystemWriteConsumer {
@@ -3261,6 +2698,7 @@ mod tests {
             }),
             pending_invalidation: None,
             filesystem_runtime: runtime.clone(),
+            writer,
         };
         drop(result_tx);
 
@@ -3312,96 +2750,6 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(runtime.begin_effect().await.is_ok());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn p3_fs_stream_write_returns_raw_mapping_after_retry_exhaustion() {
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
-        let writer = InjectedWriter::new([(0, Some(libc::EBUSY)), (0, Some(libc::EBUSY))]);
-
-        let (written, result) = run_classified_filesystem_write_chunk(
-            &writer,
-            &runtime,
-            FilesystemWriteMode::Append,
-            b"hello".to_vec(),
-            runtime.begin_append_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-
-        assert_eq!(written, 0);
-        assert!(matches!(
-            result,
-            Err(FilesystemWriteFailure::Guest(types::ErrorCode::Busy))
-        ));
-        assert_eq!(writer.suffixes(), [b"hello".to_vec(), b"hello".to_vec()]);
-        assert!(runtime.begin_effect().await.is_ok());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn p3_fs_stream_terminal_failure_traps_and_seals_runtime() {
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
-        let writer = InjectedWriter::new([(2, Some(libc::EIO))]);
-
-        let (written, result) = run_classified_filesystem_write_chunk(
-            &writer,
-            &runtime,
-            FilesystemWriteMode::At(0),
-            b"hello".to_vec(),
-            runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-
-        assert_eq!(written, 2);
-        assert!(matches!(result, Err(FilesystemWriteFailure::Trap(_))));
-        assert_eq!(writer.suffixes(), [b"hello".to_vec()]);
-        assert!(runtime.begin_effect().await.is_err());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn p3_fs_stream_interruption_after_prefix_has_unknown_effect() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let writer = InjectedWriter::new([(2, Some(libc::EINTR)), (3, None)]);
-
-        let (written, result) = run_classified_filesystem_write_chunk(
-            &writer,
-            &runtime,
-            FilesystemWriteMode::At(0),
-            b"hello".to_vec(),
-            runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-
-        assert_eq!(written, 2);
-        assert!(matches!(result, Err(FilesystemWriteFailure::Trap(_))));
-        assert_eq!(writer.suffixes(), [b"hello".to_vec()]);
-        assert!(runtime.begin_effect().await.is_err());
-    }
-
-    #[test]
-    async fn p3_fs_stream_offset_overflow_traps_after_preserving_prefix() {
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
-        let writer = InjectedWriter::new([(1, None)]);
-
-        let (written, result) = run_classified_filesystem_write_chunk(
-            &writer,
-            &runtime,
-            FilesystemWriteMode::At(u64::MAX),
-            b"hi".to_vec(),
-            runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-
-        assert_eq!(written, 1);
-        assert!(matches!(result, Err(FilesystemWriteFailure::Trap(_))));
-        assert_eq!(writer.suffixes(), [b"hi".to_vec()]);
-        assert!(runtime.begin_effect().await.is_err());
     }
 
     #[cfg(unix)]

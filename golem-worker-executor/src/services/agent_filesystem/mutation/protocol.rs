@@ -99,7 +99,37 @@ impl AgentFilesystemMutations {
             self.clone(),
             Arc::new(NativeFilesystemWriter { file }),
             mode,
+            WriteCompletion::Fill,
         )
+    }
+
+    pub(crate) fn positioned_write(
+        &self,
+        file: File,
+        offset: u64,
+        contents: Bytes,
+    ) -> Result<AgentFilesystemWriteCompletion, AgentFilesystemMutationError> {
+        self.positioned_write_with_native(
+            Arc::new(NativeFilesystemWriter { file }),
+            offset,
+            contents,
+        )
+    }
+
+    fn positioned_write_with_native(
+        &self,
+        native: Arc<dyn FilesystemWriter>,
+        offset: u64,
+        contents: Bytes,
+    ) -> Result<AgentFilesystemWriteCompletion, AgentFilesystemMutationError> {
+        AgentFilesystemWriter::new(
+            self.clone(),
+            native,
+            AgentFilesystemWriteMode::Position(offset),
+            WriteCompletion::FirstSuccess,
+        )
+        .admit(contents)
+        .map(|write| write.execute(tokio_util::sync::CancellationToken::new()))
     }
 
     pub(crate) async fn resize(&self, file: File, size: u64) -> AgentFilesystemMutationResult {
@@ -214,7 +244,7 @@ impl AgentFilesystemMutations {
         native: Arc<dyn FilesystemWriter>,
         mode: AgentFilesystemWriteMode,
     ) -> AgentFilesystemWriter {
-        AgentFilesystemWriter::new(self.clone(), native, mode)
+        AgentFilesystemWriter::new(self.clone(), native, mode, WriteCompletion::Fill)
     }
 
     #[cfg(test)]
@@ -232,6 +262,13 @@ pub(crate) struct AgentFilesystemWriter {
     native: Arc<dyn FilesystemWriter>,
     state: Arc<tokio::sync::Mutex<WriterState>>,
     sequence: Arc<WriterSequence>,
+    completion: WriteCompletion,
+}
+
+#[derive(Clone, Copy)]
+enum WriteCompletion {
+    Fill,
+    FirstSuccess,
 }
 
 struct WriterState {
@@ -254,6 +291,7 @@ impl AgentFilesystemWriter {
         mutations: AgentFilesystemMutations,
         native: Arc<dyn FilesystemWriter>,
         mode: AgentFilesystemWriteMode,
+        completion: WriteCompletion,
     ) -> Self {
         Self {
             mutations,
@@ -267,6 +305,7 @@ impl AgentFilesystemWriter {
                 }),
                 advanced: tokio::sync::Notify::new(),
             }),
+            completion,
         }
     }
 
@@ -287,6 +326,7 @@ impl AgentFilesystemWriter {
             ticket: WriterTicket::reserve(&self.sequence),
             contents,
             admission,
+            completion: self.completion,
         })
     }
 }
@@ -298,6 +338,7 @@ pub(crate) struct AdmittedFilesystemWrite {
     ticket: WriterTicket,
     contents: Bytes,
     admission: AgentFilesystemEffectAdmission,
+    completion: WriteCompletion,
 }
 
 impl AdmittedFilesystemWrite {
@@ -384,6 +425,11 @@ impl AdmittedFilesystemWrite {
             completed += attempt.written;
 
             let (error, mutation_effect) = match attempt.result {
+                Ok(()) if matches!(self.completion, WriteCompletion::FirstSuccess) => {
+                    let completed = completed_u64(completed);
+                    advance_position_or_invalidate(&self.runtime, &mut state, completed).await?;
+                    return Ok(completed);
+                }
                 Ok(()) if attempt.written != 0 => {
                     if cancellation.is_cancelled() {
                         let completed = completed_u64(completed);
@@ -924,6 +970,50 @@ mod tests {
         .await;
 
         assert_eq!(result, Ok(5));
+        assert_eq!(
+            native.calls(),
+            [(AgentFilesystemWriteMode::Position(7), b"hello".to_vec())]
+        );
+    }
+
+    #[test]
+    async fn positioned_write_preserves_successful_short_write() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let native = Arc::new(ScriptedFilesystemWriter::new([success(2)]));
+
+        let result = runtime
+            .mutations()
+            .positioned_write_with_native(
+                Arc::clone(&native) as Arc<dyn FilesystemWriter>,
+                7,
+                Bytes::from_static(b"hello"),
+            )
+            .unwrap()
+            .await;
+
+        assert_eq!(result, Ok(2));
+        assert_eq!(
+            native.calls(),
+            [(AgentFilesystemWriteMode::Position(7), b"hello".to_vec())]
+        );
+    }
+
+    #[test]
+    async fn positioned_write_preserves_successful_zero_write() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let native = Arc::new(ScriptedFilesystemWriter::new([success(0)]));
+
+        let result = runtime
+            .mutations()
+            .positioned_write_with_native(
+                Arc::clone(&native) as Arc<dyn FilesystemWriter>,
+                7,
+                Bytes::from_static(b"hello"),
+            )
+            .unwrap()
+            .await;
+
+        assert_eq!(result, Ok(0));
         assert_eq!(
             native.calls(),
             [(AgentFilesystemWriteMode::Position(7), b"hello".to_vec())]

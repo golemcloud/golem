@@ -18,7 +18,6 @@ use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use cap_std::fs::FileExt;
 use fs_set_times::{SystemTimeSpec, set_symlink_times};
 use metrohash::MetroHash128;
 use wasmtime::component::Resource;
@@ -37,25 +36,26 @@ use wasmtime_wasi::runtime::spawn_blocking;
 use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, FilesystemOutputStreamState};
 use crate::services::agent_filesystem::{
-    AgentFilesystemRuntime, ClassifiedFileOutputStream, FILESYSTEM_MUTATION_MAX_ATTEMPTS,
-    FILESYSTEM_MUTATION_RETRY_TIMEOUT, FilesystemStreamMode, MutationDecision, MutationEffect,
-    MutationFailure, MutationOperation, MutationPostcondition as P2MutationPostcondition,
-    NativeMutationGuestError, NativeOpenOptions, NativeOpenResult,
-    PathObjectType as P2PathObjectType, RequestedTime, create_directory as native_create_directory,
+    AgentFilesystemMutationError, AgentFilesystemRuntime, ClassifiedFileOutputStream,
+    FILESYSTEM_MUTATION_MAX_ATTEMPTS, FILESYSTEM_MUTATION_RETRY_TIMEOUT, FilesystemStreamMode,
+    MutationDecision, MutationEffect, MutationFailure, MutationOperation,
+    MutationPostcondition as P2MutationPostcondition, NativeMutationGuestError, NativeOpenOptions,
+    NativeOpenResult, PathObjectType as P2PathObjectType, RequestedTime,
+    create_directory as native_create_directory,
     create_directory_postcondition as p2_create_directory_postcondition,
     descriptor_state as p2_descriptor_state, descriptor_times as p2_descriptor_times,
     hard_link as native_hard_link, link_postcondition as p2_link_postcondition,
-    native_write_failure_effect, open as native_open, open_postcondition as p2_open_postcondition,
-    path_state as p2_path_state, path_state_with_follow as p2_path_state_with_follow,
-    path_times as p2_path_times, remove_directory as native_remove_directory,
-    remove_postcondition as p2_remove_postcondition, rename as native_rename,
-    rename_postcondition as p2_rename_postcondition, resize_file as native_resize_file,
-    resize_postcondition as p2_resize_postcondition, run_blocking_filesystem_mutation,
-    set_descriptor_times as native_set_descriptor_times, set_path_times as native_set_path_times,
-    symlink as native_symlink, symlink_postcondition as p2_symlink_postcondition,
-    symlink_state as p2_symlink_state, sync_descriptor as native_sync_descriptor,
-    times_postcondition, unlink_file as native_unlink_file, validate_descriptor_times,
-    validate_directory_mutation, validate_open, validate_resize, validate_two_directory_mutation,
+    open as native_open, open_postcondition as p2_open_postcondition, path_state as p2_path_state,
+    path_state_with_follow as p2_path_state_with_follow, path_times as p2_path_times,
+    remove_directory as native_remove_directory, remove_postcondition as p2_remove_postcondition,
+    rename as native_rename, rename_postcondition as p2_rename_postcondition,
+    resize_file as native_resize_file, resize_postcondition as p2_resize_postcondition,
+    run_blocking_filesystem_mutation, set_descriptor_times as native_set_descriptor_times,
+    set_path_times as native_set_path_times, symlink as native_symlink,
+    symlink_postcondition as p2_symlink_postcondition, symlink_state as p2_symlink_state,
+    sync_descriptor as native_sync_descriptor, times_postcondition,
+    unlink_file as native_unlink_file, validate_descriptor_times, validate_directory_mutation,
+    validate_open, validate_resize, validate_two_directory_mutation,
 };
 #[cfg(test)]
 use crate::services::agent_filesystem::{
@@ -382,91 +382,21 @@ fn p2_times_postcondition(
     )
 }
 
-async fn classified_positioned_write(
-    filesystem_runtime: crate::services::agent_filesystem::AgentFilesystemRuntime,
-    file: wasmtime_wasi::filesystem::File,
-    buffer: Vec<u8>,
-    offset: Filesize,
-    effect: crate::services::agent_filesystem::AgentFilesystemEffectLease,
-) -> Result<Filesize, FsError> {
-    let file = Arc::clone(&file.file);
-    let buffer = Bytes::from(buffer);
-    let effect = Arc::new(effect);
-    let started = Instant::now();
-
-    for attempt in 0..FILESYSTEM_MUTATION_MAX_ATTEMPTS {
-        let file = Arc::clone(&file);
-        let buffer = buffer.clone();
-        let effect = Arc::clone(&effect);
-        match spawn_blocking(move || {
-            let _effect = effect;
-            file.write_at(&buffer, offset)
-        })
-        .await
-        {
-            Ok(written) => {
-                return Ok(Filesize::try_from(written).expect("usize fits in Filesize"));
-            }
-            Err(error) => {
-                let raw_os_error = error.raw_os_error();
-                let error_kind = error.kind();
-                let error_message = error.to_string();
-                let effect = native_write_failure_effect(&error, 0);
-                let decision = filesystem_runtime
-                    .classify_mutation_failure_for::<ErrorCode>(
-                        MutationOperation::Write,
-                        MutationFailure::Io(error),
-                        effect,
-                    )
-                    .await;
-                match decision {
-                    MutationDecision::BoundedRetry
-                        if attempt + 1 < FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                            && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT => {}
-                    MutationDecision::BoundedRetry => {
-                        let error = raw_os_error.map_or_else(
-                            || std::io::Error::new(error_kind, error_message),
-                            std::io::Error::from_raw_os_error,
-                        );
-                        return Err(error.into());
-                    }
-                    MutationDecision::PreserveRaw => {
-                        let error = raw_os_error.map_or_else(
-                            || std::io::Error::new(error_kind, error_message),
-                            std::io::Error::from_raw_os_error,
-                        );
-                        return Err(error.into());
-                    }
-                    MutationDecision::PreserveGuest(error) => return Err(error.into()),
-                    MutationDecision::Quota => return Err(ErrorCode::Quota.into()),
-                    MutationDecision::InsufficientSpace => {
-                        return Err(ErrorCode::InsufficientSpace.into());
-                    }
-                    MutationDecision::PhysicalPressure
-                        if attempt + 1 < FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                            && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT
-                            && filesystem_runtime
-                                .recover_physical_pressure(
-                                    MutationOperation::Write,
-                                    started + FILESYSTEM_MUTATION_RETRY_TIMEOUT,
-                                )
-                                .await
-                            && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT => {}
-                    MutationDecision::PhysicalPressure => {
-                        return Err(ErrorCode::InsufficientSpace.into());
-                    }
-                    MutationDecision::Success => return Ok(0),
-                    MutationDecision::Invalidate => {
-                        return Err(FsError::trap(wasmtime::Error::msg(
-                            "agent filesystem mutation invalidated the runtime",
-                        )));
-                    }
-                }
-            }
+fn p2_write_result(result: Result<u64, AgentFilesystemMutationError>) -> Result<Filesize, FsError> {
+    match result {
+        Ok(written) => Ok(written),
+        Err(AgentFilesystemMutationError::Native { error, .. }) => {
+            Err(error.into_io_error().into())
         }
+        Err(AgentFilesystemMutationError::QuotaExhausted { .. }) => Err(ErrorCode::Quota.into()),
+        Err(AgentFilesystemMutationError::InsufficientSpace { .. }) => {
+            Err(ErrorCode::InsufficientSpace.into())
+        }
+        Err(AgentFilesystemMutationError::Cancelled { completed }) => Ok(completed),
+        Err(AgentFilesystemMutationError::RuntimeInvalidated { .. }) => Err(FsError::trap(
+            wasmtime::Error::msg("agent filesystem mutation invalidated the runtime"),
+        )),
     }
-
-    unreachable!("positioned write loop always returns")
 }
 
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
@@ -505,12 +435,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             )
             .into_dyn(),
         )?;
-        self.state.open_filesystem_output_streams.insert(
-            stream.rep(),
-            FilesystemOutputStreamState {
-                position: Some(offset),
-            },
-        );
+        self.state
+            .open_filesystem_output_streams
+            .insert(stream.rep(), FilesystemOutputStreamState);
         Ok(stream)
     }
 
@@ -532,7 +459,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         )?;
         self.state
             .open_filesystem_output_streams
-            .insert(stream.rep(), FilesystemOutputStreamState { position: None });
+            .insert(stream.rep(), FilesystemOutputStreamState);
         Ok(stream)
     }
 
@@ -707,14 +634,17 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             Descriptor::File(_) => return Err(ErrorCode::NotPermitted.into()),
             Descriptor::Dir(_) => return Err(ErrorCode::BadDescriptor.into()),
         };
-        let effect = self
-            .filesystem_runtime()
-            .begin_effect()
-            .await
-            .map_err(FsError::trap)?;
-
         self.observe_function_call("filesystem::types::descriptor", "write");
-        classified_positioned_write(self.filesystem_runtime(), file, buffer, offset, effect).await
+        let completion = self
+            .filesystem_runtime()
+            .mutations()
+            .positioned_write(file, offset, Bytes::from(buffer))
+            .map_err(|_| {
+                FsError::trap(wasmtime::Error::msg(
+                    "agent filesystem mutation invalidated the runtime",
+                ))
+            })?;
+        p2_write_result(completion.await)
     }
 
     async fn read_directory(

@@ -346,6 +346,7 @@ impl AgentFilesystemRuntime {
         self.admit_effect()?.begin().await
     }
 
+    #[cfg(test)]
     pub(crate) async fn begin_append_effect(
         &self,
     ) -> Result<AgentFilesystemEffectLease, wasmtime::Error> {
@@ -700,26 +701,18 @@ pub(crate) enum FilesystemStreamMode {
 }
 
 pub(crate) struct ClassifiedFileOutputStream {
-    writer: Arc<dyn FilesystemStreamWriter>,
-    filesystem_runtime: AgentFilesystemRuntime,
-    mode: FilesystemStreamMode,
+    writer: AgentFilesystemWriter,
     state: FilesystemOutputState,
-    prepared_effect: std::sync::Mutex<Option<AgentFilesystemEffectLease>>,
 }
 
 enum FilesystemOutputState {
     Ready,
     Waiting {
-        task: tokio::task::JoinHandle<(usize, ClassifiedFilesystemStreamResult)>,
+        completion: AgentFilesystemWriteCompletion,
         cancellation: tokio_util::sync::CancellationToken,
     },
     Error(ClassifiedFilesystemStreamFailure),
     Closed,
-}
-
-struct FilesystemWriteAttempt {
-    written: usize,
-    result: std::io::Result<()>,
 }
 
 #[derive(Debug)]
@@ -728,8 +721,6 @@ enum ClassifiedFilesystemStreamFailure {
     Raw(std::io::Error),
     Trap(String),
 }
-
-type ClassifiedFilesystemStreamResult = Result<(), ClassifiedFilesystemStreamFailure>;
 
 #[derive(Debug)]
 struct ClassifiedFilesystemErrorCode(ErrorCode);
@@ -742,93 +733,22 @@ impl std::fmt::Display for ClassifiedFilesystemErrorCode {
 
 impl std::error::Error for ClassifiedFilesystemErrorCode {}
 
-#[async_trait]
-trait FilesystemStreamWriter: Send + Sync {
-    async fn write(
-        &self,
-        mode: FilesystemStreamMode,
-        contents: Bytes,
-        start: usize,
-        effect: Arc<AgentFilesystemEffectLease>,
-    ) -> FilesystemWriteAttempt;
-}
-
-struct NativeFilesystemStreamWriter {
-    file: File,
-}
-
-#[async_trait]
-impl FilesystemStreamWriter for NativeFilesystemStreamWriter {
-    async fn write(
-        &self,
-        mode: FilesystemStreamMode,
-        contents: Bytes,
-        start: usize,
-        effect: Arc<AgentFilesystemEffectLease>,
-    ) -> FilesystemWriteAttempt {
-        let file = Arc::clone(&self.file.file);
-        spawn_blocking(move || {
-            let _effect = effect;
-            let suffix = &contents[start..];
-            let result = match mode {
-                FilesystemStreamMode::Position(position) => file.write_at(suffix, position),
-                FilesystemStreamMode::Append => {
-                    let mut file = file.as_ref();
-                    file.seek(SeekFrom::End(0)).and_then(|_| file.write(suffix))
-                }
-            };
-            match result {
-                Ok(written) => FilesystemWriteAttempt {
-                    written,
-                    result: Ok(()),
-                },
-                Err(error) => FilesystemWriteAttempt {
-                    written: 0,
-                    result: Err(error),
-                },
-            }
-        })
-        .await
-    }
-}
-
 impl ClassifiedFileOutputStream {
     pub(crate) fn new(
         file: File,
         filesystem_runtime: AgentFilesystemRuntime,
         mode: FilesystemStreamMode,
     ) -> Self {
-        Self::new_with_writer(
-            Arc::new(NativeFilesystemStreamWriter { file }),
-            filesystem_runtime,
-            mode,
-        )
-    }
-
-    fn new_with_writer(
-        writer: Arc<dyn FilesystemStreamWriter>,
-        filesystem_runtime: AgentFilesystemRuntime,
-        mode: FilesystemStreamMode,
-    ) -> Self {
+        let mode = match mode {
+            FilesystemStreamMode::Position(position) => {
+                AgentFilesystemWriteMode::Position(position)
+            }
+            FilesystemStreamMode::Append => AgentFilesystemWriteMode::Append,
+        };
         Self {
-            writer,
-            filesystem_runtime,
-            mode,
+            writer: filesystem_runtime.mutations().writer(file, mode),
             state: FilesystemOutputState::Ready,
-            prepared_effect: std::sync::Mutex::new(None),
         }
-    }
-
-    #[cfg(test)]
-    fn new_for_test<W>(
-        writer: Arc<W>,
-        filesystem_runtime: AgentFilesystemRuntime,
-        mode: FilesystemStreamMode,
-    ) -> Self
-    where
-        W: FilesystemStreamWriter + 'static,
-    {
-        Self::new_with_writer(writer, filesystem_runtime, mode)
     }
 
     pub(crate) fn into_dyn(self) -> DynOutputStream {
@@ -839,76 +759,41 @@ impl ClassifiedFileOutputStream {
         matches!(self.state, FilesystemOutputState::Waiting { .. })
     }
 
-    pub(crate) fn prepare_effect(&self, effect: AgentFilesystemEffectLease) {
-        let previous = self
-            .prepared_effect
-            .lock()
-            .expect("filesystem output stream effect lock poisoned")
-            .replace(effect);
-        debug_assert!(previous.is_none());
-    }
-
-    pub(crate) fn clear_unused_effect(&self) {
-        self.prepared_effect
-            .lock()
-            .expect("filesystem output stream effect lock poisoned")
-            .take();
-    }
-
     async fn wait_until_ready(&mut self) {
         let state = std::mem::replace(&mut self.state, FilesystemOutputState::Closed);
-        let task = match state {
-            FilesystemOutputState::Waiting { task, .. } => task,
+        let completion = match state {
+            FilesystemOutputState::Waiting { completion, .. } => completion,
             state => {
                 self.state = state;
                 return;
             }
         };
 
-        self.state = match task.await {
-            Ok((written, result)) => {
-                if let FilesystemStreamMode::Position(position) = &mut self.mode {
-                    let Some(next_position) = u64::try_from(written)
-                        .ok()
-                        .and_then(|written| position.checked_add(written))
-                    else {
-                        let _ = self
-                            .filesystem_runtime
-                            .classify_mutation_failure::<ErrorCode>(
-                                MutationFailure::Infrastructure(std::io::Error::new(
-                                    std::io::ErrorKind::InvalidData,
-                                    "filesystem stream position overflowed",
-                                )),
-                                MutationEffect::Unknown,
-                            )
-                            .await;
-                        return self.set_trap("filesystem stream position overflowed");
-                    };
-                    *position = next_position;
-                }
-                match result {
-                    Ok(()) => FilesystemOutputState::Ready,
-                    Err(error) => FilesystemOutputState::Error(error),
-                }
+        self.state = match completion.await {
+            Ok(_) | Err(AgentFilesystemMutationError::Cancelled { .. }) => {
+                FilesystemOutputState::Ready
             }
-            Err(error) => {
-                let message = format!("filesystem stream write task failed: {error}");
-                let _ = self
-                    .filesystem_runtime
-                    .classify_mutation_failure::<ErrorCode>(
-                        MutationFailure::Infrastructure(std::io::Error::other(message.clone())),
-                        MutationEffect::Unknown,
-                    )
-                    .await;
-                FilesystemOutputState::Error(ClassifiedFilesystemStreamFailure::Trap(message))
+            Err(AgentFilesystemMutationError::Native { error, .. }) => {
+                FilesystemOutputState::Error(ClassifiedFilesystemStreamFailure::Raw(
+                    error.into_io_error(),
+                ))
+            }
+            Err(AgentFilesystemMutationError::QuotaExhausted { .. }) => {
+                FilesystemOutputState::Error(ClassifiedFilesystemStreamFailure::Guest(
+                    ErrorCode::Quota,
+                ))
+            }
+            Err(AgentFilesystemMutationError::InsufficientSpace { .. }) => {
+                FilesystemOutputState::Error(ClassifiedFilesystemStreamFailure::Guest(
+                    ErrorCode::InsufficientSpace,
+                ))
+            }
+            Err(AgentFilesystemMutationError::RuntimeInvalidated { .. }) => {
+                FilesystemOutputState::Error(ClassifiedFilesystemStreamFailure::Trap(
+                    "agent filesystem mutation invalidated the runtime".to_string(),
+                ))
             }
         };
-    }
-
-    fn set_trap(&mut self, message: &'static str) {
-        self.state = FilesystemOutputState::Error(ClassifiedFilesystemStreamFailure::Trap(
-            message.to_string(),
-        ));
     }
 
     fn take_error(&mut self) -> StreamResult<usize> {
@@ -946,33 +831,18 @@ impl OutputStream for ClassifiedFileOutputStream {
             }
         }
 
-        let effect = self
-            .prepared_effect
-            .lock()
-            .expect("filesystem output stream effect lock poisoned")
-            .take()
-            .ok_or_else(|| {
-                StreamError::Trap(wasmtime::Error::msg(
-                    "filesystem output stream write has no effect lease",
-                ))
-            })?;
-        let writer = Arc::clone(&self.writer);
-        let filesystem_runtime = self.filesystem_runtime.clone();
-        let mode = self.mode;
         let cancellation = tokio_util::sync::CancellationToken::new();
-        let write_cancellation = cancellation.clone();
+        let completion = self
+            .writer
+            .admit(bytes)
+            .map_err(|_| {
+                StreamError::Trap(wasmtime::Error::msg(
+                    "agent filesystem mutation invalidated the runtime",
+                ))
+            })?
+            .execute(cancellation.clone());
         self.state = FilesystemOutputState::Waiting {
-            task: tokio::spawn(async move {
-                run_classified_filesystem_stream_write(
-                    writer.as_ref(),
-                    &filesystem_runtime,
-                    mode,
-                    bytes,
-                    effect,
-                    write_cancellation,
-                )
-                .await
-            }),
+            completion,
             cancellation,
         };
         Ok(())
@@ -1001,7 +871,6 @@ impl OutputStream for ClassifiedFileOutputStream {
             self.wait_until_ready().await;
         }
         self.state = FilesystemOutputState::Closed;
-        self.clear_unused_effect();
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -1019,199 +888,7 @@ impl Pollable for ClassifiedFileOutputStream {
 impl Drop for ClassifiedFileOutputStream {
     fn drop(&mut self) {
         self.cancel_active_write();
-        self.clear_unused_effect();
     }
-}
-
-async fn run_classified_filesystem_stream_write<W: FilesystemStreamWriter + ?Sized>(
-    writer: &W,
-    filesystem_runtime: &AgentFilesystemRuntime,
-    mode: FilesystemStreamMode,
-    contents: Bytes,
-    effect: AgentFilesystemEffectLease,
-    cancellation: tokio_util::sync::CancellationToken,
-) -> (usize, ClassifiedFilesystemStreamResult) {
-    let effect = Arc::new(effect);
-    let started = Instant::now();
-    let mut completed = 0usize;
-    let mut failed_attempts = 0usize;
-
-    while completed < contents.len() {
-        if cancellation.is_cancelled() {
-            return (completed, Ok(()));
-        }
-        let attempt_mode = match mode {
-            FilesystemStreamMode::Position(position) => {
-                let Some(position) = u64::try_from(completed)
-                    .ok()
-                    .and_then(|completed| position.checked_add(completed))
-                else {
-                    return invalidate_filesystem_stream(
-                        filesystem_runtime,
-                        completed,
-                        "filesystem stream write offset overflowed",
-                    )
-                    .await;
-                };
-                FilesystemStreamMode::Position(position)
-            }
-            FilesystemStreamMode::Append => FilesystemStreamMode::Append,
-        };
-        let attempt = writer
-            .write(
-                attempt_mode,
-                contents.clone(),
-                completed,
-                Arc::clone(&effect),
-            )
-            .await;
-        let remaining = contents.len() - completed;
-        if attempt.written > remaining {
-            return invalidate_filesystem_stream(
-                filesystem_runtime,
-                completed,
-                "filesystem stream writer reported more bytes than requested",
-            )
-            .await;
-        }
-        completed += attempt.written;
-
-        let (error, effect) = match attempt.result {
-            Ok(()) if attempt.written != 0 => {
-                if cancellation.is_cancelled() {
-                    return (completed, Ok(()));
-                }
-                continue;
-            }
-            Ok(()) => (
-                std::io::Error::from(std::io::ErrorKind::WriteZero),
-                proven_write_progress_effect(completed),
-            ),
-            Err(error) => {
-                let effect = native_write_failure_effect(&error, completed);
-                (error, effect)
-            }
-        };
-        failed_attempts += 1;
-        let raw_os_error = error.raw_os_error();
-        let error_kind = error.kind();
-        let error_message = error.to_string();
-        let decision = filesystem_runtime
-            .classify_mutation_failure_for::<ErrorCode>(
-                MutationOperation::Write,
-                MutationFailure::Io(error),
-                effect,
-            )
-            .await;
-
-        match decision {
-            MutationDecision::BoundedRetry if cancellation.is_cancelled() => {
-                return (completed, Ok(()));
-            }
-            MutationDecision::BoundedRetry
-                if failed_attempts < super::failure::FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                    && started.elapsed() <= super::failure::FILESYSTEM_MUTATION_RETRY_TIMEOUT => {}
-            MutationDecision::BoundedRetry => {
-                let error = raw_os_error.map_or_else(
-                    || std::io::Error::new(error_kind, error_message),
-                    std::io::Error::from_raw_os_error,
-                );
-                return (
-                    completed,
-                    Err(ClassifiedFilesystemStreamFailure::Raw(error)),
-                );
-            }
-            MutationDecision::PreserveRaw => {
-                let error = raw_os_error.map_or_else(
-                    || std::io::Error::new(error_kind, error_message),
-                    std::io::Error::from_raw_os_error,
-                );
-                return (
-                    completed,
-                    Err(ClassifiedFilesystemStreamFailure::Raw(error)),
-                );
-            }
-            MutationDecision::PreserveGuest(error) => {
-                return (
-                    completed,
-                    Err(ClassifiedFilesystemStreamFailure::Guest(error)),
-                );
-            }
-            MutationDecision::Quota => {
-                return (
-                    completed,
-                    Err(ClassifiedFilesystemStreamFailure::Guest(ErrorCode::Quota)),
-                );
-            }
-            MutationDecision::InsufficientSpace => {
-                return (
-                    completed,
-                    Err(ClassifiedFilesystemStreamFailure::Guest(
-                        ErrorCode::InsufficientSpace,
-                    )),
-                );
-            }
-            MutationDecision::PhysicalPressure if cancellation.is_cancelled() => {
-                return (completed, Ok(()));
-            }
-            MutationDecision::PhysicalPressure
-                if failed_attempts < super::failure::FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                    && started.elapsed() <= super::failure::FILESYSTEM_MUTATION_RETRY_TIMEOUT
-                    && filesystem_runtime
-                        .recover_physical_pressure(
-                            MutationOperation::Write,
-                            started + super::failure::FILESYSTEM_MUTATION_RETRY_TIMEOUT,
-                        )
-                        .await
-                    && started.elapsed() <= super::failure::FILESYSTEM_MUTATION_RETRY_TIMEOUT => {}
-            MutationDecision::PhysicalPressure => {
-                return (
-                    completed,
-                    Err(ClassifiedFilesystemStreamFailure::Guest(
-                        ErrorCode::InsufficientSpace,
-                    )),
-                );
-            }
-            MutationDecision::Success => return (completed, Ok(())),
-            MutationDecision::Invalidate => {
-                return (
-                    completed,
-                    Err(ClassifiedFilesystemStreamFailure::Trap(
-                        "agent filesystem mutation invalidated the runtime".to_string(),
-                    )),
-                );
-            }
-        }
-    }
-
-    (completed, Ok(()))
-}
-
-async fn invalidate_filesystem_stream(
-    filesystem_runtime: &AgentFilesystemRuntime,
-    completed: usize,
-    message: &'static str,
-) -> (usize, ClassifiedFilesystemStreamResult) {
-    let effect = u64::try_from(completed).map_or(MutationEffect::Unknown, |bytes| {
-        if bytes == 0 {
-            MutationEffect::ProvenNoEffect
-        } else {
-            MutationEffect::KnownCompletedPrefix { bytes }
-        }
-    });
-    let _ = filesystem_runtime
-        .classify_mutation_failure::<ErrorCode>(
-            MutationFailure::Infrastructure(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                message,
-            )),
-            effect,
-        )
-        .await;
-    (
-        completed,
-        Err(ClassifiedFilesystemStreamFailure::Trap(message.to_string())),
-    )
 }
 
 pub(crate) fn classified_filesystem_stream_error_code(
@@ -1225,86 +902,27 @@ pub(crate) fn classified_filesystem_stream_error_code(
 #[cfg(test)]
 mod classified_stream_tests {
     use super::*;
-    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use test_r::test;
 
-    struct InjectedFilesystemWriter {
-        attempts: std::sync::Mutex<VecDeque<FilesystemWriteAttempt>>,
-        suffixes: std::sync::Mutex<Vec<Vec<u8>>>,
-        started: Option<Arc<tokio::sync::Notify>>,
-        release: Option<Arc<tokio::sync::Semaphore>>,
+    fn writable_file(path: &std::path::Path) -> File {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(path)
+            .unwrap();
+        File::new(
+            cap_std::fs::File::from_std(file),
+            FilePerms::all(),
+            OpenMode::READ | OpenMode::WRITE,
+            false,
+            path.to_path_buf(),
+        )
     }
 
-    impl InjectedFilesystemWriter {
-        fn new(attempts: impl IntoIterator<Item = FilesystemWriteAttempt>) -> Self {
-            Self {
-                attempts: std::sync::Mutex::new(attempts.into_iter().collect()),
-                suffixes: std::sync::Mutex::new(Vec::new()),
-                started: None,
-                release: None,
-            }
-        }
-
-        fn delayed_first(
-            attempts: impl IntoIterator<Item = FilesystemWriteAttempt>,
-            started: Arc<tokio::sync::Notify>,
-            release: Arc<tokio::sync::Semaphore>,
-        ) -> Self {
-            Self {
-                attempts: std::sync::Mutex::new(attempts.into_iter().collect()),
-                suffixes: std::sync::Mutex::new(Vec::new()),
-                started: Some(started),
-                release: Some(release),
-            }
-        }
-
-        fn suffixes(&self) -> Vec<Vec<u8>> {
-            self.suffixes.lock().unwrap().clone()
-        }
-    }
-
-    #[async_trait]
-    impl FilesystemStreamWriter for InjectedFilesystemWriter {
-        async fn write(
-            &self,
-            _mode: FilesystemStreamMode,
-            contents: Bytes,
-            start: usize,
-            _effect: Arc<AgentFilesystemEffectLease>,
-        ) -> FilesystemWriteAttempt {
-            let attempt_index = {
-                let mut suffixes = self.suffixes.lock().unwrap();
-                let attempt_index = suffixes.len();
-                suffixes.push(contents[start..].to_vec());
-                attempt_index
-            };
-            if attempt_index == 0 {
-                if let Some(started) = &self.started {
-                    started.notify_one();
-                }
-                if let Some(release) = &self.release {
-                    release.acquire().await.unwrap().forget();
-                }
-            }
-            self.attempts.lock().unwrap().pop_front().unwrap()
-        }
-    }
-
-    fn success(written: usize) -> FilesystemWriteAttempt {
-        FilesystemWriteAttempt {
-            written,
-            result: Ok(()),
-        }
-    }
-
-    fn failure(written: usize, errno: i32) -> FilesystemWriteAttempt {
-        FilesystemWriteAttempt {
-            written,
-            result: Err(std::io::Error::from_raw_os_error(errno)),
-        }
-    }
-
-    #[test_r::test]
+    #[test]
     fn two_directory_mutation_allows_different_authority_sets() {
         let source_root = tempfile::TempDir::new().unwrap();
         let destination_root = tempfile::TempDir::new().unwrap();
@@ -1333,7 +951,7 @@ mod classified_stream_tests {
         assert!(validate_two_directory_mutation(&source, &destination).is_ok());
     }
 
-    #[test_r::test]
+    #[test]
     async fn cancelled_blocking_mutation_keeps_effect_lease_until_native_completion() {
         let runtime = AgentFilesystemRuntime::new_for_test();
         let started = Arc::new(AtomicBool::new(false));
@@ -1369,187 +987,13 @@ mod classified_stream_tests {
         assert!(!update_finished_while_native_operation_was_running);
     }
 
-    #[cfg(target_os = "linux")]
-    #[test_r::test]
-    async fn p2_filesystem_stream_retries_transient_before_effect() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let writer = InjectedFilesystemWriter::new([failure(0, libc::EAGAIN), success(5)]);
-
-        let (written, result) = run_classified_filesystem_stream_write(
-            &writer,
-            &runtime,
-            FilesystemStreamMode::Position(7),
-            Bytes::from_static(b"hello"),
-            runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-
-        assert_eq!(written, 5);
-        assert!(result.is_ok());
-        assert_eq!(writer.suffixes(), [b"hello".to_vec(), b"hello".to_vec()]);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test_r::test]
-    async fn p2_filesystem_stream_retries_only_unwritten_suffix() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let writer = InjectedFilesystemWriter::new([failure(2, libc::EBUSY), success(3)]);
-
-        let (written, result) = run_classified_filesystem_stream_write(
-            &writer,
-            &runtime,
-            FilesystemStreamMode::Position(11),
-            Bytes::from_static(b"hello"),
-            runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-
-        assert_eq!(written, 5);
-        assert!(result.is_ok());
-        assert_eq!(writer.suffixes(), [b"hello".to_vec(), b"llo".to_vec()]);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test_r::test]
-    async fn p2_filesystem_stream_preserves_raw_error_after_retry_exhaustion() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let writer =
-            InjectedFilesystemWriter::new([failure(0, libc::EBUSY), failure(0, libc::EBUSY)]);
-
-        let (written, result) = run_classified_filesystem_stream_write(
-            &writer,
-            &runtime,
-            FilesystemStreamMode::Append,
-            Bytes::from_static(b"hello"),
-            runtime.begin_append_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-
-        assert_eq!(written, 0);
-        assert!(matches!(
-            result,
-            Err(ClassifiedFilesystemStreamFailure::Raw(error))
-                if error.raw_os_error() == Some(libc::EBUSY)
-        ));
-        assert_eq!(writer.suffixes(), [b"hello".to_vec(), b"hello".to_vec()]);
-        assert!(runtime.begin_effect().await.is_ok());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test_r::test]
-    async fn p2_filesystem_stream_terminal_failure_traps_and_seals_runtime() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let writer = InjectedFilesystemWriter::new([failure(2, libc::EIO)]);
-
-        let (written, result) = run_classified_filesystem_stream_write(
-            &writer,
-            &runtime,
-            FilesystemStreamMode::Position(0),
-            Bytes::from_static(b"hello"),
-            runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-
-        assert_eq!(written, 2);
-        assert!(matches!(
-            result,
-            Err(ClassifiedFilesystemStreamFailure::Trap(_))
-        ));
-        assert_eq!(writer.suffixes(), [b"hello".to_vec()]);
-        assert!(runtime.begin_effect().await.is_err());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test_r::test]
-    async fn p2_filesystem_stream_interruption_has_unknown_effect() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let writer = InjectedFilesystemWriter::new([failure(0, libc::EINTR)]);
-
-        let (written, result) = run_classified_filesystem_stream_write(
-            &writer,
-            &runtime,
-            FilesystemStreamMode::Position(0),
-            Bytes::from_static(b"hello"),
-            runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-
-        assert_eq!(written, 0);
-        assert!(matches!(
-            result,
-            Err(ClassifiedFilesystemStreamFailure::Trap(_))
-        ));
-        assert_eq!(writer.suffixes(), [b"hello".to_vec()]);
-        assert!(runtime.begin_effect().await.is_err());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test_r::test]
-    async fn p2_filesystem_stream_maps_classified_storage_exhaustion() {
-        let capacity = FilesystemCapacity {
-            total_bytes: 100,
-            available_bytes: 0,
-            total_filesystem_objects: 100,
-            available_filesystem_objects: 0,
-        };
-        let quota_runtime = AgentFilesystemRuntime::new_for_test_with_observations(
-            Some(AgentFilesystemUsage {
-                allocated_bytes: 50,
-                filesystem_objects: 10,
-            }),
-            Some(ResolvedAgentFilesystemLimits {
-                allocated_bytes: 50,
-                filesystem_objects: 10,
-                filesystem_object_limit_policy_version: FILESYSTEM_OBJECT_LIMIT_POLICY_VERSION,
-            }),
-            capacity,
-        );
-        let quota_writer = InjectedFilesystemWriter::new([failure(0, libc::ENOSPC)]);
-        let (_, quota_result) = run_classified_filesystem_stream_write(
-            &quota_writer,
-            &quota_runtime,
-            FilesystemStreamMode::Position(0),
-            Bytes::from_static(b"hello"),
-            quota_runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-        assert!(matches!(
-            quota_result,
-            Err(ClassifiedFilesystemStreamFailure::Guest(ErrorCode::Quota))
-        ));
-
-        let physical_runtime =
-            AgentFilesystemRuntime::new_for_test_with_observations(None, None, capacity);
-        let physical_writer = InjectedFilesystemWriter::new([failure(0, libc::ENOSPC)]);
-        let (_, physical_result) = run_classified_filesystem_stream_write(
-            &physical_writer,
-            &physical_runtime,
-            FilesystemStreamMode::Position(0),
-            Bytes::from_static(b"hello"),
-            physical_runtime.begin_effect().await.unwrap(),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-        assert!(matches!(
-            physical_result,
-            Err(ClassifiedFilesystemStreamFailure::Guest(
-                ErrorCode::InsufficientSpace
-            ))
-        ));
-    }
-
-    #[test_r::test]
+    #[test]
     async fn p2_filesystem_stream_idle_readiness_preserves_write_capacity() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("idle-readiness");
         let runtime = AgentFilesystemRuntime::new_for_test();
-        let writer = Arc::new(InjectedFilesystemWriter::new([]));
-        let mut stream = ClassifiedFileOutputStream::new_for_test(
-            writer,
+        let mut stream = ClassifiedFileOutputStream::new(
+            writable_file(&path),
             runtime,
             FilesystemStreamMode::Position(0),
         );
@@ -1559,140 +1003,43 @@ mod classified_stream_tests {
         assert_eq!(stream.check_write().unwrap(), 1024 * 1024);
     }
 
-    #[test_r::test]
-    async fn p2_filesystem_stream_pending_flush_and_check_preserve_effect() {
+    #[test]
+    async fn p2_filesystem_stream_positions_sequential_writes() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("positioned-writes");
+        std::fs::write(&path, b"0123456789").unwrap();
         let runtime = AgentFilesystemRuntime::new_for_test();
-        let started = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Semaphore::new(0));
-        let writer = Arc::new(InjectedFilesystemWriter::delayed_first(
-            [success(5)],
-            Arc::clone(&started),
-            Arc::clone(&release),
-        ));
-        let mut stream = ClassifiedFileOutputStream::new_for_test(
-            writer,
-            runtime.clone(),
-            FilesystemStreamMode::Append,
+        let mut stream = ClassifiedFileOutputStream::new(
+            writable_file(&path),
+            runtime,
+            FilesystemStreamMode::Position(2),
         );
-        stream.prepare_effect(runtime.begin_append_effect().await.unwrap());
-        stream.write(Bytes::from_static(b"hello")).unwrap();
-        started.notified().await;
-
-        assert!(stream.flush().is_ok());
-        assert_eq!(stream.check_write().unwrap(), 0);
-        let next_append = tokio::spawn({
-            let runtime = runtime.clone();
-            async move { runtime.begin_append_effect().await }
-        });
-        tokio::task::yield_now().await;
-        assert!(!next_append.is_finished());
-
-        release.add_permits(1);
+        stream.write(Bytes::from_static(b"ab")).unwrap();
         stream.ready().await;
+        stream.write(Bytes::from_static(b"cd")).unwrap();
         stream.ready().await;
+
         assert_eq!(stream.check_write().unwrap(), 1024 * 1024);
-        assert!(next_append.await.unwrap().is_ok());
+        assert_eq!(std::fs::read(path).unwrap(), b"01abcd6789");
     }
 
-    #[cfg(target_os = "linux")]
-    #[test_r::test]
-    async fn p2_filesystem_stream_readiness_preserves_error_until_flush() {
-        let capacity = FilesystemCapacity {
-            total_bytes: 100,
-            available_bytes: 0,
-            total_filesystem_objects: 100,
-            available_filesystem_objects: 0,
-        };
-        let runtime = AgentFilesystemRuntime::new_for_test_with_observations(None, None, capacity);
-        let writer = Arc::new(InjectedFilesystemWriter::new([failure(0, libc::ENOSPC)]));
-        let mut stream = ClassifiedFileOutputStream::new_for_test(
-            writer,
-            runtime.clone(),
-            FilesystemStreamMode::Position(0),
-        );
-        stream.prepare_effect(runtime.begin_effect().await.unwrap());
-        stream.write(Bytes::from_static(b"hello")).unwrap();
-        stream.ready().await;
-
-        stream.ready().await;
-        let error = stream.flush().unwrap_err();
-        assert!(matches!(
-            error,
-            StreamError::LastOperationFailed(error)
-                if classified_filesystem_stream_error_code(&error)
-                    == Some(ErrorCode::InsufficientSpace)
-        ));
-        assert!(matches!(stream.check_write(), Err(StreamError::Closed)));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test_r::test]
-    async fn cancelling_p2_filesystem_stream_keeps_lease_until_native_completion() {
+    #[test]
+    async fn p2_filesystem_stream_appends_sequential_writes() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("append-writes");
+        std::fs::write(&path, b"start").unwrap();
         let runtime = AgentFilesystemRuntime::new_for_test();
-        let started = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Semaphore::new(0));
-        let writer = Arc::new(InjectedFilesystemWriter::delayed_first(
-            [failure(0, libc::EAGAIN), success(5)],
-            Arc::clone(&started),
-            Arc::clone(&release),
-        ));
-        let mut stream = ClassifiedFileOutputStream::new_for_test(
-            Arc::clone(&writer),
-            runtime.clone(),
+        let mut stream = ClassifiedFileOutputStream::new(
+            writable_file(&path),
+            runtime,
             FilesystemStreamMode::Append,
         );
-        stream.prepare_effect(runtime.begin_append_effect().await.unwrap());
-        stream.write(Bytes::from_static(b"hello")).unwrap();
-        started.notified().await;
+        stream.write(Bytes::from_static(b"-one")).unwrap();
+        stream.ready().await;
+        stream.write(Bytes::from_static(b"-two")).unwrap();
+        stream.ready().await;
 
-        stream.cancel_active_write();
-        let cancellation = tokio::spawn(async move {
-            stream.cancel().await;
-            stream
-        });
-        let next_append = tokio::spawn({
-            let runtime = runtime.clone();
-            async move { runtime.begin_append_effect().await }
-        });
-        tokio::task::yield_now().await;
-        assert!(!cancellation.is_finished());
-        assert!(!next_append.is_finished());
-
-        release.add_permits(1);
-        let _stream = cancellation.await.unwrap();
-        assert!(next_append.await.unwrap().is_ok());
-        assert_eq!(writer.suffixes(), [b"hello".to_vec()]);
-    }
-
-    #[test_r::test]
-    async fn dropping_p2_filesystem_stream_keeps_lease_until_native_completion() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let started = Arc::new(tokio::sync::Notify::new());
-        let release = Arc::new(tokio::sync::Semaphore::new(0));
-        let writer = Arc::new(InjectedFilesystemWriter::delayed_first(
-            [success(2), success(3)],
-            Arc::clone(&started),
-            Arc::clone(&release),
-        ));
-        let mut stream = ClassifiedFileOutputStream::new_for_test(
-            Arc::clone(&writer),
-            runtime.clone(),
-            FilesystemStreamMode::Append,
-        );
-        stream.prepare_effect(runtime.begin_append_effect().await.unwrap());
-        stream.write(Bytes::from_static(b"hello")).unwrap();
-        started.notified().await;
-        drop(stream);
-
-        let next_append = tokio::spawn({
-            let runtime = runtime.clone();
-            async move { runtime.begin_append_effect().await }
-        });
-        tokio::task::yield_now().await;
-        assert!(!next_append.is_finished());
-
-        release.add_permits(1);
-        assert!(next_append.await.unwrap().is_ok());
-        assert_eq!(writer.suffixes(), [b"hello".to_vec()]);
+        assert_eq!(stream.check_write().unwrap(), 1024 * 1024);
+        assert_eq!(std::fs::read(path).unwrap(), b"start-one-two");
     }
 }

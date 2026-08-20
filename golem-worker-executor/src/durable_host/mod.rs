@@ -5963,9 +5963,7 @@ struct ActiveDurableScope {
 }
 
 #[derive(Debug)]
-pub(crate) struct FilesystemOutputStreamState {
-    pub position: Option<u64>,
-}
+pub(crate) struct FilesystemOutputStreamState;
 
 /// Direction of a P3 TCP one-shot stream acquisition (`send` vs `receive`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
