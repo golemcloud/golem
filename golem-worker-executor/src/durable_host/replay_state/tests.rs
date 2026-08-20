@@ -507,6 +507,36 @@ async fn incomplete_observational_tree_does_not_block_custom_live_fallback() {
 }
 
 #[test]
+async fn delivered_observational_completion_does_not_block_custom_live_fallback() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        observational_start_now(2, None),
+        end_for(3, 42),
+        delivered_for(3),
+        observational_start_now(2, None),
+    ])
+    .await;
+
+    let custom = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("outer".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        rs.await_resolution_outcome(custom.handle).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+    assert!(rs.is_live());
+}
+
+#[test]
 async fn observational_call_finishing_after_custom_terminal_is_still_skipped() {
     let rs = replay_state_over(vec![
         noop(),

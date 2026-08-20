@@ -340,6 +340,16 @@ impl CursorTx<'_> {
                     self.commit_consumed_entry(read_idx, &entry).await?;
                     return Ok(Some((read_idx, entry)));
                 }
+                if self.is_custom_subtree_descendant(*start_index) {
+                    // A completed custom invocation replays as one logical result, while an
+                    // incomplete one re-executes its whole body. Either way, no replay delivery
+                    // token exists for a physical call in its observational subtree, so its
+                    // marker is replay-inert rather than a guest-delivery boundary.
+                    self.commit_consumed_entry(read_idx, &entry).await?;
+                    self.st.skip_hints_after_delivery = false;
+                    self.skip_forward().await?;
+                    continue;
+                }
                 if self.st.skipped_regions.is_in_deleted_region(*start_index) {
                     // The call belongs to an abandoned timeline, so no replay delivery token can
                     // exist for its surviving marker. Consume it like an orphan terminal and keep
