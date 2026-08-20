@@ -214,7 +214,20 @@ jobs:
           run-id: ${{ github.run_id }}
       - name: Set up Lima
         id: lima
-        uses: lima-vm/lima-actions/setup@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIMA_VERSION: v2.2.0
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -qqy --no-install-recommends ovmf qemu-system-x86 qemu-utils
+          test -c /dev/kvm
+          sudo chown "$(whoami)" /dev/kvm
+          archive="lima-${LIMA_VERSION#v}-Linux-x86_64.tar.gz"
+          curl -fOSL "https://github.com/lima-vm/lima/releases/download/${LIMA_VERSION}/${archive}"
+          gh attestation verify --owner lima-vm "${archive}"
+          sudo tar -C /usr/local -xzf "${archive}"
+          rm "${archive}"
+          echo "version=${LIMA_VERSION}" >> "${GITHUB_OUTPUT}"
       - name: Cache Lima images
         uses: actions/cache@v5
         with:
