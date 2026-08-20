@@ -175,29 +175,10 @@ impl AgentFilesystems {
         dead_code,
         reason = "authoritative capacity observation is part of the filesystem interface"
     )]
-    pub(crate) async fn capacity(&self) -> Result<FilesystemCapacity, FilesystemStorageError> {
-        #[cfg(target_os = "linux")]
-        if let Some(backend) = &self.managed_xfs {
-            let backend = Arc::clone(backend);
-            let root = backend.root().to_path_buf();
-            return tokio::task::spawn_blocking(move || backend.capacity())
-                .await
-                .map_err(|error| {
-                    FilesystemStorageError::io(
-                        "observe managed XFS capacity",
-                        &root,
-                        std::io::Error::other(error),
-                    )
-                })?
-                .map_err(|error| {
-                    FilesystemStorageError::io("observe managed XFS capacity", &root, error)
-                });
-        }
-
-        Err(FilesystemStorageError::verification(
-            "observe capacity for unmanaged filesystem storage",
-            Path::new("<unmanaged>"),
-        ))
+    pub(crate) async fn observe_capacity(
+        &self,
+    ) -> Result<FilesystemCapacity, FilesystemStorageError> {
+        self.provisioner.observe_capacity().await
     }
 
     pub(crate) fn pressure_policy(&self) -> &FilesystemPressureConfig {
@@ -213,43 +194,14 @@ impl AgentFilesystem {
     pub(crate) async fn usage(
         &self,
     ) -> Result<Option<AgentFilesystemUsage>, FilesystemStorageError> {
-        match &self.storage {
-            AgentFilesystemStorage::Unmanaged => Ok(None),
-            #[cfg(target_os = "linux")]
-            AgentFilesystemStorage::Managed {
-                backend,
-                project_id,
-                ..
-            } => {
-                let backend = Arc::clone(backend);
-                let project_id = *project_id;
-                let path = self.path.clone();
-                tokio::task::spawn_blocking(move || backend.usage(project_id))
-                    .await
-                    .map_err(|error| {
-                        FilesystemStorageError::io(
-                            "observe managed XFS project usage",
-                            &path,
-                            std::io::Error::other(error),
-                        )
-                    })?
-                    .map_err(|error| {
-                        FilesystemStorageError::io(
-                            "observe managed XFS project usage",
-                            &path,
-                            error,
-                        )
-                    })
-                    .map(Some)
-            }
-        }
+        self.runtime.usage().await
     }
 
     pub(crate) async fn settle_reconstruction(&self) -> Result<(), FilesystemStorageError> {
         let _effect = self.runtime.begin_update_effect().await.map_err(|error| {
             FilesystemStorageError::io(
                 "settle reconstructed agent filesystem",
-                &self.path,
+                self.runtime.inner.backend.root(),
                 std::io::Error::other(error),
             )
         })?;
@@ -265,10 +217,13 @@ impl AgentFilesystemRuntime {
         if self.inner.usage_observation_fails.load(Ordering::Acquire) {
             return Err(FilesystemStorageError::verification(
                 "observe test agent filesystem usage",
-                self.inner.materializer.root(),
+                self.inner.backend.root(),
             ));
         }
-        self.inner.materializer.usage().await
+        match self.inner.backend.quota() {
+            Some(quota) => quota.usage().await.map(Some),
+            None => Ok(None),
+        }
     }
 
     pub(crate) fn set_usage_observer(
@@ -324,8 +279,10 @@ impl AgentFilesystemRuntime {
         dead_code,
         reason = "fresh physical capacity is part of the runtime filesystem interface"
     )]
-    pub(crate) async fn capacity(&self) -> Result<FilesystemCapacity, FilesystemStorageError> {
-        self.inner.materializer.capacity().await
+    pub(crate) async fn observe_capacity(
+        &self,
+    ) -> Result<FilesystemCapacity, FilesystemStorageError> {
+        self.inner.backend.observe_capacity().await
     }
 
     #[allow(
@@ -375,12 +332,16 @@ impl AgentFilesystemRuntime {
             .applied_limits
             .read()
             .expect("agent filesystem applied-limit lock poisoned");
-        let (observations, capacity) = tokio::join!(
-            self.inner
-                .materializer
-                .failure_observations(installed_limits),
-            self.capacity()
-        );
+        let observations = async {
+            match self.inner.backend.quota() {
+                Some(quota) => quota
+                    .failure_observations(installed_limits)
+                    .await
+                    .map(|(usage, limits)| (Some(usage), limits)),
+                None => Ok((None, None)),
+            }
+        };
+        let (observations, capacity) = tokio::join!(observations, self.observe_capacity());
         let (usage, limits) = match observations {
             Ok(observations) => observations,
             Err(error) => {
@@ -419,47 +380,23 @@ impl AgentFilesystemRuntime {
         let effect = self.begin_update_effect().await.map_err(|error| {
             FilesystemStorageError::io(
                 "admit agent filesystem limit update",
-                self.inner.materializer.root(),
+                self.inner.backend.root(),
                 std::io::Error::other(error),
             )
         })?;
-        let resolved = match self.inner.materializer {
-            AgentFilesystemMaterializer::Unmanaged { .. } => return Ok(()),
-            #[cfg(target_os = "linux")]
-            AgentFilesystemMaterializer::Managed { .. } => {
-                self.inner.filesystem_object_limit_policy.resolve(limit)?
-            }
+        let Some(quota) = self.inner.backend.quota() else {
+            return Ok(());
         };
-        self.install_resolved_limits(resolved, effect.clone())
-            .await?;
-        drop(effect);
-        Ok(())
-    }
-
-    async fn install_resolved_limits(
-        &self,
-        resolved: ResolvedAgentFilesystemLimits,
-        effect: AgentFilesystemUpdateEffectLease,
-    ) -> Result<(), FilesystemStorageError> {
-        let usage = match self
-            .inner
-            .materializer
-            .install_limits(resolved, effect)
-            .await
-        {
-            Ok(usage) => usage,
-            Err(error) => return Err(error),
-        };
+        let installed = quota.install_limit(limit, effect.clone()).await?;
         *self
             .inner
             .applied_limits
             .write()
-            .expect("agent filesystem applied-limit lock poisoned") = Some(resolved);
-        let exceeded = usage.is_some_and(|usage| {
-            usage.allocated_bytes > resolved.allocated_bytes
-                || usage.filesystem_objects > resolved.filesystem_objects
-        });
+            .expect("agent filesystem applied-limit lock poisoned") = Some(installed.limits);
+        let exceeded = installed.usage.allocated_bytes > installed.limits.allocated_bytes
+            || installed.usage.filesystem_objects > installed.limits.filesystem_objects;
         self.notify_limit_state(exceeded).await;
+        drop(effect);
         Ok(())
     }
 
@@ -472,151 +409,6 @@ impl AgentFilesystemRuntime {
             .clone();
         if let Some(callback) = callback {
             callback(exceeded).await;
-        }
-    }
-}
-
-impl AgentFilesystemMaterializer {
-    async fn failure_observations(
-        &self,
-        installed_limits: Option<ResolvedAgentFilesystemLimits>,
-    ) -> Result<
-        (
-            Option<AgentFilesystemUsage>,
-            Option<ResolvedAgentFilesystemLimits>,
-        ),
-        FilesystemStorageError,
-    > {
-        match self {
-            Self::Unmanaged { .. } => Ok((None, None)),
-            #[cfg(target_os = "linux")]
-            Self::Managed {
-                root,
-                backend,
-                project_id,
-            } => {
-                let root = root.clone();
-                let backend = Arc::clone(backend);
-                let project_id = *project_id;
-                let policy_version = installed_limits
-                    .map(|limits| limits.filesystem_object_limit_policy_version)
-                    .unwrap_or(FILESYSTEM_OBJECT_LIMIT_POLICY_VERSION);
-                let observation_root = root.clone();
-                let (usage, observed_limits) = tokio::task::spawn_blocking(move || {
-                    backend.usage_and_limits(&observation_root, project_id, policy_version)
-                })
-                .await
-                .map_err(|error| {
-                    FilesystemStorageError::io(
-                        "observe managed XFS project quota",
-                        &root,
-                        std::io::Error::other(error),
-                    )
-                })?
-                .map_err(|error| {
-                    FilesystemStorageError::io("observe managed XFS project quota", &root, error)
-                })?;
-                validate_observed_limits(&root, installed_limits, observed_limits)?;
-                Ok((Some(usage), observed_limits))
-            }
-        }
-    }
-
-    async fn usage(&self) -> Result<Option<AgentFilesystemUsage>, FilesystemStorageError> {
-        match self {
-            Self::Unmanaged { .. } => Ok(None),
-            #[cfg(target_os = "linux")]
-            Self::Managed {
-                root,
-                backend,
-                project_id,
-            } => {
-                let root = root.clone();
-                let backend = Arc::clone(backend);
-                let project_id = *project_id;
-                tokio::task::spawn_blocking(move || backend.usage(project_id))
-                    .await
-                    .map_err(|error| {
-                        FilesystemStorageError::io(
-                            "observe managed XFS project usage",
-                            &root,
-                            std::io::Error::other(error),
-                        )
-                    })?
-                    .map(Some)
-                    .map_err(|error| {
-                        FilesystemStorageError::io(
-                            "observe managed XFS project usage",
-                            &root,
-                            error,
-                        )
-                    })
-            }
-        }
-    }
-
-    #[allow(
-        dead_code,
-        reason = "fresh physical capacity is part of the runtime filesystem interface"
-    )]
-    async fn capacity(&self) -> Result<FilesystemCapacity, FilesystemStorageError> {
-        match self {
-            Self::Unmanaged { root } => observe_path_capacity(root).await,
-            #[cfg(target_os = "linux")]
-            Self::Managed { root, backend, .. } => {
-                let root = root.clone();
-                let backend = Arc::clone(backend);
-                tokio::task::spawn_blocking(move || backend.capacity())
-                    .await
-                    .map_err(|error| {
-                        FilesystemStorageError::io(
-                            "observe managed XFS capacity",
-                            &root,
-                            std::io::Error::other(error),
-                        )
-                    })?
-                    .map_err(|error| {
-                        FilesystemStorageError::io("observe managed XFS capacity", &root, error)
-                    })
-            }
-        }
-    }
-
-    pub(super) async fn install_limits(
-        &self,
-        limits: ResolvedAgentFilesystemLimits,
-        effect: AgentFilesystemUpdateEffectLease,
-    ) -> Result<Option<AgentFilesystemUsage>, FilesystemStorageError> {
-        match self {
-            Self::Unmanaged { .. } => Ok(None),
-            #[cfg(target_os = "linux")]
-            Self::Managed {
-                root,
-                backend,
-                project_id,
-                ..
-            } => {
-                let root = root.clone();
-                let backend = Arc::clone(backend);
-                let project_id = *project_id;
-                let usage = tokio::task::spawn_blocking(move || {
-                    let _effect = effect;
-                    backend.install_project_limits(project_id, limits)?;
-                    backend.usage(project_id)
-                })
-                .await
-                .map_err(|error| {
-                    FilesystemStorageError::io(
-                        "install managed XFS project limits",
-                        &root,
-                        std::io::Error::other(error),
-                    )
-                })?
-                .map_err(|error| {
-                    FilesystemStorageError::io("install managed XFS project limits", &root, error)
-                })?;
-                Ok(Some(usage))
-            }
         }
     }
 }
@@ -646,7 +438,9 @@ pub(super) fn validate_observed_limits(
     dead_code,
     reason = "fresh physical capacity is part of the runtime filesystem interface"
 )]
-async fn observe_path_capacity(root: &Path) -> Result<FilesystemCapacity, FilesystemStorageError> {
+pub(super) async fn observe_path_capacity(
+    root: &Path,
+) -> Result<FilesystemCapacity, FilesystemStorageError> {
     let root = root.to_path_buf();
     tokio::task::spawn_blocking({
         let root = root.clone();
@@ -691,7 +485,9 @@ async fn observe_path_capacity(root: &Path) -> Result<FilesystemCapacity, Filesy
     dead_code,
     reason = "fresh physical capacity is part of the runtime filesystem interface"
 )]
-async fn observe_path_capacity(root: &Path) -> Result<FilesystemCapacity, FilesystemStorageError> {
+pub(super) async fn observe_path_capacity(
+    root: &Path,
+) -> Result<FilesystemCapacity, FilesystemStorageError> {
     Err(FilesystemStorageError::io(
         "observe agent filesystem capacity",
         root,

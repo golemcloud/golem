@@ -484,7 +484,7 @@ impl<Ctx: WorkerCtx> FilesystemPressureRecoverySource for ActiveWorkers<Ctx> {
 
     async fn capacity(&self) -> Result<FilesystemCapacity, String> {
         self.agent_filesystems
-            .capacity()
+            .observe_capacity()
             .await
             .map_err(|error| error.to_string())
     }

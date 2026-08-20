@@ -13,10 +13,22 @@
 // limitations under the License.
 
 use super::{
-    AgentFilesystemUsage, FilesystemCapacity, FilesystemStorageError,
-    ResolvedAgentFilesystemLimits, create_materialization_parent, quota::capacity_from_values,
-    set_initial_file_permissions,
+    AgentFilesystemStorageLimit, AgentFilesystemUpdateEffectLease, AgentFilesystemUsage,
+    FilesystemCapacity, FilesystemObjectLimitPolicyConfig, FilesystemStorageError, OwnedAgentId,
+    OwnedMutexGuard, ResolvedAgentFilesystemLimits, RetryState, acquire_lifecycle_lock,
+    backend::{
+        AgentFilesystemBackend, AgentFilesystemCleanup, AgentFilesystemQuota,
+        FilesystemBackendProvisioner, InitialFileMaterialization, InstalledAgentFilesystemLimit,
+        ProvisionedAgentFilesystem, agent_filesystem_owner_path,
+    },
+    create_materialization_parent,
+    quota::FILESYSTEM_OBJECT_LIMIT_POLICY_VERSION,
+    quota::capacity_from_values,
+    quota::validate_observed_limits,
+    remove_and_verify, remove_and_verify_blocking, rollback_creation, set_initial_file_permissions,
+    verify_fresh_open_directory,
 };
+use async_trait::async_trait;
 use golem_common::model::RetryConfig;
 use rustix::fs::{
     FlockOperation, Mode, OFlags, StatVfsMountFlags, flock, fstatfs, fstatvfs, ioctl_ficlone,
@@ -28,7 +40,7 @@ use std::fs::File;
 use std::num::NonZeroU32;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 const XFS_SUPER_MAGIC: u64 = 0x5846_5342;
 const XFS_BASIC_BLOCK_BYTES: u64 = 512;
@@ -117,17 +129,21 @@ struct FsQuotaStatV {
     qs_pad2: [u64; 7],
 }
 
+#[derive(Clone)]
 pub(super) struct XfsBackend {
     root: PathBuf,
-    root_fd: File,
-    allocator: Mutex<ProjectAllocator>,
+    root_fd: Arc<File>,
+    allocator: Arc<Mutex<ProjectAllocator>>,
     filesystem_block_bytes: u64,
+    cleanup_retry: RetryConfig,
+    filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
 }
 
 impl XfsBackend {
     pub(super) fn new(
         root: &Path,
         cleanup_retry: &RetryConfig,
+        filesystem_object_limit_policy: &FilesystemObjectLimitPolicyConfig,
     ) -> Result<Self, FilesystemStorageError> {
         let root_fd = File::open(root)
             .map_err(|error| FilesystemStorageError::io("open managed XFS root", root, error))?;
@@ -170,12 +186,14 @@ impl XfsBackend {
 
         let backend = Self {
             root: stable_root,
-            root_fd,
-            allocator: Mutex::new(ProjectAllocator {
+            root_fd: Arc::new(root_fd),
+            allocator: Arc::new(Mutex::new(ProjectAllocator {
                 next: 1,
                 active: HashMap::new(),
-            }),
+            })),
             filesystem_block_bytes,
+            cleanup_retry: cleanup_retry.clone(),
+            filesystem_object_limit_policy: filesystem_object_limit_policy.clone(),
         };
         backend.clear_root_project_assignment()?;
         backend.validate_project_quota_state()?;
@@ -192,7 +210,7 @@ impl XfsBackend {
         dead_code,
         reason = "authoritative capacity observation is part of the backend interface"
     )]
-    pub(super) fn capacity(&self) -> std::io::Result<FilesystemCapacity> {
+    pub(super) fn observe_capacity(&self) -> std::io::Result<FilesystemCapacity> {
         let capacity = fstatvfs(&self.root_fd).map_err(errno_to_io)?;
         if capacity.f_flag.contains(StatVfsMountFlags::RDONLY) {
             return Err(std::io::Error::new(
@@ -795,6 +813,586 @@ impl XfsBackend {
         } else {
             Ok(())
         }
+    }
+}
+
+impl XfsBackend {
+    async fn observe_capacity_async(
+        &self,
+        error_path: PathBuf,
+    ) -> Result<FilesystemCapacity, FilesystemStorageError> {
+        let backend = self.clone();
+        tokio::task::spawn_blocking(move || backend.observe_capacity())
+            .await
+            .map_err(|error| {
+                FilesystemStorageError::io(
+                    "observe managed XFS capacity",
+                    &error_path,
+                    std::io::Error::other(error),
+                )
+            })?
+            .map_err(|error| {
+                FilesystemStorageError::io("observe managed XFS capacity", &error_path, error)
+            })
+    }
+
+    async fn provision(
+        &self,
+        agent_id: &OwnedAgentId,
+        lifecycle: OwnedMutexGuard<()>,
+    ) -> Result<ProvisionedAgentFilesystem, FilesystemStorageError> {
+        let environment = agent_id.environment_id.to_string();
+        let component = agent_id.agent_id.component_id.to_string();
+        let agent = agent_id.agent_id.agent_name_encoded();
+        let owner = agent_filesystem_owner_path(agent_id);
+        let mut lifecycle = Some(lifecycle);
+        let parent = self
+            .open_agent_parent(&environment, &component)
+            .map_err(|error| {
+                FilesystemStorageError::io(
+                    "open managed runtime directory parent",
+                    &self
+                        .root()
+                        .join(owner.parent().expect("owner must have a parent")),
+                    error,
+                )
+            })?;
+        let cleanup_path =
+            PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd())).join(&agent);
+
+        let disk_project = match tokio::fs::symlink_metadata(&cleanup_path).await {
+            Ok(metadata) if !metadata.file_type().is_symlink() => {
+                let backend = self.clone();
+                let existing_entry = backend.open_entry(&parent, &agent).map_err(|error| {
+                    FilesystemStorageError::cleanup_io(
+                        "open stale managed XFS runtime path",
+                        &cleanup_path,
+                        error,
+                    )
+                })?;
+                tokio::task::spawn_blocking(move || backend.project_id(&existing_entry))
+                    .await
+                    .map_err(|error| {
+                        FilesystemStorageError::io(
+                            "inspect stale managed XFS project",
+                            &cleanup_path,
+                            std::io::Error::other(error),
+                        )
+                    })?
+                    .map_err(|error| {
+                        FilesystemStorageError::io(
+                            "inspect stale managed XFS project",
+                            &cleanup_path,
+                            error,
+                        )
+                    })?
+            }
+            Ok(_) => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(FilesystemStorageError::cleanup_io(
+                    "inspect stale managed XFS runtime path",
+                    &cleanup_path,
+                    error,
+                ));
+            }
+        };
+        let reserved_project = self.reserved_project(&owner);
+        let stale_project = match (disk_project, reserved_project) {
+            (Some(disk_project), Some(reserved_project)) if disk_project != reserved_project => {
+                return Err(FilesystemStorageError::cleanup_verification(
+                    "match stale managed XFS path and reserved project",
+                    &cleanup_path,
+                ));
+            }
+            (disk_project, reserved_project) => disk_project.or(reserved_project),
+        };
+
+        let mut stale_cleanup = if let Some(project_id) = stale_project {
+            let cleanup_parent = parent.try_clone().map_err(|error| {
+                FilesystemStorageError::cleanup_io(
+                    "retain managed XFS runtime directory parent",
+                    &cleanup_path,
+                    error,
+                )
+            })?;
+            self.reserve_existing_project(project_id, &owner)
+                .map_err(|error| {
+                    FilesystemStorageError::cleanup_io(
+                        "reserve stale managed XFS project for cleanup",
+                        &cleanup_path,
+                        error,
+                    )
+                })?;
+            Some(ManagedProjectCleanup::new(
+                XfsProjectCleanup::new(
+                    self.clone(),
+                    project_id,
+                    cleanup_path.clone(),
+                    self.cleanup_retry.clone(),
+                ),
+                cleanup_parent,
+                lifecycle
+                    .take()
+                    .expect("managed XFS lifecycle owner must exist"),
+            ))
+        } else {
+            None
+        };
+        remove_and_verify(
+            &cleanup_path,
+            "remove stale managed XFS runtime directory",
+            &self.cleanup_retry,
+        )
+        .await?;
+        if stale_project.is_some() {
+            stale_cleanup
+                .as_ref()
+                .expect("stale project cleanup owner must exist")
+                .project
+                .finish()
+                .await?;
+            lifecycle = Some(
+                stale_cleanup
+                    .as_mut()
+                    .expect("stale project cleanup owner must exist")
+                    .disarm(),
+            );
+        }
+
+        tokio::fs::create_dir(&cleanup_path)
+            .await
+            .map_err(|error| {
+                FilesystemStorageError::io(
+                    "create fresh managed runtime directory",
+                    &cleanup_path,
+                    error,
+                )
+            })?;
+
+        let project_id = self.reserve_project(&owner).map_err(|error| {
+            FilesystemStorageError::io("allocate managed XFS project", &cleanup_path, error)
+        });
+        let project_id = match project_id {
+            Ok(project_id) => project_id,
+            Err(error) => {
+                return Err(rollback_creation(&cleanup_path, error, &self.cleanup_retry).await);
+            }
+        };
+        let root_fd = match self.open_directory(&parent, &agent) {
+            Ok(root) => root,
+            Err(error) => {
+                self.release_project(project_id);
+                return Err(rollback_creation(
+                    &cleanup_path,
+                    FilesystemStorageError::io(
+                        "open fresh managed runtime directory",
+                        &cleanup_path,
+                        error,
+                    ),
+                    &self.cleanup_retry,
+                )
+                .await);
+            }
+        };
+        let root = PathBuf::from(format!("/proc/self/fd/{}", root_fd.as_raw_fd()));
+        let assignment_result = self.assign_project(&root_fd, project_id).map_err(|error| {
+            FilesystemStorageError::io("assign managed XFS project", &root, error)
+        });
+        let runtime_backend = Arc::new(XfsAgentFilesystem {
+            root,
+            backend: self.clone(),
+            project_id,
+            root_fd: Mutex::new(Some(root_fd)),
+        });
+        let backend: Arc<dyn AgentFilesystemBackend> = runtime_backend.clone();
+        let created = ProvisionedAgentFilesystem::new(
+            backend,
+            Box::new(XfsCleanup {
+                runtime_backend,
+                project: XfsProjectCleanup::new(
+                    self.clone(),
+                    project_id,
+                    cleanup_path,
+                    self.cleanup_retry.clone(),
+                ),
+                _parent: parent,
+            }),
+            lifecycle.expect("managed XFS lifecycle owner must exist"),
+        );
+        if let Err(error) = assignment_result {
+            return Err(created.rollback(error).await);
+        }
+        if let Err(error) = verify_fresh_open_directory(created.backend().root()).await {
+            return Err(created.rollback(error).await);
+        }
+
+        Ok(created)
+    }
+}
+
+#[async_trait]
+impl FilesystemBackendProvisioner for XfsBackend {
+    fn initial_file_cache_root(&self) -> Option<&Path> {
+        Some(self.root())
+    }
+
+    async fn provision_for(
+        &self,
+        agent_id: &OwnedAgentId,
+    ) -> Result<ProvisionedAgentFilesystem, FilesystemStorageError> {
+        let owner = agent_filesystem_owner_path(agent_id);
+        let lifecycle = acquire_lifecycle_lock(&self.root().join(owner)).await;
+        let backend = self.clone();
+        let agent_id = agent_id.clone();
+        let root = self.root().to_path_buf();
+        tokio::spawn(async move { backend.provision(&agent_id, lifecycle).await })
+            .await
+            .map_err(|error| {
+                FilesystemStorageError::io(
+                    "provision managed XFS agent filesystem",
+                    &root,
+                    std::io::Error::other(error),
+                )
+            })?
+    }
+
+    async fn observe_capacity(&self) -> Result<FilesystemCapacity, FilesystemStorageError> {
+        self.observe_capacity_async(self.root().to_path_buf()).await
+    }
+
+    #[cfg(test)]
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+struct XfsAgentFilesystem {
+    root: PathBuf,
+    backend: XfsBackend,
+    project_id: NonZeroU32,
+    root_fd: Mutex<Option<File>>,
+}
+
+impl XfsAgentFilesystem {
+    fn close(&self) {
+        self.root_fd
+            .lock()
+            .expect("managed XFS root descriptor lock poisoned")
+            .take();
+    }
+}
+
+#[async_trait]
+impl AgentFilesystemBackend for XfsAgentFilesystem {
+    fn root(&self) -> &Path {
+        &self.root
+    }
+
+    fn create_staging_dir(&self) -> std::io::Result<tempfile::TempDir> {
+        let staging = tempfile::Builder::new()
+            .prefix(".golem-initial-files-update-")
+            .tempdir_in(&self.root)?;
+        let directory = File::open(staging.path())?;
+        self.backend.assign_project(&directory, self.project_id)?;
+        Ok(staging)
+    }
+
+    async fn materialize_initial_file(
+        &self,
+        materialization: InitialFileMaterialization,
+    ) -> Result<(), FilesystemStorageError> {
+        let InitialFileMaterialization {
+            materialization_root,
+            source,
+            target,
+            read_only,
+            effect,
+            staging,
+        } = materialization;
+        let backend = self.backend.clone();
+        let project_id = self.project_id;
+        let operation_target = target.clone();
+        tokio::task::spawn_blocking(move || {
+            let _effect = effect;
+            let _staging = staging;
+            backend.materialize_initial_file(
+                &materialization_root,
+                project_id,
+                source.path(),
+                &operation_target,
+                read_only,
+            )
+        })
+        .await
+        .map_err(|error| {
+            FilesystemStorageError::io(
+                "reflink managed XFS initial file",
+                &target,
+                std::io::Error::other(error),
+            )
+        })?
+        .map_err(|error| {
+            FilesystemStorageError::io("reflink managed XFS initial file", &target, error)
+        })
+    }
+
+    async fn observe_capacity(&self) -> Result<FilesystemCapacity, FilesystemStorageError> {
+        self.backend.observe_capacity_async(self.root.clone()).await
+    }
+
+    fn quota(&self) -> Option<&dyn AgentFilesystemQuota> {
+        Some(self)
+    }
+
+    #[cfg(test)]
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[async_trait]
+impl AgentFilesystemQuota for XfsAgentFilesystem {
+    async fn usage(&self) -> Result<AgentFilesystemUsage, FilesystemStorageError> {
+        let root = self.root.clone();
+        let backend = self.backend.clone();
+        let project_id = self.project_id;
+        tokio::task::spawn_blocking(move || backend.usage(project_id))
+            .await
+            .map_err(|error| {
+                FilesystemStorageError::io(
+                    "observe managed XFS project usage",
+                    &root,
+                    std::io::Error::other(error),
+                )
+            })?
+            .map_err(|error| {
+                FilesystemStorageError::io("observe managed XFS project usage", &root, error)
+            })
+    }
+
+    async fn failure_observations(
+        &self,
+        installed_limits: Option<ResolvedAgentFilesystemLimits>,
+    ) -> Result<(AgentFilesystemUsage, Option<ResolvedAgentFilesystemLimits>), FilesystemStorageError>
+    {
+        let root = self.root.clone();
+        let backend = self.backend.clone();
+        let project_id = self.project_id;
+        let policy_version = installed_limits
+            .map(|limits| limits.filesystem_object_limit_policy_version)
+            .unwrap_or(FILESYSTEM_OBJECT_LIMIT_POLICY_VERSION);
+        let observation_root = root.clone();
+        let (usage, observed_limits) = tokio::task::spawn_blocking(move || {
+            backend.usage_and_limits(&observation_root, project_id, policy_version)
+        })
+        .await
+        .map_err(|error| {
+            FilesystemStorageError::io(
+                "observe managed XFS project quota",
+                &root,
+                std::io::Error::other(error),
+            )
+        })?
+        .map_err(|error| {
+            FilesystemStorageError::io("observe managed XFS project quota", &root, error)
+        })?;
+        validate_observed_limits(&root, installed_limits, observed_limits)?;
+        Ok((usage, observed_limits))
+    }
+
+    async fn install_limit(
+        &self,
+        limit: AgentFilesystemStorageLimit,
+        effect: AgentFilesystemUpdateEffectLease,
+    ) -> Result<InstalledAgentFilesystemLimit, FilesystemStorageError> {
+        let limits = self.backend.filesystem_object_limit_policy.resolve(limit)?;
+        let root = self.root.clone();
+        let backend = self.backend.clone();
+        let project_id = self.project_id;
+        let usage = tokio::task::spawn_blocking(move || {
+            let _effect = effect;
+            backend.install_project_limits(project_id, limits)?;
+            backend.usage(project_id)
+        })
+        .await
+        .map_err(|error| {
+            FilesystemStorageError::io(
+                "install managed XFS project limits",
+                &root,
+                std::io::Error::other(error),
+            )
+        })?
+        .map_err(|error| {
+            FilesystemStorageError::io("install managed XFS project limits", &root, error)
+        })?;
+        Ok(InstalledAgentFilesystemLimit { limits, usage })
+    }
+}
+
+struct XfsCleanup {
+    runtime_backend: Arc<XfsAgentFilesystem>,
+    project: XfsProjectCleanup,
+    _parent: File,
+}
+
+#[async_trait]
+impl AgentFilesystemCleanup for XfsCleanup {
+    async fn delete(&mut self) -> Result<(), FilesystemStorageError> {
+        self.runtime_backend.close();
+        remove_and_verify(
+            &self.project.path,
+            "delete managed XFS runtime directory",
+            &self.project.cleanup_retry,
+        )
+        .await?;
+        self.project.finish().await
+    }
+
+    fn delete_blocking(&mut self) -> Result<(), FilesystemStorageError> {
+        self.runtime_backend.close();
+        self.project.remove_and_finish_blocking()
+    }
+
+    fn requires_background_drop_cleanup(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+pub(super) fn project_id_for_test(backend: &dyn AgentFilesystemBackend) -> NonZeroU32 {
+    backend
+        .as_any()
+        .downcast_ref::<XfsAgentFilesystem>()
+        .expect("created filesystem backend must be XFS")
+        .project_id
+}
+
+struct ManagedProjectCleanup {
+    project: XfsProjectCleanup,
+    parent: Option<File>,
+    lifecycle: Option<OwnedMutexGuard<()>>,
+    armed: bool,
+}
+
+impl ManagedProjectCleanup {
+    fn new(project: XfsProjectCleanup, parent: File, lifecycle: OwnedMutexGuard<()>) -> Self {
+        Self {
+            project,
+            parent: Some(parent),
+            lifecycle: Some(lifecycle),
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) -> OwnedMutexGuard<()> {
+        self.armed = false;
+        self.parent.take();
+        self.lifecycle
+            .take()
+            .expect("managed XFS stale cleanup lifecycle owner must exist")
+    }
+}
+
+impl Drop for ManagedProjectCleanup {
+    fn drop(&mut self) {
+        if self.armed {
+            let project = self.project.clone();
+            let parent = self.parent.take();
+            let lifecycle = self.lifecycle.take();
+            std::thread::spawn(move || {
+                if let Err(error) = project.remove_and_finish_blocking() {
+                    tracing::error!(error = %error, "Failed to clean reserved managed XFS project");
+                }
+                drop((parent, lifecycle));
+            });
+        }
+    }
+}
+
+#[derive(Clone)]
+struct XfsProjectCleanup {
+    backend: XfsBackend,
+    project_id: NonZeroU32,
+    path: PathBuf,
+    cleanup_retry: RetryConfig,
+}
+
+impl XfsProjectCleanup {
+    fn new(
+        backend: XfsBackend,
+        project_id: NonZeroU32,
+        path: PathBuf,
+        cleanup_retry: RetryConfig,
+    ) -> Self {
+        Self {
+            backend,
+            project_id,
+            path,
+            cleanup_retry,
+        }
+    }
+
+    async fn finish(&self) -> Result<(), FilesystemStorageError> {
+        let mut retry = RetryState::new(&self.cleanup_retry);
+        loop {
+            retry.start_attempt();
+            let backend = self.backend.clone();
+            let project_id = self.project_id;
+            let attempt =
+                tokio::task::spawn_blocking(move || backend.finish_project_cleanup(project_id))
+                    .await
+                    .map_err(|error| {
+                        FilesystemStorageError::cleanup_io(
+                            "verify and clear managed XFS project",
+                            &self.path,
+                            std::io::Error::other(error),
+                        )
+                    })?;
+            match attempt {
+                Ok(()) => {
+                    self.backend.release_project(self.project_id);
+                    return Ok(());
+                }
+                Err(error) => {
+                    if !retry.failed_attempt().await {
+                        return Err(FilesystemStorageError::cleanup_io(
+                            "verify and clear managed XFS project",
+                            &self.path,
+                            error,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    fn remove_and_finish_blocking(&self) -> Result<(), FilesystemStorageError> {
+        remove_and_verify_blocking(&self.path)?;
+        let attempts = self.cleanup_retry.max_attempts.max(1);
+        let mut delay = self.cleanup_retry.min_delay;
+        for attempt in 1..=attempts {
+            match self.backend.finish_project_cleanup(self.project_id) {
+                Ok(()) => {
+                    self.backend.release_project(self.project_id);
+                    return Ok(());
+                }
+                Err(error) if attempt == attempts => {
+                    return Err(FilesystemStorageError::cleanup_io(
+                        "verify and clear managed XFS project",
+                        &self.path,
+                        error,
+                    ));
+                }
+                Err(_) => {
+                    std::thread::sleep(delay);
+                    delay = delay
+                        .mul_f64(self.cleanup_retry.multiplier)
+                        .min(self.cleanup_retry.max_delay);
+                }
+            }
+        }
+        unreachable!("managed XFS cleanup always performs at least one attempt")
     }
 }
 

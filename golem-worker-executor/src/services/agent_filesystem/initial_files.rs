@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::backend::InitialFileMaterialization;
 use super::*;
 use crate::services::file_loader::InitialFileSource;
 use golem_common::model::agent::AgentFileContentHash;
@@ -59,14 +60,14 @@ impl AgentFilesystemRuntime {
         let effect = self.begin_update_effect().await.map_err(|error| {
             FilesystemStorageError::io(
                 "admit initial-file materialization",
-                self.inner.materializer.root(),
+                self.inner.backend.root(),
                 std::io::Error::other(error),
             )
         })?;
         let mut materialized = HashMap::new();
         let mut sources: HashMap<AgentFileContentHash, InitialFileSource> = HashMap::new();
         for file in files {
-            let target = self.inner.materializer.target(file);
+            let target = self.inner.backend.root().join(file.path.to_rel_string());
             let source = match sources.get(&file.content_hash) {
                 Some(source) if source.size() == file.size => source,
                 Some(_) => {
@@ -90,8 +91,15 @@ impl AgentFilesystemRuntime {
                 }
             };
             self.inner
-                .materializer
-                .materialize(source, file, effect.clone())
+                .backend
+                .materialize_initial_file(InitialFileMaterialization {
+                    materialization_root: self.inner.backend.root().to_path_buf(),
+                    source: source.clone(),
+                    target: target.clone(),
+                    read_only: file.permissions == AgentFilePermissions::ReadOnly,
+                    effect: effect.clone(),
+                    staging: None,
+                })
                 .await?;
             if materialized.insert(target.clone(), file.clone()).is_some() {
                 return Err(FilesystemStorageError::verification(
@@ -117,7 +125,7 @@ impl AgentFilesystemRuntime {
         let effect = self.begin_update_effect().await.map_err(|error| {
             FilesystemStorageError::io(
                 "admit initial-file update",
-                self.inner.materializer.root(),
+                self.inner.backend.root(),
                 std::io::Error::other(error),
             )
         })?;
@@ -130,7 +138,7 @@ impl AgentFilesystemRuntime {
         let update_result = async {
             let mut desired = HashMap::new();
             for file in files {
-                let target = self.inner.materializer.target(file);
+                let target = self.inner.backend.root().join(file.path.to_rel_string());
                 if desired.insert(target.clone(), file.clone()).is_some() {
                     return Err(FilesystemStorageError::verification(
                         "materialize unique initial-file update target",
@@ -151,15 +159,13 @@ impl AgentFilesystemRuntime {
                 }
             }
 
-            let staging = Arc::new(self.inner.materializer.create_staging_dir().map_err(
-                |error| {
-                    FilesystemStorageError::io(
-                        "create initial-file update staging directory",
-                        self.inner.materializer.root(),
-                        error,
-                    )
-                },
-            )?);
+            let staging = Arc::new(self.inner.backend.create_staging_dir().map_err(|error| {
+                FilesystemStorageError::io(
+                    "create initial-file update staging directory",
+                    self.inner.backend.root(),
+                    error,
+                )
+            })?);
             let mut sources: HashMap<AgentFileContentHash, InitialFileSource> = HashMap::new();
             let mut staged = Vec::new();
             for (path, file) in &desired {
@@ -199,15 +205,15 @@ impl AgentFilesystemRuntime {
                         };
                         let staged_path = staging.path().join(staged.len().to_string());
                         self.inner
-                            .materializer
-                            .materialize_at(
-                                source,
-                                file,
-                                staging.path(),
-                                &staged_path,
-                                effect.clone(),
-                                Some(Arc::clone(&staging)),
-                            )
+                            .backend
+                            .materialize_initial_file(InitialFileMaterialization {
+                                materialization_root: staging.path().to_path_buf(),
+                                source: source.clone(),
+                                target: staged_path.clone(),
+                                read_only: file.permissions == AgentFilePermissions::ReadOnly,
+                                effect: effect.clone(),
+                                staging: Some(Arc::clone(&staging)),
+                            })
                             .await?;
                         staged.push((path.clone(), staged_path));
                     }
@@ -239,7 +245,7 @@ impl AgentFilesystemRuntime {
             let mut transaction = InitialFileUpdateTransaction::new(backup_root);
             for path in &replacements {
                 if let Err(error) = transaction
-                    .create_parent(self.inner.materializer.root(), path)
+                    .create_parent(self.inner.backend.root(), path)
                     .and_then(|_| validate_replaceable_target(path))
                 {
                     return Err(transaction.fail(
@@ -302,135 +308,6 @@ impl AgentFilesystemRuntime {
         update_result?;
         Ok(effect)
     }
-}
-
-impl AgentFilesystemMaterializer {
-    pub(super) fn root(&self) -> &Path {
-        match self {
-            Self::Unmanaged { root, .. } => root,
-            #[cfg(target_os = "linux")]
-            Self::Managed { root, .. } => root,
-        }
-    }
-
-    fn create_staging_dir(&self) -> std::io::Result<tempfile::TempDir> {
-        let staging = tempfile::Builder::new()
-            .prefix(".golem-initial-files-update-")
-            .tempdir_in(self.root())?;
-        #[cfg(target_os = "linux")]
-        if let Self::Managed {
-            backend,
-            project_id,
-            ..
-        } = self
-        {
-            let directory = File::open(staging.path())?;
-            backend.assign_project(&directory, *project_id)?;
-        }
-        Ok(staging)
-    }
-
-    fn target(&self, file: &InitialAgentFile) -> PathBuf {
-        self.root().join(file.path.to_rel_string())
-    }
-
-    async fn materialize(
-        &self,
-        source: &InitialFileSource,
-        file: &InitialAgentFile,
-        effect: AgentFilesystemUpdateEffectLease,
-    ) -> Result<(), FilesystemStorageError> {
-        let target = self.target(file);
-        self.materialize_at(source, file, self.root(), &target, effect, None)
-            .await
-    }
-
-    async fn materialize_at(
-        &self,
-        source: &InitialFileSource,
-        file: &InitialAgentFile,
-        materialization_root: &Path,
-        target: &Path,
-        effect: AgentFilesystemUpdateEffectLease,
-        staging: Option<Arc<tempfile::TempDir>>,
-    ) -> Result<(), FilesystemStorageError> {
-        let target = target.to_path_buf();
-        let source = source.clone();
-        let read_only = file.permissions == AgentFilePermissions::ReadOnly;
-        match self {
-            Self::Unmanaged { .. } => {
-                let root = materialization_root.to_path_buf();
-                let operation_target = target.clone();
-                tokio::task::spawn_blocking(move || {
-                    let _effect = effect;
-                    let _staging = staging;
-                    materialize_unmanaged(&root, source.path(), &operation_target, read_only)
-                })
-                .await
-                .map_err(|error| {
-                    FilesystemStorageError::io(
-                        "materialize unmanaged initial file",
-                        &target,
-                        std::io::Error::other(error),
-                    )
-                })?
-                .map_err(|error| {
-                    FilesystemStorageError::io("materialize unmanaged initial file", &target, error)
-                })
-            }
-            #[cfg(target_os = "linux")]
-            Self::Managed {
-                backend,
-                project_id,
-                ..
-            } => {
-                let root = materialization_root.to_path_buf();
-                let backend = Arc::clone(backend);
-                let project_id = *project_id;
-                let operation_target = target.clone();
-                tokio::task::spawn_blocking(move || {
-                    let _effect = effect;
-                    let _staging = staging;
-                    backend.materialize_initial_file(
-                        &root,
-                        project_id,
-                        source.path(),
-                        &operation_target,
-                        read_only,
-                    )
-                })
-                .await
-                .map_err(|error| {
-                    FilesystemStorageError::io(
-                        "reflink managed XFS initial file",
-                        &target,
-                        std::io::Error::other(error),
-                    )
-                })?
-                .map_err(|error| {
-                    FilesystemStorageError::io("reflink managed XFS initial file", &target, error)
-                })
-            }
-        }
-    }
-}
-
-fn materialize_unmanaged(
-    root: &Path,
-    source: &Path,
-    target: &Path,
-    read_only: bool,
-) -> std::io::Result<()> {
-    let parent = create_materialization_parent(root, target)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    let mut source = std::fs::File::open(source)?;
-    std::io::copy(&mut source, &mut temporary)?;
-    temporary.as_file().sync_all()?;
-    set_initial_file_permissions(temporary.as_file(), read_only)?;
-    temporary
-        .persist_noclobber(target)
-        .map_err(|error| error.error)?;
-    Ok(())
 }
 
 fn validate_replaceable_target(path: &Path) -> std::io::Result<()> {

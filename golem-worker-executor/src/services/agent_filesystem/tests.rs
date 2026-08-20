@@ -3,6 +3,7 @@ use crate::services::active_workers::MemoryGrant;
 use crate::services::agent_resource_billing::{AgentResourceBilling, FilesystemUsageObserver};
 use crate::services::agent_storage_meter::FilesystemUsageObservation;
 use crate::services::linear_memory::LinearMemoryTracker;
+use async_trait::async_trait;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::{AgentFilePath, AgentFilePermissions, ComponentId};
 use golem_common::model::environment::EnvironmentId;
@@ -11,6 +12,10 @@ use golem_common::widen_infallible;
 use golem_service_base::replayable_stream::ReplayableStream as _;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+#[cfg(target_os = "linux")]
+use std::fs::File;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use test_r::test;
 
@@ -62,6 +67,29 @@ impl FilesystemUsageObserver for CountingUsageObserver {
     fn fail_observation(&self, _observation: FilesystemUsageObservation) -> bool {
         self.failed.fetch_add(1, Ordering::AcqRel);
         !self.reject_failures.load(Ordering::Acquire)
+    }
+}
+
+struct PausedCleanup {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+    deleted: Arc<AtomicBool>,
+    used_fallback: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl backend::AgentFilesystemCleanup for PausedCleanup {
+    async fn delete(&mut self) -> Result<(), FilesystemStorageError> {
+        self.started.notify_one();
+        self.release.notified().await;
+        self.deleted.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn delete_blocking(&mut self) -> Result<(), FilesystemStorageError> {
+        self.used_fallback.store(true, Ordering::Release);
+        self.deleted.store(true, Ordering::Release);
+        Ok(())
     }
 }
 
@@ -682,13 +710,28 @@ async fn unmanaged_runtime_observes_fresh_physical_capacity() {
     let filesystems = AgentFilesystems::new(&FilesystemStorageConfig::default()).unwrap();
     let filesystem = filesystems.create_owned_empty(&agent_id()).await.unwrap();
 
-    let capacity = filesystem.runtime().capacity().await.unwrap();
+    let capacity = filesystem.runtime().observe_capacity().await.unwrap();
 
     assert!(capacity.total_bytes > 0);
     assert!(capacity.available_bytes <= capacity.total_bytes);
     assert!(capacity.total_filesystem_objects > 0);
     assert!(capacity.available_filesystem_objects <= capacity.total_filesystem_objects);
     filesystem.close_and_delete().await.unwrap();
+}
+
+#[test]
+async fn unpublished_backend_filesystem_cleans_up_on_drop() {
+    let storage_root = tempfile::tempdir().unwrap();
+    let backend = unmanaged::UnmanagedBackend::new(
+        Some(storage_root.path().to_path_buf()),
+        RetryConfig::default(),
+    );
+    let created = backend.provision_for(&agent_id()).await.unwrap();
+    let path = created.backend().root().to_path_buf();
+
+    drop(created);
+
+    assert!(!path.exists());
 }
 
 #[test]
@@ -1146,7 +1189,12 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
     std::fs::remove_file(environment_link).unwrap();
 
     let stale_file_id = agent_id();
-    let backend = Arc::clone(filesystems.managed_xfs.as_ref().unwrap());
+    let backend = filesystems
+        .provisioner
+        .as_any()
+        .downcast_ref::<xfs::XfsBackend>()
+        .expect("configured backend must be XFS")
+        .clone();
     let environment = stale_file_id.environment_id.to_string();
     let component = stale_file_id.agent_id.component_id.to_string();
     let agent = stale_file_id.agent_id.agent_name_encoded();
@@ -1181,7 +1229,7 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
         }
     );
 
-    let capacity = filesystems.capacity().await.unwrap();
+    let capacity = filesystems.observe_capacity().await.unwrap();
     assert!(capacity.total_bytes > 0);
     assert!(capacity.available_bytes <= capacity.total_bytes);
     assert!(capacity.total_filesystem_objects > 0);
@@ -1203,7 +1251,11 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
         )
         .await
         .unwrap();
-    let managed_backend = Arc::clone(filesystems.managed_xfs.as_ref().unwrap());
+    let managed_backend = filesystems
+        .provisioner
+        .as_any()
+        .downcast_ref::<xfs::XfsBackend>()
+        .expect("configured backend must be XFS");
     assert_eq!(
         managed_backend
             .project_id(&File::open(cached_source.path()).unwrap())
@@ -1241,14 +1293,7 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
         .await
         .unwrap();
     let path = filesystem.path().to_path_buf();
-    let (backend, project_id) = match &filesystem.storage {
-        AgentFilesystemStorage::Managed {
-            backend,
-            project_id,
-            ..
-        } => (Arc::clone(backend), *project_id),
-        AgentFilesystemStorage::Unmanaged => panic!("managed mode fell back to unmanaged"),
-    };
+    let project_id = xfs::project_id_for_test(filesystem.runtime.inner.backend.as_ref());
     let materialized_usage = filesystem.usage().await.unwrap().unwrap();
     assert!(materialized_usage.allocated_bytes >= 3 * 8192);
     assert!(materialized_usage.filesystem_objects >= 4);
@@ -1346,7 +1391,7 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
         .unwrap();
     dense.write_all(&vec![0x4e; 4096]).unwrap();
     dense.sync_all().unwrap();
-    let capacity_during_allocation = filesystems.capacity().await.unwrap();
+    let capacity_during_allocation = filesystems.observe_capacity().await.unwrap();
     assert!(capacity_during_allocation.available_bytes < capacity.available_bytes);
     assert!(
         capacity_during_allocation.available_filesystem_objects
@@ -1408,8 +1453,13 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
         .unwrap();
     assert!(limit_exceeded.load(Ordering::Acquire));
 
+    let retained_runtime = filesystem.runtime();
     filesystem.close_and_delete().await.unwrap();
     assert!(!path.exists());
+    assert!(
+        !retained_runtime.inner.backend.root().exists(),
+        "a retained runtime must not keep the per-agent root descriptor open"
+    );
     assert_eq!(
         backend.usage(project_id).unwrap(),
         AgentFilesystemUsage {
@@ -1417,7 +1467,7 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
             filesystem_objects: 0,
         }
     );
-    let mut capacity_after_deletion = filesystems.capacity().await.unwrap();
+    let mut capacity_after_deletion = filesystems.observe_capacity().await.unwrap();
     for _ in 0..50 {
         if capacity_after_deletion.available_bytes > capacity_during_allocation.available_bytes
             && capacity_after_deletion.available_filesystem_objects
@@ -1426,7 +1476,7 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        capacity_after_deletion = filesystems.capacity().await.unwrap();
+        capacity_after_deletion = filesystems.observe_capacity().await.unwrap();
     }
     assert!(capacity_after_deletion.available_bytes > capacity_during_allocation.available_bytes);
     assert!(
@@ -1468,14 +1518,8 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
     );
 
     let object_limited = filesystems.create_owned_empty(&agent_id()).await.unwrap();
-    let (object_backend, object_project) = match &object_limited.storage {
-        AgentFilesystemStorage::Managed {
-            backend,
-            project_id,
-            ..
-        } => (Arc::clone(backend), *project_id),
-        AgentFilesystemStorage::Unmanaged => panic!("managed mode fell back to unmanaged"),
-    };
+    let object_backend = backend.clone();
+    let object_project = xfs::project_id_for_test(object_limited.runtime.inner.backend.as_ref());
     object_backend
         .install_project_limits(
             object_project,
@@ -1528,10 +1572,7 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
     );
 
     let deferred = filesystems.create_owned_empty(&agent_id()).await.unwrap();
-    let deferred_project = match &deferred.storage {
-        AgentFilesystemStorage::Managed { project_id, .. } => *project_id,
-        AgentFilesystemStorage::Unmanaged => panic!("managed mode fell back to unmanaged"),
-    };
+    let deferred_project = xfs::project_id_for_test(deferred.runtime.inner.backend.as_ref());
     let retained_root = File::open(deferred.path()).unwrap();
     drop(deferred);
     drop(retained_root);
@@ -2074,6 +2115,51 @@ async fn close_waits_for_an_existing_effect_before_deleting() {
 }
 
 #[test]
+async fn cancelled_close_keeps_async_deletion_owned() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime_backend: Arc<dyn backend::AgentFilesystemBackend> = Arc::new(
+        unmanaged::UnmanagedAgentFilesystem::new(root.path().to_path_buf()),
+    );
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let deleted = Arc::new(AtomicBool::new(false));
+    let used_fallback = Arc::new(AtomicBool::new(false));
+    let lifecycle = Arc::new(Mutex::new(()))
+        .try_lock_owned()
+        .expect("new test lifecycle lock must be available");
+    let provisioned = backend::ProvisionedAgentFilesystem::new(
+        runtime_backend,
+        Box::new(PausedCleanup {
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+            deleted: Arc::clone(&deleted),
+            used_fallback: Arc::clone(&used_fallback),
+        }),
+        lifecycle,
+    );
+    let filesystem = AgentFilesystem::new(provisioned, FilesystemPressureConfig::default());
+    let close = tokio::spawn(filesystem.close_and_delete());
+    tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+        .await
+        .unwrap();
+
+    close.abort();
+    assert!(matches!(close.await, Err(error) if error.is_cancelled()));
+    assert!(!deleted.load(Ordering::Acquire));
+    assert!(!used_fallback.load(Ordering::Acquire));
+
+    release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !deleted.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!used_fallback.load(Ordering::Acquire));
+}
+
+#[test]
 async fn reconstruction_settlement_waits_for_existing_effects() {
     let filesystems = AgentFilesystems::new(&FilesystemStorageConfig::default()).unwrap();
     let filesystem = filesystems.create_owned_empty(&agent_id()).await.unwrap();
@@ -2152,6 +2238,55 @@ async fn deterministic_creation_is_exclusive_for_the_full_owner_lifetime() {
     let second = second.await.unwrap().unwrap();
     assert!(!second.path().join("owned").exists());
     second.close_and_delete().await.unwrap();
+}
+
+#[test]
+async fn cancelled_creation_does_not_remain_queued_for_lifecycle() {
+    let root = tempfile::tempdir().unwrap();
+    let settings = FilesystemStorageConfig {
+        deterministic_root_dir: Some(root.path().to_path_buf()),
+        ..FilesystemStorageConfig::default()
+    };
+    let filesystems = AgentFilesystems::new(&settings).unwrap();
+    let id = agent_id();
+    let first = filesystems.create_owned_empty(&id).await.unwrap();
+
+    let cancelled = tokio::spawn({
+        let filesystems = filesystems.clone();
+        let id = id.clone();
+        async move { filesystems.create_owned_empty(&id).await }
+    });
+    tokio::task::yield_now().await;
+    cancelled.abort();
+    assert!(matches!(cancelled.await, Err(error) if error.is_cancelled()));
+    tokio::task::yield_now().await;
+
+    let path = first.path().to_path_buf();
+    let lifecycle_owners = LIFECYCLE_LOCKS
+        .get()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .get(&path)
+        .unwrap()
+        .strong_count();
+    assert_eq!(lifecycle_owners, 1);
+
+    first.close_and_delete().await.unwrap();
+    let replacement = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        filesystems.create_owned_empty(&id),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        std::fs::read_dir(replacement.path())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    replacement.close_and_delete().await.unwrap();
 }
 
 #[test]
