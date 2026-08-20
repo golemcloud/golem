@@ -196,8 +196,12 @@ pub(super) enum HttpBodyChunkReply {
 /// Resolution delivered to the guest-facing trailers future once the body closes
 /// (or the durable task fails before recording the terminal).
 pub(super) enum HttpTrailersResolution {
-    /// The body terminal: clean trailers (or a body `ErrorCode`).
-    Outcome(HttpTrailersOutcome),
+    /// The body terminal: clean trailers (or a body `ErrorCode`), together with the delivery
+    /// token that is consumed only when the guest-facing future produces the outcome.
+    Outcome {
+        outcome: HttpTrailersOutcome,
+        delivery: CompletionDelivery,
+    },
     /// A durability failure: the trailers future traps with this message, tagged
     /// with the failing call scope's trap context.
     Trap {
@@ -465,7 +469,7 @@ where
         match Pin::new(&mut this.rx).poll(cx) {
             Poll::Pending if finish => Poll::Ready(Ok(None)),
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(HttpTrailersResolution::Outcome(outcome))) => {
+            Poll::Ready(Ok(HttpTrailersResolution::Outcome { outcome, delivery })) => {
                 let item = match outcome {
                     Ok(None) => Ok(None),
                     Ok(Some(headers)) => {
@@ -473,6 +477,7 @@ where
                         match view.table.push(FieldMap::new_immutable(headers)) {
                             Ok(resource) => Ok(Some(resource)),
                             Err(err) => {
+                                delivery.suppress();
                                 return Poll::Ready(Err(wasmtime::Error::from(err)
                                     .context("failed to push consume-body trailers to table")));
                             }
@@ -480,6 +485,7 @@ where
                     }
                     Err(error) => Err(error),
                 };
+                delivery.delivered();
                 Poll::Ready(Ok(Some(item)))
             }
             // A durability failure occurred before the terminal was recorded: the
@@ -1620,9 +1626,9 @@ where
                     parent_trap_context,
                 ))
             })?;
-            match trailers_tx.send(HttpTrailersResolution::Outcome(outcome)) {
-                Ok(()) => delivery.delivered(),
-                Err(_) => {
+            match trailers_tx.send(HttpTrailersResolution::Outcome { outcome, delivery }) {
+                Ok(()) => {}
+                Err(HttpTrailersResolution::Outcome { delivery, .. }) => {
                     // The guest dropped the trailers future after the terminal
                     // was persisted: the completion is silently discarded, so
                     // record the marker before acknowledging any cancellation
@@ -1637,6 +1643,9 @@ where
                             ),
                         ));
                     }
+                }
+                Err(HttpTrailersResolution::Trap { .. }) => {
+                    unreachable!("the sent trailers resolution is an outcome")
                 }
             }
         }
