@@ -201,19 +201,8 @@ async fn single_target_call_to_blackholed_pod_gives_up_within_connect_timeout() 
 /// bound detection at roughly their sum, without capping request duration.
 #[test]
 async fn call_to_peer_that_accepts_but_never_speaks_http2_gives_up() {
-    // Accept connections and then stay completely silent: no HTTP/2 preface,
-    // no SETTINGS frame, no close.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let _accepter = tokio::spawn(async move {
-        let mut held = Vec::new();
-        // Hold every socket open forever without writing anything.
-        while let Ok((sock, _)) = listener.accept().await {
-            held.push(sock);
-        }
-    });
-
-    let uri: Uri = format!("http://{addr}").parse().unwrap();
+    let peer = serve_silent_peer().await;
+    let uri: Uri = format!("http://{}", peer.addr).parse().unwrap();
     let client = executor_client(config());
 
     let started = Instant::now();
@@ -275,7 +264,11 @@ fn no_keepalive(connect_timeout: Duration) -> GrpcClientConfig {
     cfg
 }
 
-/// A peer that routes nothing, and counts the TCP connections made to it.
+/// A test peer, counting the TCP connections made to it.
+///
+/// Comes in two kinds: [`serve_grpc`], which speaks HTTP/2 and answers every
+/// request `Unimplemented`, and [`serve_silent_peer`], which completes the TCP
+/// handshake and then says nothing at all.
 struct TestPeer {
     addr: std::net::SocketAddr,
     connections: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -570,6 +563,61 @@ async fn an_established_connection_to_a_blackholed_peer_still_stalls() {
     );
 }
 
+/// The other half of the keep-alive claim: what bounds a connection that was
+/// already open when its peer went silent.
+///
+/// `connect_timeout` covers the TCP connect and nothing more, so this path waits
+/// on the kernel, which the test above characterises at around thirteen seconds.
+/// Keep-alive is what actually bounds it, at roughly interval + timeout, and this
+/// is the assertion that the setting is doing that job.
+#[test]
+async fn keep_alive_bounds_a_connection_whose_peer_went_silent() {
+    if delegated_to_namespace(test_name!()) {
+        return;
+    }
+
+    let peer = serve_grpc().await;
+    let port = peer.addr.port().to_string();
+    let uri: Uri = format!("http://{}", peer.addr).parse().unwrap();
+
+    // Small so the test is quick; production uses 10s/10s.
+    let interval = Duration::from_secs(1);
+    let timeout = Duration::from_secs(2);
+    let mut cfg = config();
+    cfg.http2_keep_alive_interval = Some(interval);
+    cfg.http2_keep_alive_timeout = Some(timeout);
+    cfg.http2_keep_alive_while_idle = Some(true);
+    let client = executor_client(cfg);
+
+    let first = ping(&client, uri.clone()).await;
+    assert_ne!(
+        first
+            .expect_err("empty router replies Unimplemented")
+            .code(),
+        tonic::Code::Unavailable,
+        "the connection must be established before the peer is silenced"
+    );
+
+    let _blackhole = blackhole_port(&port);
+
+    let started = Instant::now();
+    let err = ping(&client, uri)
+        .await
+        .expect_err("call to a silenced peer must fail");
+    let elapsed = started.elapsed();
+    eprintln!("[KEEPALIVE] bounded at {elapsed:?}, code={:?}", err.code());
+
+    // Without keep-alive this same sequence waits on the kernel instead, which
+    // the neighbouring test measures at about 13s, so this bound separates the
+    // two mechanisms rather than merely being generous.
+    let bound = (interval + timeout) * 2;
+    assert!(
+        elapsed < bound,
+        "keep-alive should have given up within {bound:?}, took {elapsed:?} — \
+         detection is falling through to the kernel's timeout instead"
+    );
+}
+
 /// Production's actual sequence, which the previous test does not capture: the
 /// pod's process dies first (sockets close, client sees ConnectionReset /
 /// BrokenPipe), and only then does its IP stop routing. The next call therefore
@@ -791,7 +839,8 @@ async fn waiter_survives_cancellation_of_the_caller_that_started_the_connect() {
     );
     assert!(
         b_result.is_ok(),
-        "waiter B stalled after its driver was cancelled ({elapsed:?}) — Shared future left undriven"
+        "waiter B never settled after the caller that started the connect was \
+         cancelled ({elapsed:?})"
     );
     assert!(
         elapsed < connect_timeout * 2,
@@ -998,19 +1047,7 @@ async fn a_dead_transport_still_carries_a_transport_error_source() {
 /// distinguishes "one attempt shared by everyone" from "one attempt each".
 #[test]
 async fn a_cohort_that_retries_opens_one_connection_per_round() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counter = accepted.clone();
-    let _accepter = tokio::spawn(async move {
-        let mut held = Vec::new();
-        // Accept, count, and then stay silent, so every attempt has to be given
-        // up on rather than completing.
-        while let Ok((sock, _)) = listener.accept().await {
-            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            held.push(sock);
-        }
-    });
+    let peer = serve_silent_peer().await;
 
     // shard-manager's executor client really does run with retries enabled
     // (max_attempts = 5 in shard-manager.toml), so the retry path is not
@@ -1030,7 +1067,7 @@ async fn a_cohort_that_retries_opens_one_connection_per_round() {
     };
 
     let client = executor_client(cfg);
-    let uri: Uri = format!("http://{addr}").parse().unwrap();
+    let uri: Uri = format!("http://{}", peer.addr).parse().unwrap();
 
     let started = Instant::now();
     let calls = (0..CALLERS).map(|_| {
@@ -1042,8 +1079,10 @@ async fn a_cohort_that_retries_opens_one_connection_per_round() {
         let _ = call.await;
     }
 
-    let connects = accepted.load(std::sync::atomic::Ordering::SeqCst);
-    let rounds = MAX_ATTEMPTS as usize + 1;
+    let connects = peer.connections.load(std::sync::atomic::Ordering::SeqCst);
+    // `failed_attempt` stops once attempts reach max_attempts, so that is the
+    // number of connects a caller makes, not one more.
+    let rounds = MAX_ATTEMPTS as usize;
     eprintln!(
         "[COHORT] {CALLERS} callers, {rounds} rounds: {connects} TCP connects in {:?}",
         started.elapsed()
@@ -1126,14 +1165,18 @@ async fn a_cohort_retrying_into_a_blackhole_opens_one_connection_per_round() {
         .and_then(|pkts| pkts.parse().ok())
         .expect("the DROP rule must be present with a packet counter");
 
-    let rounds = MAX_ATTEMPTS as usize + 1;
+    // `failed_attempt` stops once attempts reach max_attempts, so that is the
+    // number of connects a caller makes, not one more.
+    let rounds = MAX_ATTEMPTS as usize;
     eprintln!(
         "[SYN] {CALLERS} callers, {rounds} rounds: {syns} SYNs sent in {elapsed:?} \
          (single-flight expects ~{rounds}, one attempt each expects ~{})",
         CALLERS * rounds
     );
+    // One SYN per round, plus one to absorb a retransmit. Twelve if the cohort
+    // stops sharing, so the gap is not close.
     assert!(
-        syns <= rounds * 2,
+        syns <= rounds + 1,
         "{CALLERS} callers sent {syns} SYNs across {rounds} retry rounds; single-flight \
          should have opened about one connection per round, not one per caller per round"
     );
