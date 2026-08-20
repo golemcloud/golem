@@ -1324,7 +1324,7 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
     sparse.seek(SeekFrom::Start(4 * 1024 * 1024)).unwrap();
     sparse.write_all(&[0x7d]).unwrap();
     sparse.sync_all().unwrap();
-    rustix::fs::syncfs(&File::open(path).unwrap()).unwrap();
+    rustix::fs::syncfs(&File::open(&path).unwrap()).unwrap();
     let usage_after_sparse = filesystem.usage().await.unwrap().unwrap();
     assert_eq!(
         std::fs::metadata(&sparse_path).unwrap().len(),
