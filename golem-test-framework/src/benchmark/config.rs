@@ -65,6 +65,26 @@ pub enum BenchmarkConfig {
         #[arg(long)]
         add_to_json: Option<PathBuf>,
 
+        /// Stable identifier for the runner hardware class
+        #[arg(long)]
+        runner_id: Option<String>,
+
+        /// Human-readable runner name
+        #[arg(long, requires = "runner_id")]
+        runner_label: Option<String>,
+
+        /// Source repository in owner/name form
+        #[arg(long)]
+        source_repository: Option<String>,
+
+        /// Source commit SHA
+        #[arg(long)]
+        source_commit_sha: Option<String>,
+
+        /// Source ref, such as refs/heads/main
+        #[arg(long)]
+        source_ref: Option<String>,
+
         #[command(subcommand)]
         mode: TestMode,
     },
@@ -241,5 +261,70 @@ mod cloud_mode_smoke {
         for r in &runs {
             assert_eq!(r.cluster_size, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod metadata_cli {
+    use super::*;
+    use clap::Parser;
+    use test_r::test;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(subcommand)]
+        config: BenchmarkConfig,
+    }
+
+    #[test]
+    fn suite_accepts_runner_and_source_metadata() {
+        let cli = Cli::try_parse_from([
+            "test",
+            "suite",
+            "--runner-id",
+            "amp-orb-a1.xxlarge",
+            "--runner-label",
+            "Amp orb (a1.xxlarge)",
+            "--source-repository",
+            "golemcloud/golem",
+            "--source-commit-sha",
+            "0123456789abcdef",
+            "--source-ref",
+            "refs/heads/main",
+            "suite.yaml",
+            "spawned",
+        ])
+        .unwrap();
+
+        let BenchmarkConfig::Suite {
+            runner_id,
+            runner_label,
+            source_repository,
+            source_commit_sha,
+            source_ref,
+            ..
+        } = cli.config
+        else {
+            panic!("expected suite configuration");
+        };
+        assert_eq!(runner_id.as_deref(), Some("amp-orb-a1.xxlarge"));
+        assert_eq!(runner_label.as_deref(), Some("Amp orb (a1.xxlarge)"));
+        assert_eq!(source_repository.as_deref(), Some("golemcloud/golem"));
+        assert_eq!(source_commit_sha.as_deref(), Some("0123456789abcdef"));
+        assert_eq!(source_ref.as_deref(), Some("refs/heads/main"));
+    }
+
+    #[test]
+    fn runner_label_requires_runner_id() {
+        let result = Cli::try_parse_from([
+            "test",
+            "suite",
+            "--runner-label",
+            "Amp orb",
+            "suite.yaml",
+            "spawned",
+        ]);
+
+        assert!(result.is_err());
     }
 }
