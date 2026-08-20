@@ -282,6 +282,8 @@ mod tests {
             "delay",
             "findings",
             "findingsOmitted",
+            "overdueOnArrival",
+            "overdueDelay",
         ] {
             assert!(
                 !fires[key].is_null(),
@@ -301,6 +303,62 @@ mod tests {
         assert_eq!(parsed.scenario_code, "S10");
         assert!(parsed.summary.schedule_fires.is_some());
         assert!(!Stream::Scheduled.to_string().is_empty());
+    }
+
+    /// The CI annotation branches on `summary.attention` being non-empty, so
+    /// the two lists have to stay two lists across the repo boundary. Folding
+    /// context back into `attention` would make the annotation fire on every
+    /// healthy run, which is how it came to mean nothing the first time.
+    #[test]
+    fn a_result_separates_findings_from_context_for_the_ci_annotation() {
+        use crate::chaos::summary::Note;
+
+        let mut result = sample_result(TerminationReason::Completed);
+        result.summary.absorb([
+            Note::context("routing at start: 1024/1024 shards (settled before measuring)"),
+            Note::attention("4 scheduled targets filled their fire log and dropped entries"),
+        ]);
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            json["summary"]["attention"].as_array().unwrap().len(),
+            1,
+            "summary.attention is what --attention-count counts"
+        );
+        assert_eq!(
+            json["summary"]["notes"].as_array().unwrap().len(),
+            1,
+            "summary.notes is what the report renders as run context"
+        );
+
+        let parsed: ChaosResult = serde_json::from_str(&json.to_string()).unwrap();
+        assert_eq!(parsed.summary.attention.len(), 1);
+        assert_eq!(parsed.summary.notes.len(), 1);
+    }
+
+    /// A tag can be moved; a digest identifies the build a run actually tested.
+    /// The workflow emits both, and the runbook tells a reader to match them
+    /// against the deployment manifests, so both key names are load-bearing.
+    #[test]
+    fn run_metadata_carries_the_image_digest_beside_the_tag() {
+        use golem_test_framework::benchmark::RunMetadata;
+
+        let mut result = sample_result(TerminationReason::Completed);
+        result.run_metadata = Some(RunMetadata {
+            worker_executor_image_tag: Some("v1.5.10-dev.2".to_string()),
+            worker_executor_image_digest: Some("sha256:60eac87a".to_string()),
+            ..Default::default()
+        });
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            json["runMetadata"]["workerExecutorImageTag"],
+            "v1.5.10-dev.2"
+        );
+        assert_eq!(
+            json["runMetadata"]["workerExecutorImageDigest"],
+            "sha256:60eac87a"
+        );
     }
 
     #[test]

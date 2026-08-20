@@ -76,7 +76,8 @@ use crate::chaos::scenarios::{
 };
 use crate::chaos::signal::{BaselineReady, FaultSignals};
 use crate::chaos::summary::{
-    AgentReadback, ChaosSummary, ReadbackVerdict, TerminationReason, stream_that_never_succeeded,
+    AgentReadback, ChaosSummary, Note, ReadbackVerdict, TerminationReason,
+    stream_that_never_succeeded,
 };
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
@@ -150,7 +151,7 @@ pub async fn run(
     let mut fault_recovered_at = None;
     let mut fault_id = None;
     let mut fault_target_observed = None;
-    let mut attention_extra: Vec<String> = Vec::new();
+    let mut attention_extra: Vec<Note> = Vec::new();
 
     macro_rules! finish {
         ($reason:expr, $records:expr, $readback:expr) => {{
@@ -160,7 +161,7 @@ pub async fn run(
                 routing_snapshots.clone(),
                 fault_injected_at,
             );
-            summary.attention.extend(attention_extra.clone());
+            summary.absorb(attention_extra.clone());
             let result = build_result(
                 config,
                 ScenarioOutcome {
@@ -255,10 +256,13 @@ pub async fn run(
     );
 
     let requested = request_updates(&ctx, workload_config, target_revision).await;
-    attention_extra.push(format!(
-        "update to revision {target_revision} requested for {requested} of {} durable agents \
-         at {update_started_at}",
-        workload_config.durable_agents
+    attention_extra.push(Note::leveled(
+        requested < workload_config.durable_agents as usize,
+        format!(
+            "update to revision {target_revision} requested for {requested} of {} durable \
+             agents at {update_started_at}",
+            workload_config.durable_agents
+        ),
     ));
 
     // ── Signal: ready for the fault ─────────────────────────────────────────
@@ -291,9 +295,9 @@ pub async fn run(
         "S5: fault {} ({} on {}) reported active at {}, {into_update}ms into the update",
         injected.fault_id, injected.kind, injected.target, injected.injected_at
     );
-    attention_extra.push(format!(
+    attention_extra.push(Note::context(format!(
         "the executor kill landed {into_update}ms into the update"
-    ));
+    )));
     fault_injected_at = Some(injected.injected_at);
     fault_id = Some(injected.fault_id.clone());
     fault_target_observed = Some(injected.target.clone());
@@ -343,12 +347,16 @@ pub async fn run(
         .map(|(agent, _)| agent)
         .collect();
     let unreadable = versions.values().filter(|v| v.is_none()).count();
-    attention_extra.push(format!(
-        "after recovery {} of {} durable agents report component version {}; {} could not be read",
-        versions.len() - stale.len(),
-        versions.len(),
-        EXPECTED_VERSION_AFTER_UPDATE,
-        unreadable
+    attention_extra.push(Note::leveled(
+        !stale.is_empty() || unreadable > 0,
+        format!(
+            "after recovery {} of {} durable agents report component version {}; {} could not \
+             be read",
+            versions.len() - stale.len(),
+            versions.len(),
+            EXPECTED_VERSION_AFTER_UPDATE,
+            unreadable
+        ),
     ));
 
     // ── Verdict ─────────────────────────────────────────────────────────────

@@ -69,7 +69,8 @@ use crate::chaos::scenarios::{
 };
 use crate::chaos::signal::{BaselineReady, FaultSignals, RestartEvent};
 use crate::chaos::summary::{
-    AgentReadback, ChaosSummary, ExactlyOnceReport, TerminationReason, stream_that_never_succeeded,
+    AgentReadback, ChaosSummary, ExactlyOnceReport, Note, TerminationReason,
+    stream_that_never_succeeded,
 };
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
@@ -138,7 +139,7 @@ pub async fn run(
     let mut fault_recovered_at = None;
     let mut fault_id = None;
     let mut fault_target_observed = None;
-    let mut attention_extra: Vec<String> = Vec::new();
+    let mut attention_extra: Vec<Note> = Vec::new();
 
     // Sample the assignment continuously for the whole run. Five rebalances in
     // five minutes cannot be read from phase boundaries.
@@ -185,7 +186,7 @@ pub async fn run(
                 fault_injected_at,
             );
             summary.ownership = samples;
-            summary.attention.extend(attention_extra.clone());
+            summary.absorb(attention_extra.clone());
             if let Some(report) = $exactly_once {
                 summary = summary.with_exactly_once(report);
             }
@@ -296,7 +297,10 @@ pub async fn run(
     }
 
     let restarts = signals.read_restart_events();
-    attention_extra.push(describe_restarts(&restarts));
+    attention_extra.push(Note::leveled(
+        restarts.is_empty(),
+        describe_restarts(&restarts),
+    ));
     for event in &restarts {
         info!(
             "S13: restart {} at {} ({})",

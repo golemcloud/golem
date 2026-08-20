@@ -525,6 +525,17 @@ pub struct RunMetadata {
     /// Container image tag of the deployed `worker-service`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub worker_service_image_tag: Option<String>,
+    /// Image digest of the deployed `worker-executor`, when the manifest pins
+    /// one. A tag can be moved; the digest is what actually identifies the
+    /// build a run tested, which is the whole point of recording it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_executor_image_digest: Option<String>,
+    /// Image digest of the deployed `registry-service`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub registry_service_image_digest: Option<String>,
+    /// Image digest of the deployed `worker-service`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worker_service_image_digest: Option<String>,
     /// Aurora ACU capacity for the main (`golem_dev`) cluster at run start.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub aurora_acu_main: Option<f64>,
@@ -575,6 +586,9 @@ impl RunMetadata {
             worker_executor_image_tag: env_str("GOLEM_BENCH_WORKER_EXECUTOR_IMAGE_TAG"),
             registry_service_image_tag: env_str("GOLEM_BENCH_REGISTRY_SERVICE_IMAGE_TAG"),
             worker_service_image_tag: env_str("GOLEM_BENCH_WORKER_SERVICE_IMAGE_TAG"),
+            worker_executor_image_digest: env_str("GOLEM_BENCH_WORKER_EXECUTOR_IMAGE_DIGEST"),
+            registry_service_image_digest: env_str("GOLEM_BENCH_REGISTRY_SERVICE_IMAGE_DIGEST"),
+            worker_service_image_digest: env_str("GOLEM_BENCH_WORKER_SERVICE_IMAGE_DIGEST"),
             aurora_acu_main: env_f64("GOLEM_BENCH_AURORA_ACU_MAIN"),
             aurora_acu_indexed: env_f64("GOLEM_BENCH_AURORA_ACU_INDEXED"),
             aurora_acu_keyvalue: env_f64("GOLEM_BENCH_AURORA_ACU_KEYVALUE"),

@@ -482,6 +482,31 @@ impl ScheduleFireReport {
                 self.unknown_tokens
             ));
         }
+        if let Some(p99) = self.fault_window_p99_ms()
+            && p99 > self.lease_budget_ms
+        {
+            lines.push(format!(
+                "scheduled-fire p99 during the fault was {p99}ms against a {}ms lease budget",
+                self.lease_budget_ms
+            ));
+        }
+        lines
+    }
+
+    /// Lines that explain the account without claiming anything is wrong.
+    ///
+    /// Overdue-on-arrival lives here rather than in [`Self::attention_lines`]
+    /// because it describes the client, not the platform: the due time is
+    /// minted before the registering invocation goes out, so a slow
+    /// registration describes an action that was already late when it arrived
+    /// and which the scheduler then ran correctly and at once.
+    ///
+    /// Read its count together with the worst case, never alone. The
+    /// classification catches anything slower than the lead, so a fix that
+    /// shortens a two-minute stall to twelve seconds moves entries *into* this
+    /// count while making the platform strictly better.
+    pub fn note_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
         if self.overdue_on_arrival > 0 {
             lines.push(format!(
                 "{} already overdue when the registration landed (worst {}ms late). That is \
@@ -493,14 +518,6 @@ impl ScheduleFireReport {
                     format!("{} actions were", self.overdue_on_arrival)
                 },
                 self.overdue_delay.max_ms
-            ));
-        }
-        if let Some(p99) = self.fault_window_p99_ms()
-            && p99 > self.lease_budget_ms
-        {
-            lines.push(format!(
-                "scheduled-fire p99 during the fault was {p99}ms against a {}ms lease budget",
-                self.lease_budget_ms
             ));
         }
         lines
@@ -945,10 +962,16 @@ mod tests {
         );
         assert!(
             report
-                .attention_lines()
+                .note_lines()
                 .iter()
                 .any(|l| l.contains("client-side registration latency")),
             "an operator has to be told why the count is held out"
+        );
+        assert!(
+            report.attention_lines().is_empty(),
+            "holding a fire out of the cells is context, not a finding: CI raises an \
+             annotation on attention, and a run where the platform did nothing wrong must \
+             not raise one"
         );
         // Still exactly-once: both actions ran once.
         assert!(!report.has_violations());

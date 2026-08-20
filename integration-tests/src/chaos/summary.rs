@@ -485,6 +485,62 @@ impl ExactlyOnceReport {
     }
 }
 
+/// Whether a line a scenario reports is a finding or context.
+///
+/// The distinction exists because CI branches on it. An annotation that fires
+/// on every run — and one fires on every run if "routing settled before we
+/// measured" counts as something needing review — trains its readers to ignore
+/// it, which is worse than not having it. Context still reaches the report; it
+/// just does not claim a human has to act.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteLevel {
+    /// Something a human should look at before trusting the run.
+    Attention,
+    /// Something a human needs in order to read the run, but which is not
+    /// itself a problem.
+    Context,
+}
+
+/// One operator-facing line, and which of the two lists it belongs in.
+///
+/// Scenarios build these as they go and hand the whole batch to
+/// [`ChaosSummary::absorb`] at the end, so the classification lives next to the
+/// condition that produced it rather than in whatever reads the result later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Note {
+    pub level: NoteLevel,
+    pub message: String,
+}
+
+impl Note {
+    /// A line that means a human should look before trusting the run.
+    pub fn attention(message: impl Into<String>) -> Self {
+        Self {
+            level: NoteLevel::Attention,
+            message: message.into(),
+        }
+    }
+
+    /// A line that a human needs in order to read the run, but which is not
+    /// itself a problem.
+    pub fn context(message: impl Into<String>) -> Self {
+        Self {
+            level: NoteLevel::Context,
+            message: message.into(),
+        }
+    }
+
+    /// Picks the level from a condition, for the common case where the same
+    /// sentence is a finding or context depending on the numbers in it.
+    pub fn leveled(needs_attention: bool, message: impl Into<String>) -> Self {
+        if needs_attention {
+            Self::attention(message)
+        } else {
+            Self::context(message)
+        }
+    }
+}
+
 /// Everything the driver reports for a scenario.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -519,8 +575,19 @@ pub struct ChaosSummary {
     /// it interpretable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ownership: Vec<OwnershipSample>,
-    /// The read-back verdicts that need a human, hoisted for scanning.
+    /// The verdicts and findings that need a human, hoisted for scanning.
+    ///
+    /// CI raises an annotation when this is non-empty, so nothing belongs here
+    /// that is true of a healthy run. Context goes in [`Self::notes`].
     pub attention: Vec<String>,
+    /// Lines a human needs in order to read the run, which are not themselves
+    /// problems: how the routing table looked before measuring, how much of the
+    /// mechanism under test the fault actually landed in, and so on.
+    ///
+    /// Kept out of [`Self::attention`] so that list keeps meaning "look at
+    /// this". Absent from older results, hence `default`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 impl ChaosSummary {
@@ -631,6 +698,17 @@ impl ChaosSummary {
             schedule_fires: None,
             ownership: Vec::new(),
             attention,
+            notes: Vec::new(),
+        }
+    }
+
+    /// Files a batch of scenario notes into the two lists by their level.
+    pub fn absorb(&mut self, notes: impl IntoIterator<Item = Note>) {
+        for note in notes {
+            match note.level {
+                NoteLevel::Attention => self.attention.push(note.message),
+                NoteLevel::Context => self.notes.push(note.message),
+            }
         }
     }
 
@@ -657,6 +735,7 @@ impl ChaosSummary {
     /// than only in the numbers underneath them.
     pub fn with_schedule_fires(mut self, report: ScheduleFireReport) -> Self {
         self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
         self.schedule_fires = Some(report);
         self
     }
@@ -1087,5 +1166,65 @@ mod tests {
         let stats = LatencyStats::from_durations(Vec::new());
         assert_eq!(stats.count, 0);
         assert_eq!(stats.max_ms, 0);
+    }
+
+    fn empty_summary() -> ChaosSummary {
+        ChaosSummary::build(&[], Vec::new(), Vec::new(), None)
+    }
+
+    #[test]
+    fn notes_are_filed_by_level_rather_than_all_into_attention() {
+        let mut summary = empty_summary();
+        summary.absorb([
+            Note::context("routing at start: 1024/1024 shards (settled before measuring)"),
+            Note::attention("WARNING: measured against an unsettled cluster"),
+        ]);
+
+        assert_eq!(summary.attention.len(), 1);
+        assert!(summary.attention[0].contains("unsettled"));
+        assert_eq!(summary.notes.len(), 1);
+        assert!(summary.notes[0].contains("settled before measuring"));
+    }
+
+    /// The reason the split exists. CI raises an annotation when `attention` is
+    /// non-empty, so a clean run has to leave it empty — otherwise the
+    /// annotation fires every time and stops meaning anything.
+    #[test]
+    fn a_run_with_only_context_raises_nothing_for_ci() {
+        let mut summary = empty_summary();
+        summary.absorb([
+            Note::context("routing at start: 1024/1024 shards (settled before measuring)"),
+            Note::context("S10 killed the executor with 353 actions pending"),
+        ]);
+
+        assert!(summary.attention.is_empty());
+        assert_eq!(summary.notes.len(), 2);
+    }
+
+    #[test]
+    fn leveled_picks_the_list_from_the_condition() {
+        assert_eq!(Note::leveled(true, "x").level, NoteLevel::Attention);
+        assert_eq!(Note::leveled(false, "x").level, NoteLevel::Context);
+    }
+
+    /// Older results have no `notes` key at all, and must still deserialise.
+    #[test]
+    fn a_result_written_before_notes_existed_still_reads() {
+        let mut summary = empty_summary();
+        summary.absorb([Note::context("context")]);
+        let mut json: serde_json::Value = serde_json::to_value(&summary).unwrap();
+        assert!(json.get("notes").is_some(), "notes are serialised when set");
+
+        json.as_object_mut().unwrap().remove("notes");
+        let back: ChaosSummary = serde_json::from_value(json).unwrap();
+        assert!(back.notes.is_empty());
+    }
+
+    /// An empty `notes` is omitted rather than written as `[]`, matching how
+    /// every other optional block in this result behaves.
+    #[test]
+    fn an_empty_notes_list_is_not_serialised() {
+        let json = serde_json::to_value(empty_summary()).unwrap();
+        assert!(json.get("notes").is_none());
     }
 }
