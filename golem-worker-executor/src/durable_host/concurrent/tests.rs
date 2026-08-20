@@ -15,6 +15,9 @@
 use super::*;
 
 use golem_common::model::oplog::host_functions;
+use golem_common::model::oplog::{
+    HostRequestNoInput, HostResponseMonotonicClockTimestamp, LogLevel,
+};
 use golem_common::model::{NamedRetryPolicy, Predicate, RetryPolicy, RetryPolicyState};
 use std::time::Duration;
 use test_r::test;
@@ -643,7 +646,7 @@ async fn completion_delivery_replay_tokens_are_inert() {
         .await
         .expect("discarding a replay-discarded token is a no-op");
 
-    let delivered = CompletionDelivery::test_replay_delivered_legacy();
+    let delivered = CompletionDelivery::test_replay_delivered_immediate();
     assert!(!delivered.is_replay_discarded());
     assert!(!delivered.is_live_armed());
     delivered.delivered();
@@ -651,6 +654,176 @@ async fn completion_delivery_replay_tokens_are_inert() {
     // Dropping an unconsumed replay-discarded token is a no-op as well (the park path drops
     // the token after waiting for the guest to abandon the delivery boundary).
     drop(CompletionDelivery::replay_discarded());
+}
+
+/// Builds an in-memory oplog `[NoOp, Start, End]` (a markerless completed call — the recorded
+/// run crashed after the `End` became durable but before delivery), a replay state over it with
+/// the call claimed and resolved (as `replay_access_deferred` guarantees), and the tail-gated
+/// token exactly as the deferred accessor replay path constructs one.
+async fn tail_gated_token_over_crash_tail(
+    extra_tail: Vec<OplogEntry>,
+    cleanup_sink: Option<mpsc::UnboundedSender<DropEvent>>,
+) -> (Arc<InMemoryOplog>, ReplayState, CompletionDelivery) {
+    let oplog = Arc::new(InMemoryOplog::new());
+    oplog
+        .add(OplogEntry::NoOp {
+            timestamp: Timestamp::now_utc(),
+        })
+        .await;
+    oplog
+        .add(OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            function_name: HostFunctionName::MonotonicClockNow,
+            request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
+                HostRequestNoInput {},
+            )))),
+            durable_function_type: DurableFunctionType::ReadLocal,
+        })
+        .await;
+    oplog
+        .add(OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: idx(2),
+            response: Some(OplogPayload::Inline(Box::new(
+                HostResponse::MonotonicClockTimestamp(HostResponseMonotonicClockTimestamp {
+                    nanos: 42,
+                }),
+            ))),
+            forced_commit: false,
+        })
+        .await;
+    for entry in extra_tail {
+        oplog.add(entry).await;
+    }
+    let oplog_dyn: Arc<dyn Oplog> = oplog.clone();
+    let replay_state = ReplayState::new(
+        golem_common::model::OwnedAgentId {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "tail-gated-token-test".to_string(),
+            },
+        },
+        oplog_dyn.clone(),
+        golem_common::model::regions::DeletedRegions::default(),
+    )
+    .await
+    .expect("failed to build replay state");
+    let handle = replay_state
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .expect("claim must succeed");
+    replay_state
+        .await_resolution(handle)
+        .await
+        .expect("resolution must succeed");
+    let token = CompletionDelivery::test_replay_at_tail(
+        oplog_dyn,
+        replay_state.clone(),
+        idx(2),
+        cleanup_sink,
+    );
+    (oplog, replay_state, token)
+}
+
+#[test]
+async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
+    // A markerless completed `End` replays tail-gated: `prepare_delivery` waits for the recorded
+    // tail to exhaust naturally, then converts the token to live-armed so the eventual real
+    // delivery records a durable `CompletionDelivered` marker — a second crash after the tail
+    // delivery replays marker-gated instead of re-opening the crash window.
+    let (oplog, replay_state, mut token) = tail_gated_token_over_crash_tail(
+        vec![OplogEntry::Log {
+            timestamp: Timestamp::now_utc(),
+            level: LogLevel::Stdout,
+            context: "stdout".to_string(),
+            message: "crash tail hint".to_string(),
+        }],
+        None,
+    )
+    .await;
+    assert!(!token.is_live_armed());
+
+    token
+        .prepare_delivery()
+        .await
+        .expect("tail gating must succeed over a drainable tail");
+    assert!(
+        token.is_live_armed(),
+        "the tail-gated token must convert to live-armed after the tail exhausts"
+    );
+    assert!(replay_state.is_live());
+
+    token.delivered();
+    // With no cleanup sink the marker append is only settlement-tracked via the drain queue;
+    // poll the oplog for the spawned append.
+    for _ in 0..100 {
+        {
+            let entries = oplog.entries.lock().await;
+            if let Some(OplogEntry::CompletionDelivered { start_index, .. }) = entries.last() {
+                assert_eq!(*start_index, idx(2));
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the delivered marker append never landed");
+}
+
+#[test]
+async fn tail_gated_token_torn_after_conversion_records_discarded_marker() {
+    // After tail conversion the token is a real live-armed token: tearing it (dropping the
+    // delivering future) must record a `CompletionDiscarded` marker through the drain queue.
+    let (oplog, _replay_state, mut token) = tail_gated_token_over_crash_tail(vec![], None).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    token
+        .prepare_delivery()
+        .await
+        .expect("tail gating must succeed over a drainable tail");
+    assert!(token.is_live_armed());
+    if let CompletionDeliveryState::Live(live) = &mut token.state {
+        live.cleanup_sink = Some(tx);
+    }
+    drop(token);
+
+    match rx.try_recv() {
+        Ok(DropEvent::AwaitCompletionMarker { mut receipt, .. }) => {
+            await_marker_receipt(
+                receipt
+                    .as_mut()
+                    .expect("the drain event must carry the marker receipt"),
+            )
+            .await
+            .expect("marker append must succeed");
+            let entries = oplog.entries.lock().await;
+            match entries.last() {
+                Some(OplogEntry::CompletionDiscarded { start_index, .. }) => {
+                    assert_eq!(*start_index, idx(2))
+                }
+                other => panic!("expected CompletionDiscarded, got {other:?}"),
+            }
+        }
+        other => panic!("expected an AwaitCompletionMarker drop event, got {other:?}"),
+    }
+}
+
+#[test]
+async fn tail_gated_token_delivered_without_prepare_poisons_replay() {
+    // A delivery boundary firing while the completion is still tail-gated means the call site
+    // never awaited `prepare_delivery`: replay must fail loudly instead of silently re-opening
+    // the crash window the gate closes.
+    let (_oplog, replay_state, token) = tail_gated_token_over_crash_tail(vec![], None).await;
+    token.delivered();
+
+    let err = replay_state
+        .await_natural_tail_end()
+        .await
+        .expect_err("the poisoned cursor must reject further operations");
+    assert!(err.to_string().contains("tail"), "unexpected error: {err}");
 }
 
 #[test]
@@ -1716,7 +1889,10 @@ fn classify_completed_is_delivered() {
         forced_commit: false,
     });
     match classify_replay_resolution(outcome) {
-        ReplayedResolution::Delivered(ReplayedPayload::Completed(Some(p)), None) => {
+        ReplayedResolution::Delivered(
+            ReplayedPayload::Completed(Some(p)),
+            ReplayDeliveryDisposition::AtReplayTail,
+        ) => {
             assert_eq!(p, payload(vec![1, 2, 3]), "payload preserved")
         }
         other => panic!("expected Delivered(Completed), got {other:?}"),
@@ -1734,7 +1910,10 @@ fn classify_completed_without_response_payload_is_delivered() {
         forced_commit: false,
     });
     match classify_replay_resolution(outcome) {
-        ReplayedResolution::Delivered(ReplayedPayload::Completed(None), None) => {}
+        ReplayedResolution::Delivered(
+            ReplayedPayload::Completed(None),
+            ReplayDeliveryDisposition::AtReplayTail,
+        ) => {}
         other => panic!("expected Delivered(Completed(None)), got {other:?}"),
     }
 }
@@ -1746,7 +1925,10 @@ fn classify_cancelled_with_partial_is_delivered() {
         partial: Some(payload(vec![9])),
     });
     match classify_replay_resolution(outcome) {
-        ReplayedResolution::Delivered(ReplayedPayload::CancelledPartial(p), None) => {
+        ReplayedResolution::Delivered(
+            ReplayedPayload::CancelledPartial(p),
+            ReplayDeliveryDisposition::Immediate,
+        ) => {
             assert_eq!(p, payload(vec![9]), "partial payload preserved")
         }
         other => panic!("expected Delivered(CancelledPartial), got {other:?}"),

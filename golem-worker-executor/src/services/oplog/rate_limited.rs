@@ -175,17 +175,13 @@ impl Debug for RateLimitedOplog {
 
 #[async_trait]
 impl Oplog for RateLimitedOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        self.enqueue_add(entry).await
-    }
-
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         // Reserve the inner oplog position synchronously, then apply back-pressure only while the
         // returned receipt is awaited. This preserves ordering without bypassing write limiting.
         let pending = self.inner.enqueue_add(entry);
         let resource_entry = self.resource_entry.clone();
         let state = self.state.clone();
-        let account_id = self.account_id.clone();
+        let account_id = self.account_id;
         let environment_id = self.environment_id;
         Box::pin(async move {
             let idx = pending.await;

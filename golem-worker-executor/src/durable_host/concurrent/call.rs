@@ -691,30 +691,27 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         }
     }
 
-    /// Supersedes any completion-delivery observer still armed on this accessor's host subtask
-    /// once this call owns a persisted live `Start`.
+    /// Enforces that no completion-delivery observer is still armed on this accessor's host
+    /// subtask once this call owns a persisted live `Start`.
     ///
-    /// Such an observer belongs to an *earlier* durable call in the same host function whose
-    /// response has already been consumed internally by host code (see
-    /// [`CompletionDelivery::deliver_at_accessor_terminal`]): the guest can no longer discard
-    /// that completion individually — only the whole host call's terminal — and replay
-    /// re-executes the host code past its `End` deterministically, re-consuming the response
-    /// internally. So no `CompletionDiscarded` marker is needed, and the observer's
-    /// [`LiveCallPermit`] must not keep blocking suspension (e.g. for the whole duration of a
-    /// subsequent suspendable wait such as `monotonic-clock.wait-for`). Clearing the observer
-    /// drops its guard, which suppresses the token and releases the permit; the follow-up drain
-    /// joins any ordered append the superseded token parked in the drain queue, so its oplog
-    /// ordering and settlement accounting survive.
+    /// An armed observer here would belong to an *earlier* durable call in the same host
+    /// function whose response host code consumed internally before issuing this call. That
+    /// pattern is forbidden: [`CompletionDelivery::deliver_at_accessor_terminal`] must be the
+    /// tail operation of its host function. The invariant is what lets replay withhold a
+    /// markerless completed `End` until the recorded tail exhausts — a completion consumed
+    /// host-internally would legitimize durable tail entries that depend on an unmarked
+    /// delivery, silently re-opening the crash window that tail-gating closes. So instead of
+    /// tolerating the handoff, finding an armed observer is a hard error.
     ///
-    /// This handoff is only performed once *this* call is a persisted live barrier (never for
-    /// replay or snapshotting handles): until then the prior observer must stay armed so a guest
+    /// Clearing the observer drops its guard, which suppresses the token (no marker) and
+    /// releases its [`LiveCallPermit`]; the follow-up drain joins anything the suppressed token
+    /// parked in the drain queue before the error escapes, so settlement accounting stays
+    /// consistent while the worker traps.
+    ///
+    /// The check only runs once *this* call is a persisted live barrier (never for replay or
+    /// snapshotting handles): until then a prior observer legitimately stays armed so a guest
     /// cancellation landing before this call's `Start` still records its `CompletionDiscarded`
     /// marker and parks replay at the prior call.
-    ///
-    /// Invariant required of host functions: after this supersession, a failure of this call
-    /// must either arm a newer observer (via its own completion) or escape as a
-    /// trap/cancellation — host code must not swallow the failure and return a successful outer
-    /// result derived from the superseded completion with no observer armed.
     async fn supersede_prior_completion_delivery<T, D, Ctx>(
         &mut self,
         store: &Accessor<T, D>,
@@ -728,15 +725,29 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         if !(self.is_live && self.persisted) {
             return Ok(());
         }
-        if let Err(error) = store.clear_terminal_observer() {
+        let cleared = match store.clear_terminal_observer() {
+            Ok(cleared) => cleared,
+            Err(error) => {
+                self.abandon_for_trap();
+                return Err(WorkerExecutorError::runtime(format!(
+                    "failed to inspect the accessor completion observer: {error}"
+                )));
+            }
+        };
+        if cleared {
+            // Drain first so the suppressed observer's parked bookkeeping settles before the
+            // error escapes.
+            if let Err(err) = drain_dropped_call_events_access(store, get_ctx).await {
+                self.abandon_for_trap();
+                return Err(err.source);
+            }
             self.abandon_for_trap();
             return Err(WorkerExecutorError::runtime(format!(
-                "failed to supersede prior accessor completion observer: {error}"
+                "a completion-delivery observer of an earlier durable call was still armed when \
+                 durable call {} started on the same host subtask: \
+                 deliver_at_accessor_terminal must be the tail operation of its host function",
+                self.start_idx
             )));
-        }
-        if let Err(err) = drain_dropped_call_events_access(store, get_ctx).await {
-            self.abandon_for_trap();
-            return Err(err.source);
         }
         Ok(())
     }
@@ -1953,8 +1964,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .await_resolution_outcome(replay)
             .await?;
         match classify_replay_resolution(outcome) {
-            ReplayedResolution::Delivered(payload, delivery_marker) => {
-                if let Some(marker_idx) = delivery_marker {
+            ReplayedResolution::Delivered(payload, disposition) => {
+                if let ReplayDeliveryDisposition::AtMarker(marker_idx) = disposition {
                     self.finished = true;
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         "a completion-delivery marker for an accessor durable call",
@@ -1964,6 +1975,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         ),
                     ));
                 }
+                // `Immediate` and `AtReplayTail` both deliver at the host return: the direct
+                // path's guest task is synchronously blocked inside the host call, so delivery
+                // coincides with the host return and has no pre-delivery divergence window.
+                //
                 // Terminal: mark finished up front so a decode / scope-close failure below does not
                 // drop the (replay) handle as "unfinished".
                 self.finished = true;
@@ -2003,9 +2018,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         self.ensure_accessor_terminal_supported("replay_access")?;
         let function_type = self.retry.function_type().clone();
         let begin_index = self.begin_index;
-        let (replay_state, oplog) = store.with(|mut access| {
+        let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            (ctx.state.replay_state.clone(), ctx.state.oplog.clone())
+            (
+                ctx.state.replay_state.clone(),
+                ctx.state.oplog.clone(),
+                ctx.state.completion_marker_recorder(),
+            )
         });
         let replay = self
             .replay
@@ -2013,14 +2032,20 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .expect("replay_access() called on a live handle");
         let outcome = replay_state.await_resolution_outcome(replay).await?;
         match classify_replay_resolution(outcome) {
-            ReplayedResolution::Delivered(payload, delivery_marker) => {
+            ReplayedResolution::Delivered(payload, disposition) => {
                 self.finished = true;
                 let response = decode_replayed_payload::<Pair>(&oplog, payload).await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
                     .await?;
-                CompletionDelivery::replay_delivered(replay_state, self.start_idx, delivery_marker)
-                    .deliver_at_accessor_terminal(store)
-                    .await?;
+                CompletionDelivery::replay_delivered(
+                    disposition,
+                    self.start_idx,
+                    completion_marker_recorder,
+                    self.trap_context(),
+                    self.cleanup_sink.clone(),
+                )
+                .deliver_at_accessor_terminal(store)
+                .await?;
                 Ok(CallReplayOutcome::Replayed(response))
             }
             ReplayedResolution::Undelivered(terminal) => {
@@ -2081,9 +2106,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         self.ensure_accessor_terminal_supported("replay_access_deferred")?;
         let function_type = self.retry.function_type().clone();
         let begin_index = self.begin_index;
-        let (replay_state, oplog) = store.with(|mut access| {
+        let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            (ctx.state.replay_state.clone(), ctx.state.oplog.clone())
+            (
+                ctx.state.replay_state.clone(),
+                ctx.state.oplog.clone(),
+                ctx.state.completion_marker_recorder(),
+            )
         });
         let replay = self
             .replay
@@ -2091,7 +2120,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .expect("replay_access_deferred() called on a live handle");
         let outcome = replay_state.await_resolution_outcome(replay).await?;
         match classify_replay_resolution(outcome) {
-            ReplayedResolution::Delivered(payload, delivery_marker) => {
+            ReplayedResolution::Delivered(payload, disposition) => {
                 self.finished = true;
                 let response = decode_replayed_payload::<Pair>(&oplog, payload).await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
@@ -2102,9 +2131,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 Ok(DeferredCallReplayOutcome::Replayed(
                     response,
                     CompletionDelivery::replay_delivered(
-                        replay_state,
+                        disposition,
                         self.start_idx,
-                        delivery_marker,
+                        completion_marker_recorder,
+                        self.trap_context(),
+                        self.cleanup_sink.clone(),
                     ),
                 ))
             }
@@ -2493,10 +2524,11 @@ impl UndeliveredTerminal {
 /// [`UndeliveredTerminal`]).
 #[derive(Debug)]
 pub(super) enum ReplayedResolution {
-    /// The recorded run delivered this payload to the guest: decode it, close the durable scope,
-    /// run its deterministic post-`End` continuation, then gate the guest handoff on the optional
-    /// `CompletionDelivered` marker (absent in legacy oplogs).
-    Delivered(ReplayedPayload, Option<OplogIndex>),
+    /// The recorded run delivered (or, for a markerless completed `End`, must still deliver)
+    /// this payload to the guest: decode it, close the durable scope, run its deterministic
+    /// post-`End` continuation, then gate the guest handoff according to the
+    /// [`ReplayDeliveryDisposition`].
+    Delivered(ReplayedPayload, ReplayDeliveryDisposition),
     /// The recorded terminal never reached the guest.
     Undelivered(UndeliveredTerminal),
     /// The call's `Start` was committed but its terminal never was: candidate for live repair
@@ -2515,14 +2547,25 @@ pub(super) fn classify_replay_resolution(outcome: ResolutionOutcome) -> Replayed
             response,
             delivery_marker,
             ..
-        }) => ReplayedResolution::Delivered(ReplayedPayload::Completed(response), delivery_marker),
+        }) => ReplayedResolution::Delivered(
+            ReplayedPayload::Completed(response),
+            match delivery_marker {
+                Some(marker_idx) => ReplayDeliveryDisposition::AtMarker(marker_idx),
+                // A completed `End` without a delivery marker: the recorded run crashed after
+                // the `End` became durable but before the completion crossed to the guest.
+                None => ReplayDeliveryDisposition::AtReplayTail,
+            },
+        ),
         ResolutionOutcome::Resolved(Resolution::Cancelled {
             cancelled_idx,
             partial,
         }) => match partial {
-            Some(payload) => {
-                ReplayedResolution::Delivered(ReplayedPayload::CancelledPartial(payload), None)
-            }
+            Some(payload) => ReplayedResolution::Delivered(
+                ReplayedPayload::CancelledPartial(payload),
+                // A cancellation's partial result is delivered at the guest-initiated (and
+                // therefore deterministic) cancellation point: never marker-bearing, no gating.
+                ReplayDeliveryDisposition::Immediate,
+            ),
             // `Cancelled` with no partial result: in the recorded run this call never returned a
             // value to the guest — its future was dropped mid-flight.
             None => ReplayedResolution::Undelivered(UndeliveredTerminal::CancelledWithoutPartial {

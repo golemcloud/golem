@@ -1577,6 +1577,119 @@ async fn request_matching_claim_does_not_scan_past_delivery_marker() {
 }
 
 #[test]
+async fn markerless_completed_end_resolves_without_delivery_marker() {
+    // The recorded run crashed after the `End` became durable but before the completion crossed
+    // to the guest, so no `CompletionDelivered` marker follows. The resolution must expose that
+    // as `delivery_marker: None` — the deferred accessor path tail-gates such completions.
+    let rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+
+    match rs.await_resolution(handle).await.unwrap() {
+        Resolution::Completed {
+            end_idx,
+            delivery_marker,
+            ..
+        } => {
+            assert_eq!(end_idx, OplogIndex::from_u64(3));
+            assert_eq!(delivery_marker, None);
+        }
+        other => panic!("expected markerless completion, got {other:?}"),
+    }
+}
+
+#[test]
+async fn await_natural_tail_end_returns_once_tail_drains() {
+    // After the markerless call is claimed and resolved, the remaining tail holds only its own
+    // awaited `End` terminal and a trailing hint — entries the drain loop consumes without a
+    // positional owner — so the tail-gated waiter exhausts the tail and returns.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        stdout_log("crash tail hint"),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+
+    rs.await_natural_tail_end().await.unwrap();
+    assert!(rs.is_live());
+}
+
+#[test]
+async fn await_natural_tail_end_waits_for_positionally_owned_entry() {
+    // The crash tail contains a real entry (`BeginAtomicRegion`) owned by the replaying guest:
+    // the tail-gated waiter must park until the guest's positional reader consumes it, and only
+    // then observe the exhausted tail. Delivering earlier could make the replayed guest skip
+    // recorded entries — the crash window this gate closes.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        begin_atomic_region(),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+
+    let waiter = rs.await_natural_tail_end();
+    tokio::pin!(waiter);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
+            .await
+            .is_err(),
+        "the tail-gated waiter must park while a positionally-owned entry remains"
+    );
+
+    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(4));
+    assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
+
+    waiter.await.unwrap();
+    assert!(rs.is_live());
+}
+
+#[test]
+async fn await_natural_tail_end_propagates_delivery_failure() {
+    // Poisoning replay (a delivery boundary fired while a completion was still tail-gated) must
+    // wake and fail a parked tail waiter instead of leaving it parked forever.
+    let rs = replay_state_over(vec![noop(), begin_atomic_region()]).await;
+
+    let waiter = rs.await_natural_tail_end();
+    tokio::pin!(waiter);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
+            .await
+            .is_err()
+    );
+
+    rs.fail_tail_delivery(OplogIndex::from_u64(1), "test poisoning");
+    let err = waiter.await.expect_err("the poisoned waiter must fail");
+    assert!(
+        err.to_string().contains("test poisoning"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 async fn replay_delivery_barriers_preserve_adjacent_callback_order() {
     let rs = replay_state_over(vec![
         noop(),

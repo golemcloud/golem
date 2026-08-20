@@ -1104,10 +1104,6 @@ impl Drop for ForwardingOplog {
 
 #[async_trait]
 impl Oplog for ForwardingOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        self.enqueue_add(entry).await
-    }
-
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let (done, done_rx) = tokio::sync::oneshot::channel();
         if self.jobs.send(ForwardingJob::Add { entry, done }).is_err() {
@@ -2292,14 +2288,6 @@ mod tests {
 
     #[async_trait]
     impl Oplog for InMemoryOplog {
-        async fn add(&self, entry: OplogEntry) -> OplogIndex {
-            let mut entries = self.entries.lock().unwrap();
-            let mut idx = self.current_idx.lock().unwrap();
-            *idx = idx.next();
-            entries.push(entry);
-            *idx
-        }
-
         fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
             let mut entries = self.entries.lock().unwrap();
             let mut idx = self.current_idx.lock().unwrap();

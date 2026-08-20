@@ -1371,6 +1371,22 @@ impl ReplayState {
         self.cursor.progress.notify_waiters();
     }
 
+    /// Poisons replay because a markerless completed durable call (its recorded run crashed after
+    /// the `End` became durable but before the completion crossed to the guest) hit a delivery
+    /// boundary while it was still tail-gated: its delivery token must first wait for the replay
+    /// tail via `CompletionDelivery::prepare_delivery`.
+    pub(in crate::durable_host) fn fail_tail_delivery(
+        &self,
+        start_index: OplogIndex,
+        reason: impl Into<String>,
+    ) {
+        self.record_delivery_failure(format!(
+            "replay could not withhold the markerless completion of durable call Start at {start_index} until the end of the replay tail: {}",
+            reason.into()
+        ));
+        self.cursor.progress.notify_waiters();
+    }
+
     /// Runs `op` inside a cursor transaction: acquires the cursor lock via [`ReplayCursor::tx`],
     /// awaits the operation, and always finishes the transaction via [`ReplayCursor::finish_tx`]
     /// (publishing the cursor position and waking parked awaiters) before returning the

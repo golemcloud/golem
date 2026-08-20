@@ -1134,10 +1134,6 @@ impl Debug for MultiLayerOplog {
 
 #[async_trait]
 impl Oplog for MultiLayerOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        self.enqueue_add(entry).await
-    }
-
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let pending = self.primary.enqueue_add(entry);
         let last_oplog_index = self.last_oplog_index.clone();

@@ -407,7 +407,9 @@ pub type OplogAddReceipt = BoxFuture<'static, OplogIndex>;
 #[async_trait]
 pub trait Oplog: Any + Debug + Send + Sync {
     /// Adds a single entry to the oplog (possibly buffered), and returns its index
-    async fn add(&self, entry: OplogEntry) -> OplogIndex;
+    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+        self.enqueue_add(entry).await
+    }
 
     /// Synchronously enqueues a single entry before returning its asynchronous completion receipt.
     ///

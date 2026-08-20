@@ -102,9 +102,10 @@ where
         let entry = read(idx).await;
         let spanning = match &entry {
             // Completion markers are hints, not second terminals, but they carry the delivery
-            // status and timing of their call's `End`. A cut between the `End` and either marker
-            // would make the surviving prefix replay with legacy End-time delivery, so reject it
-            // the same way as one splitting a `Start` from its terminal.
+            // status and timing of their call's `End`. A cut between the `End` and its marker
+            // would leave a completed call that looks markerless, making replay tail-gate a
+            // delivery the recorded run actually consumed at the marker's position, so reject
+            // it the same way as one splitting a `Start` from its terminal.
             OplogEntry::End { start_index, .. }
             | OplogEntry::Cancelled { start_index, .. }
             | OplogEntry::CompletionDiscarded { start_index, .. }

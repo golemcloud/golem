@@ -516,10 +516,6 @@ impl Debug for EphemeralOplog {
 
 #[async_trait]
 impl Oplog for EphemeralOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        self.enqueue_add(entry).await
-    }
-
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         record_oplog_call("add");
         let (done, done_rx) = tokio::sync::oneshot::channel();

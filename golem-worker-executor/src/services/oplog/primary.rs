@@ -1375,10 +1375,6 @@ impl Debug for PrimaryOplog {
 
 #[async_trait]
 impl Oplog for PrimaryOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        self.enqueue_add(entry).await
-    }
-
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let (done, done_rx) = tokio::sync::oneshot::channel();
         if self.jobs.send(OplogJob::Add { entry, done }).is_err() {

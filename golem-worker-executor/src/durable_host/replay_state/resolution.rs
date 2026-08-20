@@ -119,6 +119,43 @@ impl ReplayState {
         }
     }
 
+    /// Waits until the recorded replay tail is naturally exhausted and the cursor is live.
+    ///
+    /// Used to withhold the completion of a markerless successful durable call (its recorded run
+    /// crashed after the `End` became durable but before the completion crossed to the guest): no
+    /// recorded tail entry can depend on that delivery (a `CompletionDelivered` marker would
+    /// precede any dependent entry), so parking the delivery until the tail exhausts cannot
+    /// deadlock, while delivering earlier could make the replayed guest skip recorded entries.
+    ///
+    /// Each round drains whatever the cursor can consume without a positional owner (awaited and
+    /// orphan terminals, scan-ahead-claimed `Start`s, trailing hints) so a tail whose remaining
+    /// entries have no active reader still exhausts, then parks on cursor progress while a real
+    /// entry (or a reserved delivery marker owned by another token) sits at the head.
+    pub(in crate::durable_host) async fn await_natural_tail_end(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+
+            self.run_owned_cursor_op(move |state| async move {
+                state
+                    .with_tx(async |tx| {
+                        tx.try_get_oplog_entry(|_| false).await?;
+                        Ok(())
+                    })
+                    .await
+            })
+            .await?;
+            if self.is_live() {
+                return Ok(());
+            }
+
+            progress.await;
+        }
+    }
+
     /// Awaits the resolution of the call identified by `handle`, treating end-of-replay as a hard
     /// error (the caller requires the call to have completed in the oplog).
     pub async fn await_resolution(
