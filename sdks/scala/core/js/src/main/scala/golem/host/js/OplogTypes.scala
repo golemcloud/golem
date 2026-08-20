@@ -80,7 +80,7 @@ sealed trait JsHostCallParameters extends js.Object {
   def durableFunctionType: JsWrappedFunctionType = js.native
 }
 
-// --- Start / End / Cancelled durable host-call markers ---
+// --- Durable host-call markers ---
 
 @js.native
 sealed trait JsStartParameters extends js.Object {
@@ -106,6 +106,18 @@ sealed trait JsCancelledParameters extends js.Object {
   def timestamp: JsDatetime                   = js.native
   def startIndex: js.BigInt                   = js.native
   def partial: js.UndefOr[JsTypedSchemaValue] = js.native
+}
+
+@js.native
+sealed trait JsCompletionDiscardedParameters extends js.Object {
+  def timestamp: JsDatetime = js.native
+  def startIndex: js.BigInt = js.native
+}
+
+@js.native
+sealed trait JsCompletionDeliveredParameters extends js.Object {
+  def timestamp: JsDatetime = js.native
+  def startIndex: js.BigInt = js.native
 }
 
 // --- SpanData  –  tagged union ---
