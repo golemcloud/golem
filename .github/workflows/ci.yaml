@@ -212,15 +212,22 @@ jobs:
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
-      - name: Install XFS tools and Redis
-        run: sudo apt-get update && sudo apt-get install --yes xfsprogs redis-server
+      - name: Set up Lima
+        id: lima
+        uses: lima-vm/lima-actions/setup@v1
+      - name: Cache Lima images
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/lima
+          key: lima-${{ runner.os }}-${{ steps.lima.outputs.version }}
       - name: Run managed XFS suite
+        env:
+          GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES: 1
+          GOLEM_MANAGED_XFS_TARGET_DIR: ${{ github.workspace }}/target
+          GOLEM_MANAGED_XFS_CARGO_TEST_R: ${{ github.workspace }}/target/cargo-test-r
         run: |
-          sudo env \
-            CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target" \
-            GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES=1 \
-            GOLEM_MANAGED_XFS_CARGO_TEST_R="$(command -v cargo-test-r)" \
-            integration-tests/scripts/managed-filesystem/run-loopback-xfs.sh
+          cp "$(command -v cargo-test-r)" "${GOLEM_MANAGED_XFS_CARGO_TEST_R}"
+          integration-tests/scripts/managed-filesystem/run-lima.sh
 
   build-cli-test-bins:
     env:
