@@ -874,12 +874,22 @@ async fn client_recovers_when_a_cleanly_killed_peer_returns() {
     );
 }
 
-/// The blackhole path, which is what production actually hit: a cached channel
-/// whose peer stops answering without sending RST. If the resulting error is not
-/// recognised as needing a reconnect, the channel stays cached forever and every
-/// later request queues onto a connection that can never work again.
+/// A dead transport has to stay recognisable, because that is what decides
+/// eviction.
+///
+/// `requires_reconnect` keys off the `tonic::transport::Error` hanging off the
+/// status rather than off the status code, since a dead connection arrives as
+/// `Unknown` and not `Unavailable`. If a tonic upgrade ever stopped attaching
+/// that source, eviction would quietly stop happening, so it is asserted here.
+///
+/// Note what this does NOT show. The recovery at the end also happens with
+/// eviction disabled, because tonic's own `Reconnect` layer re-establishes once
+/// the peer answers again; verified by mutation. The test that eviction is
+/// load-bearing is
+/// `concurrent_calls_to_unreachable_peer_fail_within_one_connect_timeout`, which
+/// does go red without it.
 #[test]
-async fn blackholed_channel_is_evicted_and_recovers_when_the_peer_answers_again() {
+async fn a_dead_transport_still_carries_a_transport_error_source() {
     if delegated_to_namespace(
         "blackholed_channel_is_evicted_and_recovers_when_the_peer_answers_again",
     ) {

@@ -211,66 +211,46 @@ impl<T: Clone> GrpcClient<T> {
         F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
             + Send,
     {
-        let mut retries = RetryState::new(&self.config.retries_on_unavailable);
-        let span = debug_span!(
-            "gRPC call",
-            target_name = self.target_name,
-            description = description.as_ref()
+        let description = description.as_ref();
+        let mut attempts = CallAttempts::new(
+            &self.config.retries_on_unavailable,
+            &self.target_name,
+            description,
+            debug_span!(
+                "gRPC call",
+                target_name = self.target_name,
+                description = description
+            ),
         );
         loop {
-            retries.start_attempt();
+            attempts.start();
             // A failed connection attempt goes through the same retry path as a
             // failed call, so `retries_on_unavailable` still governs it.
             let mut entry = match self.connected_client().await {
                 Ok(entry) => entry,
-                Err(e) => {
-                    if !retries.failed_attempt().await {
-                        span.in_scope(|| warn!("gRPC connect failed: {:?}, no more retries", e));
-                        record_internal_grpc_failure(&self.target_name, description.as_ref(), &e);
-                        break Err(e);
-                    }
-                    record_internal_grpc_retry(&self.target_name, description.as_ref());
-                    continue;
-                }
+                Err(e) => match attempts.failed("gRPC connect", &e).await {
+                    NextAttempt::Retry => continue,
+                    NextAttempt::GiveUp => break Err(e),
+                },
             };
-            let attempt_start = Instant::now();
-            match f(&mut entry.client).instrument(span.clone()).await {
+
+            let started = Instant::now();
+            match f(&mut entry.client).instrument(attempts.span()).await {
                 Ok(result) => {
-                    record_internal_grpc_success(
-                        &self.target_name,
-                        description.as_ref(),
-                        attempt_start.elapsed(),
-                    );
+                    attempts.succeeded(started.elapsed());
                     break Ok(result);
                 }
-                Err(e) => {
-                    if requires_reconnect(&e) {
-                        let _ = self.client.lock().await.take();
-                        self.connections.forget(&self.endpoint).await;
-                        if !retries.failed_attempt().await {
-                            span.in_scope(|| {
-                                warn!("gRPC call failed: {:?}, no more retries", e);
-                            });
-                            record_internal_grpc_failure(
-                                &self.target_name,
-                                description.as_ref(),
-                                &e,
-                            );
-                            break Err(e);
-                        } else {
-                            span.in_scope(|| {
-                                debug!("gRPC call failed with {:?}, retrying", e);
-                            });
-                            record_internal_grpc_retry(&self.target_name, description.as_ref());
-                            continue; // retry
-                        }
-                    } else {
-                        span.in_scope(|| {
-                            warn!("gRPC call failed: {:?}, not retriable", e);
-                        });
-                        record_internal_grpc_failure(&self.target_name, description.as_ref(), &e);
-                        break Err(e);
+                Err(e) if requires_reconnect(&e) => {
+                    let _ = self.client.lock().await.take();
+                    self.connections.forget(&self.endpoint).await;
+                    match attempts.failed("gRPC call", &e).await {
+                        NextAttempt::Retry => continue,
+                        NextAttempt::GiveUp => break Err(e),
                     }
+                }
+                Err(e) => {
+                    attempts.gave_up(&e);
+                    break Err(e);
                 }
             }
         }
@@ -337,67 +317,47 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
             + Send,
     {
-        let mut retries = RetryState::new(&self.config.retries_on_unavailable);
-        let span = debug_span!(
-            "gRPC call",
-            target_name = self.target_name,
-            endpoint = endpoint.to_string(),
-            description = description.as_ref()
+        let description = description.as_ref();
+        let mut attempts = CallAttempts::new(
+            &self.config.retries_on_unavailable,
+            &self.target_name,
+            description,
+            debug_span!(
+                "gRPC call",
+                target_name = self.target_name,
+                endpoint = endpoint.to_string(),
+                description = description
+            ),
         );
         loop {
-            retries.start_attempt();
+            attempts.start();
             // A failed connection attempt goes through the same retry path as a
             // failed call, so `retries_on_unavailable` still governs it.
             let mut entry = match self.connected_client(endpoint.clone()).await {
                 Ok(entry) => entry,
-                Err(e) => {
-                    if !retries.failed_attempt().await {
-                        span.in_scope(|| warn!("gRPC connect failed: {:?}, no more retries", e));
-                        record_internal_grpc_failure(&self.target_name, description.as_ref(), &e);
-                        break Err(e);
-                    }
-                    record_internal_grpc_retry(&self.target_name, description.as_ref());
-                    continue;
-                }
+                Err(e) => match attempts.failed("gRPC connect", &e).await {
+                    NextAttempt::Retry => continue,
+                    NextAttempt::GiveUp => break Err(e),
+                },
             };
-            let attempt_start = Instant::now();
-            match f(&mut entry.client).instrument(span.clone()).await {
+
+            let started = Instant::now();
+            match f(&mut entry.client).instrument(attempts.span()).await {
                 Ok(result) => {
-                    record_internal_grpc_success(
-                        &self.target_name,
-                        description.as_ref(),
-                        attempt_start.elapsed(),
-                    );
+                    attempts.succeeded(started.elapsed());
                     break Ok(result);
                 }
-                Err(e) => {
-                    if requires_reconnect(&e) {
-                        self.clients.remove_async(&endpoint).await;
-                        self.connections.forget(&endpoint).await;
-                        if !retries.failed_attempt().await {
-                            span.in_scope(|| {
-                                warn!("gRPC call failed: {:?}, no more retries", e);
-                            });
-                            record_internal_grpc_failure(
-                                &self.target_name,
-                                description.as_ref(),
-                                &e,
-                            );
-                            break Err(e);
-                        } else {
-                            span.in_scope(|| {
-                                debug!("gRPC call failed with {:?}, retrying", e);
-                            });
-                            record_internal_grpc_retry(&self.target_name, description.as_ref());
-                            continue; // retry
-                        }
-                    } else {
-                        span.in_scope(|| {
-                            warn!("gRPC call failed: {:?}, not retriable", e);
-                        });
-                        record_internal_grpc_failure(&self.target_name, description.as_ref(), &e);
-                        break Err(e);
+                Err(e) if requires_reconnect(&e) => {
+                    self.clients.remove_async(&endpoint).await;
+                    self.connections.forget(&endpoint).await;
+                    match attempts.failed("gRPC call", &e).await {
+                        NextAttempt::Retry => continue,
+                        NextAttempt::GiveUp => break Err(e),
                     }
+                }
+                Err(e) => {
+                    attempts.gave_up(&e);
+                    break Err(e);
                 }
             }
         }
@@ -617,6 +577,77 @@ impl EnabledGrpcClientTlsConfig {
         }
 
         config
+    }
+}
+
+/// Whether a `call` loop should go round again.
+enum NextAttempt {
+    Retry,
+    GiveUp,
+}
+
+/// The retry bookkeeping both clients' `call` loops share: decide whether there
+/// is another attempt to make, and record the outcome either way.
+///
+/// Kept in one place because the two loops previously carried byte-identical
+/// copies of it, which is how more than one fix in this area came to be needed
+/// twice.
+struct CallAttempts<'a> {
+    retries: RetryState<'a>,
+    target_name: &'a str,
+    description: &'a str,
+    span: tracing::Span,
+}
+
+impl<'a> CallAttempts<'a> {
+    fn new(
+        config: &'a RetryConfig,
+        target_name: &'a str,
+        description: &'a str,
+        span: tracing::Span,
+    ) -> Self {
+        Self {
+            retries: RetryState::new(config),
+            target_name,
+            description,
+            span,
+        }
+    }
+
+    fn span(&self) -> tracing::Span {
+        self.span.clone()
+    }
+
+    fn start(&mut self) {
+        self.retries.start_attempt();
+    }
+
+    /// Records a failed attempt and says whether to try again. `what` names the
+    /// step that failed, so a connect failure reads differently from a call that
+    /// reached the peer.
+    async fn failed(&mut self, what: &str, e: &Status) -> NextAttempt {
+        if self.retries.failed_attempt().await {
+            self.span
+                .in_scope(|| debug!("{what} failed with {:?}, retrying", e));
+            record_internal_grpc_retry(self.target_name, self.description);
+            NextAttempt::Retry
+        } else {
+            self.span
+                .in_scope(|| warn!("{what} failed: {:?}, no more retries", e));
+            record_internal_grpc_failure(self.target_name, self.description, e);
+            NextAttempt::GiveUp
+        }
+    }
+
+    /// Records a failure there is no point retrying.
+    fn gave_up(&self, e: &Status) {
+        self.span
+            .in_scope(|| warn!("gRPC call failed: {:?}, not retriable", e));
+        record_internal_grpc_failure(self.target_name, self.description, e);
+    }
+
+    fn succeeded(&self, took: Duration) {
+        record_internal_grpc_success(self.target_name, self.description, took);
     }
 }
 
