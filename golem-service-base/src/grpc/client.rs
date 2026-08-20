@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -76,6 +76,44 @@ fn build_endpoint(
 /// after which they all fail and the caller can re-resolve.
 type SharedConnect = Shared<BoxFuture<'static, Result<Connected, Status>>>;
 
+/// How long a connection to a target nobody is calling is kept.
+///
+/// Executor pods come and go, and a target that is never called again would
+/// otherwise hold its `Channel` — and the `Buffer` worker task tower spawned for
+/// it — for the life of the process. Reaching a dropped target again costs one
+/// reconnect, which is why this is generous rather than tight.
+const IDLE_CONNECTION_TTL: Duration = Duration::from_secs(600);
+
+/// Milliseconds since this process started.
+///
+/// Monotonic on purpose. An `Instant` cannot live in an atomic, and a wall clock
+/// that steps backwards would retire connections that are in constant use.
+fn elapsed_millis() -> u64 {
+    static EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
+    EPOCH.elapsed().as_millis() as u64
+}
+
+/// When a connection was last handed to a caller.
+///
+/// Shared between the connection and every client holding it, so the sweep and
+/// the callers cannot disagree about whether it is still in use.
+#[derive(Clone)]
+struct LastUsed(Arc<AtomicU64>);
+
+impl LastUsed {
+    fn now() -> Self {
+        Self(Arc::new(AtomicU64::new(elapsed_millis())))
+    }
+
+    fn touch(&self) {
+        self.0.store(elapsed_millis(), Ordering::Relaxed);
+    }
+
+    fn idle_for(&self) -> Duration {
+        Duration::from_millis(elapsed_millis().saturating_sub(self.0.load(Ordering::Relaxed)))
+    }
+}
+
 /// An established connection, and what tells it apart from the one that replaces
 /// it.
 #[derive(Clone)]
@@ -91,6 +129,7 @@ struct Connected {
     /// them. Releasing them at the moment the connection is known dead is what
     /// keeps a cohort to one `connect_timeout` between them.
     retired: CancellationToken,
+    last_used: LastUsed,
 }
 
 fn connect_shared(endpoint: Endpoint, connect_timeout: Duration) -> SharedConnect {
@@ -103,6 +142,7 @@ fn connect_shared(endpoint: Endpoint, connect_timeout: Duration) -> SharedConnec
                 channel,
                 id,
                 retired: CancellationToken::new(),
+                last_used: LastUsed::now(),
             }),
             Ok(Err(err)) => Err(Status::unavailable(format!("tcp connect error: {err}"))),
             Err(_) => Err(Status::unavailable(format!(
@@ -148,7 +188,10 @@ impl Connections {
         {
             match existing.peek() {
                 // Already connected.
-                Some(Ok(connected)) => return Ok(connected.clone()),
+                Some(Ok(connected)) => {
+                    connected.last_used.touch();
+                    return Ok(connected.clone());
+                }
                 // Someone else is connecting; wait on theirs.
                 None => return existing.await,
                 // A failed attempt is not worth inheriting, so fall through and
@@ -167,7 +210,10 @@ impl Connections {
         let attempt = match self.by_target.entry_async(target.clone()).await {
             Entry::Occupied(mut entry) => match entry.get().peek() {
                 // Already connected. This is the reuse path.
-                Some(Ok(connected)) => return Ok(connected.clone()),
+                Some(Ok(connected)) => {
+                    connected.last_used.touch();
+                    return Ok(connected.clone());
+                }
                 // A failed attempt describes a connection nobody is still making,
                 // so the caller gets its own rather than inheriting that verdict.
                 Some(Err(_)) => {
@@ -213,6 +259,19 @@ impl Connections {
                     .await;
             }
         });
+    }
+
+    /// Drops connections to targets nobody has called for `idle_ttl`.
+    ///
+    /// An attempt still in flight is never dropped: it has no outcome to have
+    /// been idle with, and callers are waiting on it right now.
+    async fn prune(&self, idle_ttl: Duration) {
+        self.by_target
+            .retain_async(|_, attempt| match attempt.peek() {
+                Some(Ok(connected)) => connected.last_used.idle_for() < idle_ttl,
+                _ => true,
+            })
+            .await;
     }
 
     /// Forgets connection `id` to `target`, so the next call builds a new one.
@@ -321,6 +380,7 @@ impl<T: Clone> GrpcClient<T> {
     /// everyone else waits on that same attempt.
     async fn connected_client(&self) -> Result<GrpcClientConnection<T>, Status> {
         if let Some(connection) = self.client.lock().await.clone() {
+            connection.last_used.touch();
             return Ok(connection);
         }
 
@@ -348,6 +408,7 @@ impl<T: Clone> GrpcClient<T> {
             client,
             id: connected.id,
             retired: connected.retired,
+            last_used: connected.last_used,
         };
         *entry = Some(connection.clone());
         Ok(connection)
@@ -470,6 +531,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             .read_async(&endpoint, |_, client| client.clone())
             .await
         {
+            existing.last_used.touch();
             return Ok(existing);
         }
 
@@ -485,6 +547,15 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             return Err(Status::unavailable("connection retired before it was used"));
         }
 
+        // A target that was already cached never reaches here, so this is the one
+        // place these maps grow and the right place to drop what has gone cold. A
+        // client whose set of targets has settled sweeps not at all; one watching
+        // pods come and go sweeps each time one appears.
+        self.clients
+            .retain_async(|_, cached| cached.last_used.idle_for() < IDLE_CONNECTION_TTL)
+            .await;
+        self.connections.prune(IDLE_CONNECTION_TTL).await;
+
         match self.clients.entry_async(endpoint).await {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
@@ -496,6 +567,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                     client,
                     id: connected.id,
                     retired: connected.retired,
+                    last_used: connected.last_used,
                 };
                 entry.insert_entry(connection.clone());
                 Ok(connection)
@@ -532,6 +604,7 @@ pub struct GrpcClientConnection<T: Clone> {
     client: T,
     id: u64,
     retired: CancellationToken,
+    last_used: LastUsed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -914,6 +987,64 @@ mod test {
         assert_ne!(
             replacement.id, first.id,
             "forget left in place the very connection it was given"
+        );
+    }
+
+    /// A target that stops being called must not hold its connection for the life
+    /// of the process. Executor pods come and go, and each one left behind keeps a
+    /// `Channel` and the `Buffer` worker task tower spawned for it.
+    ///
+    /// Driven by an explicit TTL rather than by waiting, so it costs nothing and
+    /// cannot flake.
+    #[test]
+    async fn a_target_nobody_calls_loses_its_connection() {
+        let (target, _peer) = silent_peer().await;
+        let config = GrpcClientConfig::default();
+        let connections = Connections::new();
+
+        let first = connections.connect(target.clone(), &config).await.unwrap();
+
+        // Just used, so no sweep should touch it.
+        connections.prune(Duration::from_secs(60)).await;
+        let kept = connections.connect(target.clone(), &config).await.unwrap();
+        assert_eq!(
+            kept.id, first.id,
+            "the sweep dropped a connection that was still in use"
+        );
+
+        // Against a zero TTL everything counts as cold.
+        connections.prune(Duration::ZERO).await;
+        let replacement = connections.connect(target.clone(), &config).await.unwrap();
+        assert_ne!(
+            replacement.id, first.id,
+            "the sweep kept a connection nobody had called"
+        );
+    }
+
+    /// An attempt still being made belongs to the callers waiting on it, and has
+    /// no last-used moment to be judged by. Sweeping it would send the next caller
+    /// off to open a second connection to the same place.
+    #[test]
+    async fn the_sweep_leaves_an_attempt_in_flight_alone() {
+        let config = GrpcClientConfig::default();
+        let connections = Connections::new();
+
+        // Nothing listens here, and the connect is held open by a timeout far
+        // longer than the test, so the attempt stays unsettled throughout.
+        let target: Uri = "http://127.0.0.1:1/".parse().unwrap();
+        let endpoint = build_endpoint(target.clone(), &config).unwrap();
+        let attempt = connect_shared(endpoint, Duration::from_secs(600));
+        connections
+            .by_target
+            .insert_async(target.clone(), attempt)
+            .await
+            .unwrap();
+
+        connections.prune(Duration::ZERO).await;
+
+        assert!(
+            connections.by_target.contains_async(&target).await,
+            "the sweep took an attempt that callers were still waiting on"
         );
     }
 
