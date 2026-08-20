@@ -248,6 +248,10 @@ async fn run_waiter(
         tokio::time::sleep(dwell).await;
         complete(&ctx, &waiter, &token, &promise_id).await;
 
+        // The handle is dropped rather than aborted on the timeout path, which
+        // leaves the invocation running. That is deliberate: aborting it would
+        // throw away the one record that says how the round ended, and the agent
+        // is parked either way — the driver's task is not what is holding it.
         match tokio::time::timeout(stall_timeout, wait_task).await {
             Ok(_) => {}
             Err(_) => {
