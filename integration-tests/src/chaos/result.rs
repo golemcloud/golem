@@ -25,8 +25,9 @@
 //! same scenario ran anywhere else.
 
 use crate::chaos::pinned::PinnedSelection;
+use crate::chaos::scheduled::ScheduledSelection;
 use crate::chaos::summary::{ChaosSummary, TerminationReason};
-use crate::chaos::{FaultConfig, PinnedConfig, RetryPolicy, WorkloadConfig};
+use crate::chaos::{FaultConfig, PinnedConfig, RetryPolicy, ScheduledConfig, WorkloadConfig};
 use chrono::{DateTime, Utc};
 use golem_test_framework::benchmark::RunMetadata;
 use serde::{Deserialize, Serialize};
@@ -130,6 +131,15 @@ pub struct ChaosResult {
     /// to own. Present only for scenarios that pin the target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_selection: Option<PinnedSelection>,
+    /// The scheduled-registration workload the run was configured with, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled: Option<ScheduledConfig>,
+    /// How the schedule targets divided around the executor the fault was aimed
+    /// at. Present only for S10, and load-bearing for reading its percentiles:
+    /// without it there is no way to tell the affected population from the
+    /// control group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_selection: Option<ScheduledSelection>,
     pub retry_policy: RetryPolicy,
     pub scope: RunScope,
     pub summary: ChaosSummary,
@@ -197,6 +207,8 @@ mod tests {
             }),
             pinned: None,
             pinned_selection: None,
+            scheduled: None,
+            scheduled_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "env-1".to_string(),
@@ -207,6 +219,92 @@ mod tests {
             summary: ChaosSummary::build(&[], Vec::new(), Vec::new(), None),
             run_metadata: None,
         }
+    }
+
+    /// The S10 shape, whose report is read by a script in another repository.
+    ///
+    /// `ci-scripts/chaos-investigation-report.py` in golem-cloud renders these
+    /// fields by name. The two repositories cannot be changed atomically, so a
+    /// rename here would silently empty a section of the investigation report
+    /// rather than fail anything. Naming the keys in a test is what makes that
+    /// break loudly and locally.
+    #[test]
+    fn an_s10_result_carries_the_schedule_fire_fields_the_investigation_report_reads() {
+        use crate::chaos::fires::{
+            FaultWindow, FireRecord, ScheduleFireReport, TargetFireLog,
+        };
+        use crate::chaos::history::Stream;
+
+        let now = Utc::now();
+        let due = now + chrono::Duration::seconds(10);
+        let mut result = sample_result(TerminationReason::Completed);
+        result.scenario_code = "S10".to_string();
+        result.scheduled = Some(crate::chaos::ScheduledConfig {
+            targets: 100,
+            interval_millis: 2000,
+            lead_secs: 10,
+            lease_budget_secs: 60,
+        });
+        result.summary = ChaosSummary::build(&[], Vec::new(), Vec::new(), Some(now))
+            .with_schedule_fires(ScheduleFireReport::build(
+                &[],
+                &[TargetFireLog {
+                    agent: "chaos-s10-scheduled-target-0000".to_string(),
+                    polls: Some(1),
+                    fires: vec![FireRecord {
+                        token: "chaos-s10-scheduled-target-0000-00000001".to_string(),
+                        scheduled_at: due,
+                        observed_at: due + chrono::Duration::seconds(4),
+                    }],
+                    error: None,
+                }],
+                std::time::Duration::from_secs(10),
+                Some(FaultWindow {
+                    injected_at: now,
+                    recovered_at: None,
+                }),
+                &std::collections::BTreeSet::from([
+                    "chaos-s10-scheduled-target-0000".to_string(),
+                ]),
+                std::time::Duration::from_secs(60),
+            ));
+
+        let json = serde_json::to_value(&result).unwrap();
+        let fires = &json["summary"]["scheduleFires"];
+        for key in [
+            "leaseBudgetMs",
+            "registrationsConfirmed",
+            "registrationsIndeterminate",
+            "firesRecorded",
+            "firedOnce",
+            "indeterminateThatFired",
+            "inconclusive",
+            "unverifiable",
+            "unknownTokens",
+            "targetsUnreadable",
+            "targetsTruncated",
+            "delay",
+            "findings",
+            "findingsOmitted",
+        ] {
+            assert!(
+                !fires[key].is_null(),
+                "summary.scheduleFires.{key} is what the investigation report reads"
+            );
+        }
+        let cell = &fires["delay"][0];
+        assert_eq!(cell["group"], "on-killed-executor");
+        assert_eq!(cell["window"], "during-fault");
+        assert_eq!(cell["delay"]["p99Ms"], 4000);
+        assert_eq!(cell["overBudget"], 0);
+        assert_eq!(cell["minDelayMs"], 4000);
+        assert_eq!(json["scheduled"]["leaseBudgetSecs"], 60);
+
+        // And it still round-trips, so an archived S10 result stays readable.
+        let parsed: ChaosResult = serde_json::from_str(&json.to_string()).unwrap();
+        assert_eq!(parsed.scenario_code, "S10");
+        assert!(parsed.summary.schedule_fires.is_some());
+        assert!(!Stream::Scheduled.to_string().is_empty());
     }
 
     #[test]
@@ -400,6 +498,8 @@ mod sample_artifact {
             }),
             pinned: None,
             pinned_selection: None,
+            scheduled: None,
+            scheduled_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),
@@ -417,5 +517,200 @@ mod sample_artifact {
         };
         result.save(&path).unwrap();
         println!("wrote sample result to {path}");
+    }
+
+    /// The same, for S10, whose report has a section of its own.
+    ///
+    /// A separate artifact rather than a field added to the one above: the two
+    /// scenarios do not share a workload shape, and a sample that carried both
+    /// a mixed workload and a scheduled one would not resemble anything the
+    /// driver ever writes.
+    #[test]
+    fn write_sample_s10_result_artifact() {
+        use crate::chaos::fires::{FaultWindow, FireRecord, ScheduleFireReport, TargetFireLog};
+        use crate::chaos::scheduled::ScheduledSelection;
+
+        let Ok(path) = std::env::var("CHAOS_SAMPLE_RESULT_S10") else {
+            return;
+        };
+        let at = |s: i64| Utc.timestamp_opt(1_800_000_000 + s, 0).unwrap();
+        let killed = "chaos-s10-scheduled-target-0000";
+        let survivor = "chaos-s10-scheduled-target-0001";
+
+        // Four registrations per target. On the killed executor one of them
+        // never fires, which is the finding the section exists to render.
+        let mut records = Vec::new();
+        let mut killed_fires = Vec::new();
+        let mut survivor_fires = Vec::new();
+        for i in 0..8u64 {
+            let target = if i % 2 == 0 { killed } else { survivor };
+            // Spread so some actions fall due before the kill and some during it,
+            // which is what gives the report both a control row and the row it is
+            // actually about.
+            let submitted = at(285 + i as i64 * 4);
+            let token = format!("{target}-{:08}", i / 2);
+            records.push(OperationRecord {
+                op_id: i,
+                stream: Stream::Scheduled,
+                phase: if submitted < at(300) {
+                    Phase::Baseline
+                } else {
+                    Phase::Fault
+                },
+                agent: target.to_string(),
+                method: "schedule_fire_at".to_string(),
+                idempotency_key: token.clone(),
+                submitted_at: submitted,
+                completed_at: Some(submitted),
+                attempts: 1,
+                outcome: Outcome::Confirmed,
+                duration_ms: 8 + i,
+                returned_value: None,
+                first_attempt_value: None,
+                error: None,
+                error_class: None,
+                attempt_log: Vec::new(),
+            });
+
+            let due = submitted + chrono::Duration::seconds(10);
+            if target == killed {
+                // The last one is the action the kill swallowed.
+                if i < 6 {
+                    killed_fires.push(FireRecord {
+                        token,
+                        scheduled_at: due,
+                        // Late by a shard reassignment.
+                        observed_at: due + chrono::Duration::milliseconds(41_500),
+                    });
+                }
+            } else {
+                survivor_fires.push(FireRecord {
+                    token,
+                    scheduled_at: due,
+                    observed_at: due + chrono::Duration::milliseconds(120),
+                });
+            }
+        }
+
+        let logs = vec![
+            TargetFireLog {
+                agent: killed.to_string(),
+                polls: Some(killed_fires.len() as u64),
+                fires: killed_fires,
+                error: None,
+            },
+            TargetFireLog {
+                agent: survivor.to_string(),
+                polls: Some(survivor_fires.len() as u64),
+                fires: survivor_fires,
+                error: None,
+            },
+        ];
+
+        let on_pod = std::collections::BTreeSet::from([killed.to_string()]);
+        let report = ScheduleFireReport::build(
+            &records,
+            &logs,
+            std::time::Duration::from_secs(10),
+            Some(FaultWindow {
+                injected_at: at(300),
+                recovered_at: Some(at(420)),
+            }),
+            &on_pod,
+            std::time::Duration::from_secs(60),
+        );
+
+        let readback: Vec<AgentReadback> = logs
+            .iter()
+            .map(|log| {
+                let scoped: Vec<&OperationRecord> =
+                    records.iter().filter(|r| r.agent == log.agent).collect();
+                AgentReadback::evaluate(
+                    Stream::Scheduled,
+                    &log.agent,
+                    &scoped,
+                    Ok(log.polls.unwrap_or(0)),
+                )
+            })
+            .collect();
+
+        let result = ChaosResult {
+            schema_version: RESULT_SCHEMA_VERSION,
+            scenario_code: "S10".to_string(),
+            scenario_name: "executor-crash-during-scheduled-fire".to_string(),
+            completed: false,
+            termination_reason: TerminationReason::ScheduledFireViolated {
+                findings: report.findings.len() as u64,
+                first: report
+                    .findings
+                    .first()
+                    .map(|f| format!("{} on token {}", f.violation, f.token))
+                    .unwrap_or_default(),
+            },
+            started_at: at(0),
+            ended_at: Some(at(900)),
+            phases: Phases {
+                baseline: Some({
+                    let mut w = PhaseWindow::started(at(0));
+                    w.end(at(300));
+                    w
+                }),
+                fault: Some({
+                    let mut w = PhaseWindow::started(at(300));
+                    w.end(at(420));
+                    w
+                }),
+                recovery: Some({
+                    let mut w = PhaseWindow::started(at(420));
+                    w.end(at(720));
+                    w
+                }),
+            },
+            fault_injected_at: Some(at(300)),
+            fault_recovered_at: Some(at(420)),
+            fault_id: Some("chaos-s10-12345".to_string()),
+            fault_target_observed: Some("worker-executor-abc123".to_string()),
+            fault: FaultConfig {
+                kind: "pod-kill".to_string(),
+                target: "worker-executor".to_string(),
+                mode: "one".to_string(),
+                target_count: None,
+                duration_secs: 60,
+            },
+            workload: None,
+            pinned: None,
+            pinned_selection: None,
+            scheduled: Some(crate::chaos::ScheduledConfig {
+                targets: 2,
+                interval_millis: 2000,
+                lead_secs: 10,
+                lease_budget_secs: 60,
+            }),
+            scheduled_selection: Some(ScheduledSelection {
+                pod_address: "10.0.1.1:9000".to_string(),
+                pod_ip: "10.0.1.1".to_string(),
+                on_pod: vec![killed.to_string()],
+                elsewhere: vec![survivor.to_string()],
+                targets_per_pod: [
+                    ("10.0.1.1:9000".to_string(), 1),
+                    ("10.0.1.2:9000".to_string(), 1),
+                ]
+                .into_iter()
+                .collect(),
+                number_of_shards: 1024,
+            }),
+            retry_policy: RetryPolicy::default(),
+            scope: RunScope {
+                environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),
+                component_ids: vec!["0192f000-0000-7000-8000-000000000002".to_string()],
+                agent_id_prefix: "chaos-s10".to_string(),
+                idempotency_key_prefix: "chaos-s10-".to_string(),
+            },
+            summary: ChaosSummary::build(&records, readback, Vec::new(), Some(at(300)))
+                .with_schedule_fires(report),
+            run_metadata: None,
+        };
+        result.save(&path).unwrap();
+        println!("wrote sample S10 result to {path}");
     }
 }

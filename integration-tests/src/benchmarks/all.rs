@@ -592,6 +592,7 @@ async fn run_chaos(
                 ChaosScenarioArg::S5 => chaos::ScenarioCode::S5,
                 ChaosScenarioArg::S12 => chaos::ScenarioCode::S12,
                 ChaosScenarioArg::S13 => chaos::ScenarioCode::S13,
+                ChaosScenarioArg::S10 => chaos::ScenarioCode::S10,
             };
             let config = suite
                 .scenario(code, allow_disabled)
@@ -622,6 +623,9 @@ async fn run_chaos(
                 }
                 chaos::ScenarioCode::S13 => {
                     chaos::scenarios::s13::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S10 => {
+                    chaos::scenarios::s10::run(&config, &manifest, &deps, &signals, &outputs).await
                 }
             };
 

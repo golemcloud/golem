@@ -242,6 +242,8 @@ pub enum ChaosScenarioArg {
     S12,
     /// Rolling executor restarts under load.
     S13,
+    /// Executor pod kill while scheduled actions are between claim and fire.
+    S10,
 }
 
 /// Density subcommand action.

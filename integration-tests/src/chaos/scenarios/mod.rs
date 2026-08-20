@@ -26,6 +26,7 @@
 //! produce a plausible-looking report from a wasted maintenance window.
 
 pub mod s1;
+pub mod s10;
 pub mod s12;
 pub mod s13;
 pub mod s5;
@@ -36,6 +37,7 @@ use crate::chaos::history::{OperationHistory, OperationRecord, Stream};
 use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::pinned::PinnedSelection;
 use crate::chaos::result::{ChaosResult, Phases, RESULT_SCHEMA_VERSION, RunScope};
+use crate::chaos::scheduled::ScheduledSelection;
 use crate::chaos::signal::SignalError;
 use crate::chaos::summary::{
     AgentReadback, ChaosSummary, ExactlyOnceReport, RoutingSnapshot, TerminationReason,
@@ -76,6 +78,9 @@ pub struct ScenarioOutcome {
     pub termination_reason: TerminationReason,
     /// Present only for scenarios that pin the fault to one executor.
     pub pinned_selection: Option<PinnedSelection>,
+    /// Present only for S10, which divides its targets around the executor the
+    /// fault was aimed at rather than driving only the ones it owns.
+    pub scheduled_selection: Option<ScheduledSelection>,
 }
 
 /// Assembles the archived result.
@@ -99,6 +104,8 @@ pub fn build_result(config: &ScenarioConfig, outcome: ScenarioOutcome) -> ChaosR
         workload: config.workload.clone(),
         pinned: config.pinned.clone(),
         pinned_selection: outcome.pinned_selection,
+        scheduled: config.scheduled.clone(),
+        scheduled_selection: outcome.scheduled_selection,
         retry_policy: config.retry_policy.clone(),
         scope: outcome.scope,
         summary: outcome.summary,

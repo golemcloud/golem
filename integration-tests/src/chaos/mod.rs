@@ -33,6 +33,7 @@
 //!    conditions that fail a run outright.
 
 pub mod errors;
+pub mod fires;
 pub mod history;
 pub mod ownership;
 pub mod pinned;
@@ -40,6 +41,7 @@ pub mod prep;
 pub mod probe;
 pub mod result;
 pub mod scenarios;
+pub mod scheduled;
 pub mod signal;
 pub mod summary;
 pub mod workload;
@@ -63,6 +65,8 @@ pub enum ScenarioCode {
     S12,
     /// Rolling executor restarts under load.
     S13,
+    /// Executor pod kill while scheduled actions are between claim and fire.
+    S10,
 }
 
 impl ScenarioCode {
@@ -73,16 +77,18 @@ impl ScenarioCode {
             ScenarioCode::S5 => "S5",
             ScenarioCode::S12 => "S12",
             ScenarioCode::S13 => "S13",
+            ScenarioCode::S10 => "S10",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 5] = [
+    pub const ALL: [ScenarioCode; 6] = [
         ScenarioCode::S1,
         ScenarioCode::S5,
         ScenarioCode::S8,
+        ScenarioCode::S10,
         ScenarioCode::S12,
         ScenarioCode::S13,
     ];
@@ -301,6 +307,51 @@ fn default_candidate_pool_multiplier() -> u32 {
     8
 }
 
+/// Shape of the scheduled-registration workload (GOL-378).
+///
+/// A third experiment shape next to [`WorkloadConfig`] and [`PinnedConfig`], not
+/// a variation on either. The mixed workload asks what a stream of invocations
+/// does when the platform is disturbed, and the pinned workload asks what
+/// happens to specific invocations that were running on the pod that died. This
+/// one asks about work the driver is not holding a connection to at all: an
+/// action the platform promised to run later, whose executor died in between.
+///
+/// The two numbers that decide whether the run measures anything are `leadSecs`
+/// and `intervalMillis`. See [`crate::chaos::scheduled`] for why.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledConfig {
+    /// Target agents, each with its own emitter. Also the resolution of the
+    /// report: a finding localises to one target out of this many.
+    pub targets: u32,
+    /// Milliseconds between registrations on one target. The offered rate is
+    /// `targets / interval`.
+    pub interval_millis: u64,
+    /// How far ahead each action is registered. With the cadence above this
+    /// sets how many actions stand accepted but not yet run at any instant,
+    /// which is the population a kill has to land in the middle of.
+    pub lead_secs: u64,
+    /// What recovering a scheduled action is allowed to cost, which the
+    /// fire-delay percentiles are reported against. An SLO the run records
+    /// rather than a threshold it fails on: the floor is a shard reassignment,
+    /// or the executor's `lease_ttl` for the rarer case of an action that was
+    /// already claimed, and how much more than that is acceptable is a
+    /// judgement.
+    pub lease_budget_secs: u64,
+}
+
+impl ScheduledConfig {
+    pub fn interval(&self) -> Duration {
+        Duration::from_millis(self.interval_millis)
+    }
+    pub fn lead(&self) -> Duration {
+        Duration::from_secs(self.lead_secs)
+    }
+    pub fn lease_budget(&self) -> Duration {
+        Duration::from_secs(self.lease_budget_secs)
+    }
+}
+
 /// One step of the executor scale schedule the workflow runs during the fault.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -372,6 +423,10 @@ pub struct ScenarioConfig {
     /// The pinned in-flight workload. Absent for scenarios that do not run one.
     #[serde(default)]
     pub pinned: Option<PinnedConfig>,
+    /// The scheduled-registration workload. Absent for scenarios that do not
+    /// run one.
+    #[serde(default)]
+    pub scheduled: Option<ScheduledConfig>,
     /// Shard-ownership oracle settings. Absent for scenarios that do not sample
     /// executor assignments.
     #[serde(default)]
@@ -420,6 +475,16 @@ impl ScenarioConfig {
         self.ownership.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "chaos scenario {} needs an `ownership` block in the suite YAML",
+                self.code
+            )
+        })
+    }
+
+    /// The scheduled-registration block. See [`Self::require_workload`].
+    pub fn require_scheduled(&self) -> anyhow::Result<&ScheduledConfig> {
+        self.scheduled.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs a `scheduled` block in the suite YAML",
                 self.code
             )
         })
@@ -558,6 +623,7 @@ mod tests {
                     rate_per_sec: 1,
                 }),
                 pinned: None,
+                scheduled: None,
                 ownership: None,
                 scale_during_fault: None,
                 retry_policy: RetryPolicy::default(),
@@ -655,6 +721,9 @@ mod tests {
                 }
                 ScenarioCode::S13 => {
                     entry.require_workload().unwrap();
+                }
+                ScenarioCode::S10 => {
+                    entry.require_scheduled().unwrap();
                 }
             }
         }

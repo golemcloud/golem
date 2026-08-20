@@ -48,6 +48,7 @@
 //! handful of suspect keys on it, which the workflow turns into ready-made trace
 //! queries. One global counter would have produced a haystack instead.
 
+use crate::chaos::fires::ScheduleFireReport;
 use crate::chaos::history::{Outcome, Phase, Stream};
 use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::probe::KeyProbe;
@@ -503,6 +504,12 @@ pub struct ChaosSummary {
     /// read as "checked, nothing found".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exactly_once: Option<ExactlyOnceReport>,
+    /// The scheduled-fire account, for scenarios that pair scheduled actions
+    /// against the registrations that made them. Absent for scenarios that do
+    /// not, rather than an empty report that would read as "checked, nothing
+    /// found".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_fires: Option<ScheduleFireReport>,
     /// Shard-ownership samples, in the order they were taken. Empty for
     /// scenarios that do not sample executor assignments.
     ///
@@ -621,6 +628,7 @@ impl ChaosSummary {
                 .collect(),
             routing_snapshots,
             exactly_once: None,
+            schedule_fires: None,
             ownership: Vec::new(),
             attention,
         }
@@ -637,6 +645,19 @@ impl ChaosSummary {
             ));
         }
         self.exactly_once = Some(report);
+        self
+    }
+
+    /// Attaches the scheduled-fire account and hoists everything it wants a
+    /// human to see into [`Self::attention`].
+    ///
+    /// More than the findings, unlike [`Self::with_exactly_once`]: an
+    /// unreadable target or a truncated fire log weakens every verdict the
+    /// report makes, and that has to be visible next to the verdicts rather
+    /// than only in the numbers underneath them.
+    pub fn with_schedule_fires(mut self, report: ScheduleFireReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.schedule_fires = Some(report);
         self
     }
 
@@ -688,6 +709,12 @@ pub enum TerminationReason {
     /// owners is an agent whose state can fork, and there is no instant at
     /// which that is legitimate.
     ShardOwnershipViolated { findings: u64, first: String },
+    /// A scheduled action the platform accepted never fired, fired twice, or
+    /// fired after being refused. Asserted rather than reported: unlike a
+    /// count-based read-back, each of these is a statement about one named
+    /// action paired with one named registration, with no band of doubt around
+    /// it. See [`crate::chaos::fires`].
+    ScheduledFireViolated { findings: u64, first: String },
     /// An agent's durable state did not survive a component update. Asserted
     /// because an update is supposed to change what an agent runs and nothing
     /// about what it remembers — state that moved is the one outcome an update
