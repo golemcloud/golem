@@ -523,7 +523,7 @@ async fn read_public_requests<S>(
         };
         let validation = {
             let mut state = state.lock().await;
-            state.validate_public_request(&request)
+            state.validate_received_public_request(&request)
         };
         if let Err(error) = validation {
             try_queue_websocket_close(&websocket_sender, CloseCode::Protocol, error);

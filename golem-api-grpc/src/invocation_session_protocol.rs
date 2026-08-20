@@ -95,6 +95,26 @@ impl InvocationSessionState {
         &mut self,
         request: &PublicInvocationRequest,
     ) -> Result<(), String> {
+        self.validate_public_request_with_terminal_race(request, false)
+    }
+
+    /// Validates a public request at the receiving end of a full-duplex session.
+    ///
+    /// A consumer may send an output cancellation before observing a terminal response that the
+    /// receiver has already recorded. This accepts that cancellation once while preserving strict
+    /// validation for locally generated requests.
+    pub fn validate_received_public_request(
+        &mut self,
+        request: &PublicInvocationRequest,
+    ) -> Result<(), String> {
+        self.validate_public_request_with_terminal_race(request, true)
+    }
+
+    fn validate_public_request_with_terminal_race(
+        &mut self,
+        request: &PublicInvocationRequest,
+        accept_terminal_output_cancellation: bool,
+    ) -> Result<(), String> {
         let message =
             match request.request.as_ref() {
                 Some(public_invocation_request::Request::Start(start)) => {
@@ -131,10 +151,30 @@ impl InvocationSessionState {
                 }
                 None => return Err("invocation request has no payload".to_string()),
             };
-        self.validate_request(message)
+        self.validate_request(message, accept_terminal_output_cancellation)
     }
 
     pub fn validate_trusted_request(&mut self, request: &InvocationRequest) -> Result<(), String> {
+        self.validate_trusted_request_with_terminal_race(request, false)
+    }
+
+    /// Validates a trusted request at the receiving end of a full-duplex session.
+    ///
+    /// A consumer may send an output cancellation before observing a terminal response that the
+    /// receiver has already recorded. This accepts that cancellation once while preserving strict
+    /// validation for locally generated requests.
+    pub fn validate_received_trusted_request(
+        &mut self,
+        request: &InvocationRequest,
+    ) -> Result<(), String> {
+        self.validate_trusted_request_with_terminal_race(request, true)
+    }
+
+    fn validate_trusted_request_with_terminal_race(
+        &mut self,
+        request: &InvocationRequest,
+        accept_terminal_output_cancellation: bool,
+    ) -> Result<(), String> {
         let message = match request.request.as_ref() {
             Some(invocation_request::Request::Start(start)) => RequestMessage::Start {
                 idempotency_key: &start.idempotency_key,
@@ -152,7 +192,7 @@ impl InvocationSessionState {
             }
             None => return Err("invocation request has no payload".to_string()),
         };
-        self.validate_request(message)
+        self.validate_request(message, accept_terminal_output_cancellation)
     }
 
     pub fn validate_response(&mut self, response: &InvocationResponse) -> Result<(), String> {
@@ -269,7 +309,11 @@ impl InvocationSessionState {
         self.phase == SessionPhase::Complete
     }
 
-    fn validate_request(&mut self, message: RequestMessage<'_>) -> Result<(), String> {
+    fn validate_request(
+        &mut self,
+        message: RequestMessage<'_>,
+        accept_terminal_output_cancellation: bool,
+    ) -> Result<(), String> {
         match (self.phase, message) {
             (
                 SessionPhase::Initial,
@@ -306,9 +350,11 @@ impl InvocationSessionState {
                     StreamCancelRole::InputProducer => {
                         self.cancel_input(cancel.stream_id, cancel.offset, false)
                     }
-                    StreamCancelRole::OutputConsumer => {
-                        self.request_output_cancellation(cancel.stream_id, cancel.offset)
-                    }
+                    StreamCancelRole::OutputConsumer => self.request_output_cancellation(
+                        cancel.stream_id,
+                        cancel.offset,
+                        accept_terminal_output_cancellation,
+                    ),
                     _ => Err(
                         "client request may only cancel an input producer or output consumer"
                             .to_string(),
@@ -523,12 +569,19 @@ impl InvocationSessionState {
         Ok(())
     }
 
-    fn request_output_cancellation(&mut self, stream_id: u64, offset: u64) -> Result<(), String> {
+    fn request_output_cancellation(
+        &mut self,
+        stream_id: u64,
+        offset: u64,
+        accept_terminal: bool,
+    ) -> Result<(), String> {
         let state = self
             .outputs
             .get_mut(&stream_id)
             .ok_or_else(|| format!("output stream {stream_id} is unknown"))?;
-        ensure_open(state.terminal, stream_id)?;
+        if !accept_terminal {
+            ensure_open(state.terminal, stream_id)?;
+        }
         if state.cancellation_requested.is_some() {
             return Err(format!(
                 "output stream {stream_id} already has a pending consumer cancellation"
@@ -1143,7 +1196,7 @@ mod tests {
     }
 
     #[test]
-    fn output_consumer_cancellation_after_stream_terminal_is_rejected() {
+    fn received_output_cancellation_may_race_with_stream_terminal() {
         let mut state = InvocationSessionState::default();
         state
             .validate_public_request(&public_start(record(Vec::new())))
@@ -1170,6 +1223,18 @@ mod tests {
                 ))
                 .is_err(),
             "an output-consumer cancellation must not be accepted after the stream terminal"
+        );
+
+        let cancellation = public_request(public_invocation_request::Request::StreamCancel(
+            cancel(9, StreamCancelRole::OutputConsumer, 0),
+        ));
+        state
+            .validate_received_public_request(&cancellation)
+            .unwrap();
+        assert!(
+            state
+                .validate_received_public_request(&cancellation)
+                .is_err()
         );
     }
 

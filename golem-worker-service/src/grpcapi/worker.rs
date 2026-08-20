@@ -173,7 +173,7 @@ where
             let invalid = state
                 .lock()
                 .await
-                .validate_trusted_request(&request)
+                .validate_received_trusted_request(&request)
                 .is_err();
             if validated_tx.send(request).await.is_err() {
                 let _ = initial_requests_checked_tx.take().unwrap().send(());
@@ -192,7 +192,7 @@ where
             let invalid = state
                 .lock()
                 .await
-                .validate_trusted_request(&request)
+                .validate_received_trusted_request(&request)
                 .is_err();
             if validated_tx.send(request).await.is_err() {
                 return;

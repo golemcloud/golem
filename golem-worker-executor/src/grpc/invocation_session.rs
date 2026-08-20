@@ -909,7 +909,11 @@ async fn route_live_request(
     state: &Arc<tokio::sync::Mutex<InvocationSessionState>>,
     request: InvocationRequest,
 ) -> bool {
-    let request = match state.lock().await.validate_trusted_request(&request) {
+    let request = match state
+        .lock()
+        .await
+        .validate_received_trusted_request(&request)
+    {
         Ok(()) => request
             .request
             .expect("validated invocation request has a payload"),
