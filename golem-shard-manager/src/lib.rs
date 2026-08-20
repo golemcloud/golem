@@ -20,7 +20,9 @@ mod registry_event_subscriber;
 pub(crate) mod sharding;
 
 use self::grpc::ShardManagerServiceImpl;
-use crate::config::{HealthCheckK8sConfig, HealthCheckMode};
+#[cfg(feature = "kubernetes")]
+use crate::config::HealthCheckK8sConfig;
+use crate::config::HealthCheckMode;
 use crate::quota::{DbQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
 use crate::sharding::healthcheck::GrpcHealthCheck;

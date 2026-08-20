@@ -414,8 +414,7 @@ impl AgentConnection {
                 }
             }
             Message::Binary(data) => {
-                let parsed: serde_json::Result<AgentEvent> =
-                    serde_json::from_slice(data.as_slice());
+                let parsed: serde_json::Result<AgentEvent> = serde_json::from_slice(data.as_ref());
                 match parsed {
                     Ok(parsed) => Some(parsed),
                     Err(err) => {

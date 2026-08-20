@@ -261,6 +261,12 @@ private = true
 condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-registry-service"] }]
 
+[tasks.build-shard-manager-kubernetes]
+private = true
+dependencies = ["build-bins-non-ci"]
+command = "cargo"
+args = ["build", "-p", "golem-shard-manager", "--features", "kubernetes"]
+
 [tasks.build-release-full]
 dependencies = [
     "wit",
@@ -273,6 +279,8 @@ args = [
     "--release",
     "--exclude",
     "integration-tests",
+    "--features",
+    "golem-shard-manager/kubernetes",
 ]
 
 [tasks.build-release]
@@ -302,6 +310,8 @@ args = [
     "integration-tests",
     "--exclude",
     "golem",
+    "--features",
+    "golem-shard-manager/kubernetes",
 ]
 
 [tasks.build-release-override-linux-amd64]
@@ -318,6 +328,8 @@ args = [
     "integration-tests",
     "--exclude",
     "golem",
+    "--features",
+    "golem-shard-manager/kubernetes",
 ]
 
 [tasks.build-release-override-linux-arm64]
@@ -335,6 +347,8 @@ args = [
     "integration-tests",
     "--exclude",
     "golem",
+    "--features",
+    "golem-shard-manager/kubernetes",
 ]
 
 [tasks.build-sdk-ts]
@@ -1124,7 +1138,7 @@ script = { file = "./local-run/start.sh" }
 
 [tasks.generate-configs]
 description = "Generates default and example config files"
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-shard-manager-kubernetes"]
 
 script = '''
 export RUST_BACKTRACE=1
