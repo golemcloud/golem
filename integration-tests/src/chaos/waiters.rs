@@ -76,7 +76,7 @@ use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::model::PromiseId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::FromValue;
+use golem_wasm::{FromValue, ValueAndType};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -113,6 +113,15 @@ const READ_CONCURRENCY: usize = 16;
 /// that has just been through a fault, and because the answer carries every
 /// wakeup the waiter recorded rather than one number.
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long the smoke round waits for its one wakeup before giving up.
+///
+/// Generous against a cluster that is merely cold, short enough that a broken
+/// completion path costs seconds rather than a baseline.
+const SMOKE_WAKE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How often the smoke round asks whether its waiter came back.
+const SMOKE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// A running waiter workload.
 ///
@@ -172,6 +181,81 @@ pub async fn warm(ctx: &WorkloadContext, waiters: &[String]) -> usize {
     warmed
 }
 
+/// Drives one whole round against a throwaway waiter, before the run commits to
+/// anything.
+///
+/// The first S11 run spent its entire baseline and then aborted on a count,
+/// because `arm` and `complete` were both healthy and only `wait` was refused —
+/// so the operation totals looked normal right up until nothing had woken. The
+/// scenario knew something was wrong three minutes after it could have.
+///
+/// This is the cheap version of that question, asked first and answered with the
+/// platform's own error rather than with a zero. It uses an agent outside the
+/// waiter pool, so a failed smoke test leaves the measured population untouched.
+///
+/// Errors are returned rather than recorded: this is a pre-flight check, not
+/// part of the workload, and its whole value is in saying *why*.
+pub async fn smoke_test(ctx: &WorkloadContext, dwell: Duration) -> Result<(), String> {
+    let waiter = format!("{}-promise-smoke", ctx.key_prefix);
+    let parsed: ParsedAgentId = agent_id!(PROMISE_WAITER_AGENT, waiter.clone());
+    let token = format!("{waiter}-smoke");
+
+    let created = ctx
+        .user
+        .invoke_and_await_agent(&ctx.promise, &parsed, "arm", data_value!(token.clone()))
+        .await
+        .map_err(|e| format!("arm failed: {e:#}"))?;
+    let promise = created
+        .into_return_value_and_type()
+        .ok_or_else(|| "arm returned no promise id".to_string())?;
+    let id = PromiseId::from_value(promise.value.clone())
+        .map_err(|e| format!("arm returned a promise id the driver cannot parse: {e}"))?;
+
+    // Fire-and-forget on purpose. A `wait` that parks correctly never returns
+    // while we are looking at it, so awaiting it here would prove nothing and
+    // block forever — but a `wait` the platform refuses fails at the API
+    // boundary, which is exactly the failure this is here to catch.
+    ctx.user
+        .invoke_agent(
+            &ctx.promise,
+            &parsed,
+            "wait",
+            data_value!(token.clone(), promise),
+        )
+        .await
+        .map_err(|e| format!("wait was refused: {e:#}"))?;
+
+    tokio::time::sleep(dwell).await;
+    ctx.user
+        .complete_promise(&id, COMPLETION_PAYLOAD.to_vec())
+        .await
+        .map_err(|e| format!("complete_promise failed: {e:#}"))?;
+
+    // The waiter has to actually come back. Polled rather than awaited for the
+    // same reason as above.
+    let deadline = tokio::time::Instant::now() + SMOKE_WAKE_TIMEOUT;
+    loop {
+        if let Ok(value) = ctx
+            .user
+            .invoke_and_await_agent(&ctx.promise, &parsed, "wakes", data_value!())
+            .await
+            && let Some(wakes) = value
+                .into_return_value_and_type()
+                .and_then(|v| u32::from_value(v.value).ok())
+            && wakes > 0
+        {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "the smoke waiter was armed, told to wait and completed, and did not wake \
+                 within {SMOKE_WAKE_TIMEOUT:?}"
+            ));
+        }
+        tokio::time::sleep(SMOKE_POLL_INTERVAL).await;
+    }
+}
+
 /// Starts one loop per waiter.
 pub fn start(ctx: WorkloadContext, waiters: &[String], config: &PromiseConfig) -> WaiterHandle {
     let running = Arc::new(AtomicBool::new(true));
@@ -225,7 +309,7 @@ async fn run_waiter(
         round += 1;
         rounds.fetch_add(1, Ordering::Relaxed);
 
-        let Some(promise_id) = arm(&ctx, &waiter, &parsed, &token).await else {
+        let Some(armed) = arm(&ctx, &waiter, &parsed, &token).await else {
             // Nothing to complete and nobody parked. The next round tries again
             // after a dwell, which keeps a wholly unreachable platform from
             // spinning.
@@ -241,12 +325,12 @@ async fn run_waiter(
             let waiter = waiter.clone();
             let parsed = parsed.clone();
             let token = token.clone();
-            let promise_id = promise_id.clone();
-            tokio::spawn(async move { wait(&ctx, &waiter, &parsed, &token, &promise_id).await })
+            let promise = armed.value.clone();
+            tokio::spawn(async move { wait(&ctx, &waiter, &parsed, &token, &promise).await })
         };
 
         tokio::time::sleep(dwell).await;
-        complete(&ctx, &waiter, &token, &promise_id).await;
+        complete(&ctx, &waiter, &token, &armed.id).await;
 
         // The handle is dropped rather than aborted on the timeout path, which
         // leaves the invocation running. That is deliberate: aborting it would
@@ -266,9 +350,35 @@ async fn run_waiter(
     }
 }
 
+/// One armed promise, in the two forms the round needs it.
+///
+/// Both halves are kept because the two consumers want different things and
+/// only one of them will accept a re-encoding.
+#[derive(Clone)]
+struct Armed {
+    /// For [`TestDsl::complete_promise`], the external REST API, which takes a
+    /// typed promise id and serialises it itself.
+    id: PromiseId,
+    /// For the `wait` invocation, which passes the promise back *into* an
+    /// agent.
+    ///
+    /// This has to be the value the agent handed out, verbatim. Re-encoding the
+    /// parsed [`PromiseId`] does not work: `data_value!` derives the parameter's
+    /// type from `IntoValue`, which names the record's fields with their WIT
+    /// spellings (`agent-id`, `oplog-idx`), while the agent's generated
+    /// parameter schema declares them in the component model's own spelling
+    /// (`agent_id`, `oplog_idx`). The type checker rejects the call outright.
+    /// Threading the original value through sidesteps the question, because its
+    /// type came from the agent in the first place.
+    ///
+    /// `crate::benchmarks::density::promise` keeps both halves for exactly this
+    /// reason.
+    value: ValueAndType,
+}
+
 /// Creates the round's promise, recording the invocation.
 ///
-/// The promise id comes back through a cell rather than a return value because
+/// The result comes back through a cell rather than a return value because
 /// [`workload::run_operation`] owns the retry rule and the failure
 /// classification for every stream in the suite, and it reports outcomes rather
 /// than payloads. Duplicating it here to get one value back would put the two
@@ -278,8 +388,8 @@ async fn arm(
     waiter: &str,
     parsed: &ParsedAgentId,
     token: &str,
-) -> Option<PromiseId> {
-    let cell: Arc<std::sync::Mutex<Option<PromiseId>>> = Arc::new(std::sync::Mutex::new(None));
+) -> Option<Armed> {
+    let cell: Arc<std::sync::Mutex<Option<Armed>>> = Arc::new(std::sync::Mutex::new(None));
     let sink = cell.clone();
     let ctx2 = ctx.clone();
     let parsed2 = parsed.clone();
@@ -309,9 +419,9 @@ async fn arm(
                 let value = created
                     .into_return_value_and_type()
                     .ok_or_else(|| anyhow::anyhow!("arm returned no promise id"))?;
-                let promise_id = PromiseId::from_value(value.value)
+                let id = PromiseId::from_value(value.value.clone())
                     .map_err(|e| anyhow::anyhow!("invalid promise id: {e}"))?;
-                *sink.lock().unwrap() = Some(promise_id);
+                *sink.lock().unwrap() = Some(Armed { id, value });
                 Ok(None)
             }
         },
@@ -327,7 +437,7 @@ async fn wait(
     waiter: &str,
     parsed: &ParsedAgentId,
     token: &str,
-    promise_id: &PromiseId,
+    promise: &ValueAndType,
 ) {
     let ctx2 = ctx.clone();
     let parsed2 = parsed.clone();
@@ -341,7 +451,7 @@ async fn wait(
             let ctx = ctx2.clone();
             let parsed = parsed2.clone();
             let token = token.to_string();
-            let promise_id = promise_id.clone();
+            let promise = promise.clone();
             async move {
                 ctx.user
                     .invoke_and_await_agent_with_key(
@@ -349,7 +459,7 @@ async fn wait(
                         &parsed,
                         &key,
                         "wait",
-                        data_value!(token, promise_id),
+                        data_value!(token, promise),
                     )
                     .await?;
                 Ok(None)
@@ -551,33 +661,37 @@ mod tests {
         assert_eq!(from_millis(0).timestamp_millis(), 0);
     }
 
-    /// A promise id has to survive the trip back *into* an agent.
+    /// Why `wait` is handed the value `arm` returned rather than a re-encoded
+    /// [`PromiseId`].
     ///
-    /// The driver parses what `arm` returns into a [`PromiseId`] so it can call
-    /// the external completion API with it, and passes that same parsed value
-    /// into `wait`. Only the first of those directions is exercised anywhere
-    /// else in this repository — the density benchmark keeps the raw
-    /// `ValueAndType` for its agent calls and never re-encodes one. So the
-    /// encoding side is pinned here rather than discovered on a cluster: a
-    /// `PromiseId` that does not round-trip would fail every round of S11 after
-    /// the run had already spent its baseline.
+    /// This is not a style preference, and getting it wrong is not caught by
+    /// anything local: the first S11 run had every single `wait` refused by the
+    /// type checker in two milliseconds, with `arm` and `complete` both clean,
+    /// because a re-encoded promise id names its fields the way WIT does and the
+    /// agent's generated parameter schema names them the way the component model
+    /// does. The two spellings never meet.
+    ///
+    /// So the rule is: a value that came *out* of an agent goes back *into* one
+    /// verbatim. This test pins the mismatch that makes the rule necessary, so
+    /// that a future change to either derive shows up here rather than on a
+    /// cluster.
     #[test]
-    fn a_promise_id_survives_the_round_trip_back_into_an_agent() {
-        use golem_common::model::{AgentId, OplogIndex};
+    fn a_re_encoded_promise_id_does_not_name_its_fields_the_way_an_agent_declares_them() {
+        use golem_common::model::PromiseId;
         use golem_wasm::IntoValue;
+        use golem_wasm::analysis::AnalysedType;
 
-        let parsed: ParsedAgentId = agent_id!(PROMISE_WAITER_AGENT, "w-0001".to_string());
-        let promise_id = PromiseId {
-            agent_id: AgentId {
-                component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-                agent_id: parsed.to_string(),
-            },
-            oplog_idx: OplogIndex::from_u64(42),
+        let AnalysedType::Record(record) = PromiseId::get_type() else {
+            panic!("a promise id is a record");
         };
+        let names: Vec<&str> = record.fields.iter().map(|f| f.name.as_str()).collect();
 
-        let encoded = promise_id.clone().into_value();
-        let decoded = PromiseId::from_value(encoded).expect("promise id should decode");
-        assert_eq!(decoded, promise_id);
-        assert_eq!(decoded.oplog_idx.as_u64(), 42);
+        // What `data_value!` would ship: the WIT spellings.
+        assert!(names.contains(&"agent-id"), "got {names:?}");
+        assert!(names.contains(&"oplog-idx"), "got {names:?}");
+
+        // What the agent's parameter schema actually asks for, and does not get.
+        assert!(!names.contains(&"agent_id"), "got {names:?}");
+        assert!(!names.contains(&"oplog_idx"), "got {names:?}");
     }
 }

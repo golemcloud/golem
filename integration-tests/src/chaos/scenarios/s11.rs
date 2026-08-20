@@ -215,6 +215,24 @@ pub async fn run(
     info!("S11: warmed {warmed} waiters, settling {WARMUP_SETTLE:?}");
     tokio::time::sleep(WARMUP_SETTLE).await;
 
+    // ── Prove one whole round works ─────────────────────────────────────────
+    // Before aiming, before the baseline, before anything that costs the window.
+    // Arming and completing can both succeed while the parking in between is
+    // refused, and that combination looks entirely healthy in the operation
+    // totals — so the totals are not what gets asked.
+    if let Err(e) = waiters::smoke_test(&ctx, promise_config.dwell()).await {
+        warn!("S11: a single promise round does not work against this cluster: {e}");
+        let records = history.snapshot();
+        finish!(
+            TerminationReason::PlatformUnreachable {
+                detail: format!("promise round smoke test failed: {e}"),
+            },
+            &records,
+            None
+        );
+    }
+    info!("S11: smoke round armed, parked, completed and woke");
+
     // ── Aim the fault ───────────────────────────────────────────────────────
     // Before the baseline, because a run that cannot be aimed should not spend a
     // maintenance window proving it.
