@@ -152,6 +152,7 @@ pub async fn run(
                     summary,
                     termination_reason: $reason,
                     pinned_selection: selection.clone(),
+                    scheduled_selection: None,
                 },
             );
             write_outputs(&result, &history, outputs)?;

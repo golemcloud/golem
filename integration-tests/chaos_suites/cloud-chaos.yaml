@@ -318,6 +318,81 @@ scenarios:
 
     signalTimeoutSecs: 1800
 
+  # S10 — executor pod kill while scheduled actions are pending (GOL-378).
+  #
+  # The only scenario whose workload the driver is not holding a connection to.
+  # Every target registers an action ten seconds ahead, over and over, so a few
+  # hundred actions are always accepted and not yet run. Killing the executor
+  # that owns their shards asks whether the platform still runs each of them,
+  # exactly once, after the shards move.
+  #
+  # Like S8 the driver names the pod: it picks the executor owning the largest
+  # share of targets and reports its address in `baseline-ready.json`. Unlike
+  # S8, the targets on the *other* executor keep registering too — they are the
+  # control group, and the report splits the two.
+  - code: S10
+    name: executor-crash-during-scheduled-fire
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # The workflow narrows the selector to the pod the driver named; `one`
+      # stays as the belt-and-braces bound, exactly as in S8.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Eighteen leads' worth of registrations, so the baseline measures a
+      # cluster that has been firing scheduled actions steadily rather than one
+      # that has just started.
+      baselineSecs: 180
+      # Covers the kill, the reschedule, and the shard reassignment that has to
+      # happen before anything claims the dead executor's due actions.
+      faultSecs: 120
+      # Registrations continue throughout. Long enough that the actions
+      # registered during the fault also fall due, fire and are accounted for
+      # inside the run rather than after it.
+      recoverySecs: 300
+
+    scheduled:
+      # 100 targets, each with its own emitter. Also the resolution of the
+      # report: a lost action localises to one target out of a hundred.
+      targets: 100
+      # 50 registrations a second overall, which is half what the mixed workload
+      # offers. The scheduled path is the whole experiment here rather than one
+      # stream of four, so the rate is set by what keeps the pending population
+      # large rather than by a share of a budget.
+      intervalMillis: 2000
+      # 500 actions accepted and not yet run at any instant. It also has to
+      # comfortably exceed the workflow's inject-and-verify path — signal poll
+      # (5s) plus `kubectl apply` plus waiting for `AllInjected` — or everything
+      # registered before the kill would already have fired by the time the pod
+      # died.
+      leadSecs: 10
+      # What recovering a pending action may cost, and the number the fire-delay
+      # percentiles are reported against. Derived rather than picked: the
+      # executor's scheduler holds a 30s lease and refreshes every 2s, and a
+      # shard reassignment has to complete before the surviving executor claims
+      # anything at all. 60s covers both without being so generous that a
+      # regression would sit inside it.
+      #
+      # Recorded, not asserted. A p99 past it is an attention line and a number
+      # in the result, because how much a reassignment may cost is a judgement.
+      leaseBudgetSecs: 60
+
+    retryPolicy:
+      # Identical to the others and load-bearing for the same reason, with one
+      # extra consequence here: the retry goes out under the original key, and
+      # that key is what the scheduled action carries back to the target. So a
+      # retried registration that registered twice shows up as one token firing
+      # twice, not as an arithmetic argument about totals.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
   # S13 — rolling executor restarts under load (GOL-367).
   #
   # One executor killed every 60 seconds for five minutes while the mixed

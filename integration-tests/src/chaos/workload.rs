@@ -65,8 +65,8 @@ use tracing::{debug, info, warn};
 /// Agent type names exported by the counters component.
 const COUNTER_AGENT: &str = "Counter";
 const EPHEMERAL_COUNTER_AGENT: &str = "EphemeralCounter";
-const SCHEDULE_EMITTER_AGENT: &str = "ScheduleEmitter";
-const SCHEDULE_COUNTER_AGENT: &str = "ScheduleCounter";
+pub(crate) const SCHEDULE_EMITTER_AGENT: &str = "ScheduleEmitter";
+pub(crate) const SCHEDULE_COUNTER_AGENT: &str = "ScheduleCounter";
 const PROMISE_AGENT: &str = "PromiseAgent";
 const QUOTA_COUNTER_AGENT: &str = "QuotaCounter";
 
@@ -112,6 +112,10 @@ const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
 /// Generous, because read-back happens on a cluster that has just been through
 /// a fault and a slow answer is still an answer.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Ceiling on one fire-log read. Larger than [`READ_TIMEOUT`] because the
+/// answer carries every fire the target recorded rather than one number.
+const FIRE_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Payload written when completing a promise.
 const PROMISE_PAYLOAD: &[u8] = b"chaos";
@@ -671,15 +675,24 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
 /// A timeout is reported as an unreadable agent rather than propagated: the
 /// read-back already models "could not be read" as a verdict of its own, and an
 /// agent that will not answer is exactly that.
-async fn read_with_timeout<F>(what: &str, agent: &str, read: F) -> Result<u64, String>
+async fn read_with_timeout<T, F>(what: &str, agent: &str, read: F) -> Result<T, String>
 where
-    F: std::future::Future<Output = Result<u64, String>>,
+    F: std::future::Future<Output = Result<T, String>>,
 {
-    match tokio::time::timeout(READ_TIMEOUT, read).await {
+    read_within(what, agent, READ_TIMEOUT, read).await
+}
+
+/// [`read_with_timeout`] with the ceiling named by the caller, for reads whose
+/// answer is much bigger than a counter.
+async fn read_within<T, F>(what: &str, agent: &str, timeout: Duration, read: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    match tokio::time::timeout(timeout, read).await {
         Ok(result) => result,
         Err(_) => {
-            warn!("Chaos: reading {what} on {agent} timed out after {READ_TIMEOUT:?}");
-            Err(format!("{what} timed out after {READ_TIMEOUT:?}"))
+            warn!("Chaos: reading {what} on {agent} timed out after {timeout:?}");
+            Err(format!("{what} timed out after {timeout:?}"))
         }
     }
 }
@@ -774,6 +787,34 @@ pub async fn read_quota_counter(ctx: &WorkloadContext, agent: &str) -> Result<u6
             Ok(value) => as_u32(value)
                 .map(u64::from)
                 .ok_or_else(|| "count returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
+}
+
+/// Reads back the fire log of a scheduled target (GOL-378).
+///
+/// One `(token, scheduledMillis, observedMillis)` per fire. Bounded more
+/// generously than the counter reads: this answer is the whole run's worth of
+/// fires for one agent rather than a single number, and a slow answer after a
+/// fault is still an answer. A target that times out here becomes *unverifiable*
+/// in [`crate::chaos::fires`] rather than a target that lost work.
+pub async fn read_fires(
+    ctx: &WorkloadContext,
+    agent: &str,
+) -> Result<Vec<(String, u64, u64)>, String> {
+    read_within("fires", agent, FIRE_READ_TIMEOUT, async {
+        let parsed: ParsedAgentId = agent_id!(SCHEDULE_COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "fires", data_value!())
+            .await
+        {
+            Ok(value) => value
+                .into_return_value()
+                .and_then(|v| Vec::<(String, u64, u64)>::from_value(v).ok())
+                .ok_or_else(|| "fires returned no readable value".to_string()),
             Err(e) => Err(format!("{e:#}")),
         }
     })
