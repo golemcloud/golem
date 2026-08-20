@@ -49,6 +49,8 @@
 //! queries. One global counter would have produced a haystack instead.
 
 use crate::chaos::history::{Outcome, Phase, Stream};
+use crate::chaos::ownership::OwnershipSample;
+use crate::chaos::probe::KeyProbe;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -124,6 +126,14 @@ pub struct AgentReadback {
     /// kill produces a handful, not thousands.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub suspect_keys: Vec<String>,
+    /// Reservations the platform refused, for the quota stream only.
+    ///
+    /// Read from the agent rather than inferred: a refused reservation still
+    /// returns successfully to the caller, so it is invisible in the operation
+    /// outcomes. Non-zero during a partition is the cost of a lease the
+    /// executor could no longer renew.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused_reservations: Option<u64>,
     /// Keys where a retry came back with a *higher* counter value than the
     /// first attempt. That is direct per-key proof of double execution and needs
     /// no read-back arithmetic at all.
@@ -185,6 +195,7 @@ impl AgentReadback {
             read_error,
             suspect_keys,
             proven_double_execution_keys,
+            refused_reservations: None,
         }
     }
 }
@@ -278,6 +289,201 @@ pub struct RoutingSnapshot {
     pub unavailable_reason: Option<String>,
 }
 
+/// Which of the two exactly-once guarantees a key broke.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExactlyOnceViolation {
+    /// The platform accepted the operation, but after recovery the key has no
+    /// final result: asked again under its own idempotency key, the platform
+    /// could not produce one.
+    MissingFinalResult,
+    /// The key has more than one distinct successful completion value. Since
+    /// `Counter.sleep_and_increment` returns its post-increment count, two
+    /// different values under one key is direct proof the work ran twice.
+    MultipleDistinctCompletions,
+}
+
+impl ExactlyOnceViolation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExactlyOnceViolation::MissingFinalResult => "missing-final-result",
+            ExactlyOnceViolation::MultipleDistinctCompletions => "multiple-distinct-completions",
+        }
+    }
+}
+
+impl std::fmt::Display for ExactlyOnceViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One key that broke a guarantee, with enough detail to go straight to a trace
+/// query for it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExactlyOnceFinding {
+    pub violation: ExactlyOnceViolation,
+    pub idempotency_key: String,
+    pub agent: String,
+    /// Plain-language statement of what was observed, so a job-log reader does
+    /// not have to reconstruct it from the numbers.
+    pub detail: String,
+}
+
+/// The exactly-once account for a pinned run (GOL-366).
+///
+/// Unlike the read-back verdicts, the findings here are **assertions**, not
+/// observations for an operator to weigh. That difference is earned: the pinned
+/// population is bounded and every key was probed individually under its own
+/// idempotency key, so there is no aggregate arithmetic and no band of doubt to
+/// interpret. A finding is a fact about one key.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExactlyOnceReport {
+    /// Keys the probe pass covered.
+    pub keys_checked: u64,
+    /// Keys that had no probe result at all — a probe task that died rather
+    /// than one that failed, which is the only way a key escapes the account.
+    /// Counted rather than ignored: a verdict computed over a silently smaller
+    /// population is a weaker claim than it appears to be.
+    pub keys_unprobed: u64,
+    /// Keys whose probe failed in a way that does not answer the question.
+    ///
+    /// A probe that dies at transport level says nothing about whether the
+    /// platform has the result — only that the driver could not ask. Treating
+    /// that as "accepted work has no final result" would report a connection
+    /// problem as a correctness defect, which is the exact mistake the rest of
+    /// this suite is built to avoid. They are counted here and named in the
+    /// report so a clean verdict over a large number of them can be read for
+    /// what it is: a weaker claim.
+    pub keys_inconclusive: u64,
+    /// Keys that had a final result after recovery.
+    pub keys_with_final_result: u64,
+    /// Keys the driver never got a result for, but which the platform produced
+    /// one for when asked again. Not a defect — this is recovery working — but
+    /// worth surfacing, because it is the population the fault actually
+    /// disturbed.
+    pub keys_recovered_by_probe: u64,
+    /// Keys the driver was definitely refused, which are excluded from the
+    /// missing-result check: nothing was accepted, so nothing is owed.
+    pub keys_rejected: u64,
+    /// Net counter movement across the probe pass, per agent. A probe of a key
+    /// that already ran replays a stored result and moves nothing; this is
+    /// therefore how many keys had never run at all, and it bounds how much of
+    /// the pass was fresh execution rather than replay.
+    pub probe_executed_per_agent: BTreeMap<String, i64>,
+    /// Total of the above. Zero means every probed key already had a result
+    /// stored, which is the strongest form of the guarantee holding.
+    pub probe_executed_total: i64,
+    pub findings: Vec<ExactlyOnceFinding>,
+}
+
+impl ExactlyOnceReport {
+    /// Builds the account from the pinned records, the probe results, and the
+    /// counter read-backs taken either side of the probe pass.
+    /// `stream` is the population being accounted for, and it has to match the
+    /// stream the probes were taken from. Passing it explicitly rather than
+    /// inferring it keeps a mismatch loud: a report built over the wrong stream
+    /// finds no records, checks nothing, and reports a flawless result.
+    pub fn build(
+        records: &[OperationRecord],
+        probes: &[KeyProbe],
+        stream: Stream,
+        before_probe: &BTreeMap<String, u64>,
+        after_probe: &BTreeMap<String, u64>,
+    ) -> Self {
+        let by_key: BTreeMap<&str, &KeyProbe> = probes
+            .iter()
+            .map(|p| (p.idempotency_key.as_str(), p))
+            .collect();
+
+        let mut report = ExactlyOnceReport::default();
+        for record in records.iter().filter(|r| r.stream == stream) {
+            let Some(probe) = by_key.get(record.idempotency_key.as_str()) else {
+                report.keys_unprobed += 1;
+                continue;
+            };
+            report.keys_checked += 1;
+
+            if record.outcome == Outcome::Rejected {
+                // Refused outright, so the platform owes nothing for this key.
+                // Probing it anyway is still useful — it is how the refusal is
+                // confirmed to have left no trace — but it cannot fail the run.
+                report.keys_rejected += 1;
+                continue;
+            }
+
+            match probe.final_value {
+                None => {
+                    // Only a *definite* answer is evidence. A probe that was
+                    // refused outright asked the question and was told there is
+                    // nothing; a probe that died at transport level never got
+                    // to ask, and the platform may hold the result perfectly
+                    // well. Failing a run on the second would be reporting a
+                    // connection problem as a correctness defect.
+                    let definitive = probe
+                        .error_class
+                        .is_some_and(|class| class.is_definite_rejection());
+                    if !definitive {
+                        report.keys_inconclusive += 1;
+                        continue;
+                    }
+                    report.findings.push(ExactlyOnceFinding {
+                        violation: ExactlyOnceViolation::MissingFinalResult,
+                        idempotency_key: record.idempotency_key.clone(),
+                        agent: record.agent.clone(),
+                        detail: format!(
+                            "accepted as {} but the platform refused to produce a final result                              for this key after recovery: {}",
+                            record.outcome,
+                            probe.error.as_deref().unwrap_or("probe returned no value")
+                        ),
+                    });
+                }
+                Some(final_value) => {
+                    report.keys_with_final_result += 1;
+                    if !record.had_successful_attempt() {
+                        report.keys_recovered_by_probe += 1;
+                    }
+
+                    let mut values = record.distinct_successful_values();
+                    if !values.contains(&final_value) {
+                        values.push(final_value);
+                    }
+                    if values.len() > 1 {
+                        values.sort_unstable();
+                        report.findings.push(ExactlyOnceFinding {
+                            violation: ExactlyOnceViolation::MultipleDistinctCompletions,
+                            idempotency_key: record.idempotency_key.clone(),
+                            agent: record.agent.clone(),
+                            detail: format!(
+                                "one key, {} distinct successful counter values {values:?} — the work ran more than once",
+                                values.len()
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        for (agent, after) in after_probe {
+            let before = before_probe.get(agent).copied().unwrap_or(0);
+            let delta = *after as i64 - before as i64;
+            if delta != 0 {
+                report.probe_executed_per_agent.insert(agent.clone(), delta);
+            }
+            report.probe_executed_total += delta;
+        }
+
+        report
+    }
+
+    /// The two conditions that fail a pinned scenario outright.
+    pub fn has_violations(&self) -> bool {
+        !self.findings.is_empty()
+    }
+}
+
 /// Everything the driver reports for a scenario.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -292,6 +498,20 @@ pub struct ChaosSummary {
     /// or simply had nothing to report.
     pub streams_without_readback: Vec<Stream>,
     pub routing_snapshots: Vec<RoutingSnapshot>,
+    /// The exactly-once account, for scenarios that run a pinned population.
+    /// Absent for scenarios that do not, rather than an empty report that would
+    /// read as "checked, nothing found".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exactly_once: Option<ExactlyOnceReport>,
+    /// Shard-ownership samples, in the order they were taken. Empty for
+    /// scenarios that do not sample executor assignments.
+    ///
+    /// Every sample is kept, not just the judged one: what an operator needs in
+    /// order to read a violation is the *before* and *during* pictures next to
+    /// it, so keeping only the verdict would throw away the context that makes
+    /// it interpretable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ownership: Vec<OwnershipSample>,
     /// The read-back verdicts that need a human, hoisted for scanning.
     pub attention: Vec<String>,
 }
@@ -400,8 +620,39 @@ impl ChaosSummary {
                 .filter(|s| !s.has_readback())
                 .collect(),
             routing_snapshots,
+            exactly_once: None,
+            ownership: Vec::new(),
             attention,
         }
+    }
+
+    /// Attaches the exactly-once account and hoists its findings into
+    /// [`Self::attention`], so a reader scanning the top of a report sees them
+    /// next to the read-back verdicts rather than further down.
+    pub fn with_exactly_once(mut self, report: ExactlyOnceReport) -> Self {
+        for finding in &report.findings {
+            self.attention.push(format!(
+                "{}: key {} on agent {} — {}",
+                finding.violation, finding.idempotency_key, finding.agent, finding.detail
+            ));
+        }
+        self.exactly_once = Some(report);
+        self
+    }
+
+    /// Attaches the shard-ownership samples and hoists their findings into
+    /// [`Self::attention`].
+    ///
+    /// Findings from *every* sample surface, not only the judged one: a
+    /// mid-fault overlap that healed before the settle sample is not a run
+    /// failure, but it is absolutely something an operator wants to know
+    /// happened.
+    pub fn with_ownership(mut self, reports: Vec<OwnershipSample>) -> Self {
+        for report in &reports {
+            self.attention.extend(report.attention_lines());
+        }
+        self.ownership = reports;
+        self
     }
 }
 
@@ -424,6 +675,35 @@ pub enum TerminationReason {
     PlatformUnreachable { detail: String },
     /// The run was cancelled; artifacts are whatever had accumulated.
     Aborted { detail: String },
+    /// A pinned scenario's exactly-once account found at least one key that
+    /// broke a guarantee. Unlike the read-back verdicts this *is* asserted —
+    /// see [`ExactlyOnceReport`] for why the pinned population earns that.
+    ExactlyOnceViolated { findings: u64, first: String },
+    /// The fault could not be aimed at a verified target. Better to spend the
+    /// maintenance window fixing that than to kill an unrelated pod and report
+    /// on it as though it were the right one.
+    FaultTargetUnverified { detail: String },
+    /// After the settling window, two or more executors still believed they
+    /// owned the same shard. Asserted rather than reported: an agent with two
+    /// owners is an agent whose state can fork, and there is no instant at
+    /// which that is legitimate.
+    ShardOwnershipViolated { findings: u64, first: String },
+    /// An agent's durable state did not survive a component update. Asserted
+    /// because an update is supposed to change what an agent runs and nothing
+    /// about what it remembers — state that moved is the one outcome an update
+    /// may never produce.
+    UpdateStateInconsistent { agent: String, detail: String },
+    /// An agent was still running the old build after recovery. Asserted on the
+    /// agent's own answer rather than on component metadata: metadata says what
+    /// the platform believes, and the question is what the code is.
+    ///
+    /// An agent that could not be read at all does not reach here. That is
+    /// reported, because an unreadable agent says nothing either way.
+    UpdateNotApplied {
+        agent: String,
+        observed: Option<u32>,
+        expected: u32,
+    },
 }
 
 impl TerminationReason {
@@ -482,6 +762,8 @@ mod tests {
             returned_value: None,
             first_attempt_value: None,
             error: None,
+            error_class: None,
+            attempt_log: Vec::new(),
         }
     }
 

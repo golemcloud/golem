@@ -35,18 +35,20 @@
 
 use crate::chaos::history::{OperationHistory, OperationRecord, Phase, Stream};
 use crate::chaos::prep::ChaosPrepManifest;
-use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RESULT_SCHEMA_VERSION, RunScope};
-use crate::chaos::signal::{BaselineReady, FaultSignals, SignalError};
+use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
+use crate::chaos::scenarios::{
+    OutputPaths, ScenarioOutcome, build_result, readback_for, signal_termination, snapshot_routing,
+    write_outputs,
+};
+use crate::chaos::signal::{BaselineReady, FaultSignals};
 use crate::chaos::summary::{
-    AgentReadback, ChaosSummary, RoutingSnapshot, TerminationReason, stream_that_never_succeeded,
+    AgentReadback, ChaosSummary, TerminationReason, stream_that_never_succeeded,
 };
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
 use chrono::Utc;
-use golem_test_framework::benchmark::RunMetadata;
-use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
+use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
-use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -55,12 +57,6 @@ use tracing::{info, warn};
 /// in-flight increment still has to land; reading too early would report a
 /// mismatch that says nothing about the platform.
 const SETTLE_BEFORE_READBACK: Duration = Duration::from_secs(30);
-
-/// Where the driver writes its artifacts.
-pub struct OutputPaths {
-    pub result: Option<std::path::PathBuf>,
-    pub history: Option<std::path::PathBuf>,
-}
 
 /// Runs S12 end to end.
 ///
@@ -75,8 +71,9 @@ pub async fn run(
     outputs: &OutputPaths,
 ) -> anyhow::Result<ChaosResult> {
     let started_at = Utc::now();
+    let workload_config = config.require_workload()?;
     let history = OperationHistory::new(ScenarioCode::S12.as_str());
-    let key_prefix = format!("chaos-{}", ScenarioCode::S12.as_str().to_lowercase());
+    let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S12);
 
     let user = manifest.user_context(deps);
     let counters = user
@@ -111,6 +108,7 @@ pub async fn run(
     let mut fault_injected_at = None;
     let mut fault_recovered_at = None;
     let mut fault_id = None;
+    let mut fault_target_observed = None;
 
     // Every early return below goes through `finish`, so an abort produces the
     // same artifact shape as a completed run — just with fewer phases filled in.
@@ -118,16 +116,23 @@ pub async fn run(
         ($reason:expr, $records:expr, $readback:expr) => {{
             let result = build_result(
                 config,
-                started_at,
-                phases.clone(),
-                fault_injected_at,
-                fault_recovered_at,
-                fault_id.clone(),
-                scope.clone(),
-                $records,
-                $readback,
-                routing_snapshots.clone(),
-                $reason,
+                ScenarioOutcome {
+                    started_at,
+                    phases: phases.clone(),
+                    fault_injected_at,
+                    fault_recovered_at,
+                    fault_id: fault_id.clone(),
+                    fault_target_observed: fault_target_observed.clone(),
+                    scope: scope.clone(),
+                    summary: ChaosSummary::build(
+                        $records,
+                        $readback,
+                        routing_snapshots.clone(),
+                        fault_injected_at,
+                    ),
+                    termination_reason: $reason,
+                    pinned_selection: None,
+                },
             );
             write_outputs(&result, &history, outputs)?;
             return Ok(result);
@@ -140,7 +145,7 @@ pub async fn run(
         config.phases.baseline()
     );
     phases.baseline = Some(PhaseWindow::started(Utc::now()));
-    let handle = workload::start(ctx.clone(), &config.workload);
+    let handle = workload::start(ctx.clone(), workload_config);
     tokio::time::sleep(config.phases.baseline()).await;
     routing_snapshots.push(snapshot_routing(deps, "before-fault").await);
     if let Some(window) = phases.baseline.as_mut() {
@@ -169,6 +174,9 @@ pub async fn run(
         scenario_code: ScenarioCode::S12.as_str().to_string(),
         ready_at: Utc::now(),
         baseline_operations,
+        // S12 kills whichever shard-manager pod Chaos Mesh picks: there is one,
+        // and which one it is carries no information.
+        fault_target: None,
     })?;
 
     // ── Fault ───────────────────────────────────────────────────────────────
@@ -187,6 +195,7 @@ pub async fn run(
     );
     fault_injected_at = Some(injected.injected_at);
     fault_id = Some(injected.fault_id.clone());
+    fault_target_observed = Some(injected.target.clone());
     ctx.phase.set(Phase::Fault);
     phases.fault = Some(PhaseWindow::started(injected.injected_at));
 
@@ -233,7 +242,7 @@ pub async fn run(
     tokio::time::sleep(SETTLE_BEFORE_READBACK).await;
 
     let records = history.snapshot();
-    let readback = read_back(&ctx, &records, &config.workload).await;
+    let readback = read_back(&ctx, &records, workload_config).await;
 
     let reason = match stream_that_never_succeeded(&ChaosSummary::build(
         &records,
@@ -261,181 +270,27 @@ async fn read_back(
 
     for index in 0..config.durable_agents {
         let agent = ctx.agent_name(Stream::Durable, index);
-        let scoped: Vec<&OperationRecord> = records
+        let scoped = records
             .iter()
-            .filter(|r| r.stream == Stream::Durable && r.agent == agent)
-            .collect();
-        if scoped.is_empty() {
+            .filter(|r| r.stream == Stream::Durable && r.agent == agent);
+        if scoped.clone().next().is_none() {
             continue;
         }
         let observed = workload::read_counter(ctx, &agent).await;
-        readback.push(AgentReadback::evaluate(
-            Stream::Durable,
-            &agent,
-            &scoped,
-            observed,
-        ));
+        readback.extend(readback_for(Stream::Durable, &agent, scoped, observed));
     }
 
     for index in 0..config.scheduled_agents {
         let target = ctx.schedule_target_name(index);
-        let scoped: Vec<&OperationRecord> = records
+        let scoped = records
             .iter()
-            .filter(|r| r.stream == Stream::Scheduled && r.agent == target)
-            .collect();
-        if scoped.is_empty() {
+            .filter(|r| r.stream == Stream::Scheduled && r.agent == target);
+        if scoped.clone().next().is_none() {
             continue;
         }
         let observed = workload::read_polls(ctx, &target).await;
-        readback.push(AgentReadback::evaluate(
-            Stream::Scheduled,
-            &target,
-            &scoped,
-            observed,
-        ));
+        readback.extend(readback_for(Stream::Scheduled, &target, scoped, observed));
     }
 
     readback
-}
-
-/// Samples the routing table. Failure is recorded, not propagated: the
-/// shard-manager being unreachable is an expected observation during a
-/// shard-manager fault, and losing the whole run over it would be absurd.
-async fn snapshot_routing(deps: &BenchmarkTestDependencies, at: &str) -> RoutingSnapshot {
-    match deps.shard_manager().get_routing_table().await {
-        Ok(table) => {
-            let shards_per_executor: BTreeMap<String, usize> = table
-                .shards_per_pod()
-                .into_iter()
-                .map(|(pod, count)| (pod.to_string(), count))
-                .collect();
-            RoutingSnapshot {
-                at: at.to_string(),
-                taken_at: Utc::now(),
-                shards_per_executor: Some(shards_per_executor),
-                unavailable_reason: None,
-            }
-        }
-        Err(e) => {
-            warn!("S12: routing table unavailable at {at}: {e:#}");
-            RoutingSnapshot {
-                at: at.to_string(),
-                taken_at: Utc::now(),
-                shards_per_executor: None,
-                unavailable_reason: Some(format!("{e:#}")),
-            }
-        }
-    }
-}
-
-fn signal_termination(error: &SignalError) -> TerminationReason {
-    match error {
-        SignalError::Timeout { file, .. } => TerminationReason::SignalTimeout {
-            file: file.to_string(),
-        },
-        other => TerminationReason::Aborted {
-            detail: other.to_string(),
-        },
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_result(
-    config: &ScenarioConfig,
-    started_at: chrono::DateTime<Utc>,
-    phases: Phases,
-    fault_injected_at: Option<chrono::DateTime<Utc>>,
-    fault_recovered_at: Option<chrono::DateTime<Utc>>,
-    fault_id: Option<String>,
-    scope: RunScope,
-    records: &[OperationRecord],
-    readback: Vec<AgentReadback>,
-    routing_snapshots: Vec<RoutingSnapshot>,
-    termination_reason: TerminationReason,
-) -> ChaosResult {
-    let summary = ChaosSummary::build(records, readback, routing_snapshots, fault_injected_at);
-    let metadata = RunMetadata::from_env();
-
-    ChaosResult {
-        schema_version: RESULT_SCHEMA_VERSION,
-        scenario_code: config.code.to_uppercase(),
-        scenario_name: config.name.clone(),
-        completed: !termination_reason.is_failure(),
-        termination_reason,
-        started_at,
-        ended_at: Some(Utc::now()),
-        phases,
-        fault_injected_at,
-        fault_recovered_at,
-        fault_id,
-        fault: config.fault.clone(),
-        workload: config.workload.clone(),
-        retry_policy: config.retry_policy.clone(),
-        scope,
-        summary,
-        run_metadata: (!metadata.is_empty()).then_some(metadata),
-    }
-}
-
-/// Writes result and history wherever the caller asked for them. Called on every
-/// exit path, including aborts — a run that produced no readable artifact is a
-/// wasted maintenance window.
-fn write_outputs(
-    result: &ChaosResult,
-    history: &OperationHistory,
-    outputs: &OutputPaths,
-) -> anyhow::Result<()> {
-    if let Some(path) = &outputs.result {
-        result.save(path)?;
-        info!("S12: result written to {path:?}");
-    }
-    if let Some(path) = &outputs.history {
-        history.save(path, !result.completed)?;
-        info!("S12: operation history written to {path:?}");
-    }
-    Ok(())
-}
-
-/// Writes whatever artifacts exist for a run that died before producing a
-/// result — a cancelled workflow, or a panic. Best effort by definition.
-pub fn flush_partial(history: &OperationHistory, outputs: &OutputPaths, detail: &str) {
-    warn!("S12: flushing partial artifacts ({detail})");
-    if let Some(path) = &outputs.history
-        && let Err(e) = history.save(path, true)
-    {
-        warn!("S12: could not write partial history to {path:?}: {e:#}");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::chaos::signal::FAULT_INJECTED_FILE;
-    use test_r::test;
-
-    #[test]
-    fn a_signal_timeout_names_the_file_that_never_arrived() {
-        let error = SignalError::Timeout {
-            file: FAULT_INJECTED_FILE,
-            dir: "/tmp/signals".to_string(),
-            waited: Duration::from_secs(1800),
-        };
-        assert_eq!(
-            signal_termination(&error),
-            TerminationReason::SignalTimeout {
-                file: FAULT_INJECTED_FILE.to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn other_signal_errors_abort_with_the_underlying_detail() {
-        let error = SignalError::Io(anyhow::anyhow!("permission denied"));
-        match signal_termination(&error) {
-            TerminationReason::Aborted { detail } => {
-                assert!(detail.contains("permission denied"))
-            }
-            other => panic!("expected an abort, got {other:?}"),
-        }
-    }
 }

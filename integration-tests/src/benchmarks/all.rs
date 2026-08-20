@@ -334,6 +334,7 @@ async fn main() {
             signal_dir,
             save_to_json,
             save_history_to_json,
+            allow_disabled,
             ..
         } => {
             run_chaos(
@@ -347,6 +348,7 @@ async fn main() {
                 signal_dir.clone(),
                 save_to_json.clone(),
                 save_history_to_json.clone(),
+                *allow_disabled,
             )
             .await;
         }
@@ -560,6 +562,7 @@ async fn run_chaos(
     signal_dir: Option<std::path::PathBuf>,
     save_to_json: Option<std::path::PathBuf>,
     save_history_to_json: Option<std::path::PathBuf>,
+    allow_disabled: bool,
 ) {
     if !matches!(mode, TestMode::Cloud { .. }) {
         panic!("chaos scenarios require cloud mode");
@@ -584,10 +587,14 @@ async fn run_chaos(
 
             let suite = chaos::ChaosSuite::load(&suite_path).expect("failed to load chaos suite");
             let code = match scenario {
+                ChaosScenarioArg::S1 => chaos::ScenarioCode::S1,
+                ChaosScenarioArg::S8 => chaos::ScenarioCode::S8,
+                ChaosScenarioArg::S5 => chaos::ScenarioCode::S5,
                 ChaosScenarioArg::S12 => chaos::ScenarioCode::S12,
+                ChaosScenarioArg::S13 => chaos::ScenarioCode::S13,
             };
             let config = suite
-                .scenario(code)
+                .scenario(code, allow_disabled)
                 .expect("scenario is missing or disabled in the suite")
                 .clone();
 
@@ -595,14 +602,26 @@ async fn run_chaos(
                 .expect("failed to load chaos prep manifest");
             let signals =
                 chaos::signal::FaultSignals::new(&signal_dir).expect("failed to open signal dir");
-            let outputs = chaos::scenarios::s12::OutputPaths {
+            let outputs = chaos::scenarios::OutputPaths {
                 result: save_to_json,
                 history: save_history_to_json,
             };
 
             let result = match code {
+                chaos::ScenarioCode::S1 => {
+                    chaos::scenarios::s1::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S8 => {
+                    chaos::scenarios::s8::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S5 => {
+                    chaos::scenarios::s5::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
                 chaos::ScenarioCode::S12 => {
                     chaos::scenarios::s12::run(&config, &manifest, &deps, &signals, &outputs).await
+                }
+                chaos::ScenarioCode::S13 => {
+                    chaos::scenarios::s13::run(&config, &manifest, &deps, &signals, &outputs).await
                 }
             };
 

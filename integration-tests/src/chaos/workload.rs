@@ -33,17 +33,19 @@
 //! benchmark helper does — would turn every duplicate execution into a clean
 //! run, because the platform would be right to execute both.
 //!
-//! **Honest failure classification.** [`is_definite_rejection`] only lets an
-//! operation be called
-//! `Rejected` when the platform returned a definite, non-retryable status.
-//! Anything else that failed is `Indeterminate`: from the client side, a dropped
-//! connection is indistinguishable from a request that arrived and executed. A
-//! shard-manager kill produces exactly these, and recording them as failures
-//! would understate what the platform did while recording them as successes
-//! would overstate it.
+//! **Honest failure classification.** [`crate::chaos::errors`] decides what a
+//! failed attempt actually proves, and only a definite, non-retryable status
+//! lets an operation be called `Rejected`. Anything else that failed is
+//! `Indeterminate`: from the client side, a dropped connection is
+//! indistinguishable from a request that arrived and executed. A pod kill
+//! produces exactly these, and recording them as failures would understate what
+//! the platform did while recording them as successes would overstate it.
 
 use crate::chaos::RetryPolicy;
-use crate::chaos::history::{OperationHistory, OperationRecord, Outcome, Phase, Stream};
+use crate::chaos::errors::{self, ErrorClass};
+use crate::chaos::history::{
+    AttemptRecord, OperationHistory, OperationRecord, Outcome, Phase, Stream,
+};
 use chrono::Utc;
 use golem_common::base_model::agent::{DataValue, ParsedAgentId};
 use golem_common::model::IdempotencyKey;
@@ -66,6 +68,7 @@ const EPHEMERAL_COUNTER_AGENT: &str = "EphemeralCounter";
 const SCHEDULE_EMITTER_AGENT: &str = "ScheduleEmitter";
 const SCHEDULE_COUNTER_AGENT: &str = "ScheduleCounter";
 const PROMISE_AGENT: &str = "PromiseAgent";
+const QUOTA_COUNTER_AGENT: &str = "QuotaCounter";
 
 /// How far ahead scheduled polls are registered. Long enough that registration
 /// and firing are distinct events (so a fault can land between them), short
@@ -77,9 +80,12 @@ const SCHEDULE_LEAD: Duration = Duration::from_secs(10);
 /// restart recovery, and extra spans only make the traces harder to read.
 const SCHEDULE_CONTEXT_SPANS: u32 = 0;
 
-/// Ceiling on operations in flight at once. The rate limiter sets the pace; this
-/// only stops a stalled platform from accumulating unbounded tasks during a
-/// fault, which would turn a fault window into an out-of-memory abort.
+/// Ceiling on operations in flight at once, across all streams. Divided evenly
+/// between the active streams, so a stream that stalls can only exhaust its own
+/// share — see the allocation site for why that matters. The rate limiter sets
+/// the pace; this only stops a stalled platform from accumulating unbounded
+/// tasks during a fault, which would turn a fault window into an out-of-memory
+/// abort.
 ///
 /// It has to stay well above `ratePerSec`, because it doubles as a stall
 /// backstop: once the pool is exhausted the streams stop submitting, so a cap
@@ -94,6 +100,18 @@ const MAX_IN_FLIGHT: usize = 1024;
 /// stalls in-flight work — but bounded, so an operation cannot outlive the
 /// scenario that submitted it.
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Ceiling on a single read-back invocation.
+///
+/// Read-back walks every agent the run touched, and an agent that never answers
+/// would otherwise stall the whole scenario — which is not hypothetical: a
+/// quota lease lost during a fault leaves the agent's next reservation parked
+/// with no timeout on the platform side, so `invoke_and_await` against it never
+/// returns. One wedged agent must cost one entry, not the run.
+///
+/// Generous, because read-back happens on a cluster that has just been through
+/// a fault and a slow answer is still an answer.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Payload written when completing a promise.
 const PROMISE_PAYLOAD: &[u8] = b"chaos";
@@ -166,47 +184,23 @@ impl WorkloadContext {
     }
 }
 
-/// Whether an error means the platform definitely refused the request, as
-/// opposed to the driver simply not knowing.
-///
-/// Only a definite, non-retryable HTTP status counts as a rejection. Everything
-/// else — connection reset, timeout, no status at all — leaves genuine doubt
-/// about whether the request arrived and executed, and is reported as such.
-pub fn is_definite_rejection(error: &anyhow::Error) -> bool {
-    for cause in error.chain() {
-        if let Some(reqwest_error) = cause.downcast_ref::<reqwest::Error>() {
-            return match reqwest_error.status() {
-                // A status means the server answered, so it saw the request and
-                // decided. 5xx/408/429 are transient and leave doubt; the rest
-                // are definite refusals.
-                Some(status) => {
-                    !(status.is_server_error()
-                        || status == reqwest::StatusCode::REQUEST_TIMEOUT
-                        || status == reqwest::StatusCode::TOO_MANY_REQUESTS)
-                }
-                // No status: the exchange never completed. Nobody can say
-                // whether the server executed it.
-                None => false,
-            };
-        }
-    }
-    // An error the driver cannot interpret is treated as doubt rather than as a
-    // refusal. Widening the band costs a little precision; narrowing it wrongly
-    // would manufacture a duplicate-execution finding out of a timeout.
-    false
-}
-
 /// Outcome and value of a single invocation attempt.
 struct AttemptResult {
     value: Option<u32>,
     error: Option<anyhow::Error>,
-    definite_rejection: bool,
+    /// Absent when the attempt succeeded.
+    class: Option<ErrorClass>,
 }
 
 /// Runs one operation with the configured bounded, same-key retry, and records
 /// it in the history.
+///
+/// Shared with the pinned in-flight stream in [`crate::chaos::pinned`]: the
+/// retry rule and the failure classification are the load-bearing parts of
+/// every chaos scenario, and a second copy of them would be a second place for
+/// them to drift.
 #[allow(clippy::too_many_arguments)]
-async fn run_operation<F, Fut>(
+pub(crate) async fn run_operation<F, Fut>(
     ctx: &WorkloadContext,
     stream: Stream,
     agent: String,
@@ -225,22 +219,25 @@ async fn run_operation<F, Fut>(
 
     let mut attempts = 0u32;
     let mut first_attempt_value = None;
+    let mut attempt_log: Vec<AttemptRecord> = Vec::new();
     let mut last: AttemptResult;
 
     loop {
         attempts += 1;
+        let attempt_started_at = Utc::now();
+        let attempt_started = Instant::now();
         last = match tokio::time::timeout(ATTEMPT_TIMEOUT, invoke(idempotency_key.clone())).await {
             Ok(Ok(value)) => AttemptResult {
                 value,
                 error: None,
-                definite_rejection: false,
+                class: None,
             },
             Ok(Err(error)) => {
-                let definite_rejection = is_definite_rejection(&error);
+                let class = errors::classify(&error);
                 AttemptResult {
                     value: None,
                     error: Some(error),
-                    definite_rejection,
+                    class: Some(class),
                 }
             }
             Err(_) => AttemptResult {
@@ -250,14 +247,30 @@ async fn run_operation<F, Fut>(
                 )),
                 // A timeout is the archetypal case of not knowing: the request
                 // may well be executing right now.
-                definite_rejection: false,
+                class: Some(ErrorClass::Transport),
             },
         };
 
         let succeeded = last.error.is_none();
+        attempt_log.push(AttemptRecord {
+            attempt: attempts,
+            started_at: attempt_started_at,
+            duration_ms: attempt_started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+            returned_value: last.value,
+            succeeded,
+            error_class: last.class,
+            error: last.error.as_ref().map(|e| format!("{e:#}")),
+        });
+
+        // Only transport failures are retried, and only under the original key.
+        // See `crate::chaos::errors` for why the other three classes are not:
+        // the retry is there to *expose* duplicate execution, not to paper over
+        // a failing platform.
         let may_retry = attempts <= ctx.retry.max_retries
             && !succeeded
-            && (!ctx.retry.transport_only || !last.definite_rejection);
+            && last.class.is_some_and(|class| {
+                !ctx.retry.transport_only || class.is_retryable_transport_failure()
+            });
 
         if succeeded || !may_retry {
             break;
@@ -269,23 +282,26 @@ async fn run_operation<F, Fut>(
             first_attempt_value = last.value;
         }
         debug!(
-            "Chaos {stream} op {key} attempt {attempts} failed, retrying with the same key in {:?}",
+            "Chaos {stream} op {key} attempt {attempts} failed ({}), retrying with the same key in {:?}",
+            last.class.map(|c| c.as_str()).unwrap_or("unclassified"),
             ctx.retry.delay()
         );
         tokio::time::sleep(ctx.retry.delay()).await;
     }
 
-    let outcome = if last.error.is_none() {
-        Outcome::Confirmed
-    } else if last.definite_rejection {
-        Outcome::Rejected
-    } else {
-        Outcome::Indeterminate
+    let outcome = match last.class {
+        None => Outcome::Confirmed,
+        // A definite refusal is the only failure that proves nothing executed.
+        // Everything else — transport, platform, application — leaves doubt the
+        // read-back carries through as the width of a range.
+        Some(class) if class.is_definite_rejection() => Outcome::Rejected,
+        Some(_) => Outcome::Indeterminate,
     };
 
     if outcome == Outcome::Indeterminate {
         warn!(
-            "Chaos {stream} op {key} ended indeterminate after {attempts} attempt(s): {}",
+            "Chaos {stream} op {key} ended indeterminate ({}) after {attempts} attempt(s): {}",
+            last.class.map(|c| c.as_str()).unwrap_or("unclassified"),
             last.error
                 .as_ref()
                 .map(|e| e.to_string())
@@ -308,11 +324,20 @@ async fn run_operation<F, Fut>(
         returned_value: last.value,
         first_attempt_value,
         error: last.error.as_ref().map(|e| format!("{e:#}")),
+        error_class: last.class,
+        attempt_log,
     });
 }
 
 /// Extracts a `u32` return value, if the agent returned one. Absent values are
 /// not an error: several workload methods return nothing.
+///
+/// Public under a fuller name for [`crate::chaos::pinned`], which reads the same
+/// counter values back from its own invocations.
+pub fn as_u32_value(value: DataValue) -> Option<u32> {
+    as_u32(value)
+}
+
 fn as_u32(value: DataValue) -> Option<u32> {
     u32::from_value(value.into_return_value()?).ok()
 }
@@ -351,10 +376,6 @@ pub fn start(ctx: WorkloadContext, config: &crate::chaos::WorkloadConfig) -> Wor
     let submitted = Arc::new(AtomicU64::new(0));
     let mut tasks = JoinSet::new();
 
-    // One shared permit pool across streams, so a stalled stream cannot starve
-    // the others of the ability to submit.
-    let in_flight = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
-
     // The configured rate is split evenly across the active streams. Streams
     // with no agents configured are skipped entirely rather than run empty.
     let active: Vec<(Stream, u32)> = [
@@ -362,6 +383,7 @@ pub fn start(ctx: WorkloadContext, config: &crate::chaos::WorkloadConfig) -> Wor
         (Stream::Ephemeral, config.ephemeral_agents),
         (Stream::Scheduled, config.scheduled_agents),
         (Stream::Promise, config.promise_agents),
+        (Stream::Quota, config.quota_agents),
     ]
     .into_iter()
     .filter(|(_, agents)| *agents > 0)
@@ -378,18 +400,36 @@ pub fn start(ctx: WorkloadContext, config: &crate::chaos::WorkloadConfig) -> Wor
 
     let per_stream_rate = (config.rate_per_sec as f64 / active.len() as f64).max(0.1);
     let interval = Duration::from_secs_f64(1.0 / per_stream_rate);
+    // One permit pool *per stream*, not one shared across them.
+    //
+    // A shared pool was the original design, on the reasoning that it would let
+    // a fast stream use capacity a slow one was not using. It does the opposite
+    // under the exact conditions these scenarios create. In S1 the quota stream
+    // blocks for minutes while its lease is unreachable, its operations sit on
+    // permits without completing, and the pool drains — so the four streams that
+    // cannot even see the fault stop submitting too. That run showed all five
+    // streams dropping from ~20 ops/s to ~5.7 ops/s together, which makes
+    // acceptance degradation unattributable: every stream looks affected by a
+    // fault only one of them touches.
+    //
+    // Per-stream budgets keep the blast radius inside the stream that stalled.
+    // The total ceiling is unchanged, so the out-of-memory backstop still holds.
+    let per_stream_in_flight = (MAX_IN_FLIGHT / active.len()).max(1);
+
     info!(
-        "Chaos workload starting: {} streams, {:.2} ops/s each ({:?} between submissions)",
+        "Chaos workload starting: {} streams, {:.2} ops/s each ({:?} between \
+         submissions), {} in flight per stream",
         active.len(),
         per_stream_rate,
-        interval
+        interval,
+        per_stream_in_flight
     );
 
     for (stream, agent_count) in active {
         let ctx = ctx.clone();
         let stop = stop.clone();
         let submitted = submitted.clone();
-        let in_flight = in_flight.clone();
+        let in_flight = Arc::new(Semaphore::new(per_stream_in_flight));
 
         tasks.spawn(async move {
             let mut ticker = tokio::time::interval(interval);
@@ -432,8 +472,15 @@ pub fn start(ctx: WorkloadContext, config: &crate::chaos::WorkloadConfig) -> Wor
 }
 
 /// Submits one operation of `stream` against agent `index`.
-async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32, seq: u64) {
+pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32, seq: u64) {
     match stream {
+        // Driven by `crate::chaos::pinned`, not by the rate-based streams: it
+        // has no rate and its agents are chosen by shard ownership rather than
+        // by index. `start` never puts it in the active list, so reaching here
+        // means a caller wired it up by hand.
+        Stream::PinnedHttp => {
+            warn!("Chaos mixed workload cannot drive the pinned stream; see chaos::pinned");
+        }
         Stream::Durable => {
             let agent = ctx.agent_name(Stream::Durable, index);
             let key = ctx.idempotency_key(&agent, seq);
@@ -536,6 +583,41 @@ async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32, seq: u64)
             )
             .await;
         }
+        Stream::Quota => {
+            // Reserving against a held token is the point: the executor keeps
+            // the underlying lease renewed with the shard-manager, so this is
+            // the one stream a shard-manager partition can actually disturb.
+            let agent = ctx.agent_name(Stream::Quota, index);
+            let key = ctx.idempotency_key(&agent, seq);
+            let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.clone());
+            let ctx2 = ctx.clone();
+            let parsed2 = parsed.clone();
+            run_operation(
+                ctx,
+                Stream::Quota,
+                agent.clone(),
+                "reserve_and_increment",
+                key,
+                |k| {
+                    let ctx = ctx2.clone();
+                    let parsed = parsed2.clone();
+                    async move {
+                        let value = ctx
+                            .user
+                            .invoke_and_await_agent_with_key(
+                                &ctx.counters,
+                                &parsed,
+                                &k,
+                                "reserve_and_increment",
+                                data_value!(),
+                            )
+                            .await?;
+                        Ok(as_u32(value))
+                    }
+                },
+            )
+            .await;
+        }
         Stream::Promise => {
             let agent = ctx.agent_name(Stream::Promise, index);
             let key = ctx.idempotency_key(&agent, seq);
@@ -584,33 +666,136 @@ async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32, seq: u64)
 }
 
 /// Reads back a durable counter agent's value.
-pub async fn read_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
-    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
-    match ctx
-        .user
-        .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
-        .await
-    {
-        Ok(value) => as_u32(value)
-            .map(u64::from)
-            .ok_or_else(|| "count returned no value".to_string()),
-        Err(e) => Err(format!("{e:#}")),
+/// Runs a read-back invocation under [`READ_TIMEOUT`].
+///
+/// A timeout is reported as an unreadable agent rather than propagated: the
+/// read-back already models "could not be read" as a verdict of its own, and an
+/// agent that will not answer is exactly that.
+async fn read_with_timeout<F>(what: &str, agent: &str, read: F) -> Result<u64, String>
+where
+    F: std::future::Future<Output = Result<u64, String>>,
+{
+    match tokio::time::timeout(READ_TIMEOUT, read).await {
+        Ok(result) => result,
+        Err(_) => {
+            warn!("Chaos: reading {what} on {agent} timed out after {READ_TIMEOUT:?}");
+            Err(format!("{what} timed out after {READ_TIMEOUT:?}"))
+        }
     }
+}
+
+pub async fn read_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
+    read_with_timeout("count", agent, async {
+        let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "count returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
+}
+
+/// Reads which build of the counters component an agent is running.
+///
+/// S5 updates the component underneath running agents and then has to prove
+/// they came up on the new one. Component metadata reports the revision the
+/// platform *believes* an agent is on; this asks the code actually executing,
+/// which is the only answer that settles the question.
+pub async fn read_component_version(ctx: &WorkloadContext, agent: &str) -> Result<u32, String> {
+    read_with_timeout("component_version", agent, async {
+        let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "component_version", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "component_version returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
+    .map(|v| v as u32)
+}
+
+/// The platform-level id of a durable counter agent, for callers that address
+/// one directly rather than through the workload.
+///
+/// Built the same way the worker-service builds the id it routes on: the
+/// component id plus the *string form* of the parsed agent id. Anything else
+/// would name a different agent from the one the workload is driving.
+pub fn counter_agent_id(ctx: &WorkloadContext, agent: &str) -> golem_common::model::AgentId {
+    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+    golem_common::model::AgentId {
+        component_id: ctx.counters.id,
+        agent_id: parsed.to_string(),
+    }
+}
+
+/// Reads back how many reservations a quota agent was refused.
+///
+/// The counterpart to [`read_counter`] for the quota stream: the counter says
+/// how much work got through, this says how much the platform turned away. A
+/// refusal during the fault is the observable cost of a lease the executor
+/// could no longer renew.
+pub async fn read_refused(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
+    read_with_timeout("refused", agent, async {
+        let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "refused", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "refused returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
+}
+
+/// Reads back a quota agent's committed count.
+pub async fn read_quota_counter(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
+    read_with_timeout("count", agent, async {
+        let parsed: ParsedAgentId = agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "count", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "count returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
 }
 
 /// Reads back how many scheduled polls actually fired on a target agent.
 pub async fn read_polls(ctx: &WorkloadContext, agent: &str) -> Result<u64, String> {
-    let parsed: ParsedAgentId = agent_id!(SCHEDULE_COUNTER_AGENT, agent.to_string());
-    match ctx
-        .user
-        .invoke_and_await_agent(&ctx.counters, &parsed, "polls", data_value!())
-        .await
-    {
-        Ok(value) => as_u32(value)
-            .map(u64::from)
-            .ok_or_else(|| "polls returned no value".to_string()),
-        Err(e) => Err(format!("{e:#}")),
-    }
+    read_with_timeout("polls", agent, async {
+        let parsed: ParsedAgentId = agent_id!(SCHEDULE_COUNTER_AGENT, agent.to_string());
+        match ctx
+            .user
+            .invoke_and_await_agent(&ctx.counters, &parsed, "polls", data_value!())
+            .await
+        {
+            Ok(value) => as_u32(value)
+                .map(u64::from)
+                .ok_or_else(|| "polls returned no value".to_string()),
+            Err(e) => Err(format!("{e:#}")),
+        }
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -662,39 +847,42 @@ mod tests {
         );
     }
 
-    // ── Failure classification ──────────────────────────────────────────────
-    // The three-way split is what keeps the read-back honest, so the boundary
-    // between "definitely refused" and "cannot tell" gets direct tests.
+    // ── The retry rule ──────────────────────────────────────────────────────
+    // Which failures are classified how lives in `crate::chaos::errors` and is
+    // tested there. What this covers is the rule built on top of it: at most
+    // one retry, and only for the one class that might be transient.
 
     #[test]
-    fn an_uninterpretable_error_leaves_doubt_rather_than_claiming_refusal() {
-        let error = anyhow::anyhow!("connection reset by peer");
-        assert!(
-            !is_definite_rejection(&error),
-            "an error the driver cannot read must widen the band, not narrow it"
-        );
-    }
-
-    #[test]
-    fn a_wrapped_uninterpretable_error_still_leaves_doubt() {
-        let error = anyhow::anyhow!("broken pipe").context("invoking increment");
-        assert!(!is_definite_rejection(&error));
-    }
-
-    /// The retry rule the policy encodes: retry only what might be transient,
-    /// and only under the same key.
-    #[test]
-    fn retry_policy_permits_one_retry_for_non_definite_failures() {
+    fn retry_policy_permits_one_retry_and_only_for_transport_failures() {
         let policy = RetryPolicy::default();
         assert_eq!(policy.max_retries, 1);
         assert!(policy.transport_only);
 
-        // attempts=1 (the first) may retry once; attempts=2 may not.
-        let may_retry = |attempts: u32, definite: bool| {
-            attempts <= policy.max_retries && (!policy.transport_only || !definite)
+        // Mirrors the predicate in `run_operation`. attempts=1 is the first
+        // attempt, which may retry once; attempts=2 has spent the budget.
+        let may_retry = |attempts: u32, class: ErrorClass| {
+            attempts <= policy.max_retries
+                && (!policy.transport_only || class.is_retryable_transport_failure())
         };
-        assert!(may_retry(1, false), "first transport failure retries");
-        assert!(!may_retry(2, false), "the retry budget is one");
-        assert!(!may_retry(1, true), "a definite refusal is not retried");
+        assert!(
+            may_retry(1, ErrorClass::Transport),
+            "the first transport failure retries under the same key"
+        );
+        assert!(
+            !may_retry(2, ErrorClass::Transport),
+            "the retry budget is one"
+        );
+        assert!(
+            !may_retry(1, ErrorClass::Response),
+            "a definite refusal is not retried"
+        );
+        assert!(
+            !may_retry(1, ErrorClass::Platform),
+            "a transient server-side status is not a transport failure"
+        );
+        assert!(
+            !may_retry(1, ErrorClass::Application),
+            "an agent that ran and failed is not retried under the same key"
+        );
     }
 }
