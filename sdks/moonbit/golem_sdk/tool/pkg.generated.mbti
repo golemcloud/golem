@@ -131,6 +131,7 @@ pub fn ToolBuildError::schema_model(String) -> Self
 pub(all) struct CanonicalInputField {
   name : String
   aliases : Array[String]
+  short : Char?
   type_ : @schema_model.SchemaGraph
 } derive(Eq)
 
@@ -142,6 +143,7 @@ pub(all) struct CanonicalInputModel {
 pub(all) struct CanonicalInputValue {
   name : String
   aliases : Array[String]
+  short : Char?
   type_ : @schema_model.SchemaGraph
   value : @schema_model.SchemaValue
 } derive(Eq)

@@ -103,7 +103,8 @@ mod tests {
             tool_deployment: Some(tool_deployment.clone()),
         };
 
-        let proto: golem_api_grpc::proto::golem::registry::EnvironmentState = state.into();
+        let proto: golem_api_grpc::proto::golem::registry::EnvironmentState =
+            state.try_into().unwrap();
         let decoded = EnvironmentState::try_from(proto).unwrap();
 
         assert_eq!(decoded.tool_deployment, Some(tool_deployment));

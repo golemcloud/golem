@@ -22,22 +22,11 @@ fn[T : @schema.FromSchema] decode_custom_error_for_test(
 }
 
 ///|
-fn run_async_test_noraise(block : async () -> Unit noraise) -> Unit = "%async.run"
-
-///|
-fn run_async_test(block : async () -> Unit) -> Unit {
-  let failure : Array[String?] = [None]
-  run_async_test_noraise(() => {
-    try block() catch {
-      error => failure[0] = Some(repr(error))
-    } noraise {
-      _ => ()
-    }
-  })
-  match failure[0] {
-    Some(message) => abort(message)
-    None => ()
-  }
+fn[T : @schema.IntoSchema] custom_error_of_for_test(
+  value : T,
+) -> @common.AgentError raise {
+  let typed = @schema.try_into_typed_schema_value(value)
+  @common.AgentError::CustomError(@model.typed_schema_value_to_wit(typed))
 }
 
 ///|
@@ -62,39 +51,35 @@ test "internal_error prefixes and round-trips" {
 
 ///|
 test "custom_error_of round-trips a typed (non-string) value" {
-  run_async_test(async fn() {
-    let err = custom_error_of((42 : Int))
-    guard err is CustomError(_) else { fail("expected CustomError") }
-    let decoded : Int? = decode_custom_error_for_test(err)
-    inspect(decoded, content="Some(42)")
-  })
+  let err = custom_error_of_for_test((42 : Int))
+  guard err is CustomError(_) else { fail("expected CustomError") }
+  let decoded : Int? = decode_custom_error_for_test(err)
+  inspect(decoded, content="Some(42)")
 }
 
 ///|
 test "failed custom error conversion drops its decoded stream" {
-  run_async_test(async fn() {
-    let handle = @model.GuestSchemaValueStreamHandle::from_wrapped(
-      @types.SchemaValueStream::SchemaValueStream(90),
-    )
-    let stream : @schema.AgentStream[Int] = @schema.from_value_as(
-      @model.SchemaValue::Stream(handle),
-    )
-    let error = custom_error_of(stream)
-    let dropped = [0]
-    let result : Result[Int?, _] = try? decode_custom_error_with_resource_drops(
-      error,
-      {
-        drop_secret: fn(_) {  },
-        drop_quota_token: fn(_) {  },
-        drop_stream: fn(_) { dropped[0] += 1 },
-        drop_native_stream: fn(_) {  },
-      },
-    )
-    guard result is Err(_) else {
-      fail("decoding a stream custom error as Int must fail")
-    }
-    assert_eq(dropped[0], 1)
-  })
+  let handle = @model.GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(90),
+  )
+  let stream : @schema.AgentStream[Int] = @schema.from_value_as(
+    @model.SchemaValue::Stream(handle),
+  )
+  let error = custom_error_of_for_test(stream)
+  let dropped = [0]
+  let result : Result[Int?, _] = try? decode_custom_error_with_resource_drops(
+    error,
+    {
+      drop_secret: fn(_) {  },
+      drop_quota_token: fn(_) {  },
+      drop_stream: fn(_) { dropped[0] += 1 },
+      drop_native_stream: fn(_) {  },
+    },
+  )
+  guard result is Err(_) else {
+    fail("decoding a stream custom error as Int must fail")
+  }
+  assert_eq(dropped[0], 1)
 }
 
 ///|

@@ -264,13 +264,21 @@ fn reject_wire_invocation_with_resource_drops(
   error : @toolCommon.ToolError,
   drops : @model.SchemaValueResourceDrops,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  release_wire_invocation_input(input, drops)
+  drop_optional_stdin(stdin)
+  Err(error)
+}
+
+///|
+fn release_wire_invocation_input(
+  input : @types.TypedSchemaValue,
+  drops : @model.SchemaValueResourceDrops,
+) -> Unit {
   try @model.typed_schema_value_from_wit(input, drops) catch {
     _ => ()
   } noraise {
     decoded => decoded.value.release_resources(drops)
   }
-  drop_optional_stdin(stdin)
-  Err(error)
 }
 
 ///|

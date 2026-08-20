@@ -98,7 +98,7 @@ pub async fn[E] invoke_and_await(
 ) -> Result[InvocationResult, ToolError[E]] {
   let wire_input = @model.typed_schema_value_to_wit_async(input) catch {
     e => {
-      input.value.release_resources(@model_host.resource_drops())
+      release_failed_tool_input(input, @model_host.resource_drops())
       match stdin {
         Some(stdin) => stdin.drop_sync()
         None => ()
@@ -112,6 +112,14 @@ pub async fn[E] invoke_and_await(
     Err(e) => return Err(map_rpc_error(e, decode_error))
   }
   decode_invocation_result(wire_result)
+}
+
+///|
+fn release_failed_tool_input(
+  input : @model.TypedSchemaValue,
+  drops : @model.SchemaValueResourceDrops,
+) -> Unit {
+  input.value.release_resources(drops)
 }
 
 ///|

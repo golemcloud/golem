@@ -2,6 +2,7 @@
 pub(all) struct CanonicalInputField {
   name : String
   aliases : Array[String]
+  short : Char?
   type_ : @model.SchemaGraph
 } derive(Eq)
 
@@ -9,6 +10,7 @@ pub(all) struct CanonicalInputField {
 pub(all) struct CanonicalInputValue {
   name : String
   aliases : Array[String]
+  short : Char?
   type_ : @model.SchemaGraph
   value : @model.SchemaValue
 } derive(Eq)
@@ -186,6 +188,7 @@ pub fn ToolDef::canonical_input_fields(
       fields.push({
         name: positional.name,
         aliases: [],
+        short: None,
         type_: positional.type_,
       })
     }
@@ -193,6 +196,7 @@ pub fn ToolDef::canonical_input_fields(
       fields.push({
         name: tail.name,
         aliases: [],
+        short: None,
         type_: list_graph(tail.item_type),
       })
     }
@@ -237,7 +241,7 @@ fn OptionSpecDef::canonical_field(self : OptionSpecDef) -> CanonicalInputField {
     RepeatableList(shape) => list_graph(shape.item_type)
     RepeatableMap(shape) => shape.map_type
   }
-  { name: self.long, aliases: self.aliases, type_ }
+  { name: self.long, aliases: self.aliases, short: self.short, type_ }
 }
 
 ///|
@@ -250,7 +254,12 @@ fn @toolCommon.FlagSpec::canonical_field(
     @toolCommon.FlagShape::CountFlag(_) =>
       @model.schema_type(@model.SchemaTypeBody::U32(None))
   }
-  { name: self.long, aliases: self.aliases, type_: { defs: [], root } }
+  {
+    name: self.long,
+    aliases: self.aliases,
+    short: self.short,
+    type_: { defs: [], root },
+  }
 }
 
 ///|
@@ -346,6 +355,7 @@ fn decode_canonical_input_with_resource_drops(
       result.push({
         name: field.name,
         aliases: field.aliases,
+        short: field.short,
         type_: field.type_,
         value: values[i],
       })
@@ -515,14 +525,33 @@ pub fn forward_canonical_input(
   let params : Array[(String, @model.SchemaValue)] = []
   for target in model.fields {
     let mut found : CanonicalInputValue? = None
+    let mut found_rank = 0
     for candidate in fields {
-      if candidate.name == target.name ||
-        candidate.aliases.contains(target.name) ||
-        target.aliases.contains(candidate.name) ||
-        target.aliases.any(surface_alias => {
+      let rank = if candidate.name == target.name {
+        4
+      } else if target.aliases.contains(candidate.name) {
+        3
+      } else if candidate.aliases.contains(target.name) {
+        2
+      } else if target.aliases.any(surface_alias => {
           candidate.aliases.contains(surface_alias)
         }) {
+        1
+      } else {
+        0
+      }
+      if rank > found_rank {
         found = Some(candidate)
+        found_rank = rank
+      }
+    }
+    if found is None {
+      for candidate in fields {
+        if candidate.short is Some(candidate_short) &&
+          target.short == Some(candidate_short) {
+          found = Some(candidate)
+          break
+        }
       }
     }
     guard found is Some(found) else {

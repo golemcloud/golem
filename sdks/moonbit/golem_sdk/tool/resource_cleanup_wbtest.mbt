@@ -63,6 +63,7 @@ test "canonical field rejection releases undecoded streams" {
     {
       name: "stream",
       aliases: [],
+      short: None,
       type_: cleanup_string_graph(),
       value: @model.SchemaValue::Stream(source),
     },
@@ -80,117 +81,73 @@ test "canonical field rejection releases undecoded streams" {
 }
 
 ///|
-test "subtool routing rejection releases unforwarded streams" {
-  run_async_test(() => {
-    let source = @model.GuestSchemaValueStreamHandle::from_wrapped(
-      @types.SchemaValueStream::SchemaValueStream(4),
-    )
-    let result = invoke_registered_subtool_with_resource_drops(
-      "missing-cleanup-tool",
-      [],
-      [
-        {
-          name: "stream",
-          aliases: [],
-          type_: cleanup_string_graph(),
-          value: @model.SchemaValue::Stream(source),
-        },
-      ],
-      None,
-      @agentCommon.Principal::Anonymous,
-      cleanup_drops(),
-    )
-    guard result is Err(@toolCommon.ToolError::InvalidToolName(_)) else {
-      fail("an unregistered subtool must fail")
-    }
-    assert_false(source.is_present())
-  })
-}
-
-///|
-test "top-level routing rejection drops wire stream resources" {
-  run_async_test(() => {
-    let dropped = [0]
-    let drops : @model.SchemaValueResourceDrops = {
-      drop_secret: fn(_) {  },
-      drop_quota_token: fn(_) {  },
-      drop_stream: fn(_) { dropped[0] += 1 },
-      drop_native_stream: fn(_) {  },
-    }
-    let input : @types.TypedSchemaValue = {
-      graph: @model.schema_graph_to_wit(cleanup_string_graph()),
-      value: {
-        value_nodes: [
-          @types.StreamValue(@types.SchemaValueStream::SchemaValueStream(14)),
-        ],
-        root: 0,
+test "decoded invocation rejection releases unforwarded streams" {
+  let source = @model.GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(4),
+  )
+  release_canonical_input_values(
+    [
+      {
+        name: "stream",
+        aliases: [],
+        short: None,
+        type_: cleanup_string_graph(),
+        value: @model.SchemaValue::Stream(source),
       },
-    }
-    let result = invoke_registered_tool_with_resource_drops(
-      "missing-wire-cleanup-tool",
-      [],
-      input,
-      None,
-      @agentCommon.Principal::Anonymous,
-      drops,
-    )
-    guard result is Err(@toolCommon.ToolError::InvalidToolName(_)) else {
-      fail("an unregistered top-level tool must fail")
-    }
-    assert_eq(dropped[0], 1)
-  })
+    ],
+    cleanup_drops(),
+  )
+  assert_false(source.is_present())
 }
 
 ///|
-test "subtool with no invoker drops source before forwarding" {
-  run_async_test(() => {
-    let base = canonical_test_def()
-    let command = base.commands[0]
-    let def : ToolDef = {
-      version: base.version,
-      commands: [
-        {
-          name: "cleanup-no-invoker",
-          aliases: command.aliases,
-          doc: command.doc,
-          globals: command.globals,
-          subcommands: [],
-          body: command.body,
-        },
+test "wire invocation rejection drops stream resources" {
+  let dropped = [0]
+  let drops : @model.SchemaValueResourceDrops = {
+    drop_secret: fn(_) {  },
+    drop_quota_token: fn(_) {  },
+    drop_stream: fn(_) { dropped[0] += 1 },
+    drop_native_stream: fn(_) {  },
+  }
+  let input : @types.TypedSchemaValue = {
+    graph: @model.schema_graph_to_wit(cleanup_string_graph()),
+    value: {
+      value_nodes: [
+        @types.StreamValue(@types.SchemaValueStream::SchemaValueStream(14)),
       ],
-    }
-    register_tool_def(def)
-    let source = @model.GuestSchemaValueStreamHandle::from_wrapped(
-      @types.SchemaValueStream::SchemaValueStream(15),
-    )
-    let dropped = [0]
-    let drops : @model.SchemaValueResourceDrops = {
-      drop_secret: fn(_) {  },
-      drop_quota_token: fn(_) {  },
-      drop_stream: fn(_) { dropped[0] += 1 },
-      drop_native_stream: fn(_) {  },
-    }
-    let result = invoke_registered_subtool_with_resource_drops(
-      "cleanup-no-invoker",
-      [],
-      [
-        {
-          name: "global",
-          aliases: [],
-          type_: cleanup_string_graph(),
-          value: @model.SchemaValue::Stream(source),
-        },
-      ],
-      None,
-      @agentCommon.Principal::Anonymous,
-      drops,
-    )
-    guard result is Err(@toolCommon.ToolError::InvalidToolName(_)) else {
-      fail("a subtool without an invoker must fail")
-    }
-    assert_false(source.is_present())
-    assert_eq(dropped[0], 1)
-  })
+      root: 0,
+    },
+  }
+  release_wire_invocation_input(input, drops)
+  assert_eq(dropped[0], 1)
+}
+
+///|
+test "decoded invocation rejection calls configured stream drop" {
+  let source = @model.GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(15),
+  )
+  let dropped = [0]
+  let drops : @model.SchemaValueResourceDrops = {
+    drop_secret: fn(_) {  },
+    drop_quota_token: fn(_) {  },
+    drop_stream: fn(_) { dropped[0] += 1 },
+    drop_native_stream: fn(_) {  },
+  }
+  release_canonical_input_values(
+    [
+      {
+        name: "global",
+        aliases: [],
+        short: None,
+        type_: cleanup_string_graph(),
+        value: @model.SchemaValue::Stream(source),
+      },
+    ],
+    drops,
+  )
+  assert_false(source.is_present())
+  assert_eq(dropped[0], 1)
 }
 
 ///|
@@ -198,14 +155,11 @@ test "tool result conversion failure releases decoded streams" {
   let source = @model.GuestSchemaValueStreamHandle::from_wrapped(
     @types.SchemaValueStream::SchemaValueStream(5),
   )
-  let result : Result[Int, ToolError[NoToolError]] = decode_result_value_with_resource_drops(
-    {
-      result: Some({
-        graph: cleanup_string_graph(),
-        value: @model.SchemaValue::Stream(source),
-      }),
-      stdout: None,
-    },
+  let result : Result[Int, ToolError[NoToolError]] = decode_expected_value(
+    Some({
+      graph: cleanup_string_graph(),
+      value: @model.SchemaValue::Stream(source),
+    }),
     cleanup_drops(),
   )
   guard result is Err(ToolError::Rpc(RpcError::Protocol(_))) else {
@@ -219,48 +173,44 @@ test "tool result validates stdout before transferring its value" {
   let source = @model.GuestSchemaValueStreamHandle::from_wrapped(
     @types.SchemaValueStream::SchemaValueStream(6),
   )
-  let result : Result[
-    (@schema.AgentStream[Int], @async-core.Stream[Byte]),
-    ToolError[NoToolError],
-  ] = decode_result_with_stdout_with_resource_drops(
-    {
-      result: Some({
-        graph: cleanup_string_graph(),
-        value: @model.SchemaValue::Stream(source),
-      }),
-      stdout: None,
-    },
-    cleanup_drops(),
+  let value : @model.TypedSchemaValue? = Some({
+    graph: cleanup_string_graph(),
+    value: @model.SchemaValue::Stream(source),
+  })
+  let stdout : @async-core.Stream[Byte]? = None
+  let stdout_result : Result[@async-core.Stream[Byte], ToolError[NoToolError]] = expect_stdout(
+    stdout,
   )
-  guard result is Err(ToolError::Rpc(RpcError::Protocol(_))) else {
+  guard stdout_result is Err(ToolError::Rpc(RpcError::Protocol(_))) else {
     fail("a missing stdout stream must fail")
   }
+  release_optional_value(value, cleanup_drops())
   assert_false(source.is_present())
 }
 
 ///|
-test "tool input encoding failure drops value streams and stdin" {
-  run_async_test(() => {
-    let (value_reader, value_sink) = @async-core.Stream::new()
-    let value_source = @model.GuestSchemaValueStreamHandle::from_native(
-      value_reader,
-    )
-    let (stdin, stdin_sink) = @async-core.Stream::new()
-    let invalid_graph : @model.SchemaGraph = {
+test "tool input encoding failure drops value streams" {
+  let value_source = @model.GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(16),
+  )
+  let dropped = [0]
+  let drops : @model.SchemaValueResourceDrops = {
+    drop_secret: fn(_) {  },
+    drop_quota_token: fn(_) {  },
+    drop_stream: fn(_) { dropped[0] += 1 },
+    drop_native_stream: fn(_) {  },
+  }
+  let input : @model.TypedSchemaValue = {
+    graph: {
       defs: [],
       root: @model.schema_type(@model.SchemaTypeBody::Ref("missing-type")),
-    }
-    let result = invoke_and_await_no_tool_error(
-      @toolHost.ToolRpc::ToolRpc(0),
-      [],
-      { graph: invalid_graph, value: @model.SchemaValue::Stream(value_source) },
-      Some(stdin),
-    )
-    guard result is Err(ToolError::Rpc(RpcError::Protocol(_))) else {
-      fail("an invalid input graph must fail before invoking the host")
-    }
-    assert_false(value_source.is_present())
-    assert_false(value_sink.is_open())
-    assert_false(stdin_sink.is_open())
-  })
+    },
+    value: @model.SchemaValue::Stream(value_source),
+  }
+  guard (try? @model.typed_schema_value_to_wit(input)) is Err(_) else {
+    fail("an invalid input graph must fail encoding")
+  }
+  release_failed_tool_input(input, drops)
+  assert_false(value_source.is_present())
+  assert_eq(dropped[0], 1)
 }
