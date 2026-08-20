@@ -14,7 +14,8 @@
 
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::concurrent::{
-    CallHandle, NotCancellable, drain_queued_dropped_call_events,
+    CallHandle, Cancellable, DeferredCallReplayOutcome, NotCancellable,
+    drain_queued_dropped_call_events,
 };
 use crate::durable_host::p3::{DurableP3, DurableP3View, run_read_access};
 use crate::durable_host::suspendable_wait::{
@@ -170,18 +171,60 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         store: &Accessor<U, Self>,
         how_long: types::Duration,
     ) -> wasmtime::Result<()> {
-        let recorded_now = run_read_access::<_, _, Ctx, P3MonotonicClockNow, _, _>(
+        let mut handle = CallHandle::<P3MonotonicClockNow, Cancellable>::start_access(
             store,
+            super::durable_worker_ctx::<Ctx, U>,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
-            || async {
-                let nanos = current_monotonic_now::<U, Ctx>(store)?;
-                Ok(HostResponseMonotonicClockTimestamp { nanos })
-            },
         )
-        .await?
-        .nanos;
-        let when = recorded_now.saturating_add(how_long);
+        .await
+        .map_err(wasmtime::Error::from)?;
+
+        let (now, mut delivery) = if !handle.is_live() {
+            match handle
+                .replay_access_deferred(store, super::durable_worker_ctx::<Ctx, U>)
+                .await
+                .map_err(wasmtime::Error::from)?
+            {
+                DeferredCallReplayOutcome::Replayed(response, delivery) => (response, delivery),
+                DeferredCallReplayOutcome::Incomplete(live_handle) => {
+                    handle = live_handle;
+                    let nanos = current_monotonic_now::<U, Ctx>(store)
+                        .map_err(|error| wasmtime::Error::from_anyhow(handle.trap(error)))?;
+                    handle
+                        .complete_access_deferred(
+                            store,
+                            super::durable_worker_ctx::<Ctx, U>,
+                            HostResponseMonotonicClockTimestamp { nanos },
+                            None,
+                        )
+                        .await
+                        .map_err(wasmtime::Error::from)?
+                }
+            }
+        } else {
+            let nanos = current_monotonic_now::<U, Ctx>(store)
+                .map_err(|error| wasmtime::Error::from_anyhow(handle.trap(error)))?;
+            handle
+                .complete_access_deferred(
+                    store,
+                    super::durable_worker_ctx::<Ctx, U>,
+                    HostResponseMonotonicClockTimestamp { nanos },
+                    None,
+                )
+                .await
+                .map_err(wasmtime::Error::from)?
+        };
+        if delivery.is_replay_discarded() {
+            std::future::pending::<()>().await;
+        }
+        delivery
+            .prepare_delivery()
+            .await
+            .map_err(wasmtime::Error::from)?;
+        delivery.delivered();
+
+        let when = now.nanos.saturating_add(how_long);
 
         run_read_access::<_, _, Ctx, P3MonotonicClockWaitFor, _, _>(
             store,
