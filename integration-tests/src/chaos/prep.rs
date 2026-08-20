@@ -27,12 +27,16 @@
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use golem_client::api::RegistryServiceClient;
+use golem_client::api::{RegistryServiceClient, ResourcesClient};
 use golem_common::model::account::{AccountCreation, AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::auth::{TokenCreation, TokenSecret};
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentId, EnvironmentName};
+use golem_common::model::quota::{
+    EnforcementAction, ResourceDefinitionCreation, ResourceLimit, ResourceName, ResourceRateLimit,
+    TimePeriod,
+};
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -45,8 +49,18 @@ use tracing::info;
 /// `Counter`, `EphemeralCounter`, `ScheduleEmitter` and `ScheduleCounter` agent
 /// types the mixed workload drives.
 pub const COUNTERS_WASM: &str = "it_agent_counters_release";
+/// WASM file name of the counters component S5 updates *to*.
+///
+/// Identical to [`COUNTERS_WASM`] apart from `Counter::component_version`, so a
+/// state mismatch after an update can only mean the restart lost something.
+pub const COUNTERS_V2_WASM: &str = "it_agent_counters_v2_release";
+
 /// WASM file name of the Rust promise component.
 pub const PROMISE_WASM: &str = "golem_it_promise_agent_rust_release";
+
+/// Resource the quota stream reserves against. Must match `CHAOS_QUOTA_RESOURCE`
+/// in the counters component — the agent names it when it takes its token.
+pub const QUOTA_RESOURCE: &str = "chaos-quota";
 
 /// Registry name of the counters component.
 pub const COUNTERS_COMPONENT_NAME: &str = "chaos-counters";
@@ -178,6 +192,52 @@ pub async fn run_prep(deps: &BenchmarkTestDependencies) -> anyhow::Result<ChaosP
     user.deploy_environment(counters_env.id)
         .await
         .context("deploying counters environment")?;
+
+    // The quota stream needs a resource to hold a lease against, and the
+    // registry is the only place to declare one: chaos-prep uploads WASM
+    // directly rather than deploying a `golem.yaml`, so the manifest's
+    // `resourceDefaults` never come into play.
+    //
+    // The limit is set far above what the workload can consume on purpose. This
+    // stream exists to keep a *lease* alive — the executor renews it against the
+    // shard-manager every 10s, which is the traffic the partition is meant to
+    // cut. Rate-limiting the workload as well would confound the two: a refused
+    // reservation would no longer distinguish "the lease was lost" from "the
+    // quota was legitimately exhausted".
+    let resources_client = deps
+        .registry_service()
+        .resources_client(&manifest_token)
+        .await;
+    info!("Chaos-prep: declaring quota resource {QUOTA_RESOURCE} on the counters environment");
+    resources_client
+        .create_resource(
+            &counters_env.id.0,
+            &ResourceDefinitionCreation {
+                name: ResourceName(QUOTA_RESOURCE.to_string()),
+                limit: ResourceLimit::Rate(ResourceRateLimit {
+                    value: 1_000_000,
+                    period: TimePeriod::Second,
+                    max: 1_000_000,
+                }),
+                // Reject rather than throttle or terminate: a refused
+                // reservation is an observation the driver can record and carry
+                // on from. Throttling would silently stretch latency instead,
+                // and terminating would take the agent out entirely.
+                enforcement_action: EnforcementAction::Reject,
+                unit: "operation".to_string(),
+                units: "operations".to_string(),
+            },
+        )
+        .await
+        // Name the endpoint. The first failure here was a bare
+        // `Decode("EOF while parsing a value")` from a client pointed at the
+        // wrong base URL, which said nothing about where it had been looking.
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "create_resource({QUOTA_RESOURCE}) on environment {} failed: {e:?}",
+                counters_env.id.0
+            )
+        })?;
 
     let promise_env = create_env(
         &user_client,

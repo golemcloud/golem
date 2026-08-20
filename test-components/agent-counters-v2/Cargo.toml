@@ -1,0 +1,27 @@
+[package]
+name = "it_agent_counters"
+version = "0.0.1"
+ edition = "2024"
+
+# Standalone workspace root: this component is excluded from the golem-oss
+# workspace, and when built nested inside another repo's workspace (e.g. the
+# cloud-perf CI checkout under golem-cloud) cargo would otherwise walk up and
+# attach it to that unrelated workspace. An empty table stops that search.
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = {version = "0.1.89"}
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_load_snapshot", "export_save_snapshot", "export_golem_agentic"] }
+golem-wasi-http = { version = "0.2.0", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ctor = "0.4.3"
+wstd = { version = "=0.6.5", features = ["default", "json"] }

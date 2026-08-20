@@ -95,3 +95,292 @@ scenarios:
     # Bounded so a signal that never arrives aborts with partial artifacts
     # instead of holding the golem-dev maintenance window open.
     signalTimeoutSecs: 1800
+
+  # S8 — executor pod kill with HTTP invocations in flight (GOL-366). Unlike
+  # S12, the driver chooses *which* pod dies: it pins a set of agents to one
+  # executor by shard ownership, verifies the ownership still holds immediately
+  # before injection, and names that pod in `baseline-ready.json`. The workflow
+  # resolves the address to a pod and aims the PodChaos at it by name.
+  - code: S8
+    name: http-in-flight-executor-crash
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # Still `one` pod, but not an arbitrary one: the workflow narrows the
+      # selector to the pod the driver named. `one` remains as the belt-and-
+      # braces bound in case that narrowing ever matches more than expected.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Shorter than S12's: there is no rate to warm up to, only residency of a
+      # fixed set of agents, and the workload holds a constant 50 operations in
+      # flight from the first second.
+      baselineSecs: 180
+      faultSecs: 120
+      # Long enough for shard reassignment plus several whole operations, so
+      # every key gets a chance to reach a result before the account is taken.
+      recoverySecs: 300
+
+    pinned:
+      # 50 agents, so 50 operations in flight at every instant. Agent count and
+      # concurrency are the same number here by construction: each agent holds
+      # exactly one operation at a time, which is what makes "how many were in
+      # flight when the pod died" a known constant rather than a sample.
+      agents: 50
+      # Each operation sleeps this long server-side before incrementing. It has
+      # to comfortably exceed the workflow's inject-and-verify path — signal
+      # poll (5s) + `kubectl apply` + waiting for `AllInjected` — or the kill
+      # would land between operations and the scenario would measure nothing.
+      operationMillis: 30000
+      # Ownership is a hash, so a given executor owns roughly its share of any
+      # candidate pool. Scanning 8x the needed count leaves room for an uneven
+      # split on a two-executor topology without an unbounded search.
+      candidatePoolMultiplier: 8
+
+    retryPolicy:
+      # Identical to S12's and load-bearing for the same reason, but here it
+      # feeds an exact per-key check rather than aggregate arithmetic: the one
+      # permitted retry goes out under the original key, so a second execution
+      # shows up as two distinct successful counter values on one key.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S1 — shard-manager / executor network partition (GOL-364). Nothing crashes
+  # and nothing restarts: only the link between the shard-manager and half the
+  # executors is cut, so both sides keep serving while each believes its own
+  # view is current. The question is what they agree on once they can talk
+  # again, and the answer has to be "no shard has two owners".
+  #
+  # This is the first scenario whose fault is NOT a PodChaos. NetworkChaos is a
+  # separate grant in the bench runner's Kubernetes Role — see the S1 runbook.
+  - code: S1
+    name: shard-manager-executor-partition
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: shard-manager
+      # Selected by label, not by name: unlike S8 the claim is about *any*
+      # partition healing cleanly, so which executors land on the far side
+      # carries no information the run depends on.
+      mode: all
+      # How many executors to cut off. Half of the two-executor topology, which
+      # is what makes this a partition rather than a shard-manager outage: the
+      # executors that stay connected keep getting told the truth, and the
+      # disagreement between the two groups is the whole experiment.
+      targetCount: 1
+      durationSecs: 120
+
+    phases:
+      baselineSecs: 300
+      # Long enough for the shard-manager to notice the cut-off executors miss
+      # their health checks and start reassigning their shards. Reassigning is
+      # what creates the opportunity for overlap: the partitioned executor has
+      # not been told to stop serving them.
+      faultSecs: 180
+      # Covers the ownership settle window below plus time for in-flight and
+      # scheduled work to drain before read-back.
+      recoverySecs: 420
+
+    # Second traffic generator: the executor scale schedule.
+    #
+    # The quota stream above covers executor → shard-manager. This covers the
+    # other direction — removing an executor forces a revoke and reassign,
+    # adding one back forces a register and rebalance, and all of those are
+    # shard-manager → executor calls the partition can block.
+    #
+    # Down and back up, not up and down. An executor requests 13Gi against
+    # 16 GiB nodes, so exactly one fits per node, and the worker-exec nodegroup
+    # is pinned at two with no autoscaler: a third replica would sit Pending for
+    # the whole run and generate no traffic at all. Scaling down to one and back
+    # exercises the same code paths within the capacity that exists.
+    #
+    # This schedule depends on an interim cluster setting. Until 2026-08-18 it
+    # could not pass: a scale-up under load strands shards, because the executor
+    # commits a revoke and only then drains its workers, the shard-manager times
+    # out and puts the shards back in its routing table, and nothing reconciles
+    # the two. One run left 460 of 1024 shards unserved for 43 minutes.
+    #
+    # golem-dev now runs GOLEM__WORKER_EXECUTORS__REVOKE_SHARDS_TIMEOUT=60s
+    # (was 5s), matching the assign leg. That is a mitigation, not a fix — the
+    # drain is unbounded, so a large enough working set still outruns any
+    # timeout. Keeping this schedule here is deliberate: it is what tells us
+    # whether the mitigation holds, and it is expected to fail again if the
+    # setting is reverted or the workload grows. The design fix is tracked on
+    # the "Replace Shard Manager" project.
+    scaleDuringFault:
+      steps:
+        # A quarter in, so the partition is established first.
+        - afterFraction: 0.25
+          toReplicas: 1
+        # Two thirds in, leaving the rest of the window plus the settle window
+        # for the restored executor to register and be rebalanced onto.
+        - afterFraction: 0.65
+          toReplicas: 2
+
+    ownership:
+      # The load-bearing number of this scenario. After the partition heals the
+      # cluster rebalances, and during a rebalance transient disagreement is
+      # normal — sampling too early would measure that instead of the state the
+      # cluster settled into. Comfortably longer than one shard-manager health
+      # check cycle plus a re-registration round trip.
+      settleSecs: 120
+
+    workload:
+      # The mixed workload S12 runs, plus the stream that makes this scenario
+      # mean anything.
+      #
+      # `quotaAgents` is the load-bearing one. Every other stream goes client →
+      # worker-service → executor and never touches the shard-manager, so a
+      # shard-manager partition is invisible to it — the first three S1 runs
+      # measured exactly zero degradation for that reason. A quota agent holds a
+      # token for its lifetime, which keeps the executor renewing a lease
+      # against the shard-manager every 10s against a 60s expiry, and that is
+      # the traffic the partition cuts.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 50
+      promiseAgents: 50
+      quotaAgents: 50
+      ratePerSec: 100
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S5 — executor pod kill during an automatic component update (GOL-365).
+  #
+  # Agents run on the counters component, the scenario updates that component to
+  # a second build, asks every durable agent to move to it, and kills an
+  # executor while those updates are in flight. Every affected agent has to come
+  # back on the new build with its state intact.
+  #
+  # The update target is `agent-counters-v2`, which is `agent-counters` with
+  # `Counter::component_version` returning 2 instead of 1 and nothing else
+  # changed. If the builds behaved differently, a state mismatch after the kill
+  # would be ambiguous between "the restart lost it" and "the builds disagree" —
+  # and telling those apart is the whole job.
+  - code: S5
+    name: executor-restart-during-update
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # `one` plus the namespace and opt-in label selectors in podchaos-s5.yaml
+      # are what bound the blast radius. Unlike S8 the driver does not name the
+      # pod: agents are mid-update across both executors, so either one
+      # interrupts updates in flight and which one carries no information.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Long enough for cold starts and route warm-up to settle, so the update
+      # is applied to a population that is running rather than still arriving.
+      baselineSecs: 300
+      # Covers the kill, the reschedule, and the updates finishing on both the
+      # surviving executor and the replacement.
+      faultSecs: 120
+      # Updates continue after the kill and agents have to converge before
+      # read-back compares their state.
+      recoverySecs: 300
+
+    workload:
+      # Durable agents are the population being updated, so the pool is large:
+      # a divergence localises to one agent out of 200 rather than a haystack.
+      durableAgents: 200
+      # Ephemeral agents are not updated — they exist to show whether
+      # acceptance degraded during the kill, separately from the update.
+      ephemeralAgents: 50
+      # Scheduled agents keep durable state that the update does not touch, so
+      # they are the control: their read-back should be unaffected.
+      scheduledAgents: 50
+      promiseAgents: 0
+      # No quota stream. S5 has nothing to do with the shard-manager link, and
+      # a lease that cannot be renewed would add a second failure mode to a
+      # scenario that already has one.
+      quotaAgents: 0
+      ratePerSec: 100
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # S13 — rolling executor restarts under load (GOL-367).
+  #
+  # One executor killed every 60 seconds for five minutes while the mixed
+  # workload runs. Nothing is partitioned and nothing is updated: the question
+  # is only whether five rebalances in a row compose the way one does.
+  #
+  # The cadence is deliberately close to how long a rebalance takes. Spacing the
+  # kills far enough apart to guarantee quiet between them would turn S13 into
+  # S8 five times over, which tests nothing new.
+  - code: S13
+    name: rolling-executor-restarts
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      mode: one
+      # Each individual kill. The schedule below is what makes this rolling.
+      durationSecs: 30
+
+    rollingRestarts:
+      # Five kills, 60s apart, is the five-minute window from the spec. The
+      # workflow performs them and records each one in executor-restarts.json;
+      # the driver reads that back rather than inferring restarts from the
+      # routing table, which cannot distinguish a kill from a rebalance.
+      intervalSecs: 60
+      count: 5
+
+    phases:
+      baselineSecs: 300
+      # Long enough to cover five kills 60s apart plus the last reschedule.
+      faultSecs: 360
+      # Cumulative damage is the thing S13 looks for, so the cluster gets a
+      # generous window to converge before read-back decides whether it did.
+      recoverySecs: 420
+
+    workload:
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 50
+      promiseAgents: 50
+      # Quota agents are here because executor churn is exactly what starves
+      # them. An executor that has just started holds no allocation, and the
+      # shard-manager cannot give it one while an existing executor is sitting
+      # on the pool: it divides by the executors that already hold leases, so
+      # whoever asked first holds everything until its own lease renews. That
+      # renewal is up to 40s away (60s lease, 20s threshold).
+      #
+      # S13 restarts an executor every 60s. So it puts a fresh, zero-allocation
+      # executor next to a lease-holding one, five times in a row, which is the
+      # sharpest test of that behaviour the suite can run. Agents starved this
+      # way do not fail: they wait with no error and no estimate, so without
+      # this stream the run would look clean.
+      quotaAgents: 50
+      # The project caps this at 25% of measured per-pod capacity so the run
+      # measures recovery rather than saturation. Restarting an executor
+      # removes half the capacity for as long as the reschedule takes, so a
+      # rate that is comfortable at two executors has to stay survivable at one.
+      ratePerSec: 100
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

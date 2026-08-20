@@ -20,7 +20,7 @@ use super::component_compilation_service::ComponentCompilationService;
 use super::rdb::Rdb;
 use super::{EnvVarBuilder, wait_for_startup_grpc, wait_for_startup_http};
 use async_trait::async_trait;
-use golem_client::api::RegistryServiceClientLive;
+use golem_client::api::{RegistryServiceClientLive, ResourcesClientLive};
 use golem_client::{Context, Security};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenSecret;
@@ -57,14 +57,34 @@ pub trait RegistryService: Send + Sync {
 
     async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware;
 
-    async fn client(&self, token: &TokenSecret) -> RegistryServiceClientLive {
+    /// How to reach the registry service, for every generated client.
+    ///
+    /// **This is the override point, not the individual client constructors.**
+    /// Cloud mode reaches the registry through an HTTPS gateway, so the
+    /// `http://host:port` form below is wrong there — and an implementation
+    /// that overrode only `client()` would leave every other client silently
+    /// pointing at a URL that answers with an empty body. Overriding the
+    /// context fixes all of them at once.
+    async fn client_context(&self, token: &TokenSecret) -> Context {
         let url = format!("http://{}:{}", self.http_host(), self.http_port());
+        Context {
+            client: self.base_http_client().await,
+            base_url: Url::parse(&url).expect("Failed to parse url"),
+            security_token: Security::Bearer(token.secret().to_string()),
+        }
+    }
+
+    async fn client(&self, token: &TokenSecret) -> RegistryServiceClientLive {
         RegistryServiceClientLive {
-            context: Context {
-                client: self.base_http_client().await,
-                base_url: Url::parse(&url).expect("Failed to parse url"),
-                security_token: Security::Bearer(token.secret().to_string()),
-            },
+            context: self.client_context(token).await,
+        }
+    }
+
+    /// Client for the quota-resource API, which the registry service also
+    /// serves.
+    async fn resources_client(&self, token: &TokenSecret) -> ResourcesClientLive {
+        ResourcesClientLive {
+            context: self.client_context(token).await,
         }
     }
 }

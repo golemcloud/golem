@@ -164,7 +164,7 @@ impl Counter for CounterImpl {
     }
 
     fn component_version(&self) -> u32 {
-        1
+        2
     }
 
     fn sleep_and_increment(&mut self, millis: u32) -> u32 {
