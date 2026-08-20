@@ -329,6 +329,13 @@ impl<T: Clone> GrpcClient<T> {
             .connect(self.endpoint.clone(), &self.config)
             .await?;
 
+        // Retired in the moment between being established and being installed
+        // here. Caching it would hand every later caller a connection that fails
+        // the instant it is used, until one of them retires it again.
+        if connected.retired.is_cancelled() {
+            return Err(Status::unavailable("connection retired before it was used"));
+        }
+
         let mut entry = self.client.lock().await;
         if let Some(connection) = &*entry {
             return Ok(connection.clone());
@@ -470,6 +477,13 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             .connections
             .connect(endpoint.clone(), &self.config)
             .await?;
+
+        // Retired in the moment between being established and being installed
+        // here. Caching it would hand every later caller a connection that fails
+        // the instant it is used, until one of them retires it again.
+        if connected.retired.is_cancelled() {
+            return Err(Status::unavailable("connection retired before it was used"));
+        }
 
         match self.clients.entry_async(endpoint).await {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
