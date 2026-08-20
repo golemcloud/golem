@@ -214,7 +214,6 @@ impl Connections {
         let endpoint = build_endpoint(target.clone(), config)
             .map_err(|err| Status::from_error(Box::new(err)))?;
 
-        let mut started = None;
         let attempt = match self.by_target.entry_async(target.clone()).await {
             Entry::Occupied(mut entry) => match entry.get().peek() {
                 // Already connected. This is the reuse path.
@@ -229,26 +228,26 @@ impl Connections {
                 Some(_) => {
                     let attempt = connect_shared(endpoint, config.connect_timeout);
                     *entry.get_mut() = attempt.clone();
-                    started = Some(attempt.clone());
+                    self.drive(target.clone(), attempt.clone());
                     attempt
                 }
             },
             Entry::Vacant(entry) => {
                 let attempt = connect_shared(endpoint, config.connect_timeout);
                 entry.insert_entry(attempt.clone());
-                started = Some(attempt.clone());
+                self.drive(target.clone(), attempt.clone());
                 attempt
             }
         };
-        if let Some(attempt) = started {
-            self.drive(target, attempt);
-        }
 
         attempt.await
     }
 
     /// Drives an attempt to completion independently of its callers, and clears
-    /// it if it failed.
+    /// it if it failed. Called wherever an attempt is created, while the entry
+    /// holding it is still locked, so that no arm can create one and leave it
+    /// with nobody to finish it. Only spawning happens here, so holding the
+    /// entry across it costs nothing.
     ///
     /// Callers go away all the time: an upstream timeout, a dropped client. An
     /// attempt driven only by its waiters would, on losing the last of them, sit
