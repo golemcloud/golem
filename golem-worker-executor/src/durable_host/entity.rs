@@ -43,7 +43,7 @@ use std::sync::Arc;
 use wasmtime::component::{Accessor, HasData};
 
 pub enum EntityInvocationDurabilityOutcome {
-    Completed(HostResponseEntityInvocation),
+    Completed(Box<HostResponseEntityInvocation>),
     Cancelled,
 }
 
@@ -203,7 +203,9 @@ impl EntityInvocationDurability {
                 .complete_access(store, get_ctx, response)
                 .await
                 .map_err(|error| error.source)?;
-            return Ok(EntityInvocationDurabilityOutcome::Completed(response));
+            return Ok(EntityInvocationDurabilityOutcome::Completed(Box::new(
+                response,
+            )));
         }
 
         let replay = async {
@@ -244,9 +246,9 @@ impl EntityInvocationDurability {
             EntityReconstructionOutcome::Cancelled => {
                 Ok(EntityInvocationDurabilityOutcome::Cancelled)
             }
-            EntityReconstructionOutcome::Replayed(recorded) => {
-                Ok(EntityInvocationDurabilityOutcome::Completed(recorded))
-            }
+            EntityReconstructionOutcome::Replayed(recorded) => Ok(
+                EntityInvocationDurabilityOutcome::Completed(Box::new(recorded)),
+            ),
             EntityReconstructionOutcome::Incomplete {
                 response,
                 handle: live_handle,
@@ -255,7 +257,9 @@ impl EntityInvocationDurability {
                     .complete_access(store, get_ctx, response)
                     .await
                     .map_err(|error| error.source)?;
-                Ok(EntityInvocationDurabilityOutcome::Completed(response))
+                Ok(EntityInvocationDurabilityOutcome::Completed(Box::new(
+                    response,
+                )))
             }
         }
     }

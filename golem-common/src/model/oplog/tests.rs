@@ -1344,7 +1344,7 @@ mod scope_scan {
 
     #[test]
     fn scope_projection_includes_retried_transaction_begin_marker() {
-        let entries = vec![
+        let entries = [
             (
                 10,
                 start(None, DurableFunctionType::WriteRemoteTransaction(None)),
@@ -1388,7 +1388,7 @@ mod scope_scan {
 
     #[test]
     fn scope_projection_excludes_adjacent_foreign_retried_transaction_begin_marker() {
-        let entries = vec![
+        let entries = [
             (10, start(None, DurableFunctionType::WriteLocal)),
             (
                 11,

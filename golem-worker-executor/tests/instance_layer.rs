@@ -374,7 +374,10 @@ fn activation_with_policy(
     EntityActivation::new(
         executable,
         deployment_revision,
-        EntityActivationPolicy::Tool { provision, binding },
+        EntityActivationPolicy::Tool {
+            provision,
+            binding: Box::new(binding),
+        },
         filesystem,
     )
     .unwrap()

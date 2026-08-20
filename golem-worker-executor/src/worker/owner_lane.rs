@@ -416,19 +416,17 @@ impl OwnerLaneInner {
     ) -> Option<LaneCompletionWait> {
         let wait = {
             let mut state = self.state.lock().unwrap();
-            let Some(completed) = state.invocations.remove(invocation) else {
-                return None;
-            };
+            let completed = state.invocations.remove(invocation)?;
 
             let pending_capable_children = state
                 .invocations
                 .iter()
-                .filter_map(|(id, child)| {
-                    (child.parent.as_ref() == Some(invocation)
+                .filter(|&(_id, child)| {
+                    child.parent.as_ref() == Some(invocation)
                         && child.filesystem == FilesystemCapability::Capable
-                        && !child.running)
-                        .then(|| id.clone())
+                        && !child.running
                 })
+                .map(|(id, _child)| id.clone())
                 .collect::<BTreeSet<_>>();
             for child in state.invocations.values_mut() {
                 if child.parent.as_ref() == Some(invocation) {
@@ -562,9 +560,7 @@ impl OwnerLaneWait {
 impl OwnerLaneState {
     fn next_capable_candidate(&self) -> Option<OwnerInvocationId> {
         let candidates = if let Some(holder) = &self.holder {
-            let Some(holder_state) = self.invocations.get(holder) else {
-                return None;
-            };
+            let holder_state = self.invocations.get(holder)?;
             if holder_state.blocked_on.is_empty() {
                 return None;
             }

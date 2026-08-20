@@ -192,7 +192,7 @@ impl ToolActivationSnapshot {
             self.registered_tool.deployment_revision,
             EntityActivationPolicy::Tool {
                 provision: self.registered_tool.provision,
-                binding: self.binding,
+                binding: Box::new(self.binding),
             },
             self.filesystem,
         )

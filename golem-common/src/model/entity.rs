@@ -233,7 +233,7 @@ pub enum FilesystemCapability {
 pub enum EntityActivationPolicy {
     Tool {
         provision: ToolProvisionConfig,
-        binding: CompiledToolBinding,
+        binding: Box<CompiledToolBinding>,
     },
     ToolMiddleware {
         middleware_name: ToolMiddlewareName,
@@ -801,7 +801,7 @@ impl From<EntityActivationPolicy> for golem_api_grpc::proto::golem::worker::Enti
             EntityActivationPolicy::Tool { provision, binding } => Value::Tool(
                 golem_api_grpc::proto::golem::worker::ToolEntityActivationPolicy {
                     provision: Some(provision.into()),
-                    binding: Some(binding.into()),
+                    binding: Some((*binding).into()),
                 },
             ),
             EntityActivationPolicy::ToolMiddleware {
@@ -843,10 +843,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EntityActivationPolicy>
                     .provision
                     .ok_or("Missing ToolEntityActivationPolicy.provision")?
                     .try_into()?,
-                binding: tool
-                    .binding
-                    .ok_or("Missing ToolEntityActivationPolicy.binding")?
-                    .try_into()?,
+                binding: Box::new(
+                    tool.binding
+                        .ok_or("Missing ToolEntityActivationPolicy.binding")?
+                        .try_into()?,
+                ),
             }),
             Value::ToolMiddleware(middleware) => Ok(Self::ToolMiddleware {
                 middleware_name: ToolMiddlewareName::try_from(middleware.middleware_name)?,
@@ -1074,7 +1075,7 @@ mod tests {
             deployment_revision,
             EntityActivationPolicy::Tool {
                 provision: ToolProvisionConfig::default(),
-                binding,
+                binding: Box::new(binding),
             },
             FilesystemCapability::Incapable,
         )

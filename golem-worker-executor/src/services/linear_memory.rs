@@ -566,7 +566,7 @@ mod tests {
                 .await
                 .unwrap();
             tracker.retain_growth_grant(grant);
-            assert_eq!(tracker.grow((desired - current) as u64, now).1, false);
+            assert!(!tracker.grow((desired - current) as u64, now).1);
         }
 
         assert_eq!(tracker.current_bytes(), 60);
