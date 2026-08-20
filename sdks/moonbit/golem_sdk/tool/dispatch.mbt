@@ -4,30 +4,54 @@ pub fn decode_invocation_input(
   arity : Int,
   context : String,
 ) -> Array[@model.SchemaValue] raise @toolCommon.ToolError {
-  let typed = @model.typed_schema_value_from_wit(input) catch {
+  decode_invocation_input_with_resource_drops(
+    input,
+    arity,
+    context,
+    @model_host.resource_drops(),
+  )
+}
+
+///|
+fn decode_invocation_input_with_resource_drops(
+  input : @types.TypedSchemaValue,
+  arity : Int,
+  context : String,
+  drops : @model.SchemaValueResourceDrops,
+) -> Array[@model.SchemaValue] raise @toolCommon.ToolError {
+  let typed = @model.typed_schema_value_from_wit(input, drops) catch {
     e =>
       raise @toolCommon.ToolError::InvalidInput(
         "\{context}: invalid typed schema value input: \{e}",
       )
   }
-  validate_invocation_input_graph(typed.graph, arity, context)
-  if !value_matches_type(typed.graph, typed.graph.root, typed.value) {
-    raise @toolCommon.ToolError::InvalidInput(
-      "\{context}: input value does not match input schema graph",
-    )
-  }
-  let fields = @schema.expect_record(typed.value, context) catch {
-    e =>
+  try {
+    validate_invocation_input_graph(typed.graph, arity, context)
+    if !value_matches_type(typed.graph, typed.graph.root, typed.value) {
       raise @toolCommon.ToolError::InvalidInput(
-        "\{context}: expected a record input: \{e}",
+        "\{context}: input value does not match input schema graph",
       )
+    }
+    let fields = @schema.expect_record(typed.value, context) catch {
+      e =>
+        raise @toolCommon.ToolError::InvalidInput(
+          "\{context}: expected a record input: \{e}",
+        )
+    }
+    guard fields.length() == arity else {
+      raise @toolCommon.ToolError::InvalidInput(
+        "\{context}: expected \{arity} parameter(s), got \{fields.length()}",
+      )
+    }
+    fields
+  } catch {
+    error => {
+      typed.value.release_resources(drops)
+      raise error
+    }
+  } noraise {
+    fields => fields
   }
-  guard fields.length() == arity else {
-    raise @toolCommon.ToolError::InvalidInput(
-      "\{context}: expected \{arity} parameter(s), got \{fields.length()}",
-    )
-  }
-  fields
 }
 
 ///|
@@ -203,7 +227,7 @@ fn value_matches_type(
     @model.SchemaTypeBody::QuotaToken(_) =>
       value is @model.SchemaValue::QuotaToken(_)
     @model.SchemaTypeBody::Future(_) => false
-    @model.SchemaTypeBody::Stream(_) => false
+    @model.SchemaTypeBody::Stream(_) => value is @model.SchemaValue::Stream(_)
   }
 }
 
@@ -418,17 +442,36 @@ pub fn[T : @schema.FromSchema] decode_param(
   index : Int,
   context : String,
 ) -> T raise @toolCommon.ToolError {
+  decode_param_with_resource_drops(
+    fields,
+    index,
+    context,
+    @model_host.resource_drops(),
+  )
+}
+
+///|
+fn[T : @schema.FromSchema] decode_param_with_resource_drops(
+  fields : Array[@model.SchemaValue],
+  index : Int,
+  context : String,
+  drops : @model.SchemaValueResourceDrops,
+) -> T raise @toolCommon.ToolError {
   let field = @schema.record_field(fields, index, context) catch {
-    e =>
+    e => {
+      @model.SchemaValue::Record(fields).release_resources(drops)
       raise @toolCommon.ToolError::InvalidInput(
         "\{context}: missing parameter \{index}: \{e}",
       )
+    }
   }
   @schema.from_value_as(field) catch {
-    e =>
+    e => {
+      @model.SchemaValue::Record(fields).release_resources(drops)
       raise @toolCommon.ToolError::InvalidInput(
         "\{context}: failed decoding parameter \{index}: \{e}",
       )
+    }
   }
 }
 
@@ -441,14 +484,22 @@ pub fn encode_invocation_input(
 }
 
 ///|
-pub fn[T : @schema.IntoSchema] encode_result_value(
+pub async fn[T : @schema.IntoSchema] encode_result_value(
   value : T,
 ) -> @types.TypedSchemaValue raise @toolCommon.ToolError {
-  @model.typed_schema_value_to_wit(@schema.try_into_typed_schema_value(value)) catch {
-    e =>
+  let typed = @schema.try_into_typed_schema_value(value) catch {
+    error =>
+      raise @toolCommon.ToolError::InvalidResult(
+        "failed building tool result schema: \{error}",
+      )
+  }
+  @model.typed_schema_value_to_wit_async(typed) catch {
+    e => {
+      typed.value.release_resources(@model_host.resource_drops())
       raise @toolCommon.ToolError::InvalidResult(
         "failed serializing tool result: \{e}",
       )
+    }
   }
 }
 
@@ -458,7 +509,7 @@ pub fn invocation_result_empty() -> @toolCommon.InvocationResult {
 }
 
 ///|
-pub fn[T : @schema.IntoSchema] invocation_result_value(
+pub async fn[T : @schema.IntoSchema] invocation_result_value(
   value : T,
 ) -> @toolCommon.InvocationResult raise @toolCommon.ToolError {
   { result: Some(encode_result_value(value)), stdout: None }
@@ -472,9 +523,28 @@ pub fn invocation_result_stdout(
 }
 
 ///|
-pub fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(
+pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(
   value : T,
   stdout : @async-core.Stream[Byte],
 ) -> @toolCommon.InvocationResult raise @toolCommon.ToolError {
-  { result: Some(encode_result_value(value)), stdout: Some(stdout) }
+  { result: Some(encode_result_value(value)), stdout: Some(stdout) } catch {
+    error => {
+      stdout.drop_sync()
+      raise error
+    }
+  }
+}
+
+///|
+pub async fn encode_error_payload(
+  payload : @model.TypedSchemaValue,
+) -> @types.TypedSchemaValue raise @toolCommon.ToolError {
+  @model.typed_schema_value_to_wit_async(payload) catch {
+    error => {
+      payload.value.release_resources(@model_host.resource_drops())
+      raise @toolCommon.ToolError::InvalidResult(
+        "failed serializing custom tool error: \{error}",
+      )
+    }
+  }
 }

@@ -21,6 +21,7 @@ use crate::schema::tool::validation::validate_tool;
 use crate::schema::tool::wit::wire as tool_wire;
 use crate::wasmtime_config::create_wasmtime_config;
 use anyhow::anyhow;
+use golem_schema::schema::SchemaValueStreamHandleRep;
 use golem_schema::schema::wit::{
     QuotaTokenHandleDropper, QuotaTokenHandleRep, SecretHandleDropper, SecretHandleRep,
 };
@@ -530,6 +531,10 @@ fn is_secret_resource(interface_name: &str, resource_name: &str) -> bool {
         )
 }
 
+fn is_schema_value_stream_resource(interface_name: &str, resource_name: &str) -> bool {
+    interface_name == "golem:core/types@2.0.0" && resource_name == "schema-value-stream"
+}
+
 fn dynamic_import(
     name: &str,
     engine: &Engine,
@@ -594,6 +599,12 @@ fn dynamic_import(
                         instance.resource(
                             &inner_name,
                             ResourceType::host::<SecretHandleRep>(),
+                            |_store, _rep| Ok(()),
+                        )?;
+                    } else if is_schema_value_stream_resource(&name, &inner_name) {
+                        instance.resource(
+                            &inner_name,
+                            ResourceType::host::<SchemaValueStreamHandleRep>(),
                             |_store, _rep| Ok(()),
                         )?;
                     } else if &inner_name != "pollable"

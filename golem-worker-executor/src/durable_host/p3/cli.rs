@@ -333,18 +333,26 @@ async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     event: InternalWorkerEvent,
 ) {
-    let (has_oplog_processor, owned_agent_id, public_state, replay_state, oplog, is_live) =
-        accessor.with(|mut access| {
-            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-            (
-                ctx.state.component_metadata.metadata.has_oplog_processor(),
-                ctx.owned_agent_id.clone(),
-                ctx.public_state.clone(),
-                ctx.state.replay_state.clone(),
-                ctx.state.oplog.clone(),
-                ctx.state.is_live(),
-            )
-        });
+    let (
+        has_oplog_processor,
+        owned_agent_id,
+        public_state,
+        replay_state,
+        oplog,
+        is_live,
+        is_unpersisted_execution,
+    ) = accessor.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        (
+            ctx.state.component_metadata.metadata.has_oplog_processor(),
+            ctx.owned_agent_id.clone(),
+            ctx.public_state.clone(),
+            ctx.state.replay_state.clone(),
+            ctx.state.oplog.clone(),
+            ctx.state.is_live(),
+            ctx.is_unpersisted_execution(),
+        )
+    });
 
     logging_policy::emit_log_event_with_state::<Ctx>(
         event,
@@ -354,6 +362,7 @@ async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
         &replay_state,
         &oplog,
         is_live,
+        is_unpersisted_execution,
     )
     .await;
 }

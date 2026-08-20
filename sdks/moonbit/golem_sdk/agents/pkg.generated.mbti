@@ -10,17 +10,19 @@ import {
 }
 
 // Values
-pub fn construct_and_set_instance(String, @types.SchemaValueTree, @common.Principal) -> Result[Unit, @common.AgentError]
+pub async fn construct_and_set_instance(String, @types.SchemaValueTree, @common.Principal) -> Result[Unit, @common.AgentError]
 
-pub fn decode_invocation_input(@types.SchemaValueTree, Int, String) -> Array[@schema_model.SchemaValue] raise @common.AgentError
+pub async fn decode_invocation_input(@types.SchemaValueTree, Int, String) -> Array[@schema_model.SchemaValue] raise @common.AgentError
 
-pub fn[T : @schema.FromSchema] decode_output(@types.SchemaValueTree, String) -> T raise @common.AgentError
+pub async fn[T : @schema.FromSchema] decode_output(@types.SchemaValueTree, String) -> T raise @common.AgentError
 
 pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int, String) -> T raise @common.AgentError
 
 pub fn encode_invocation_input(Array[@schema_model.SchemaValue]) -> @types.SchemaValueTree raise @common.AgentError
 
-pub fn[T : @schema.IntoSchema] encode_output(T) -> @types.SchemaValueTree raise @common.AgentError
+pub async fn encode_invocation_input_async(Array[@schema_model.SchemaValue]) -> @types.SchemaValueTree raise @common.AgentError
+
+pub async fn[T : @schema.IntoSchema] encode_output(T) -> @types.SchemaValueTree raise @common.AgentError
 
 pub fn get_agent_instance() -> AgentInstance?
 
@@ -113,7 +115,7 @@ pub(all) enum InputParamSource {
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
-  construct : (@types.SchemaValueTree, @common.Principal) -> Result[ConstructedAgent, @common.AgentError]
+  construct : async (@types.SchemaValueTree, @common.Principal) -> Result[ConstructedAgent, @common.AgentError]
 }
 
 pub(all) enum SnapshotFormat {

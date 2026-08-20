@@ -322,7 +322,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn get_oplog_index(&mut self) -> anyhow::Result<golem_api_1_x::oplog::OplogIndex> {
         self.observe_function_call("golem::api", "get_oplog_index");
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             Ok(self.state.current_oplog_index().await.into())
         } else if self.state.is_live() {
             // Use the index returned by `add` — a concurrently running host task (a durable
@@ -362,7 +362,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         oplog_idx: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "set_oplog_index");
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             return Ok(());
         }
         if self.state.is_live() {
@@ -445,7 +445,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn mark_begin_operation(&mut self) -> anyhow::Result<golem_api_1_x::host::OplogIndex> {
         self.observe_function_call("golem::api", "mark_begin_operation");
 
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             Ok(self.state.current_oplog_index().await.into())
         } else if self.state.is_live() {
             let next_idempotency_key_oplog_index = self
@@ -532,7 +532,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         begin: golem_api_1_x::oplog::OplogIndex,
     ) -> anyhow::Result<()> {
         self.observe_function_call("golem::api", "mark_end_operation");
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             return Ok(());
         }
         let begin_index = OplogIndex::from_u64(begin);
@@ -1151,10 +1151,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .state
                 .opens_durable_scope(&DurableFunctionType::WriteRemote)
                 .then_some(oplog_index_cut_off);
-            self.public_state
-                .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+            if !self.is_unpersisted_execution() {
+                self.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::Always)
+                    .await;
+            }
 
             let created_by = self.created_by();
             let fork_result = loop {

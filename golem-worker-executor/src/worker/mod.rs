@@ -896,6 +896,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             FinalWorkerState::Unloaded {
                                 startup_failure: None,
                             },
+                            PendingLiveInvocationDisposition::Fail,
                         )
                         .await;
 
@@ -930,8 +931,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.status_flusher.begin_delete().await;
         self.status_checkpointer.begin_delete().await;
         let error = WorkerExecutorError::invalid_request("Worker is being deleted");
-        self.stop_internal(false, Some(error), FinalWorkerState::Deleting)
-            .await;
+        self.stop_internal(
+            false,
+            Some(error),
+            FinalWorkerState::Deleting,
+            PendingLiveInvocationDisposition::Fail,
+        )
+        .await;
         Ok(())
     }
 
@@ -1498,7 +1504,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation: AgentInvocation,
         idempotency_key: IdempotencyKey,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
-        match self.clone().invoke(invocation).await? {
+        let result = self.clone().invoke(invocation).await?;
+        self.await_invocation_result(idempotency_key, result).await
+    }
+
+    pub(crate) async fn await_invocation_result(
+        self: Arc<Self>,
+        idempotency_key: IdempotencyKey,
+        result: ResultOrSubscription,
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        match result {
             ResultOrSubscription::Finished(Ok(output)) => Ok(output),
             ResultOrSubscription::Finished(Err(err)) => Err(err),
             ResultOrSubscription::Pending(subscription) => {
@@ -2033,6 +2048,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     FinalWorkerState::Unloaded {
                         startup_failure: None,
                     },
+                    PendingLiveInvocationDisposition::Fail,
                 )
                 .await;
             drop(instance_guard);
@@ -2179,11 +2195,38 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    /// Acquire storage semaphore permits for a write operation.
-    /// Called from `DurableWorkerCtx::acquire_filesystem_space` in live mode only.
+    /// Acquire temporary storage semaphore permits for an unpersisted execution.
+    /// Called from the durable host in live mode only.
     /// Returns `NodeOutOfFilesystemStorage` if the executor pool is exhausted.
     ///
     /// Should only be called from the invocation loop.
+    pub async fn acquire_unpersisted_filesystem_storage_space(
+        &self,
+        new_bytes: u64,
+    ) -> anyhow::Result<Option<FilesystemStoragePermit>> {
+        if new_bytes == 0 {
+            return Ok(None);
+        }
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(_) => {
+                if let Some(permit) = self
+                    .active_workers()
+                    .try_acquire_filesystem_storage(new_bytes)
+                    .await
+                {
+                    self.desired_extra_filesystem_storage
+                        .store(0, Ordering::Relaxed);
+                    Ok(Some(permit))
+                } else {
+                    self.desired_extra_filesystem_storage
+                        .store(new_bytes, Ordering::Relaxed);
+                    Err(anyhow!(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage))
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
     pub async fn acquire_filesystem_storage_space(&self, new_bytes: u64) -> anyhow::Result<()> {
         match &mut *self.instance.lock().await {
             WorkerInstance::Running(running) => {
@@ -2595,6 +2638,59 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         receiver.await.unwrap()
     }
 
+    /// Runs an awaited agent invocation through the dedicated live-streaming
+    /// path. Unlike normal invocations, this path is intentionally not added to
+    /// the durable queue and never serializes its result into the oplog.
+    pub async fn invoke_live_streaming(
+        self: Arc<Self>,
+        invocation: AgentInvocation,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<golem_common::schema::SchemaValue, WorkerExecutorError> {
+        self.enqueue_live_streaming(invocation, cancellation)
+            .await?
+            .result()
+            .await
+    }
+
+    pub async fn enqueue_live_streaming(
+        self: Arc<Self>,
+        invocation: AgentInvocation,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<LiveStreamingInvocationHandle, WorkerExecutorError> {
+        let instance_guard = self.lock_non_stopping_worker().await;
+        if instance_guard.is_deleting() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot invoke a deleting worker",
+            ));
+        }
+        if let Some(err) = instance_guard.startup_failure() {
+            return Err(err.clone());
+        }
+
+        let (sender, receiver) = oneshot::channel();
+        self.queue
+            .write()
+            .await
+            .push_back(QueuedWorkerInvocation::LiveStreamingInvocation {
+                invocation: Box::new(invocation),
+                sender,
+                cancellation: cancellation.clone(),
+            });
+        if let WorkerInstance::Running(running) = &*instance_guard {
+            running.sender.send(WorkerCommand::WorkAvailable).unwrap();
+        }
+        drop(instance_guard);
+        tokio::spawn(async move {
+            if let Err(error) = Worker::start_if_needed(self).await {
+                tracing::debug!(%error, "Failed to start worker for live streaming invocation");
+            }
+        });
+        Ok(LiveStreamingInvocationHandle {
+            receiver,
+            cancellation: Some(cancellation),
+        })
+    }
+
     /// Appends an oplog entry without forcing a durable commit. Callers that
     /// require ordering must await the append before exposing subsequent work.
     pub async fn add_to_oplog(&self, entry: OplogEntry) -> OplogIndex {
@@ -2925,6 +3021,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         called_from_invocation_loop: bool,
         fail_pending_invocations: Option<WorkerExecutorError>,
         final_state: FinalWorkerState,
+        pending_live_invocations: PendingLiveInvocationDisposition,
     ) {
         let mut instance_guard = self.instance.lock().await;
 
@@ -2934,6 +3031,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 called_from_invocation_loop,
                 fail_pending_invocations,
                 final_state,
+                pending_live_invocations,
             )
             .await;
 
@@ -2950,6 +3048,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // Only respected when this is the call that triggered the stop
         fail_pending_invocations: Option<WorkerExecutorError>,
         final_state: FinalWorkerState,
+        pending_live_invocations: PendingLiveInvocationDisposition,
     ) -> StopResult {
         // Temporarily set the instance to unloaded so we can work with the old value.
         // This is not visible to anyone as long as we are holding the lock.
@@ -2966,6 +3065,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.fail_pending_invocations(error.clone()).await;
                 }
                 **instance_guard = final_state.into_instance();
+                if let WorkerInstance::Unloaded { startup_failure } = &**instance_guard {
+                    self.resolve_pending_queue_on_unload(
+                        startup_failure.as_ref(),
+                        pending_live_invocations,
+                    )
+                    .await;
+                }
                 StopResult::Stopped
             }
             WorkerInstance::WaitingForPermit(_) => {
@@ -2975,8 +3081,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 crate::metrics::workers::dec_worker_waiting_for_memory();
                 **instance_guard = final_state.into_instance();
                 if let WorkerInstance::Unloaded { startup_failure } = &**instance_guard {
-                    self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
-                        .await;
+                    self.resolve_pending_queue_on_unload(
+                        startup_failure.as_ref(),
+                        pending_live_invocations,
+                    )
+                    .await;
                 }
                 StopResult::Stopped
             }
@@ -2990,6 +3099,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 StopResult::Stopped
             }
             WorkerInstance::Stopping(mut stopping) => {
+                if pending_live_invocations == PendingLiveInvocationDisposition::Fail {
+                    stopping.pending_live_invocations = PendingLiveInvocationDisposition::Fail;
+                }
                 // If we're stopping for deletion, upgrade the final state
                 if matches!(final_state, FinalWorkerState::Deleting) {
                     stopping.final_state = FinalWorkerState::Deleting;
@@ -3039,8 +3151,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.release_linear_memory_grant();
                     **instance_guard = final_state.into_instance();
                     if let WorkerInstance::Unloaded { startup_failure } = &**instance_guard {
-                        self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
-                            .await;
+                        self.resolve_pending_queue_on_unload(
+                            startup_failure.as_ref(),
+                            pending_live_invocations,
+                        )
+                        .await;
                     }
                     StopResult::Stopped
                 } else {
@@ -3053,6 +3168,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     **instance_guard = WorkerInstance::Stopping(StoppingWorker {
                         notify: notify.clone(),
                         final_state,
+                        pending_live_invocations,
                     });
                     StopResult::NeedsWaitForLoopExit {
                         run_loop_handle,
@@ -3094,20 +3210,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     instance_guard = self.instance.lock().await;
                 }
 
-                match std::mem::replace(
+                let pending_live_invocations = match std::mem::replace(
                     &mut *instance_guard,
                     WorkerInstance::Unloaded {
                         startup_failure: None,
                     },
                 ) {
                     WorkerInstance::Stopping(stopping) => {
+                        let pending_live_invocations = stopping.pending_live_invocations;
                         *instance_guard = stopping.final_state.into_instance();
+                        pending_live_invocations
                     }
                     other => panic!("expected Stopping, got {other:?}"),
-                }
+                };
                 if let WorkerInstance::Unloaded { startup_failure } = &*instance_guard {
-                    self.resolve_pending_readiness_awaiters_on_stop(startup_failure.as_ref())
-                        .await;
+                    self.resolve_pending_queue_on_unload(
+                        startup_failure.as_ref(),
+                        pending_live_invocations,
+                    )
+                    .await;
                 }
                 drop(instance_guard);
 
@@ -3121,6 +3242,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// worker suspends itself mid-invocation, as debugging workers do as soon as their replay
     /// goes live. Waiters observe the startup failure if there is one, otherwise a successful
     /// stop. All other queued items are kept for the next start.
+    async fn resolve_pending_queue_on_unload(
+        &self,
+        startup_failure: Option<&WorkerExecutorError>,
+        pending_live_invocations: PendingLiveInvocationDisposition,
+    ) {
+        self.resolve_pending_readiness_awaiters_on_stop(startup_failure)
+            .await;
+        if pending_live_invocations == PendingLiveInvocationDisposition::Fail {
+            self.fail_pending_live_streaming_invocations_on_stop(startup_failure)
+                .await;
+        }
+    }
+
     async fn resolve_pending_readiness_awaiters_on_stop(
         &self,
         startup_failure: Option<&WorkerExecutorError>,
@@ -3140,6 +3274,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    async fn fail_pending_live_streaming_invocations_on_stop(
+        &self,
+        startup_failure: Option<&WorkerExecutorError>,
+    ) {
+        let error = startup_failure.cloned().unwrap_or_else(|| {
+            WorkerExecutorError::runtime(
+                "worker stopped before processing the live streaming invocation",
+            )
+        });
+        let mut queue = self.queue.write().await;
+        fail_live_streaming_queue_entries(&mut queue, &error);
+    }
+
     async fn fail_pending_invocations(&self, error: WorkerExecutorError) {
         let queued_items = self.queue.write().await.drain(..).collect::<VecDeque<_>>();
         let mut origins = self.external_invocation_origins.write().await;
@@ -3157,6 +3304,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     let _ = sender.send(Err(error.clone()));
                 }
                 QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
+                    let _ = sender.send(Err(error.clone()));
+                }
+                QueuedWorkerInvocation::LiveStreamingInvocation { sender, .. } => {
                     let _ = sender.send(Err(error.clone()));
                 }
                 QueuedWorkerInvocation::SaveSnapshot => {}
@@ -3218,6 +3368,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 FinalWorkerState::Unloaded {
                     startup_failure: None,
                 },
+                PendingLiveInvocationDisposition::Fail,
             )
             .await;
             let instance_guard = self.instance.lock().await;
@@ -3240,6 +3391,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             FinalWorkerState::Unloaded {
                 startup_failure: None,
             },
+            PendingLiveInvocationDisposition::Preserve,
         )
         .await;
         if let Some(delay) = delay {
@@ -4590,10 +4742,17 @@ impl FinalWorkerState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingLiveInvocationDisposition {
+    Fail,
+    Preserve,
+}
+
 #[derive(Debug)]
 struct StoppingWorker {
     notify: OneShotEvent,
     final_state: FinalWorkerState,
+    pending_live_invocations: PendingLiveInvocationDisposition,
 }
 
 #[derive(Debug, Clone)]
@@ -5045,6 +5204,57 @@ mod tests {
         assert!(terminal(InterruptKind::Interrupt(Timestamp::now_utc())));
         assert!(terminal(InterruptKind::Suspend(Timestamp::now_utc())));
     }
+
+    #[test]
+    async fn terminal_stop_fails_queued_live_invocations_without_dropping_other_work() {
+        let (sender, receiver) = oneshot::channel();
+        let mut queue = VecDeque::from([
+            QueuedWorkerInvocation::LiveStreamingInvocation {
+                invocation: Box::new(AgentInvocation::AgentInitialization {
+                    idempotency_key: IdempotencyKey::fresh(),
+                    input: golem_common::schema::SchemaValue::Record { fields: Vec::new() },
+                    invocation_context: InvocationContextStack::fresh(),
+                    principal: Principal::anonymous(),
+                }),
+                sender,
+                cancellation: tokio_util::sync::CancellationToken::new(),
+            },
+            QueuedWorkerInvocation::SaveSnapshot,
+        ]);
+        let error = WorkerExecutorError::runtime("worker generation stopped");
+
+        fail_live_streaming_queue_entries(&mut queue, &error);
+
+        assert!(matches!(
+            receiver.await,
+            Ok(Err(WorkerExecutorError::Runtime { details, .. }))
+                if details == "worker generation stopped"
+        ));
+        assert!(matches!(
+            queue.pop_front(),
+            Some(QueuedWorkerInvocation::SaveSnapshot)
+        ));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    async fn completed_live_result_is_not_overridden_by_later_worker_state() {
+        let (sender, receiver) = oneshot::channel();
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        sender
+            .send(Ok(golem_common::schema::SchemaValue::U64(42)))
+            .unwrap();
+        let handle = LiveStreamingInvocationHandle {
+            receiver,
+            cancellation: Some(cancellation.clone()),
+        };
+
+        assert_eq!(
+            handle.result().await.unwrap(),
+            golem_common::schema::SchemaValue::U64(42)
+        );
+        assert!(!cancellation.is_cancelled());
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -5192,7 +5402,54 @@ pub enum QueuedWorkerInvocation {
     AwaitReadyToProcessCommands {
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
+    LiveStreamingInvocation {
+        invocation: Box<AgentInvocation>,
+        sender: oneshot::Sender<Result<golem_common::schema::SchemaValue, WorkerExecutorError>>,
+        cancellation: tokio_util::sync::CancellationToken,
+    },
     SaveSnapshot,
+}
+
+fn fail_live_streaming_queue_entries(
+    queue: &mut VecDeque<QueuedWorkerInvocation>,
+    error: &WorkerExecutorError,
+) {
+    let items = queue.drain(..).collect::<Vec<_>>();
+    for item in items {
+        match item {
+            QueuedWorkerInvocation::LiveStreamingInvocation { sender, .. } => {
+                let _ = sender.send(Err(error.clone()));
+            }
+            other => queue.push_back(other),
+        }
+    }
+}
+
+pub struct LiveStreamingInvocationHandle {
+    receiver: oneshot::Receiver<Result<golem_common::schema::SchemaValue, WorkerExecutorError>>,
+    cancellation: Option<tokio_util::sync::CancellationToken>,
+}
+
+impl LiveStreamingInvocationHandle {
+    pub async fn result(
+        mut self,
+    ) -> Result<golem_common::schema::SchemaValue, WorkerExecutorError> {
+        let result = (&mut self.receiver).await.map_err(|_| {
+            WorkerExecutorError::runtime(
+                "live streaming invocation ended before publishing a result",
+            )
+        })?;
+        self.cancellation = None;
+        result
+    }
+}
+
+impl Drop for LiveStreamingInvocationHandle {
+    fn drop(&mut self) {
+        if let Some(cancellation) = self.cancellation.take() {
+            cancellation.cancel();
+        }
+    }
 }
 
 #[allow(clippy::large_enum_variant)]

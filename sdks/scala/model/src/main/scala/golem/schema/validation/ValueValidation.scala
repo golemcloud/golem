@@ -204,6 +204,7 @@ object ValueValidation {
       case (QuantityType(s), QuantityValueNode(q))  => checkQuantity(s, q, p, e)
       case (SecretType(_), SecretValue(_))          => ()
       case (QuotaTokenType(_), QuotaTokenHandle(_)) => ()
+      case (StreamType(_), StreamValue(_))          => ()
       case (RecordType(fs), RecordValue(vs))        =>
         if (fs.length != vs.length) e += RecordArityMismatch(path(p), fs.length, vs.length)
         else fs.zip(vs).foreach { case (f, x) => check(g, f.body, x, p :+ ValuePathSegment.Field(f.name), e) }

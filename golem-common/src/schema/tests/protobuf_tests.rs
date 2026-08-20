@@ -57,7 +57,8 @@ proptest! {
     /// quantity / secret / quota-token).
     #[test]
     fn schema_value_proto_round_trip(value in schema_value_strategy()) {
-        let proto: golem_api_grpc::proto::golem::schema::SchemaValue = value.clone().into();
+        let proto: golem_api_grpc::proto::golem::schema::SchemaValue =
+            value.clone().try_into().expect("encode");
         let back: SchemaValue = proto.try_into().expect("decode");
         prop_assert!(
             schema_values_eq(&value, &back),
@@ -68,7 +69,8 @@ proptest! {
     /// The typed pair (graph + value) round-trips through its protobuf mirror.
     #[test]
     fn typed_schema_value_proto_round_trip(typed in typed_schema_value_strategy()) {
-        let proto: golem_api_grpc::proto::golem::schema::TypedSchemaValue = typed.clone().into();
+        let proto: golem_api_grpc::proto::golem::schema::TypedSchemaValue =
+            typed.clone().try_into().expect("encode");
         let back: TypedSchemaValue = proto.try_into().expect("decode");
         prop_assert_eq!(typed.graph(), back.graph());
         prop_assert!(

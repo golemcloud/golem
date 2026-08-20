@@ -67,7 +67,7 @@ If dependencies are outdated or missing required features, the CLI shows a diff 
 ### TypeScript Dependency Checks
 The CLI inspects the root `package.json` for:
 - **`@golemcloud/golem-ts-sdk`** — must be present with a compatible version
-- **Rollup plugins** (`@rollup/plugin-alias`, `@rollup/plugin-node-resolve`, `@rollup/plugin-typescript`, `@rollup/plugin-commonjs`, `@rollup/plugin-json`) — version compatibility checked
+- **Rollup plugins** (`@rollup/plugin-node-resolve`, `@rollup/plugin-typescript`, `@rollup/plugin-commonjs`, `@rollup/plugin-json`) — version compatibility checked
 - **`typescript`**, **`rollup`**, **`tslib`**, **`@types/node`** — version compatibility checked
 
 The CLI also validates `tsconfig.json` settings:

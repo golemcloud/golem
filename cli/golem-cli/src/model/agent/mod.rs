@@ -15,6 +15,7 @@
 pub mod action_result;
 pub mod extraction;
 pub mod files;
+pub mod invocation_session;
 pub mod oplog;
 pub mod stream;
 

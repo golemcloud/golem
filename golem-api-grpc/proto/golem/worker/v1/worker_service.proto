@@ -18,6 +18,7 @@ import "golem/worker/filesystem.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation.proto";
 import "golem/worker/invocation_context.proto";
+import "golem/worker/invocation_session.proto";
 import "golem/worker/log_event.proto";
 import "golem/worker/oplog_cursor.proto";
 import "golem/worker/public_oplog.proto";
@@ -37,6 +38,9 @@ service WorkerService {
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
   rpc CompletePromise (CompletePromiseRequest) returns (CompletePromiseResponse);
   rpc InvokeAgent (InvokeAgentRequest) returns (InvokeAgentResponse);
+  // Internal executor-routing endpoint. Public clients use the authenticated
+  // agent-session WebSocket and its PublicInvocationRequest envelope.
+  rpc InvokeAgentSession (stream golem.worker.InvocationRequest) returns (stream golem.worker.InvocationResponse);
   rpc CancelInvocation (CancelInvocationRequest) returns (CancelInvocationResponse);
   rpc ProcessOplogEntries (ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
 }

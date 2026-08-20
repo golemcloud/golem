@@ -76,7 +76,7 @@ pub(all) struct ConstructedAgent {
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
-  construct : (@types.SchemaValueTree, @common.Principal) -> Result[
+  construct : async (@types.SchemaValueTree, @common.Principal) -> Result[
     ConstructedAgent,
     @common.AgentError,
   ]
@@ -97,7 +97,7 @@ pub(all) struct AgentInstance {
 ///|
 /// Constructs an agent and sets it as the current instance.
 /// Shared logic used by both `initialize` and snapshot-based `load`.
-pub fn construct_and_set_instance(
+pub async fn construct_and_set_instance(
   agent_type : String,
   input : @types.SchemaValueTree,
   principal : @common.Principal,

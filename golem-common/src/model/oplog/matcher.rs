@@ -783,6 +783,7 @@ impl PublicOplogEntry {
             SchemaValue::QuotaToken(payload) => {
                 Self::string_match(&payload.resource_name, path_stack, query_path, query)
             }
+            SchemaValue::Stream(_) => false,
         }
     }
 }

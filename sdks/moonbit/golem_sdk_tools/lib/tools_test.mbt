@@ -211,12 +211,6 @@ test "strict tool parser diagnostics" {
   )
   inspect(
     parse_error(
-      "#derive.tool\nstruct Bad {}\npub async fn Bad::run() -> Unit { ... }\n",
-    ),
-    content="Async tool command 'Bad::run' is unsupported: the MoonBit WIT export invoker is synchronous and no block_on is available",
-  )
-  inspect(
-    parse_error(
       "#derive.tool\nstruct Bad {}\n#derive.arg(\"missing\", kind=\"flag\")\npub fn Bad::run(ok : Bool) -> Unit {}\n",
     ),
     content="#derive.arg references missing parameter 'missing' on Bad::run",

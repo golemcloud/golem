@@ -143,6 +143,6 @@ fn[Response : @schema.FromSchema] decode_durable_replay(
       "function type differs for '\{function_name}'",
     )
   }
-  let response = @model.typed_schema_value_from_wit(invocation.response)
+  let response = @model_host.typed_schema_value_from_wit(invocation.response)
   @schema.from_value_as(response.value)
 }

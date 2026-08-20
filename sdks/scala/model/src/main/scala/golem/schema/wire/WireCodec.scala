@@ -240,6 +240,7 @@ object SchemaWire {
   private def preflightCapabilityHandles(value: SchemaValue): Unit = {
     val seenSecrets                 = mutable.Set.empty[GuestSecretHandle]
     val seenQuotaTokens             = mutable.Set.empty[GuestQuotaTokenHandle]
+    val seenStreams                 = mutable.Set.empty[Any]
     def visit(v: SchemaValue): Unit = {
       import SchemaValue._
       v match {
@@ -255,6 +256,11 @@ object SchemaWire {
             )
           if (!seenQuotaTokens.add(h))
             throw SchemaEncodeError("the same quota-token handle appeared more than once in one value tree")
+        case StreamValue(h) =>
+          val ownershipKey =
+            h.ownershipKey.getOrElse(throw SchemaEncodeError("schema value stream was already transferred"))
+          if (!seenStreams.add(ownershipKey))
+            throw SchemaEncodeError("the same schema value stream appeared more than once in one value tree")
         case RecordValue(fields)  => fields.foreach(visit)
         case VariantValue(_, p)   => p.foreach(visit)
         case TupleValue(elements) => elements.foreach(visit)
@@ -326,6 +332,7 @@ object SchemaWire {
         case UnionValue(unionTag, body)   => W.UnionValue(WitUnionValuePayload(unionTag, emit(body)))
         case SecretValue(h)               => W.SecretValue(h)
         case QuotaTokenHandle(h)          => W.QuotaTokenHandle(h)
+        case StreamValue(h)               => W.StreamValue(h)
       }
     }
 
@@ -343,6 +350,7 @@ object SchemaWire {
     val liftedHandle  = Array.fill(nodes.length)(false)
     val seenRawSecret = mutable.Set.empty[Any]
     val seenRawQuota  = mutable.Set.empty[Any]
+    val seenRawStream = mutable.Set.empty[Any]
 
     def fromIdx(idx: Int): SchemaValue = {
       if (idx < 0 || idx >= nodes.length)
@@ -367,6 +375,14 @@ object SchemaWire {
           if (!seenRawQuota.add(raw))
             throw SchemaDecodeError(s"quota-token handle resource referenced more than once at index $idx")
           liftedHandle(idx) = true
+        case WitSchemaValueNode.StreamValue(h) =>
+          if (liftedHandle(idx))
+            throw SchemaDecodeError(s"schema value stream node referenced more than once at index $idx")
+          val ownershipKey = h.ownershipKey
+            .getOrElse(throw SchemaDecodeError(s"schema value stream node already consumed at index $idx"))
+          if (!seenRawStream.add(ownershipKey))
+            throw SchemaDecodeError(s"schema value stream resource referenced more than once at index $idx")
+          liftedHandle(idx) = true
         case _ => ()
       }
       onPath(idx) = true
@@ -390,6 +406,9 @@ object SchemaWire {
             h.take()
             if (leftover.isEmpty) leftover = Some(i)
           case WitSchemaValueNode.QuotaTokenHandle(h) if includeLifted || !liftedHandle(i) =>
+            h.take()
+            if (leftover.isEmpty) leftover = Some(i)
+          case WitSchemaValueNode.StreamValue(h) if includeLifted || !liftedHandle(i) =>
             h.take()
             if (leftover.isEmpty) leftover = Some(i)
           case _ => ()
@@ -441,6 +460,7 @@ object SchemaWire {
         case WitSchemaValueNode.UnionValue(p)        => S.UnionValue(p.tag, fromIdx(p.body))
         case WitSchemaValueNode.SecretValue(h)       => S.SecretValue(h)
         case WitSchemaValueNode.QuotaTokenHandle(h)  => S.QuotaTokenHandle(h)
+        case WitSchemaValueNode.StreamValue(h)       => S.StreamValue(h)
       }
     }
 

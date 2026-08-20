@@ -276,7 +276,7 @@ pub(crate) struct OpenCustomInvocationScope {
 #[derive(Debug)]
 pub struct LiveCustomDurableInvocation {
     scope_id: u64,
-    start_index: OplogIndex,
+    start_index: Option<OplogIndex>,
 }
 
 /// Classification of host function failures for semantic retry decisions
@@ -605,6 +605,7 @@ pub enum AsyncRetryDecision {
 pub struct DurableExecutionState {
     pub is_live: bool,
     pub snapshotting_mode: bool,
+    pub is_unpersisted_execution: bool,
     /// Whether the executor assumes idempotence for remote writes.
     pub assume_idempotence: bool,
     /// Maximum delay for in-function retries. Delays exceeding this fall back to trap+replay.
@@ -1308,7 +1309,7 @@ fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
         };
         let resource = access.get().table().push(LiveCustomDurableInvocation {
             scope_id,
-            start_index,
+            start_index: Some(start_index),
         })?;
         access.get().state.custom_invocation_scopes.insert(
             scope_id,
@@ -1338,12 +1339,15 @@ fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
 fn close_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
     access: &mut Access<'_, U, HasSelf<DurableWorkerCtx<Ctx>>>,
     resource: Resource<LiveCustomDurableInvocation>,
-) -> anyhow::Result<OplogIndex> {
+) -> anyhow::Result<Option<OplogIndex>> {
+    let resource_rep = resource.rep();
+    let invocation = access.get().table().delete(resource)?;
+    let Some(start_index) = invocation.start_index else {
+        return Ok(None);
+    };
     let current = access
         .as_context_mut()
         .guest_task_context::<CustomInvocationContext>()?;
-    let resource_rep = resource.rep();
-    let invocation = access.get().table().delete(resource)?;
     let registered = access
         .get()
         .state
@@ -1355,9 +1359,7 @@ fn close_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
                 invocation.scope_id
             )
         })?;
-    if registered.owner_start_index != invocation.start_index
-        || registered.resource_rep != resource_rep
-    {
+    if registered.owner_start_index != start_index || registered.resource_rep != resource_rep {
         return Err(anyhow::anyhow!(
             "custom invocation scope {} has stale attribution",
             invocation.scope_id
@@ -1387,7 +1389,7 @@ fn close_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
             .as_context_mut()
             .set_guest_task_context(Arc::new(next))?;
     }
-    Ok(invocation.start_index)
+    Ok(Some(start_index))
 }
 
 impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocationWithStore<U>
@@ -1397,12 +1399,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
         mut access: Access<'_, U, Self>,
         resource: Resource<LiveCustomDurableInvocation>,
     ) -> anyhow::Result<()> {
-        let start_index = close_live_custom_durable_invocation(&mut access, resource)?;
-        access
-            .get()
-            .state
-            .active_custom_invocations
-            .remove(&start_index);
+        if let Some(start_index) = close_live_custom_durable_invocation(&mut access, resource)? {
+            access
+                .get()
+                .state
+                .active_custom_invocations
+                .remove(&start_index);
+        }
         Ok(())
     }
 
@@ -1412,9 +1415,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
         response: golem_common::schema::wit::wire::TypedSchemaValue,
         forced_commit: bool,
     ) -> anyhow::Result<()> {
-        let (start_index, response, oplog, worker) = accessor.with(|mut access| {
+        let invocation = accessor.with(|mut access| {
             let start_index = close_live_custom_durable_invocation(&mut access, resource)?;
             let ctx = access.get();
+            let Some(start_index) = start_index else {
+                golem_common::schema::wit::decode_typed_rejecting_quota_with(response, ctx)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to decode durable function response schema value: {e}"
+                        )
+                    })?;
+                return Ok::<_, anyhow::Error>(None);
+            };
             let invocation = ctx
                 .state
                 .active_custom_invocations
@@ -1447,8 +1459,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
             })?;
             let oplog = ctx.state.oplog.clone();
             let worker = ctx.public_state.worker();
-            Ok::<_, anyhow::Error>((start_index, response, oplog, worker))
+            Ok::<_, anyhow::Error>(Some((start_index, response, oplog, worker)))
         })?;
+        let Some((start_index, response, oplog, worker)) = invocation else {
+            return Ok(());
+        };
 
         concurrent::drain_dropped_call_events_access(accessor, accessor.getter())
             .await
@@ -1490,6 +1505,34 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
         request: golem_common::schema::wit::wire::TypedSchemaValue,
         function_type: durability::DurableFunctionType,
     ) -> anyhow::Result<durability::CustomDurableInvocation> {
+        let is_unpersisted =
+            accessor.with(|mut access| access.get().state.is_unpersisted_execution());
+        if is_unpersisted {
+            let resource = accessor.with(|mut access| {
+                let ctx = access.get();
+                golem_common::schema::wit::decode_typed_rejecting_quota_with(request, ctx)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to decode durable function request schema value: {e}"
+                        )
+                    })?;
+                let function_type: DurableFunctionType = function_type.into();
+                if is_write_side_effect(&function_type) {
+                    DurableWorkerCtx::check_read_only_allows(
+                        ctx,
+                        "golem::durability::begin-custom-durable-invocation",
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                }
+                let resource = ctx.table().push(LiveCustomDurableInvocation {
+                    scope_id: 0,
+                    start_index: None,
+                })?;
+                Ok::<_, anyhow::Error>(resource)
+            })?;
+            return Ok(durability::CustomDurableInvocation::Live(resource));
+        }
+
         // Capture attribution before the first await. The immutable Arc is the initiation-time
         // snapshot inherited by this host task and its continuations.
         let custom_invocation_context = accessor.guest_task_context::<CustomInvocationContext>()?;
@@ -1799,9 +1842,11 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
     }
 
     fn durable_execution_state(&self) -> DurableExecutionState {
+        let is_unpersisted_execution = self.is_unpersisted_execution();
         DurableExecutionState {
-            is_live: self.state.is_live() || self.state.snapshotting_mode,
+            is_live: self.state.is_live() || self.state.durability_is_suppressed(),
             snapshotting_mode: self.state.snapshotting_mode,
+            is_unpersisted_execution,
             assume_idempotence: self.state.assume_idempotence,
             max_in_function_retry_delay: self.state.config.max_in_function_retry_delay,
         }
@@ -1823,7 +1868,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             return;
         }
 
@@ -1885,7 +1930,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
         self.end_function(function_type, begin_index).await?;
-        if !self.state.snapshotting_mode
+        if !self.state.durability_is_suppressed()
             && (function_type == &DurableFunctionType::WriteRemote
                 || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
                 || matches!(
@@ -2029,6 +2074,10 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             let status = self.execution_status.read().unwrap();
             status.create_await_interrupt_signal()
         };
+        let live_stream_cancellation = self
+            .live_stream_tracker
+            .as_ref()
+            .map(|tracker| tracker.cancellation_token());
         if self
             .state
             .invocation_deadline_exceeded
@@ -2037,6 +2086,9 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 .state
                 .tail_work_deadline_exceeded
                 .load(std::sync::atomic::Ordering::Acquire)
+            || live_stream_cancellation
+                .as_ref()
+                .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
         {
             let status = self.execution_status.read().unwrap();
             if matches!(&*status, ExecutionStatus::Interrupting { .. }) {
@@ -2046,7 +2098,18 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 Timestamp::now_utc(),
             )));
         }
-        interrupt_signal
+        match live_stream_cancellation {
+            Some(cancellation) => Box::pin(async move {
+                tokio::select! {
+                    biased;
+                    interrupt = interrupt_signal => interrupt,
+                    () = cancellation.cancelled() => {
+                        InterruptKind::Interrupt(Timestamp::now_utc())
+                    }
+                }
+            }),
+            None => interrupt_signal,
+        }
     }
 
     fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
@@ -2310,6 +2373,8 @@ pub struct TaskRetryContext<Ctx: WorkerCtx> {
     pub current_retry_policy_state: Option<RetryPolicyState>,
     /// Properties describing the error context (verb, URI, status code, etc.) for predicate evaluation.
     pub retry_properties: RetryProperties,
+    /// Whether retry bookkeeping belongs to an unpersisted execution and must not be recorded.
+    pub is_unpersisted_execution: bool,
     /// Reference to the worker that owns this task.
     pub worker: Arc<crate::worker::Worker<Ctx>>,
 }
@@ -2351,6 +2416,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         DurableExecutionState {
             is_live: true,
             snapshotting_mode: false,
+            is_unpersisted_execution: false,
             assume_idempotence: true,
             max_in_function_retry_delay: self.max_in_function_retry_delay,
         }
@@ -2362,6 +2428,11 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
+        if self.is_unpersisted_execution {
+            self.current_retry_policy_state = retry_policy_state;
+            return;
+        }
+
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
             AgentError::TransientError("in-function retry".to_string()),
@@ -2615,6 +2686,7 @@ mod tests {
             DurableExecutionState {
                 is_live: true,
                 snapshotting_mode: false,
+                is_unpersisted_execution: false,
                 assume_idempotence: self.assume_idempotence,
                 max_in_function_retry_delay: self.max_in_function_retry_delay,
             }

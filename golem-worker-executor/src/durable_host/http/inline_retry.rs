@@ -127,7 +127,9 @@ pub(crate) fn take_http_background_retry_fallback(
 pub enum InlineRetryIneligible {
     /// Worker is in replay mode (not live).
     NotLive,
-    /// Worker is in snapshotting mode.
+    /// Worker is executing host operations without persistence.
+    UnpersistedExecution,
+    /// Worker is executing a snapshot load/save function.
     Snapshotting,
     /// Worker is inside a user-defined atomic region; a failure must escalate
     /// to trap+replay so the whole region re-executes.
@@ -163,6 +165,9 @@ impl From<HttpRetryDisallowedReason> for InlineRetryIneligible {
     fn from(reason: HttpRetryDisallowedReason) -> Self {
         match reason {
             HttpRetryDisallowedReason::NotLive => InlineRetryIneligible::NotLive,
+            HttpRetryDisallowedReason::UnpersistedExecution => {
+                InlineRetryIneligible::UnpersistedExecution
+            }
             HttpRetryDisallowedReason::Snapshotting => InlineRetryIneligible::Snapshotting,
             HttpRetryDisallowedReason::InAtomicRegion => InlineRetryIneligible::InAtomicRegion,
             HttpRetryDisallowedReason::NotIdempotent => InlineRetryIneligible::NotIdempotent,
@@ -696,6 +701,7 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
     agent_type: Option<String>,
     max_delay: Duration,
     begin_index: OplogIndex,
+    is_unpersisted_execution: bool,
 ) -> FutureIncomingResponseHandle {
     // No span: this task waits for the guest to finish its outgoing body, so its
     // duration is decided by guest code rather than by an operation the executor
@@ -749,6 +755,7 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
             max_in_function_retry_delay: max_delay,
             current_retry_policy_state,
             retry_properties: properties.clone(),
+            is_unpersisted_execution,
             worker,
         };
 
@@ -933,6 +940,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     max_delay: Duration,
     begin_index: OplogIndex,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
+    is_unpersisted_execution: bool,
 ) -> FutureIncomingResponseHandle {
     // Capture config fields individually since OutgoingRequestConfig is not Clone
     let use_tls = config.use_tls;
@@ -998,6 +1006,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                         max_in_function_retry_delay: max_delay,
                         current_retry_policy_state,
                         retry_properties,
+                        is_unpersisted_execution,
                         worker,
                     };
 
@@ -1273,6 +1282,7 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 exec_state.max_in_function_retry_delay,
                 request_state.begin_index,
                 ctx.execution_status.clone(),
+                ctx.is_unpersisted_execution(),
             );
             HostFutureIncomingResponse::pending(retry_handle)
         } else {
@@ -1550,7 +1560,7 @@ pub(crate) enum StatusRetryOutcome {
 /// This is invoked from `HostFutureIncomingResponse::get` *after* the response has
 /// arrived (so its status is known) but *before* the response is exposed to guest
 /// code or persisted. Behavior:
-/// - In replay mode, snapshotting mode, or inside an atomic region
+/// - In replay mode, unpersisted execution, snapshotting, or inside an atomic region
 ///   the function is a no-op (`NoRetry`) — by design (atomic-region semantics: skip
 ///   in v1, the user-land throw triggers atomic-region replay).
 /// - Otherwise eligibility is checked using the same rules as
@@ -1821,6 +1831,7 @@ mod tests {
         DurableExecutionState {
             is_live: true,
             snapshotting_mode: false,
+            is_unpersisted_execution: false,
             assume_idempotence: true,
             max_in_function_retry_delay: Duration::from_secs(1),
         }

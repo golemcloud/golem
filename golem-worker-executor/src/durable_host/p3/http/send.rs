@@ -398,7 +398,7 @@ where
     let recording_enabled = store.with(|mut access| {
         !durable_worker_ctx::<Ctx, U>(access.data_mut())
             .state
-            .snapshotting_mode
+            .durability_is_suppressed()
     });
     let converted = match convert_physical_send_request::<Ctx, U>(
         store,
@@ -507,7 +507,9 @@ where
                 if (handle.trap_context().in_atomic_region || handle.is_observational())
                     && store.with(|mut access| {
                         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                        ctx.state.is_live() && !ctx.state.snapshotting_mode
+                        ctx.state.is_live()
+                            && !ctx.is_unpersisted_execution()
+                            && !ctx.state.snapshotting_mode
                     })
                     && matching_status_retry_policy(
                         store,
@@ -1091,6 +1093,9 @@ where
         max_in_function_retry_delay,
         current_retry_policy_state,
         retry_properties,
+        is_unpersisted_execution: store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).is_unpersisted_execution()
+        }),
         worker,
     }
 }

@@ -44,6 +44,7 @@ import type {
 } from 'golem:core/types@2.0.0';
 import { GuestSecretHandle } from './secretHandle';
 import { GuestQuotaTokenHandle } from './quotaTokenHandle';
+import { GuestSchemaValueStreamHandle } from './schemaValueStreamHandle';
 
 export type {
   TypeId,
@@ -432,7 +433,8 @@ export type SchemaValue =
   | { tag: 'secret'; handle: GuestSecretHandle }
   // An opaque, affine owned `quota-token` handle. Carried by ownership; never
   // inspectable or forgeable from a guest. See `GuestQuotaTokenHandle`.
-  | { tag: 'quota-token'; handle: GuestQuotaTokenHandle };
+  | { tag: 'quota-token'; handle: GuestQuotaTokenHandle }
+  | { tag: 'stream'; handle: GuestSchemaValueStreamHandle };
 
 export interface SchemaMapEntry {
   key: SchemaValue;
@@ -501,6 +503,7 @@ export const t = {
   secret: (inner: SchemaType, spec: Omit<SecretSpec, 'inner'> = {}): SchemaType =>
     schemaType({ tag: 'secret', spec, inner }),
   quotaToken: (spec: QuotaTokenSpec): SchemaType => schemaType({ tag: 'quota-token', spec }),
+  stream: (element?: SchemaType): SchemaType => schemaType({ tag: 'stream', element }),
 };
 
 /** Compact constructors for schema field/case helpers. */
@@ -564,6 +567,7 @@ export const v = {
   union: (unionTag: string, body: SchemaValue): SchemaValue => ({ tag: 'union', unionTag, body }),
   secret: (handle: GuestSecretHandle): SchemaValue => ({ tag: 'secret', handle }),
   quotaToken: (handle: GuestQuotaTokenHandle): SchemaValue => ({ tag: 'quota-token', handle }),
+  stream: (handle: GuestSchemaValueStreamHandle): SchemaValue => ({ tag: 'stream', handle }),
 };
 
 /** Clone a schema value without duplicating affine capability handles. */
@@ -644,6 +648,8 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   // two distinct handles would compare equal (both expose no enumerable state).
   if (a instanceof GuestSecretHandle || b instanceof GuestSecretHandle) return false;
   if (a instanceof GuestQuotaTokenHandle || b instanceof GuestQuotaTokenHandle) return false;
+  if (a instanceof GuestSchemaValueStreamHandle || b instanceof GuestSchemaValueStreamHandle)
+    return false;
 
   if (typeof a === 'bigint' || typeof b === 'bigint') return a === b;
 

@@ -28,6 +28,7 @@ fn durable_execution_state() -> DurableExecutionState {
     DurableExecutionState {
         is_live: true,
         snapshotting_mode: false,
+        is_unpersisted_execution: false,
         assume_idempotence: true,
         max_in_function_retry_delay: Duration::from_secs(20),
     }
@@ -172,6 +173,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
     let durable_execution_state = DurableExecutionState {
         is_live: true,
         snapshotting_mode: false,
+        is_unpersisted_execution: false,
         assume_idempotence: false,
         max_in_function_retry_delay: Duration::ZERO,
     };
@@ -216,6 +218,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
     let durable_execution_state = DurableExecutionState {
         is_live: true,
         snapshotting_mode: false,
+        is_unpersisted_execution: false,
         assume_idempotence: false,
         max_in_function_retry_delay: Duration::ZERO,
     };
@@ -1518,6 +1521,7 @@ fn can_reexecute_matches_internal_retry_eligibility() {
             DurableExecutionState {
                 is_live: true,
                 snapshotting_mode: false,
+                is_unpersisted_execution: false,
                 assume_idempotence,
                 max_in_function_retry_delay: Duration::ZERO,
             },

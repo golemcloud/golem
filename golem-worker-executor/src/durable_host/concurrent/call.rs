@@ -118,14 +118,14 @@ pub struct CallHandle<Pair: HostPayloadPair, P: DropPolicy> {
     /// pre-call index and `end_durable_function` only uses it to commit at the right boundary.
     pub(super) begin_index: OplogIndex,
     pub(super) is_live: bool,
-    /// `true` when a `Start` entry was actually appended. It is `false` while snapshotting (where
-    /// nothing is persisted) and for replay handles.
+    /// `true` when a `Start` entry was actually appended. It is `false` during unpersisted
+    /// execution and for replay handles.
     pub(super) persisted: bool,
     /// Tracks the (possibly deferred) blob upload of this call's request payload, started when the
     /// `Start` was reserved. Awaited before the matching `End` / `Cancelled` is appended so an
     /// upload failure surfaces at the call site rather than only at the leaf oplog's commit barrier.
-    /// `PendingUpload::already_durable()` (a no-op) for replay handles, snapshotting, and inline
-    /// requests.
+    /// `PendingUpload::already_durable()` (a no-op) for replay handles, unpersisted execution, and
+    /// inline requests.
     pub(super) request_upload: PendingUpload,
     /// Replay-side resolver receiver; `Some` only for replay handles.
     pub(super) replay: Option<ReplayCallHandle>,
@@ -261,7 +261,7 @@ impl CallExecutionScope {
 /// Builds an *unregistered* atomic-region lease: it preserves the call's initiation-time region
 /// for trap/retry classification (matching the immutable capture used before leases existed) but
 /// is not a member of any region registry, so it never transfers or detaches on region close.
-/// Used for replay and snapshotting handles, which do not participate in the live in-flight
+/// Used for replay and unpersisted handles, which do not participate in the live in-flight
 /// member guard.
 pub(super) fn unregistered_atomic_lease(
     atomic_region: Option<OplogIndex>,
@@ -277,7 +277,7 @@ pub(super) fn unregistered_atomic_lease(
 
 struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
     is_live: bool,
-    snapshotting: bool,
+    unpersisted: bool,
     oplog: Arc<dyn Oplog>,
     public_state: PublicDurableWorkerState<Ctx>,
     replay_state: crate::durable_host::replay_state::ReplayState,
@@ -770,7 +770,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     /// ordering and settlement accounting survive.
     ///
     /// This handoff is only performed once *this* call is a persisted live barrier (never for
-    /// replay or snapshotting handles): until then the prior observer must stay armed so a guest
+    /// replay or unpersisted handles): until then the prior observer must stay armed so a guest
     /// cancellation landing before this call's `Start` still records its `CompletionDiscarded`
     /// marker and parks replay at the prior call.
     ///
@@ -849,13 +849,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             observational_owner,
         };
         let is_live = durable_execution_state.is_live;
-        let snapshotting = durable_execution_state.snapshotting_mode;
+        let unpersisted = durable_execution_state.snapshotting_mode
+            || durable_execution_state.is_unpersisted_execution;
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
         // A live persisted call initiated inside an open atomic region joins the region's member
         // registry: its lease starts owned by that region and follows the region's close
         // transitions (transfer to the enclosing region, or detachment at the outermost close).
-        let atomic_lease = if is_live && !snapshotting {
+        let atomic_lease = if is_live && !unpersisted {
             match atomic_region {
                 Some(begin_index) => Some(
                     ctx.state
@@ -878,7 +879,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         let live_host_calls = ctx.state.live_host_call_counter();
         Ok(PreparedAccessStart {
             is_live,
-            snapshotting,
+            unpersisted,
             oplog: ctx.state.oplog.clone(),
             public_state: ctx.public_state.clone(),
             replay_state: ctx.state.replay_state.clone(),
@@ -899,7 +900,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         })
     }
 
-    /// Snapshotting is the only state in which a live host call is intentionally not persisted.
+    /// Unpersisted executions take the live `persisted: false` branch.
     async fn execute_access_start<Ctx: WorkerCtx, F>(
         mut prepared: PreparedAccessStart<Pair, P, Ctx>,
         build_request: F,
@@ -911,7 +912,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         let starts_scope = opens_accessor_scope(
             prepared.retry.function_type(),
             prepared.retry.durable_execution_state().assume_idempotence,
-            prepared.snapshotting,
+            prepared.unpersisted,
         );
         let scope_start = if starts_scope {
             Some(Self::execute_access_scope_start(&prepared).await?)
@@ -931,6 +932,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     DurableExecutionState {
                         is_live: true,
                         snapshotting_mode: previous.snapshotting_mode,
+                        is_unpersisted_execution: previous.is_unpersisted_execution,
                         assume_idempotence: previous.assume_idempotence,
                         max_in_function_retry_delay: previous.max_in_function_retry_delay,
                     },
@@ -973,7 +975,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         })?;
 
         if is_live {
-            if prepared.snapshotting {
+            if prepared.unpersisted {
                 let start_idx = prepared.oplog.current_oplog_index().await;
                 let atomic_lease = unregistered_atomic_lease(
                     execution_scope.atomic_region,
@@ -1632,6 +1634,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 .max_in_function_retry_delay,
             current_retry_policy_state,
             retry_properties: properties.clone(),
+            is_unpersisted_execution: self
+                .retry
+                .durable_execution_state()
+                .is_unpersisted_execution,
             worker,
         };
 
@@ -2708,25 +2714,37 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (opens_scope, is_live, replay_handle, replay_state, oplog, public_state) =
-        store.with(|mut access| {
-            let ctx = get_ctx(access.data_mut());
-            let opens_scope = ctx.state.opens_durable_scope(&function_type);
-            let is_live = ctx.state.is_live();
-            let replay_handle = if opens_scope && !is_live {
-                ctx.state.take_durable_scope_replay_handle(begin_index)
-            } else {
-                None
-            };
-            (
-                opens_scope,
-                is_live,
-                replay_handle,
-                ctx.state.replay_state.clone(),
-                ctx.state.oplog.clone(),
-                ctx.public_state.clone(),
-            )
-        });
+    let (
+        opens_scope,
+        is_live,
+        is_unpersisted_execution,
+        replay_handle,
+        replay_state,
+        oplog,
+        public_state,
+    ) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        let opens_scope = ctx.state.opens_durable_scope(&function_type);
+        let is_live = ctx.state.is_live();
+        let replay_handle = if opens_scope && !is_live {
+            ctx.state.take_durable_scope_replay_handle(begin_index)
+        } else {
+            None
+        };
+        (
+            opens_scope,
+            is_live,
+            ctx.state.durability_is_suppressed(),
+            replay_handle,
+            ctx.state.replay_state.clone(),
+            ctx.state.oplog.clone(),
+            ctx.public_state.clone(),
+        )
+    });
+
+    if is_unpersisted_execution {
+        return Ok(());
+    }
 
     if opens_scope {
         if is_live {
@@ -2873,21 +2891,24 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (is_live, worker, replay_state) = store.with(|mut access| {
+    let (is_live, durability_is_suppressed, worker, replay_state) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
         (
             ctx.state.is_live(),
+            ctx.state.durability_is_suppressed(),
             ctx.public_state.worker(),
             ctx.state.replay_state.clone(),
         )
     });
 
-    if is_live {
-        worker
-            .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
-            .await;
-    } else {
-        crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
+    if !durability_is_suppressed {
+        if is_live {
+            worker
+                .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
+                .await;
+        } else {
+            crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
+        }
     }
 
     store.with(|mut access| {
@@ -2909,9 +2930,9 @@ fn is_accessor_supported_function_type(function_type: &DurableFunctionType) -> b
 fn opens_accessor_scope(
     function_type: &DurableFunctionType,
     assume_idempotence: bool,
-    snapshotting: bool,
+    unpersisted: bool,
 ) -> bool {
-    !snapshotting
+    !unpersisted
         && ((*function_type == DurableFunctionType::WriteRemote && !assume_idempotence)
             || matches!(function_type, DurableFunctionType::WriteRemoteBatched(None)))
 }
@@ -3364,20 +3385,22 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     }
 
     /// Second phase on the live path: upload the request and append the eager host-call `Start`
-    /// (or, while snapshotting, persist nothing).
+    /// (or, while durability is suppressed, persist nothing).
     pub async fn start_live<Ctx: WorkerCtx>(
         self,
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
     ) -> Result<CallHandle<Pair, P>, WorkerExecutorError> {
         debug_assert!(self.is_live(), "start_live() called on a replay handle");
-        let snapshotting = self.retry.durable_execution_state().snapshotting_mode;
+        let durable_execution_state = self.retry.durable_execution_state();
+        let durability_is_suppressed = durable_execution_state.snapshotting_mode
+            || durable_execution_state.is_unpersisted_execution;
         // The host-call `Start` nests inside the enclosing durable scope captured at initiation
         // (its own opened scope, or the scope encoded in the function type), derived explicitly —
         // never from the set of temporally-open sibling scopes. `None` for a top-level unscoped call.
         let parent_start_index = self.execution_scope.parent_start_index;
-        let (start_idx, persisted, request_upload) = if snapshotting {
-            // Snapshotting mode persists nothing.
+        let (start_idx, persisted, request_upload) = if durability_is_suppressed {
+            // Snapshot and unpersisted execution write no durable call records.
             let oplog = ctx.state.oplog.clone();
             (
                 oplog.current_oplog_index().await,
@@ -3431,7 +3454,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                 None
             }
         } else {
-            // Snapshotting persists nothing; keep the initiation-time region for trap/retry
+            // Unpersisted execution writes nothing; keep the initiation-time region for trap/retry
             // classification without joining the live in-flight member guard.
             unregistered_atomic_lease(
                 self.execution_scope.atomic_region,
@@ -3510,7 +3533,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for CallHandle<Pair, P> {
                     self.drop_sink.as_ref(),
                 );
             }
-            // Not persisted (snapshotting): there is nothing on disk to reconcile.
+            // Not persisted: there is nothing on disk to reconcile.
         } else {
             if opens_replay_durable_scope(
                 self.retry.function_type(),

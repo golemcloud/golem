@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::schema_value_stream::{StoreValueResolver, contains_stream};
+use crate::durable_host::stream_transport::LiveStreamTracker;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::TrapType;
 use crate::preview2::exports::golem::agent::guest as guest_exports;
@@ -21,21 +23,27 @@ use crate::preview2::oplog_processor_plugin::exports::golem::api1_5_0::oplog_pro
 use crate::preview2::{golem_agent, golem_api_1_x};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
+use futures::channel::oneshot;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
+#[cfg(test)]
+use golem_common::schema::agent::InputSchema;
 use golem_common::schema::agent::wit::decode_agent_error_rejecting_quota_with;
-use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema};
+use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
-use golem_common::schema::validation::value::{validate_record_fields, validate_value};
+use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
-use golem_schema::schema::wit::{decode_value_with, encode_value_with};
+use golem_schema::schema::wit::{decode_value_with, encode_value_with, encode_value_with_streams};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use std::any::Any;
+use std::sync::Arc;
+use std::sync::Mutex;
 use tracing::{Instrument, Level, debug, span};
-use wasmtime::component::Accessor;
+use wasmtime::component::{Accessor, AccessorTask};
 use wasmtime::{AsContextMut, StoreContextMut};
 
 /// Describes how an invocation is being executed with respect to the oplog.
@@ -103,6 +111,220 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
             record_invocation(was_live_before, "success");
             result
         }
+    }
+}
+
+type LiveStreamingResponse = Result<SchemaValue, WorkerExecutorError>;
+type LiveStreamingResponseSender = Arc<Mutex<Option<oneshot::Sender<LiveStreamingResponse>>>>;
+
+fn publish_live_streaming_response(
+    response: &LiveStreamingResponseSender,
+    result: LiveStreamingResponse,
+) -> bool {
+    response
+        .lock()
+        .expect("live streaming response mutex poisoned")
+        .take()
+        .is_some_and(|response| response.send(result).is_ok())
+}
+
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+/// Runs one live, non-durable agent RPC whose value tree may contain recursive
+/// streams. The result head is published as soon as `guest.invoke` returns;
+/// the Store remains exclusively owned by this call until every stream sourced
+/// by the guest reaches its terminal state or the downstream reader detaches.
+pub async fn invoke_live_streaming_rpc<Ctx: WorkerCtx>(
+    lowered: LoweredInvocation,
+    store: &mut impl AsContextMut<Data = Ctx>,
+    instance: &wasmtime::component::Instance,
+    response: oneshot::Sender<Result<SchemaValue, WorkerExecutorError>>,
+    cancellation: tokio_util::sync::CancellationToken,
+) -> Result<(), WorkerExecutorError> {
+    let mut store = store.as_context_mut();
+    let response = Arc::new(Mutex::new(Some(response)));
+    let LoweredInvocation {
+        display_name,
+        read_only_method,
+        call,
+    } = lowered;
+    let guest = match load_agent_guest(&mut store, instance) {
+        Ok(guest) => guest,
+        Err(error) => {
+            publish_live_streaming_response(&response, Err(error.clone()));
+            return Err(error);
+        }
+    };
+    if let Some(blocker) = store.data().snapshot_boundary_blocker() {
+        let error = WorkerExecutorError::runtime(format!(
+            "cannot start a live streaming invocation while {blocker}"
+        ));
+        publish_live_streaming_response(&response, Err(error.clone()));
+        return Err(error);
+    }
+    let LoweredCall::Invoke {
+        method_name,
+        input,
+        principal,
+        expected_output,
+    } = call
+    else {
+        let error = WorkerExecutorError::invalid_request(
+            "live streaming RPC is only supported for agent method invocations",
+        );
+        publish_live_streaming_response(&response, Err(error.clone()));
+        return Err(error);
+    };
+    let stream_capacity = store.data().durable_ctx().live_stream_event_capacity();
+    let tracker = Arc::new(LiveStreamTracker::new(cancellation, stream_capacity));
+    let mut tracker_installed = false;
+    let mut unpersisted_execution_active = false;
+    let mut read_only_active = false;
+    let mut invocation_started = false;
+    let response_for_call = response.clone();
+    let tracker_for_call = tracker.clone();
+    let validation_name = display_name.clone();
+
+    let call = std::panic::AssertUnwindSafe(async {
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .set_live_stream_tracker(tracker_for_call.clone());
+        tracker_installed = true;
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .begin_unpersisted_streaming_invocation();
+        unpersisted_execution_active = true;
+
+        let input = {
+            let mut resolver = StoreValueResolver::new(&mut store);
+            encode_value_with_streams(&input, &mut resolver).map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed to encode live agent method input: {error}"
+                ))
+            })?
+        };
+
+        prepare_guest_call(&mut store, &display_name).await;
+        invocation_started = true;
+        store.data_mut().set_running();
+        let _deadline = store.data().durable_ctx().arm_invocation_deadline();
+
+        if let Some(method_name) = &read_only_method {
+            store.data_mut().enter_read_only_mode(method_name.clone());
+            read_only_active = true;
+        }
+
+        run_guest_call_settled(&mut store, async move |accessor| {
+            match guest
+                .call_invoke(accessor, method_name, input, principal)
+                .await
+            {
+                Ok(Ok(output)) => {
+                    let output = accessor.with(|mut access| match output {
+                        None => Ok(SchemaValue::Tuple {
+                            elements: Vec::new(),
+                        }),
+                        Some(tree) => {
+                            let mut store = access.as_context_mut();
+                            let mut resolver = StoreValueResolver::new(&mut store);
+                            decode_value_with(tree, &mut resolver)
+                                .map_err(|error| wasmtime::Error::msg(error.to_string()))
+                        }
+                    })?;
+                    validate_invoke_output(&validation_name, &expected_output, &output)
+                        .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
+                    if publish_live_streaming_response(&response_for_call, Ok(output)) {
+                        accessor
+                            .spawn(WaitForLiveStreamSources {
+                                tracker: tracker_for_call.clone(),
+                            })
+                            .await;
+                    }
+                    Ok(true)
+                }
+                Ok(Err(error)) => {
+                    let message = format!("agent method returned an error: {error:?}");
+                    publish_live_streaming_response(
+                        &response_for_call,
+                        Err(WorkerExecutorError::runtime(message)),
+                    );
+                    Ok(false)
+                }
+                Err(error) => {
+                    publish_live_streaming_response(
+                        &response_for_call,
+                        Err(WorkerExecutorError::runtime(error.to_string())),
+                    );
+                    Err(error)
+                }
+            }
+        })
+        .await
+        .and_then(|result| result)
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+    })
+    .catch_unwind()
+    .await;
+
+    let (result, completed_successfully) = match call {
+        Ok(Ok(completed_successfully)) => (Ok(()), completed_successfully),
+        Ok(Err(error)) => (Err(error), false),
+        Err(payload) => (
+            Err(WorkerExecutorError::runtime(format!(
+                "live streaming invocation panicked: {}",
+                panic_payload_message(payload.as_ref())
+            ))),
+            false,
+        ),
+    };
+
+    if !completed_successfully {
+        tracker.cancellation_token().cancel();
+    }
+    if read_only_active {
+        store.data_mut().exit_read_only_mode();
+    }
+    if unpersisted_execution_active {
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .end_unpersisted_streaming_invocation_if_active();
+    }
+    if tracker_installed {
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .clear_live_stream_tracker();
+    }
+    if invocation_started {
+        let _ = finish_invocation_and_get_fuel_consumption(&mut store, &display_name).await?;
+        store.data().set_suspended();
+    }
+
+    if let Err(error) = &result {
+        publish_live_streaming_response(&response, Err(error.clone()));
+    }
+    result
+}
+
+struct WaitForLiveStreamSources {
+    tracker: Arc<LiveStreamTracker>,
+}
+
+impl<Ctx: WorkerCtx> AccessorTask<Ctx> for WaitForLiveStreamSources {
+    async fn run(self, _accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
+        self.tracker.wait_for_sources().await;
+        Ok(())
     }
 }
 
@@ -368,8 +590,8 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
-                Ok(Ok(maybe_output)) => {
-                    let output = decode_invoke_output(store, maybe_output)?;
+                Ok(Ok(invoke_output)) => {
+                    let output = decode_invoke_output(store, invoke_output)?;
                     validate_invoke_output(display_name, &expected_output, &output)?;
                     Ok(InvokeResult::Succeeded {
                         consumed_fuel,
@@ -527,26 +749,45 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
     })
 }
 
-/// Decodes the `option<schema-value-tree>` output of `invoke` into the
-/// schema-native [`SchemaValue`] carried across the gRPC / oplog boundary.
+/// Decodes the optional value returned by `invoke` into the schema-native
+/// [`SchemaValue`] carried across the gRPC / oplog boundary.
 ///
 /// A `none` result (the declared `unit` output) is represented by the
 /// canonical empty tuple, matching the `unit` projection used on the caller
 /// side ([`schema_value_to_wire_output`](crate::durable_host::wasm_rpc)).
 fn decode_invoke_output<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
-    maybe_output: Option<core_wire::SchemaValueTree>,
+    output: Option<core_wire::SchemaValueTree>,
 ) -> Result<SchemaValue, WorkerExecutorError> {
-    match maybe_output {
+    match output {
         // `none` is the declared `unit` output.
         None => Ok(SchemaValue::Tuple {
             elements: Vec::new(),
         }),
-        // The output is a guest-owned value tree, so any `quota-token` handles
-        // it carries are lifted into trusted snapshots (and consumed) here.
-        Some(tree) => decode_value_with(tree, store.data_mut().durable_ctx_mut()).map_err(|e| {
-            WorkerExecutorError::runtime(format!("Failed to decode agent method output: {e}"))
-        }),
+        // The output is crossing a durable/materializing boundary. Quota-token
+        // handles are lifted into trusted snapshots, while live stream handles
+        // are rejected and remain exclusive to `invoke_live_streaming_rpc`.
+        Some(tree) => {
+            let output =
+                decode_value_with(tree, store.data_mut().durable_ctx_mut()).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to decode agent method output: {e}"
+                    ))
+                })?;
+            reject_stream_at_materializing_boundary(output)
+        }
+    }
+}
+
+fn reject_stream_at_materializing_boundary(
+    output: SchemaValue,
+) -> Result<SchemaValue, WorkerExecutorError> {
+    if contains_stream(&output) {
+        Err(WorkerExecutorError::runtime(
+            "Agent method output contains a live stream at a materializing invocation boundary",
+        ))
+    } else {
+        Ok(output)
     }
 }
 
@@ -1000,12 +1241,7 @@ pub fn lower_invocation(
                 })?;
 
             let read_only_method = method.read_only.is_some().then(|| method_name.clone());
-            validate_schema_input_against_method_schema(
-                &input,
-                agent_type,
-                &method.input_schema,
-                &method_name,
-            )?;
+            validate_method_invocation(agent_type, method, &input, &method_name)?;
 
             let expected_output = Box::new(ExpectedInvokeOutput {
                 graph: agent_type.schema.clone(),
@@ -1082,51 +1318,49 @@ pub fn lower_invocation(
     }
 }
 
-fn validate_schema_input_against_method_schema(
-    input: &SchemaValue,
-    agent_type: &AgentTypeSchema,
-    input_schema: &InputSchema,
+pub fn validate_agent_method_invocation(
+    component_metadata: &ComponentMetadata,
+    agent_id: Option<&ParsedAgentId>,
     method_name: &str,
-) -> Result<(), WorkerExecutorError> {
-    let SchemaValue::Record { fields } = input else {
-        return Err(WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}': expected input parameter record"
-        )));
-    };
-
-    // Auto-injected fields (e.g. the principal) are supplied by the host to the
-    // guest export separately from the caller-provided input record, so they
-    // are excluded from both the parameter count and the value validation here.
-    let user_fields: Vec<_> = input_schema
-        .fields()
+    input: &SchemaValue,
+) -> Result<bool, WorkerExecutorError> {
+    let agent_type = resolve_agent_type(component_metadata, agent_id)?;
+    let method = agent_type
+        .methods
         .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-        .collect();
-    if fields.len() != user_fields.len() {
-        return Err(WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}': expected {} parameters, got {}",
-            user_fields.len(),
-            fields.len()
-        )));
-    }
+        .find(|method| method.name == method_name)
+        .ok_or_else(|| {
+            WorkerExecutorError::invalid_request(format!(
+                "Agent method '{method_name}' not found in agent type '{}'",
+                agent_type.type_name
+            ))
+        })?;
 
-    validate_record_fields(
-        &agent_type.schema,
-        user_fields
-            .iter()
-            .map(|field| (field.name.as_str(), &field.schema)),
-        fields,
-    )
-    .map_err(|errors| {
-        WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}': invalid input parameter value: {}",
-            errors
-                .into_iter()
-                .map(|error| error.to_string())
-                .collect::<Vec<_>>()
-                .join("; ")
-        ))
-    })
+    validate_method_invocation(agent_type, method, input, method_name)
+}
+
+pub fn method_uses_streams(
+    agent_type: &AgentTypeSchema,
+    method: &AgentMethodSchema,
+    input: &SchemaValue,
+) -> bool {
+    contains_stream(input) || method.uses_streams(&agent_type.schema)
+}
+
+pub fn validate_method_invocation(
+    agent_type: &AgentTypeSchema,
+    method: &AgentMethodSchema,
+    input: &SchemaValue,
+    method_name: &str,
+) -> Result<bool, WorkerExecutorError> {
+    method
+        .validate_input(&agent_type.schema, input)
+        .map_err(|error| {
+            WorkerExecutorError::invalid_request(format!(
+                "Method '{method_name}': invalid input parameter value: {error}"
+            ))
+        })?;
+    Ok(method_uses_streams(agent_type, method, input))
 }
 
 /// Resolves the [`AgentTypeSchema`] an invocation targets: by name when an agent id
@@ -1179,6 +1413,37 @@ mod tests {
     const AGENT_TYPE: &str = "test-agent";
     const METHOD_NAME: &str = "do-work";
 
+    #[test]
+    async fn live_streaming_response_is_published_exactly_once() {
+        let (sender, receiver) = oneshot::channel();
+        let response = Arc::new(Mutex::new(Some(sender)));
+
+        assert!(publish_live_streaming_response(
+            &response,
+            Ok(SchemaValue::Tuple {
+                elements: Vec::new(),
+            })
+        ));
+        assert!(!publish_live_streaming_response(
+            &response,
+            Err(WorkerExecutorError::runtime("late failure"))
+        ));
+
+        assert!(matches!(
+            receiver.await.unwrap(),
+            Ok(SchemaValue::Tuple { elements }) if elements.is_empty()
+        ));
+    }
+
+    #[test]
+    fn live_streaming_panic_payload_is_reported() {
+        let owned: Box<dyn Any + Send> = Box::new("owned panic".to_string());
+        let borrowed: Box<dyn Any + Send> = Box::new("borrowed panic");
+
+        assert_eq!(panic_payload_message(owned.as_ref()), "owned panic");
+        assert_eq!(panic_payload_message(borrowed.as_ref()), "borrowed panic");
+    }
+
     /// Component metadata with one agent type whose `do-work` method takes two
     /// user-supplied parameters (`count: u32`, `label: string`) plus an
     /// auto-injected `principal` field.
@@ -1200,6 +1465,10 @@ mod tests {
             http_endpoint: Vec::new(),
             read_only: None,
         };
+        metadata_with_method(method)
+    }
+
+    fn metadata_with_method(method: AgentMethodSchema) -> ComponentMetadata {
         let at = AgentTypeSchema {
             type_name: AgentTypeName(AGENT_TYPE.to_string()),
             description: String::new(),
@@ -1271,7 +1540,7 @@ mod tests {
             panic!("non-record input must be rejected");
         };
         assert!(
-            err.to_string().contains("expected input parameter record"),
+            err.to_string().contains("expected record, found u32"),
             "unexpected error: {err}"
         );
     }
@@ -1289,7 +1558,7 @@ mod tests {
             panic!("arity mismatch must be rejected");
         };
         assert!(
-            err.to_string().contains("expected 2 parameters, got 1"),
+            err.to_string().contains("has 1 field(s), expected 2"),
             "unexpected error: {err}"
         );
     }
@@ -1309,6 +1578,89 @@ mod tests {
         assert!(
             err.to_string().contains("invalid input parameter value"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn streaming_output_is_accepted_at_the_invocation_boundary() {
+        let metadata = metadata_with_method(AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(Vec::new()),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::stream(Some(
+                SchemaType::u32(),
+            )))),
+            http_endpoint: Vec::new(),
+            read_only: None,
+        });
+        let result = lower_invocation(
+            method_invocation(SchemaValue::Record { fields: Vec::new() }),
+            &metadata,
+            Some(&agent_id()),
+        );
+        if let Err(error) = result {
+            panic!("unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn streaming_method_is_classified_while_stream_free_method_is_not() {
+        let streaming = metadata_with_method(AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(Vec::new()),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::stream(Some(
+                SchemaType::u32(),
+            )))),
+            http_endpoint: Vec::new(),
+            read_only: None,
+        });
+        let empty_input = SchemaValue::Record { fields: Vec::new() };
+
+        assert!(
+            validate_agent_method_invocation(
+                &streaming,
+                Some(&agent_id()),
+                METHOD_NAME,
+                &empty_input,
+            )
+            .unwrap()
+        );
+        assert!(
+            !validate_agent_method_invocation(
+                &metadata_with_method(AgentMethodSchema {
+                    name: METHOD_NAME.to_string(),
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::Parameters(Vec::new()),
+                    output_schema: OutputSchema::Unit,
+                    http_endpoint: Vec::new(),
+                    read_only: None,
+                }),
+                Some(&agent_id()),
+                METHOD_NAME,
+                &empty_input,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn materializing_boundary_rejects_a_real_stream_handle() {
+        let stream = golem_common::schema::stream::SchemaValueStream::from_host_endpoint(());
+        let output = SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(stream)],
+        };
+
+        let error = reject_stream_at_materializing_boundary(output)
+            .expect_err("a live stream reaching materialization is a contract violation");
+        assert!(
+            error
+                .to_string()
+                .contains("live stream at a materializing invocation boundary"),
+            "unexpected error: {error}"
         );
     }
 

@@ -17,7 +17,7 @@ use crate::golem_agentic::golem::agent::common::Principal;
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
-use crate::schema::wit::{decode_value, encode_value};
+use crate::schema::wit::{decode_value, encode_value_async};
 use crate::{
     agentic::{
         AgentTypeName, with_agent_initiator, with_agent_instance, with_agent_instance_async,
@@ -88,23 +88,18 @@ impl Guest for Component {
             .map_err(|e| AgentError::InvalidInput(format!("invalid schema value input: {e}")))?;
 
         with_agent_instance_async(|resolved_agent| async move {
-            resolved_agent
+            let result = resolved_agent
                 .agent
                 .borrow_mut()
                 .as_mut()
                 .invoke(method_name, input, principal)
-                .await
-                .and_then(|value| {
-                    value
-                        .map(|value| {
-                            encode_value(&value).map_err(|e| {
-                                AgentError::InvalidInput(format!(
-                                    "invalid schema value output: {e}"
-                                ))
-                            })
-                        })
-                        .transpose()
-                })
+                .await?;
+            match result.value {
+                Some(value) => encode_value_async(&value).await.map(Some).map_err(|e| {
+                    AgentError::InvalidInput(format!("invalid schema value output: {e}"))
+                }),
+                None => Ok(None),
+            }
         })
         .await
     }

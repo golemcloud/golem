@@ -80,6 +80,9 @@ object SchemaValue {
    * moved to exactly one destination; it carries no readable content.
    */
   final case class QuotaTokenHandle(handle: GuestQuotaTokenHandle) extends SchemaValue
+
+  /** An owned native stream, which may occur at any depth in the value tree. */
+  final case class StreamValue(handle: GuestSchemaValueStreamHandle) extends SchemaValue
 }
 
 /** An entry of a [[SchemaValue.MapValue]]. */
@@ -125,6 +128,7 @@ object v {
   def ok(value: Option[SchemaValue]): SchemaValue         = ResultValue(SchemaResult.Ok(value))
   def err(value: Option[SchemaValue]): SchemaValue        = ResultValue(SchemaResult.Err(value))
 
-  def secret(handle: GuestSecretHandle): SchemaValue         = SecretValue(handle)
-  def quotaToken(handle: GuestQuotaTokenHandle): SchemaValue = QuotaTokenHandle(handle)
+  def secret(handle: GuestSecretHandle): SchemaValue            = SecretValue(handle)
+  def quotaToken(handle: GuestQuotaTokenHandle): SchemaValue    = QuotaTokenHandle(handle)
+  def stream(handle: GuestSchemaValueStreamHandle): SchemaValue = StreamValue(handle)
 }

@@ -206,6 +206,35 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
             + Send,
     {
+        self.call_with_retry(description, endpoint, true, f).await
+    }
+
+    /// Performs one attempt, even for `Unavailable`, for operations whose request stream cannot
+    /// be replayed.
+    pub async fn call_without_retry<F, R>(
+        &self,
+        description: impl AsRef<str>,
+        endpoint: Uri,
+        f: F,
+    ) -> Result<R, Status>
+    where
+        F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
+            + Send,
+    {
+        self.call_with_retry(description, endpoint, false, f).await
+    }
+
+    async fn call_with_retry<F, R>(
+        &self,
+        description: impl AsRef<str>,
+        endpoint: Uri,
+        retry_on_unavailable: bool,
+        f: F,
+    ) -> Result<R, Status>
+    where
+        F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
+            + Send,
+    {
         let mut retries = RetryState::new(&self.config.retries_on_unavailable);
         let span = debug_span!(
             "gRPC call",
@@ -232,7 +261,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                 Err(e) => {
                     if requires_reconnect(&e) {
                         self.clients.remove_async(&endpoint).await;
-                        if !retries.failed_attempt().await {
+                        if !retry_on_unavailable || !retries.failed_attempt().await {
                             span.in_scope(|| {
                                 warn!("gRPC call failed: {:?}, no more retries", e);
                             });
@@ -434,4 +463,38 @@ impl EnabledGrpcClientTlsConfig {
 
 fn requires_reconnect(e: &Status) -> bool {
     e.code() == Code::Unavailable
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GrpcClientConfig, MultiTargetGrpcClient};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use test_r::test;
+    use tonic::Status;
+
+    #[derive(Clone)]
+    struct TestClient;
+
+    #[test]
+    async fn multi_target_call_without_retry_attempts_unavailable_request_once() {
+        let client =
+            MultiTargetGrpcClient::new("test", |_, _| TestClient, GrpcClientConfig::default());
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_call = attempts.clone();
+
+        let result = client
+            .call_without_retry(
+                "non-replayable",
+                "http://127.0.0.1:1".parse().unwrap(),
+                move |_| {
+                    attempts_for_call.fetch_add(1, Ordering::Relaxed);
+                    Box::pin(async { Err::<(), _>(Status::unavailable("failed")) })
+                },
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
 }

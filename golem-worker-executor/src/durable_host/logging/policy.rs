@@ -32,9 +32,10 @@ use std::sync::Arc;
 
 /// Applies the common log emission policy for a single worker log event.
 ///
-/// `is_live` must be sampled from the worker state at the time of the call; `oplog` must be the
-/// worker's private oplog (used by the [`LogEventEmitBehaviour::Always`] branch, which appends
-/// without going through the invocation queue).
+/// `is_live` and `is_unpersisted_execution` must be sampled from worker state at the time
+/// of the call; `oplog` must be the worker's private oplog (used by the
+/// [`LogEventEmitBehaviour::Always`] branch, which appends without going through the invocation
+/// queue).
 pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
     event: InternalWorkerEvent,
     has_oplog_processor: bool,
@@ -43,6 +44,7 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
     replay_state: &ReplayState,
     oplog: &Arc<dyn Oplog>,
     is_live: bool,
+    is_unpersisted_execution: bool,
 ) {
     if let Some(entry) = event.as_oplog_entry()
         && let OplogEntry::Log {
@@ -103,7 +105,9 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
                     if !replay_state.seen_log(*level, context, message).await {
                         // haven't seen this log before
                         public_state.event_service().emit_event(event.clone(), true);
-                        public_state.worker().add_to_oplog(entry).await;
+                        if !is_unpersisted_execution {
+                            public_state.worker().add_to_oplog(entry).await;
+                        }
                     } else {
                         // we have persisted emitting this log before, so we mark it as non-live and
                         // remove the entry from the seen log set.
@@ -119,7 +123,10 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
             LogEventEmitBehaviour::Always => {
                 public_state.event_service().emit_event(event.clone(), true);
 
-                if is_live && !replay_state.seen_log(*level, context, message).await {
+                if is_live
+                    && !is_unpersisted_execution
+                    && !replay_state.seen_log(*level, context, message).await
+                {
                     oplog.add(entry).await;
                 }
             }

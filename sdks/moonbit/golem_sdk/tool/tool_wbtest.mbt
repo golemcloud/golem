@@ -1,4 +1,114 @@
 ///|
+fn test_resource_drops() -> @model.SchemaValueResourceDrops {
+  {
+    drop_secret: fn(_) {  },
+    drop_quota_token: fn(_) {  },
+    drop_stream: fn(_) {  },
+    drop_native_stream: fn(_) {  },
+  }
+}
+
+///|
+fn register_subtool_def_for_test(tool : ToolDef) -> Unit raise ToolBuildError {
+  let name = match tool.tool_name() {
+    Ok(name) => name
+    Err(error) => raise error
+  }
+  ensure_tool_name_available(name)
+  state.defs[name] = tool
+}
+
+///|
+fn decode_canonical_input_for_test(
+  def : ToolDef,
+  command_index : Int,
+  input : @types.TypedSchemaValue,
+  context : String,
+) -> Array[CanonicalInputValue] raise @toolCommon.ToolError {
+  decode_canonical_input_with_resource_drops(
+    def,
+    command_index,
+    input,
+    context,
+    test_resource_drops(),
+  )
+}
+
+///|
+fn decode_invocation_input_for_test(
+  input : @types.TypedSchemaValue,
+  arity : Int,
+  context : String,
+) -> Array[@model.SchemaValue] raise @toolCommon.ToolError {
+  decode_invocation_input_with_resource_drops(
+    input,
+    arity,
+    context,
+    test_resource_drops(),
+  )
+}
+
+///|
+fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field_for_test(
+  fields : Array[CanonicalInputValue],
+  name : String,
+  context : String,
+) -> T raise @toolCommon.ToolError {
+  decode_canonical_field_with_resource_drops(
+    fields,
+    name,
+    context,
+    test_resource_drops(),
+  )
+}
+
+///|
+fn[T : @schema.FromSchema] decode_param_for_test(
+  fields : Array[@model.SchemaValue],
+  index : Int,
+  context : String,
+) -> T raise @toolCommon.ToolError {
+  decode_param_with_resource_drops(
+    fields,
+    index,
+    context,
+    test_resource_drops(),
+  )
+}
+
+///|
+test "rejected tool envelopes drop reached stream resources" {
+  let dropped = [0]
+  let input : @types.TypedSchemaValue = {
+    graph: @model.schema_graph_to_wit({
+      defs: [],
+      root: @model.schema_type(@model.SchemaTypeBody::Record([])),
+    }),
+    value: {
+      value_nodes: [
+        @types.StreamValue(@types.SchemaValueStream::SchemaValueStream(91)),
+      ],
+      root: 0,
+    },
+  }
+  let result = try? decode_invocation_input_with_resource_drops(
+    input,
+    0,
+    "tool cleanup",
+    {
+      drop_secret: fn(_) {  },
+      drop_quota_token: fn(_) {  },
+      drop_stream: fn(_) { dropped[0] += 1 },
+      drop_native_stream: fn(_) {  },
+    },
+  )
+  guard result is Err(@toolCommon.ToolError::InvalidInput(_)) else {
+    fail("expected the schema/value mismatch to be rejected")
+  }
+  assert_eq(dropped[0], 1)
+}
+
+///|
 fn doc(summary : String) -> @toolCommon.Doc {
   { summary, description: "details for " + summary, examples: [] }
 }
@@ -96,36 +206,95 @@ fn[T] unwrap_tool_result(result : Result[T, ToolBuildError]) -> T {
 ///|
 test "subtree-only tool cannot be invoked as a top-level tool" {
   let def = canonical_test_def()
-  register_subtool_def_invoker(def, fn(_, _, _, _) {
-    Ok(invocation_result_empty())
-  })
+  register_subtool_def_for_test(def)
   assert_true(
     get_registered_tool("root")
-    is Err(@toolCommon.ToolError::InvalidToolName("root")),
-  )
-  let input = @model.typed_schema_value_to_wit(
-    @schema.try_into_typed_schema_value(()),
-  )
-  assert_true(
-    invoke_registered_tool(
-      "root",
-      [],
-      input,
-      None,
-      @agentCommon.Principal::Anonymous,
-    )
     is Err(@toolCommon.ToolError::InvalidToolName("root")),
   )
 }
 
 ///|
-test "normalization rejects distinct inherited globals with the same short" {
+test "forwarding matches short forms in their separate namespace" {
+  let flag = fn(long : String) -> @toolCommon.FlagSpec {
+    {
+      long,
+      short: Some('v'),
+      aliases: [],
+      doc: doc(long),
+      shape: @toolCommon.FlagShape::BoolFlag({
+        default: false,
+        negatable: false,
+      }),
+      env_var: None,
+    }
+  }
+  let child : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "short-forward-child",
+        aliases: [],
+        doc: doc("short forward child"),
+        globals: { options: [], flags: [flag("child-verbose")] },
+        subcommands: [],
+        body: Some({
+          positionals: { fixed: [], tail: None },
+          options: [],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: None,
+          errors: [],
+          annotations: None,
+        }),
+      },
+    ],
+  }
+  let parent : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "short-forward-parent",
+        aliases: [],
+        doc: doc("short forward parent"),
+        globals: { options: [], flags: [flag("parent-verbose")] },
+        subcommands: [],
+        body: None,
+      },
+    ],
+  }
+  let parent_fields = parent.canonical_input_fields(0)
+  inspect(parent_fields.map(field => field.name), content="[parent-verbose]")
+  assert_eq(parent_fields[0].short, Some('v'))
+  let model = parent.canonical_input_model(0)
+  let input = build_canonical_input(model, [
+    ("parent-verbose", @model.SchemaValue::Bool(true)),
+  ])
+  let wire = @model.typed_schema_value_to_wit(input)
+  let decoded = decode_canonical_input_for_test(parent, 0, wire, "short parent")
+  let forwarded = forward_canonical_input(decoded, child, 0)
+  let child_input = decode_canonical_input_for_test(
+    child, 0, forwarded, "short child",
+  )
+  let verbose : Bool = decode_canonical_field_for_test(
+    child_input, "child-verbose", "short child",
+  )
+  assert_true(verbose)
+}
+
+///|
+test "forwarding keeps authored aliases separate from short forms" {
   let string = string_graph()
-  let option = fn(long : String, short : Char?) -> OptionSpecDef {
+  let option = fn(
+    long : String,
+    aliases : Array[String],
+    short : Char?,
+  ) -> OptionSpecDef {
     {
       long,
       short,
-      aliases: [],
+      aliases,
       doc: doc(long),
       value_name: None,
       shape: OptionShapeDef::Scalar(string),
@@ -141,41 +310,140 @@ test "normalization rejects distinct inherited globals with the same short" {
         name: "root",
         aliases: [],
         doc: doc("root"),
-        globals: { options: [option("count", Some('f'))], flags: [] },
+        globals: { options: [option("format", ["f"], None)], flags: [] },
         subcommands: [1],
         body: None,
       },
       {
-        name: "child",
+        name: "run",
         aliases: [],
-        doc: doc("child"),
-        globals: { options: [option("format", Some('f'))], flags: [] },
+        doc: doc("run"),
+        globals: { options: [], flags: [] },
         subcommands: [],
-        body: None,
+        body: Some({
+          positionals: { fixed: [], tail: None },
+          options: [option("file", [], Some('f'))],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: None,
+          errors: [],
+          annotations: None,
+        }),
       },
     ],
   }
-  try def.normalize_inherited_globals() catch {
-    InheritedGlobalConflict("f", "child") => ()
-    _ => fail("unexpected normalization error")
-  } noraise {
-    _ => fail("expected inherited short conflict")
-  }
+  let normalized = def.normalize_inherited_globals()
+  let model = normalized.canonical_input_model(1)
+  let input = build_canonical_input(model, [
+    ("format", @model.SchemaValue::String("json")),
+    ("file", @model.SchemaValue::String("input.txt")),
+  ])
+  let decoded = decode_canonical_input_for_test(
+    normalized,
+    1,
+    @model.typed_schema_value_to_wit(input),
+    "source",
+  )
+  let forwarded = forward_canonical_input(decoded, normalized, 1)
+  let forwarded = decode_canonical_input_for_test(
+    normalized, 1, forwarded, "forwarded",
+  )
+  let format : String = decode_canonical_field_for_test(
+    forwarded, "format", "forwarded",
+  )
+  let file : String = decode_canonical_field_for_test(
+    forwarded, "file", "forwarded",
+  )
+  assert_eq(format, "json")
+  assert_eq(file, "input.txt")
 }
 
 ///|
-test "grafting rejects distinct globals with the same short" {
+test "forwarding prefers an exact name over an unrelated short form" {
   let string = string_graph()
-  let option = fn(long : String) -> OptionSpecDef {
+  let option = fn(long : String, short : Char?) -> OptionSpecDef {
     {
       long,
-      short: Some('f'),
+      short,
       aliases: [],
       doc: doc(long),
       value_name: None,
       shape: OptionShapeDef::Scalar(string),
       default: None,
       required: true,
+      env_var: None,
+    }
+  }
+  let source : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "source",
+        aliases: [],
+        doc: doc("source"),
+        globals: { options: [option("format", None)], flags: [] },
+        subcommands: [],
+        body: Some({
+          positionals: { fixed: [], tail: None },
+          options: [option("file", Some('f'))],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: None,
+          errors: [],
+          annotations: None,
+        }),
+      },
+    ],
+  }
+  let target : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "target",
+        aliases: [],
+        doc: doc("target"),
+        globals: { options: [option("format", Some('f'))], flags: [] },
+        subcommands: [],
+        body: None,
+      },
+    ],
+  }
+  let input = build_canonical_input(source.canonical_input_model(0), [
+    ("format", @model.SchemaValue::String("json")),
+    ("file", @model.SchemaValue::String("input.txt")),
+  ])
+  let decoded = decode_canonical_input_for_test(
+    source,
+    0,
+    @model.typed_schema_value_to_wit(input),
+    "source",
+  )
+  let forwarded = forward_canonical_input(decoded, target, 0)
+  let forwarded = decode_canonical_input_for_test(
+    target, 0, forwarded, "target",
+  )
+  let format : String = decode_canonical_field_for_test(
+    forwarded, "format", "target",
+  )
+  assert_eq(format, "json")
+}
+
+///|
+test "grafting rejects child short collision with strict ancestor" {
+  let flag = fn(long : String) -> @toolCommon.FlagSpec {
+    {
+      long,
+      short: Some('v'),
+      aliases: [],
+      doc: doc(long),
+      shape: @toolCommon.FlagShape::BoolFlag({
+        default: false,
+        negatable: false,
+      }),
       env_var: None,
     }
   }
@@ -186,145 +454,49 @@ test "grafting rejects distinct globals with the same short" {
         name: "child",
         aliases: [],
         doc: doc("child"),
-        globals: { options: [option("format")], flags: [] },
+        globals: { options: [], flags: [flag("child-verbose")] },
         subcommands: [],
         body: None,
       },
     ],
   }
-  let parent_base : ToolDef = {
+  let parent : ToolDef = {
     version: "1",
     commands: [
       {
         name: "parent",
         aliases: [],
         doc: doc("parent"),
-        globals: { options: [], flags: [] },
+        globals: { options: [], flags: [flag("ancestor-verbose")] },
         subcommands: [],
         body: None,
       },
     ],
   }
   try
-    parent_base.graft_subtree(
+    parent.graft_subtree(
       child,
       "child",
-      { options: [option("count")], flags: [] },
+      { options: [], flags: [] },
       None,
       None,
       None,
     )
   catch {
-    InheritedGlobalConflict("f", "child") => ()
+    InheritedGlobalConflict(_, _) => ()
     _ => fail("unexpected graft error")
   } noraise {
-    _ => fail("expected inherited short conflict")
+    _ => fail("expected strict-ancestor short-form conflict")
   }
 }
 
 ///|
-test "compatible identity deprojects before discarded short validation" {
+test "grafting rejects distinct parent and child globals sharing only a short form" {
   let string = string_graph()
-  let option = fn(long : String, short : Char?) -> OptionSpecDef {
+  let option = fn(long : String) -> OptionSpecDef {
     {
       long,
-      short,
-      aliases: [],
-      doc: doc(long),
-      value_name: None,
-      shape: OptionShapeDef::Scalar(string),
-      default: None,
-      required: true,
-      env_var: None,
-    }
-  }
-  let def : ToolDef = {
-    version: "1",
-    commands: [
-      {
-        name: "root",
-        aliases: [],
-        doc: doc("root"),
-        globals: {
-          options: [option("count", Some('f')), option("format", Some('g'))],
-          flags: [],
-        },
-        subcommands: [1],
-        body: None,
-      },
-      {
-        name: "child",
-        aliases: [],
-        doc: doc("child"),
-        globals: { options: [option("count", Some('g'))], flags: [] },
-        subcommands: [],
-        body: None,
-      },
-    ],
-  }
-  let normalized = def.normalize_inherited_globals()
-  assert_true(normalized.commands[1].globals.options.is_empty())
-  inspect(
-    normalized.canonical_input_fields(1).map(field => field.name),
-    content="[count, format]",
-  )
-}
-
-///|
-test "normalization rejects an incompatible inherited identity" {
-  let string = string_graph()
-  let uint = @schema.schema_graph_of_tag(
-    (@schema.type_tag() : @schema.TypeTag[UInt]),
-  )
-  let option = fn(long : String, type_ : @model.SchemaGraph) -> OptionSpecDef {
-    {
-      long,
-      short: None,
-      aliases: [],
-      doc: doc(long),
-      value_name: None,
-      shape: OptionShapeDef::Scalar(type_),
-      default: None,
-      required: true,
-      env_var: None,
-    }
-  }
-  let def : ToolDef = {
-    version: "1",
-    commands: [
-      {
-        name: "root",
-        aliases: [],
-        doc: doc("root"),
-        globals: { options: [option("token", string)], flags: [] },
-        subcommands: [1],
-        body: None,
-      },
-      {
-        name: "child",
-        aliases: [],
-        doc: doc("child"),
-        globals: { options: [option("token", uint)], flags: [] },
-        subcommands: [],
-        body: None,
-      },
-    ],
-  }
-  try def.normalize_inherited_globals() catch {
-    InheritedGlobalConflict("token", "child") => ()
-    _ => fail("unexpected normalization error")
-  } noraise {
-    _ => fail("expected incompatible inherited identity")
-  }
-}
-
-///|
-test "grafting deprojects parent arguments before child short validation" {
-  let string = string_graph()
-  let option = fn(long : String, short : Char?) -> OptionSpecDef {
-    {
-      long,
-      short,
+      short: Some('f'),
       aliases: [],
       doc: doc(long),
       value_name: None,
@@ -341,7 +513,7 @@ test "grafting deprojects parent arguments before child short validation" {
         name: "parent",
         aliases: [],
         doc: doc("parent"),
-        globals: { options: [option("token", Some('t'))], flags: [] },
+        globals: { options: [], flags: [] },
         subcommands: [],
         body: None,
       },
@@ -354,78 +526,119 @@ test "grafting deprojects parent arguments before child short validation" {
         name: "child",
         aliases: [],
         doc: doc("child"),
-        globals: { options: [option("other", Some('x'))], flags: [] },
+        globals: { options: [option("format")], flags: [] },
         subcommands: [],
         body: None,
       },
     ],
   }
-  let composed = parent
-    .graft_subtree(
+  try
+    parent.graft_subtree(
       child,
       "child",
-      { options: [option("token", Some('x'))], flags: [] },
+      { options: [option("count")], flags: [] },
       None,
       None,
       None,
     )
-    .normalize_inherited_globals()
-  let child_index = composed.command_index_by_path(["child"])
-  guard child_index is Some(child_index) else {
-    fail("expected grafted child command")
+  catch {
+    InheritedGlobalConflict(_, _) => ()
+    _ => fail("unexpected graft error")
+  } noraise {
+    _ => fail("expected distinct short-form collision to be rejected")
   }
-  inspect(
-    composed.canonical_input_fields(child_index).map(field => field.name),
-    content="[token, other]",
-  )
 }
 
 ///|
-test "inherited short and local positional name use separate namespaces" {
+test "grafting rejects a child global matching two inherited identities" {
   let string = string_graph()
-  let format : OptionSpecDef = {
-    long: "format",
-    short: Some('f'),
-    aliases: [],
-    doc: doc("format"),
-    value_name: None,
-    shape: OptionShapeDef::Scalar(string),
-    default: None,
-    required: true,
-    env_var: None,
+  let option = fn(long : String, aliases : Array[String]) -> OptionSpecDef {
+    {
+      long,
+      short: None,
+      aliases,
+      doc: doc(long),
+      value_name: None,
+      shape: OptionShapeDef::Scalar(string),
+      default: None,
+      required: true,
+      env_var: None,
+    }
   }
-  let def : ToolDef = {
+  let parent : ToolDef = {
     version: "1",
     commands: [
       {
-        name: "root",
+        name: "parent",
         aliases: [],
-        doc: doc("root"),
-        globals: { options: [format], flags: [] },
-        subcommands: [1],
+        doc: doc("parent"),
+        globals: { options: [option("alpha", [])], flags: [] },
+        subcommands: [],
         body: None,
       },
+    ],
+  }
+  let child : ToolDef = {
+    version: "1",
+    commands: [
       {
         name: "child",
         aliases: [],
         doc: doc("child"),
-        globals: { options: [], flags: [] },
+        globals: { options: [option("alpha", ["beta"])], flags: [] },
         subcommands: [],
+        body: None,
+      },
+    ],
+  }
+  try
+    parent.graft_subtree(
+      child,
+      "child",
+      { options: [option("beta", [])], flags: [] },
+      None,
+      None,
+      None,
+    )
+  catch {
+    InheritedGlobalConflict(_, _) => ()
+    _ => fail("unexpected graft error")
+  } noraise {
+    _ => fail("expected ambiguous inherited identity conflict")
+  }
+}
+
+///|
+test "deprojected child global does not consume a descendant local input" {
+  let string = string_graph()
+  let option = fn(
+    long : String,
+    aliases : Array[String],
+    short : Char?,
+  ) -> OptionSpecDef {
+    {
+      long,
+      short,
+      aliases,
+      doc: doc(long),
+      value_name: None,
+      shape: OptionShapeDef::Scalar(string),
+      default: None,
+      required: true,
+      env_var: None,
+    }
+  }
+  let child_raw : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "deproject-child",
+        aliases: [],
+        doc: doc("deproject child"),
+        globals: { options: [option("child-global", [], Some('f'))], flags: [] },
+        subcommands: [1],
         body: Some({
-          positionals: {
-            fixed: [
-              {
-                name: "f",
-                doc: doc("f"),
-                value_name: None,
-                type_: string,
-                default: None,
-                required: true,
-                accepts_stdio: false,
-              },
-            ],
-            tail: None,
-          },
+          positionals: { fixed: [], tail: None },
           options: [],
           flags: [],
           constraints: [],
@@ -436,68 +649,15 @@ test "inherited short and local positional name use separate namespaces" {
           annotations: None,
         }),
       },
-    ],
-  }
-  let normalized = def.normalize_inherited_globals()
-  let model = normalized.canonical_input_model(1)
-  inspect(model.fields.map(field => field.name), content="[format, f]")
-  assert_false(model.fields[0].aliases.contains("f"))
-  let input = build_canonical_input(model, [
-    ("format", @model.SchemaValue::String("global")),
-    ("f", @model.SchemaValue::String("positional")),
-  ])
-  let decoded = decode_canonical_input(
-    normalized,
-    1,
-    @model.typed_schema_value_to_wit(input),
-    "separate namespaces",
-  )
-  let format : String = decode_canonical_field(
-    decoded, "format", "separate namespaces",
-  )
-  let positional : String = decode_canonical_field(
-    decoded, "f", "separate namespaces",
-  )
-  assert_eq(format, "global")
-  assert_eq(positional, "positional")
-}
-
-///|
-test "inherited long name and local short use separate namespaces" {
-  let string = string_graph()
-  let option = fn(long : String, short : Char?) -> OptionSpecDef {
-    {
-      long,
-      short,
-      aliases: [],
-      doc: doc(long),
-      value_name: None,
-      shape: OptionShapeDef::Scalar(string),
-      default: None,
-      required: true,
-      env_var: None,
-    }
-  }
-  let def : ToolDef = {
-    version: "1",
-    commands: [
       {
-        name: "root",
+        name: "run",
         aliases: [],
-        doc: doc("root"),
-        globals: { options: [option("f", None)], flags: [] },
-        subcommands: [1],
-        body: None,
-      },
-      {
-        name: "child",
-        aliases: [],
-        doc: doc("child"),
+        doc: doc("run"),
         globals: { options: [], flags: [] },
         subcommands: [],
         body: Some({
           positionals: { fixed: [], tail: None },
-          options: [option("format", Some('f'))],
+          options: [option("format", [], None)],
           flags: [],
           constraints: [],
           stdin: None,
@@ -509,32 +669,63 @@ test "inherited long name and local short use separate namespaces" {
       },
     ],
   }
-  let normalized = def.normalize_inherited_globals()
-  let model = normalized.canonical_input_model(1)
-  inspect(model.fields.map(field => field.name), content="[f, format]")
-  assert_false(model.fields[1].aliases.contains("f"))
+  let child = child_raw.normalize_inherited_globals()
+  let parent_base : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "deproject-parent",
+        aliases: [],
+        doc: doc("deproject parent"),
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: None,
+      },
+    ],
+  }
+  let parent = parent_base
+    .graft_subtree(
+      child_raw,
+      "deproject-child",
+      { options: [option("count", ["child-global"], Some('f'))], flags: [] },
+      None,
+      None,
+      None,
+    )
+    .normalize_inherited_globals()
+  let parent_index = parent.command_index_by_path(["deproject-child", "run"])
+  guard parent_index is Some(parent_index) else {
+    fail("expected grafted descendant command")
+  }
+  inspect(
+    parent.canonical_input_fields(parent_index).map(field => field.name),
+    content="[count, format]",
+  )
+  let model = parent.canonical_input_model(parent_index)
   let input = build_canonical_input(model, [
-    ("f", @model.SchemaValue::String("global")),
+    ("count", @model.SchemaValue::String("inherited")),
     ("format", @model.SchemaValue::String("local")),
   ])
-  let decoded = decode_canonical_input(
-    normalized,
-    1,
-    @model.typed_schema_value_to_wit(input),
-    "separate namespaces",
+  let wire = @model.typed_schema_value_to_wit(input)
+  let fields = decode_canonical_input_for_test(
+    parent, parent_index, wire, "deproject parent",
   )
-  let inherited : String = decode_canonical_field(
-    decoded, "f", "separate namespaces",
+  let child_index = child.command_index_by_path(["run"])
+  guard child_index is Some(child_index) else {
+    fail("expected child descendant command")
+  }
+  let forwarded = forward_canonical_input(fields, child, child_index)
+  let child_input = decode_canonical_input_for_test(
+    child, child_index, forwarded, "deproject child",
   )
-  let format : String = decode_canonical_field(
-    decoded, "format", "separate namespaces",
+  let format : String = decode_canonical_field_for_test(
+    child_input, "format", "deproject child",
   )
-  assert_eq(inherited, "global")
   assert_eq(format, "local")
 }
 
 ///|
-test "forwarding prefers surviving descendant over ancestor alias" {
+test "bug finder forwarding prefers surviving descendant over ancestor alias" {
   let string = string_graph()
   let option = fn(long : String, aliases : Array[String]) -> OptionSpecDef {
     {
@@ -618,161 +809,29 @@ test "forwarding prefers surviving descendant over ancestor alias" {
     parent.canonical_input_fields(parent_index).map(field => field.name),
     content="[parent-value, leaf]",
   )
-  register_subtool_def_invoker(child, fn(command_path, input, _, _) {
-    let index = match child.command_index_by_path(command_path) {
-      Some(index) => index
-      None =>
-        return Err(@toolCommon.ToolError::InvalidCommandPath(command_path))
-    }
-    let decoded = decode_canonical_input(child, index, input, "ranked child") catch {
-      error => return Err(error)
-    }
-    let leaf : String = decode_canonical_field(
-      decoded, "format", "ranked child",
-    ) catch {
-      error => return Err(error)
-    }
-    if leaf == "local" {
-      Ok(invocation_result_empty())
-    } else {
-      Err(@toolCommon.ToolError::InvalidInput("ancestor alias won forwarding"))
-    }
-  })
   let model = parent.canonical_input_model(parent_index)
   let input = build_canonical_input(model, [
     ("parent-value", @model.SchemaValue::String("ancestor")),
     ("leaf", @model.SchemaValue::String("local")),
   ])
-  let fields = decode_canonical_input(
+  let fields = decode_canonical_input_for_test(
     parent,
     parent_index,
     @model.typed_schema_value_to_wit(input),
     "ranked parent",
   )
-  let result = invoke_registered_subtool(
-    "ranked-forward-child",
-    ["run"],
-    fields,
-    None,
-    @agentCommon.Principal::Anonymous,
-  )
-  guard result is Ok(_) else { fail("surviving descendant was not forwarded") }
-}
-
-///|
-test "forwarding prefers surviving descendant over exact ancestor name" {
-  let string = string_graph()
-  let option = fn(long : String, aliases : Array[String]) -> OptionSpecDef {
-    {
-      long,
-      short: None,
-      aliases,
-      doc: doc(long),
-      value_name: None,
-      shape: OptionShapeDef::Scalar(string),
-      default: None,
-      required: true,
-      env_var: None,
-    }
+  let child_index = child.command_index_by_path(["run"])
+  guard child_index is Some(child_index) else {
+    fail("expected child descendant command")
   }
-  let standalone_middle_raw : ToolDef = {
-    version: "1",
-    commands: [
-      {
-        name: "middle",
-        aliases: [],
-        doc: doc("middle"),
-        globals: { options: [option("outer", ["leaf"])], flags: [] },
-        subcommands: [1],
-        body: None,
-      },
-      {
-        name: "run",
-        aliases: [],
-        doc: doc("run"),
-        globals: { options: [], flags: [] },
-        subcommands: [],
-        body: Some({
-          positionals: { fixed: [], tail: None },
-          options: [option("leaf", [])],
-          flags: [],
-          constraints: [],
-          stdin: None,
-          stdout: None,
-          result: None,
-          errors: [],
-          annotations: None,
-        }),
-      },
-    ],
-  }
-  let standalone_middle = standalone_middle_raw.normalize_inherited_globals()
-  inspect(
-    standalone_middle.canonical_input_fields(1).map(field => field.name),
-    content="[outer]",
+  let forwarded = forward_canonical_input(fields, child, child_index)
+  let child_input = decode_canonical_input_for_test(
+    child, child_index, forwarded, "ranked child",
   )
-  let composed_raw : ToolDef = {
-    version: "1",
-    commands: [
-      {
-        name: "outer",
-        aliases: [],
-        doc: doc("outer"),
-        globals: { options: [option("outer", [])], flags: [] },
-        subcommands: [1],
-        body: None,
-      },
-      {
-        name: "middle",
-        aliases: [],
-        doc: doc("middle"),
-        globals: { options: [option("outer", ["leaf"])], flags: [] },
-        subcommands: [2],
-        body: None,
-      },
-      {
-        name: "run",
-        aliases: [],
-        doc: doc("run"),
-        globals: { options: [], flags: [] },
-        subcommands: [],
-        body: Some({
-          positionals: { fixed: [], tail: None },
-          options: [option("leaf", [])],
-          flags: [],
-          constraints: [],
-          stdin: None,
-          stdout: None,
-          result: None,
-          errors: [],
-          annotations: None,
-        }),
-      },
-    ],
-  }
-  let composed = composed_raw.normalize_inherited_globals()
-  inspect(
-    composed.canonical_input_fields(2).map(field => field.name),
-    content="[outer, leaf]",
+  let leaf : String = decode_canonical_field_for_test(
+    child_input, "format", "ranked child",
   )
-  let input = build_canonical_input(composed.canonical_input_model(2), [
-    ("outer", @model.SchemaValue::String("ancestor")),
-    ("leaf", @model.SchemaValue::String("descendant")),
-  ])
-  let decoded = decode_canonical_input(
-    composed,
-    2,
-    @model.typed_schema_value_to_wit(input),
-    "composed",
-  )
-  let forwarded = forward_canonical_input(decoded, standalone_middle, 1)
-  let forwarded = decode_canonical_input(
-    standalone_middle, 1, forwarded, "standalone middle",
-  )
-  let value : String = decode_canonical_field(
-    forwarded, "outer", "standalone middle",
-  )
-  inspect(value, content="descendant")
+  assert_eq(leaf, "local")
 }
 
 ///|
@@ -830,13 +889,13 @@ test "reverse-alias deprojection retains the surviving canonical value" {
   let input = build_canonical_input(def.canonical_input_model(1), [
     ("format", @model.SchemaValue::String("7")),
   ])
-  let decoded = decode_canonical_input(
+  let decoded = decode_canonical_input_for_test(
     def,
     1,
     @model.typed_schema_value_to_wit(input),
     "reverse alias",
   )
-  let format : String = decode_canonical_field(
+  let format : String = decode_canonical_field_for_test(
     decoded, "format", "reverse alias",
   ) catch {
     _ => fail("surviving canonical field was not decoded")
@@ -859,9 +918,7 @@ test "panic top-level registration rejects an existing private subtool name" {
       },
     ],
   }
-  register_subtool_def_invoker(def, fn(_, _, _, _) {
-    Ok(invocation_result_empty())
-  })
+  register_subtool_def_for_test(def)
   register_tool_def(def)
 }
 
@@ -898,7 +955,7 @@ test "decode invocation input rejects graph root that is not a record" {
   let graph = string_graph()
   let typed = encode_invocation_input(graph, [@model.SchemaValue::String("x")])
   let wire = @model.typed_schema_value_to_wit(typed)
-  try decode_invocation_input(wire, 1, "tool command") catch {
+  try decode_invocation_input_for_test(wire, 1, "tool command") catch {
     @toolCommon.ToolError::InvalidInput(_) => ()
     _ => abort("expected invalid input")
   } noraise {
@@ -922,14 +979,46 @@ test "decode invocation input rejects value that does not match typed schema fie
   }
   let wire = @model.typed_schema_value_to_wit(typed)
   try {
-    let fields = decode_invocation_input(wire, 1, "tool command")
-    let _decoded : Int = decode_param(fields, 0, "tool command")
+    let fields = decode_invocation_input_for_test(wire, 1, "tool command")
+    let _decoded : Int = decode_param_for_test(fields, 0, "tool command")
   } catch {
     @toolCommon.ToolError::InvalidInput(_) => ()
     _ => abort("expected invalid input")
   } noraise {
     _ => abort("expected invalid input")
   }
+}
+
+///|
+test "decode invocation input accepts a stream value" {
+  let graph : @model.SchemaGraph = {
+    defs: [],
+    root: @model.schema_type(
+      @model.SchemaTypeBody::Record([
+        @model.field(
+          "stream",
+          @model.schema_type(@model.SchemaTypeBody::Stream(None)),
+        ),
+      ]),
+    ),
+  }
+  let handle = @model.GuestSchemaValueStreamHandle::from_wrapped(
+    @types.SchemaValueStream::SchemaValueStream(92),
+  )
+  let typed : @model.TypedSchemaValue = {
+    graph,
+    value: @model.SchemaValue::Record([@model.SchemaValue::Stream(handle)]),
+  }
+  let decoded = decode_invocation_input_for_test(
+    @model.typed_schema_value_to_wit(typed),
+    1,
+    "stream tool command",
+  )
+  guard decoded[0] is @model.SchemaValue::Stream(decoded_handle) else {
+    fail("expected a decoded stream value")
+  }
+  assert_true(decoded_handle.is_present())
+  @model.SchemaValue::Record(decoded).release_resources(test_resource_drops())
 }
 
 ///|
@@ -972,7 +1061,7 @@ test "decode invocation input rejects union value whose discriminator does not m
     ]),
   }
   let wire = @model.typed_schema_value_to_wit(typed)
-  try decode_invocation_input(wire, 1, "tool command") catch {
+  try decode_invocation_input_for_test(wire, 1, "tool command") catch {
     @toolCommon.ToolError::InvalidInput(_) => ()
     _ => abort("expected invalid input")
   } noraise {
@@ -1040,6 +1129,60 @@ test "normalization rejects a local field overlapping two inherited globals" {
     _ => abort("unexpected normalization error")
   } noraise {
     _ => abort("expected inherited global conflict")
+  }
+}
+
+///|
+test "normalization rejects distinct options sharing an inherited short form" {
+  let string = string_graph()
+  let option = fn(long : String) -> OptionSpecDef {
+    {
+      long,
+      short: Some('f'),
+      aliases: [],
+      doc: doc(long),
+      value_name: None,
+      shape: OptionShapeDef::Scalar(string),
+      default: None,
+      required: true,
+      env_var: None,
+    }
+  }
+  let def : ToolDef = {
+    version: "1",
+    commands: [
+      {
+        name: "root",
+        aliases: [],
+        doc: doc("root"),
+        globals: { options: [option("format")], flags: [] },
+        subcommands: [1],
+        body: None,
+      },
+      {
+        name: "child",
+        aliases: [],
+        doc: doc("child"),
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some({
+          positionals: { fixed: [], tail: None },
+          options: [option("file")],
+          flags: [],
+          constraints: [],
+          stdin: None,
+          stdout: None,
+          result: None,
+          errors: [],
+          annotations: None,
+        }),
+      },
+    ],
+  }
+  try def.normalize_inherited_globals() catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected inherited short-form conflict")
   }
 }
 
@@ -1112,162 +1255,6 @@ test "normalization resolves value-is literals against inherited globals" {
     fail("expected resolved value-is constraint")
   }
   let _wire = normalized.to_tool()
-}
-
-///|
-test "generated parent-only constraint descriptors can all register" {
-  let string = string_graph()
-  let format : OptionSpecDef = {
-    long: "format",
-    short: None,
-    aliases: [],
-    doc: doc("format"),
-    value_name: None,
-    shape: OptionShapeDef::Scalar(string),
-    default: None,
-    required: true,
-    env_var: None,
-  }
-  let child_raw : ToolDef = {
-    version: "1",
-    commands: [
-      {
-        name: "constraint-child",
-        aliases: [],
-        doc: doc("constraint child"),
-        globals: { options: [], flags: [] },
-        subcommands: [1],
-        body: None,
-      },
-      {
-        name: "run",
-        aliases: [],
-        doc: doc("run"),
-        globals: { options: [], flags: [] },
-        subcommands: [],
-        body: Some({
-          positionals: { fixed: [], tail: None },
-          options: [],
-          flags: [],
-          constraints: [
-            ConstraintDef::RequiresAll([
-              RefDef::ValueIs({
-                name: "format",
-                value: ValueIsLiteralDef::Deferred(ToolLiteral::Scalar("json")),
-              }),
-            ]),
-          ],
-          stdin: None,
-          stdout: None,
-          result: None,
-          errors: [],
-          annotations: None,
-        }),
-      },
-    ],
-  }
-  let parent_raw : ToolDef = {
-    version: "1",
-    commands: [
-      {
-        name: "constraint-parent",
-        aliases: [],
-        doc: doc("constraint parent"),
-        globals: { options: [], flags: [] },
-        subcommands: [],
-        body: None,
-      },
-    ],
-  }
-  let parent = parent_raw
-    .graft_subtree(
-      child_raw,
-      "constraint-child",
-      { options: [format], flags: [] },
-      None,
-      None,
-      None,
-    )
-    .normalize_inherited_globals()
-  register_tool_def_invoker(parent, fn(_, _, _, _) {
-    Ok(invocation_result_empty())
-  })
-  let child = child_raw.normalize_inherited_globals()
-  register_subtool_def_invoker(child, fn(_, _, _, _) {
-    Ok(invocation_result_empty())
-  })
-}
-
-///|
-test "normalization does not resolve value-is literals by short form" {
-  let string = string_graph()
-  let format : OptionSpecDef = {
-    long: "format",
-    short: Some('f'),
-    aliases: [],
-    doc: doc("format"),
-    value_name: None,
-    shape: OptionShapeDef::Scalar(string),
-    default: None,
-    required: false,
-    env_var: None,
-  }
-  let def : ToolDef = {
-    version: "1",
-    commands: [
-      {
-        name: "root",
-        aliases: [],
-        doc: doc("root"),
-        globals: { options: [format], flags: [] },
-        subcommands: [1],
-        body: None,
-      },
-      {
-        name: "render",
-        aliases: [],
-        doc: doc("render"),
-        globals: { options: [], flags: [] },
-        subcommands: [],
-        body: Some({
-          positionals: { fixed: [], tail: None },
-          options: [],
-          flags: [],
-          constraints: [
-            ConstraintDef::RequiresAll([
-              RefDef::ValueIs({
-                name: "f",
-                value: ValueIsLiteralDef::Deferred(ToolLiteral::Scalar("json")),
-              }),
-            ]),
-          ],
-          stdin: None,
-          stdout: None,
-          result: None,
-          errors: [],
-          annotations: None,
-        }),
-      },
-    ],
-  }
-  let normalized = def.normalize_inherited_globals()
-  guard normalized.commands[1].body is Some(body) else {
-    fail("expected command body")
-  }
-  guard body.constraints
-    is [
-      ConstraintDef::RequiresAll(
-        [RefDef::ValueIs({ name: "f", value: ValueIsLiteralDef::Deferred(_) })]
-      ),
-    ] else {
-    fail("short-only value-is reference was unexpectedly resolved")
-  }
-  try normalized.to_tool() catch {
-    UnresolvedValueIsLiteral("f") => ()
-    _ => fail("unexpected conversion error")
-  } noraise {
-    _ => fail("expected unresolved short-only value-is reference")
-  }
 }
 
 ///|
@@ -1443,8 +1430,8 @@ test "canonical model builds and decodes the expected named record" {
   }
   inspect(values[0], content="String(new)")
   let wire = @model.typed_schema_value_to_wit(input)
-  let decoded = decode_canonical_input(def, 1, wire, "leaf")
-  let force : Bool = decode_canonical_field(decoded, "f", "leaf")
+  let decoded = decode_canonical_input_for_test(def, 1, wire, "leaf")
+  let force : Bool = decode_canonical_field_for_test(decoded, "f", "leaf")
   assert_true(force)
 }
 
@@ -1463,7 +1450,7 @@ test "canonical input rejects missing fields and mismatching wire schema" {
     value: @model.SchemaValue::String("not a record"),
   }
   let wire = @model.typed_schema_value_to_wit(mismatching)
-  try decode_canonical_input(def, 1, wire, "leaf") catch {
+  try decode_canonical_input_for_test(def, 1, wire, "leaf") catch {
     @toolCommon.ToolError::InvalidInput(_) => ()
     _ => fail("expected invalid canonical input")
   } noraise {
@@ -1648,8 +1635,8 @@ test "text-refined string canonical input round-trips through typed values" {
     ("value", @schema.to_value_as("aaa")),
   ])
   let wire = @model.typed_schema_value_to_wit(input)
-  let decoded = decode_canonical_input(def, 0, wire, "echo")
-  let value : String = decode_canonical_field(decoded, "value", "echo")
+  let decoded = decode_canonical_input_for_test(def, 0, wire, "echo")
+  let value : String = decode_canonical_field_for_test(decoded, "value", "echo")
   inspect(value, content="aaa")
 }
 

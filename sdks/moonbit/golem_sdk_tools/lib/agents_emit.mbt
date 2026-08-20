@@ -219,7 +219,7 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
   let user_params = visible_params(agent.constructor_params)
   let arity = user_params.length()
   let ctx = escape_string_lit("\{agent.name}::new")
-  buf.write_string("      construct: fn(input, principal) {\n")
+  buf.write_string("      construct: async fn(input, principal) {\n")
   buf.write_string("        let _ = principal\n")
   buf.write_string("        try {\n")
   if arity > 0 {
@@ -358,7 +358,7 @@ fn emit_raw_agent(buf : StringBuilder, agent : AgentInfo) -> Unit {
     emit_method_arm(buf, agent, m)
   }
   buf.write_string(
-    "      other => Err(@common.AgentError::InvalidMethod(other))\n",
+    "      other => {\n        @agents.discard_wire_value(input)\n        Err(@common.AgentError::InvalidMethod(other))\n      }\n",
   )
   buf.write_string("    }\n")
   buf.write_string("  } catch {\n")

@@ -25,6 +25,7 @@ pub mod multimodal;
 pub mod protobuf;
 pub mod schema_type;
 pub mod schema_value;
+pub mod stream;
 pub mod tool;
 pub mod unstructured;
 pub mod validation;
@@ -56,3 +57,6 @@ pub use schema_value::{
     BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
     SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
+pub use stream::SchemaValueStream;
+#[cfg(all(feature = "host", not(feature = "guest")))]
+pub use stream::SchemaValueStreamHandleRep;

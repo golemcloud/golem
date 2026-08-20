@@ -1,5 +1,5 @@
 use crate::app::{TestContext, cmd, flag, merge_into_manifest};
-use crate::crate_path;
+use crate::{crate_path, workspace_path};
 use std::path::PathBuf;
 
 fn test_data_path() -> PathBuf {
@@ -20,6 +20,723 @@ use test_r::{inherit_test_dep, test, timeout};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
+
+async fn streaming_invocation_context() -> TestContext {
+    let mut ctx = TestContext::new();
+    let component_dir = ctx.cwd_path_join("component");
+    fs::create_dir_all(component_dir.join("src")).unwrap();
+
+    let fixture = workspace_path().join("test-components/agent-rpc/golem-it-agent-rpc-rust");
+    fs::copy(fixture.join("src/lib.rs"), component_dir.join("src/lib.rs")).unwrap();
+
+    let sdk_path = workspace_path().join("sdks/rust/golem-rust");
+    fs::write_str(
+        component_dir.join("Cargo.toml"),
+        formatdoc! {r#"
+            [package]
+            name = "golem_it_agent_rpc_rust"
+            version = "0.0.1"
+            edition = "2024"
+
+            [profile.release]
+            opt-level = "s"
+            lto = true
+
+            [lib]
+            crate-type = ["cdylib"]
+            path = "src/lib.rs"
+
+            [dependencies]
+            bytes = "1.11.0"
+            log = {{ version = "0.4.29", features = ["kv"] }}
+            golem-rust = {{ path = "{sdk_path}", features = ["bytes", "export_golem_agentic"] }}
+            serde = {{ version = "1", features = ["derive"] }}
+            serde_json = "1"
+            wasi-fetch = "=0.2.0"
+        "#, sdk_path = sdk_path.display()},
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: streaming-invocation
+
+            componentTemplates:
+              rust-streaming-test:
+                build:
+                - command: cargo build --target wasm32-wasip2 --release
+                  sources:
+                  - "{{{{ componentDir }}}}/src"
+                  - "{{{{ componentDir }}}}/Cargo.toml"
+                  targets:
+                  - "{{{{ cargoTarget }}}}/wasm32-wasip2/release/golem_it_agent_rpc_rust.wasm"
+                componentWasm: "{{{{ cargoTarget }}}}/wasm32-wasip2/release/golem_it_agent_rpc_rust.wasm"
+                outputWasm: "{{{{ golemTempDir }}}}/agents/golem_it_agent_rpc_rust.wasm"
+
+            components:
+              golem-it:agent-rpc-rust:
+                dir: component
+                templates: rust-streaming-test
+                presets:
+                  release: {{}}
+
+            environments:
+              local:
+                server: local
+                componentPresets: release
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    ctx.start_server().await;
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    ctx
+}
+
+fn streaming_agent(name: &str) -> String {
+    format!(r#"StreamingRpcTarget("{name}")"#)
+}
+
+#[test]
+#[timeout("15 minutes")]
+async fn test_streaming_invocation_cli_end_to_end() {
+    let ctx = streaming_invocation_context().await;
+    let agent = streaming_agent(&Uuid::new_v4().to_string());
+
+    let scalar = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, &agent, "increment_scalar"])
+        .await;
+    assert!(scalar.success_or_dump());
+    assert!(scalar.stdout_contains("Invocation result in Rust syntax:"));
+    assert!(scalar.stdout_contains("1"));
+
+    let unit = ctx.cli([cmd::AGENT, cmd::INVOKE, &agent, "noop"]).await;
+    assert!(unit.success_or_dump());
+    assert!(unit.stdout_contains("void"));
+
+    let trigger_stream = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            &agent,
+            "produce",
+            "[1]",
+            "--trigger",
+        ])
+        .await;
+    assert!(!trigger_stream.success());
+    assert!(
+        trigger_stream
+            .stderr_contains("Streaming agent methods require an attached invocation session")
+    );
+
+    let scheduled_stream = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            &agent,
+            "produce",
+            "[1]",
+            "--trigger",
+            "--schedule-at",
+            "2030-01-01T00:00:00Z",
+        ])
+        .await;
+    assert!(!scheduled_stream.success());
+    assert!(
+        scheduled_stream
+            .stderr_contains("Streaming agent methods require an attached invocation session")
+    );
+
+    let value_input = ctx
+        .cli_with_input(
+            [cmd::AGENT, cmd::INVOKE, &agent, "consume", "-"],
+            b"1\n2\n3\n",
+        )
+        .await;
+    assert!(
+        value_input.success(),
+        "value stdin failed: {}",
+        value_input.stderr_text()
+    );
+    assert!(value_input.stdout_text().contains("[1, 2, 3]"));
+
+    let string_input = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "consume_strings",
+                "-",
+                "--no-stream",
+            ],
+            b"first\n\nthird\n",
+        )
+        .await;
+    assert!(
+        string_input.success(),
+        "string stdin failed: {}",
+        string_input.stderr_text()
+    );
+    assert!(
+        string_input
+            .stdout_text()
+            .contains("[\"first\", \"\", \"third\"]\n")
+    );
+
+    let value_output = ctx
+        .cli_with_input(
+            [cmd::AGENT, cmd::INVOKE, &agent, "produce", "[4, 5, 6]"],
+            b"",
+        )
+        .await;
+    assert!(
+        value_output.success(),
+        "value stdout failed: {}",
+        value_output.stderr_text()
+    );
+    assert!(value_output.stdout_text().contains("4\n5\n6\n"));
+
+    let bidirectional = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "transform",
+                "-",
+                "--no-stream",
+            ],
+            b"7\n8\n",
+        )
+        .await;
+    assert!(
+        bidirectional.success(),
+        "bidirectional invocation failed: {}",
+        bidirectional.stderr_text()
+    );
+    assert!(bidirectional.stdout_text().contains("70\n80\n"));
+
+    let raw_output = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "produce_bytes",
+                "[0, 1, 2, 255]",
+                "--stdout-format",
+                "raw",
+            ],
+            b"",
+        )
+        .await;
+    assert!(
+        raw_output.success(),
+        "raw stdout failed: {}",
+        raw_output.stderr_text()
+    );
+    assert_eq!(raw_output.stdout(), &[0, 1, 2, 255]);
+
+    let raw_input = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "consume_bytes",
+                "-",
+                "--stdin-format",
+                "raw",
+                "--no-stream",
+            ],
+            b"raw input",
+        )
+        .await;
+    assert!(
+        raw_input.success(),
+        "raw stdin failed: {}",
+        raw_input.stderr_text()
+    );
+    assert!(
+        raw_input
+            .stdout_text()
+            .contains("[114, 97, 119, 32, 105, 110, 112, 117, 116]")
+    );
+
+    let raw_bidirectional = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "transform_bytes",
+                "-",
+                "--stdin-format",
+                "raw",
+                "--stdout-format",
+                "raw",
+            ],
+            &[0, 9, 10, 255],
+        )
+        .await;
+    assert!(
+        raw_bidirectional.success(),
+        "raw bidirectional invocation failed: {}",
+        raw_bidirectional.stderr_text()
+    );
+    assert_eq!(raw_bidirectional.stdout(), &[0, 9, 10, 255]);
+
+    let binary_input = (0..(64 * 1024 + 17))
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    let raw_binary = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "transform_binary",
+                "-",
+                "--stdin-format",
+                "raw",
+                "--stdout-format",
+                "raw",
+            ],
+            &binary_input,
+        )
+        .await;
+    assert!(
+        raw_binary.success(),
+        "raw binary invocation failed: {}",
+        raw_binary.stderr_text()
+    );
+    assert_eq!(raw_binary.stdout(), binary_input);
+
+    let binary_chunks = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "consume_binary_chunks",
+                "-",
+                "--stdin-format",
+                "raw",
+                "--no-stream",
+            ],
+            &binary_input,
+        )
+        .await;
+    assert!(
+        binary_chunks.success(),
+        "raw binary chunk check failed: {}",
+        binary_chunks.stderr_text()
+    );
+    assert!(binary_chunks.stdout_text().contains("[65536, 17]\n"));
+
+    let siblings = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "produce_siblings",
+                "--no-stream",
+            ],
+            b"",
+        )
+        .await;
+    assert!(
+        siblings.success(),
+        "sibling output failed: {}",
+        siblings.stderr_text()
+    );
+    let sibling_stdout = siblings.stdout_text();
+    assert!(sibling_stdout.contains("$[0]: \"a\""));
+    assert!(sibling_stdout.contains("$[0]: \"b\""));
+    assert!(sibling_stdout.contains("$[1]: 63"));
+
+    let nested = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "produce_nested_items",
+                "--no-stream",
+            ],
+            b"",
+        )
+        .await;
+    assert!(
+        nested.success(),
+        "nested output failed: {}",
+        nested.stderr_text()
+    );
+    let nested_stdout = nested.stdout_text();
+    assert!(nested_stdout.contains("first"));
+    assert!(nested_stdout.contains("second"));
+    assert!(nested_stdout.contains("$[0].values"));
+    assert!(nested_stdout.contains("$[1].values"));
+    assert!(nested_stdout.contains("5"));
+
+    let structured = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "produce",
+                "[9, 10]",
+                flag::FORMAT,
+                "json",
+                "--no-stream",
+            ],
+            b"",
+        )
+        .await;
+    assert!(
+        structured.success(),
+        "structured invocation failed: {}",
+        structured.stderr_text()
+    );
+    let events = structured
+        .stdout_text()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .all(|event| event["$type"] == "agent.invoke-session")
+    );
+    let kinds = events
+        .iter()
+        .map(|event| event["kind"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        ["accepted", "result", "item", "item", "end", "finished"]
+    );
+    assert_eq!(events.last().unwrap()["outcome"], "success");
+
+    let scalar_and_stream = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "produce_scalar_and_stream",
+                flag::FORMAT,
+                "json",
+                "--no-stream",
+            ],
+            b"",
+        )
+        .await;
+    assert!(
+        scalar_and_stream.success(),
+        "scalar-plus-stream invocation failed: {}",
+        scalar_and_stream.stderr_text()
+    );
+    let scalar_and_stream_events = scalar_and_stream
+        .stdout_text()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(scalar_and_stream_events[1]["value"][0], "metadata");
+    assert_eq!(scalar_and_stream_events[2]["value"], 11);
+    assert_eq!(scalar_and_stream_events[3]["value"], 12);
+    assert_eq!(
+        scalar_and_stream_events.last().unwrap()["outcome"],
+        "success"
+    );
+
+    let yaml = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "produce",
+                "[]",
+                flag::FORMAT,
+                "yaml",
+                "--no-stream",
+            ],
+            b"",
+        )
+        .await;
+    assert!(
+        yaml.success(),
+        "YAML invocation failed: {}",
+        yaml.stderr_text()
+    );
+    assert_eq!(yaml.stdout_text().matches("---\n").count(), 4);
+
+    let toon = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "produce",
+                "[]",
+                flag::FORMAT,
+                "toon",
+                "--no-stream",
+            ],
+            b"",
+        )
+        .await;
+    assert!(
+        toon.success(),
+        "TOON invocation failed: {}",
+        toon.stderr_text()
+    );
+    assert_eq!(toon.stdout_text().matches("@toon\n").count(), 4);
+    assert_eq!(toon.stdout_text().matches("@end\n").count(), 4);
+
+    let malformed_input = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "consume",
+                "-",
+                "--no-stream",
+            ],
+            b"1\nnot-a-u32\n3\n",
+        )
+        .await;
+    assert!(!malformed_input.success());
+    assert!(
+        malformed_input
+            .stderr_text()
+            .contains("parameter 'input' at line 2")
+    );
+
+    let drop_input_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let saturated_malformed_input = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &drop_input_agent,
+                "drop_input",
+                "-",
+                "--no-stream",
+            ],
+            format!("{}not-a-u32\n", "1\n".repeat(16)).as_bytes(),
+        )
+        .await;
+    assert!(!saturated_malformed_input.success());
+    assert!(
+        saturated_malformed_input
+            .stderr_text()
+            .contains("parameter 'input' at line 17")
+    );
+
+    let cancelled_valid_input_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let cancelled_valid_input = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &cancelled_valid_input_agent,
+                "drop_input",
+                "-",
+                "--no-stream",
+            ],
+            "1\n".repeat(64).as_bytes(),
+        )
+        .await;
+    assert!(
+        cancelled_valid_input.success(),
+        "guest input cancellation failed with queued valid input: {}",
+        cancelled_valid_input.stderr_text()
+    );
+    assert!(cancelled_valid_input.stdout_text().contains("42"));
+
+    let cancelled_late_malformed_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let cancelled_late_malformed_input = format!("{}not-a-u32\n", "1\n".repeat(64));
+    let cancelled_late_malformed = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &cancelled_late_malformed_agent,
+                "drop_input",
+                "-",
+                "--no-stream",
+            ],
+            cancelled_late_malformed_input.as_bytes(),
+        )
+        .await;
+    assert!(!cancelled_late_malformed.success());
+    assert!(
+        cancelled_late_malformed
+            .stderr_text()
+            .contains("parameter 'input' at line 65")
+    );
+
+    let held_input_agent = streaming_agent(&Uuid::new_v4().to_string());
+    let held_input = format!("{}not-a-u32\n", "1\n".repeat(32));
+    let held_malformed_input = tokio::time::timeout(
+        Duration::from_secs(10),
+        ctx.cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &held_input_agent,
+                "hold_input",
+                "-",
+                "--no-stream",
+            ],
+            held_input.as_bytes(),
+        ),
+    )
+    .await
+    .expect("stdin parse failure remained blocked behind unacknowledged input");
+    assert!(!held_malformed_input.success());
+    assert!(
+        held_malformed_input
+            .stderr_text()
+            .contains("parameter 'input' at line 33")
+    );
+
+    let producer_error = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "produce_error",
+                "--no-stream",
+            ],
+            b"",
+        )
+        .await;
+    assert!(!producer_error.success());
+    assert!(producer_error.stdout_text().lines().any(|line| line == "1"));
+    assert!(producer_error.stderr_text().contains("Output stream"));
+
+    let sibling_error = ctx
+        .cli_with_input(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &agent,
+                "produce_sibling_error",
+                "--no-stream",
+            ],
+            b"",
+        )
+        .await;
+    assert!(!sibling_error.success());
+    assert!(sibling_error.stderr_text().contains("Output stream"));
+    assert!(sibling_error.stdout_text().contains("$[1]: 63"));
+
+    let broken_pipe = ctx
+        .cli_with_broken_stdout([
+            cmd::AGENT,
+            cmd::INVOKE,
+            &agent,
+            "produce_byte_then_wait",
+            "--stdout-format",
+            "raw",
+        ])
+        .await;
+    assert!(
+        broken_pipe.success(),
+        "broken stdout pipe was treated as failure (exit {:?}): {}",
+        broken_pipe.exit_code(),
+        broken_pipe.stderr_text()
+    );
+    assert!(!broken_pipe.stderr_text().contains("Broken pipe"));
+
+    let interrupted_agent = streaming_agent(&Uuid::new_v4().to_string());
+    #[cfg(unix)]
+    {
+        let exit_code = ctx
+            .cli_ctrl_c_after(
+                [
+                    cmd::AGENT,
+                    cmd::INVOKE,
+                    &interrupted_agent,
+                    "transform",
+                    "-",
+                    flag::FORMAT,
+                    "json",
+                    "--no-stream",
+                ],
+                "\"kind\":\"accepted\"",
+                Duration::ZERO,
+            )
+            .await;
+        assert_eq!(exit_code, 130);
+
+        let backpressured_agent = streaming_agent(&Uuid::new_v4().to_string());
+        let exit_code = ctx
+            .cli_ctrl_c_after(
+                [
+                    cmd::AGENT,
+                    cmd::INVOKE,
+                    &backpressured_agent,
+                    "produce_many_bytes",
+                    "200000",
+                    flag::FORMAT,
+                    "json",
+                    "--no-stream",
+                ],
+                "\"kind\":\"accepted\"",
+                Duration::from_secs(1),
+            )
+            .await;
+        assert_eq!(exit_code, 130);
+    }
+    #[cfg(not(unix))]
+    {
+        let interactive_agent = interrupted_agent.clone();
+        ctx.cli_interactive(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &interactive_agent,
+                "transform",
+                "-",
+                flag::FORMAT,
+                "json",
+                "--no-stream",
+            ],
+            |session| {
+                session.set_expect_timeout(Some(Duration::from_secs(30)));
+                session.expect_str("\"kind\":\"accepted\"")?;
+                session.send("\u{3}")?;
+                session.expect_eof()
+            },
+        )
+        .await;
+    }
+
+    let after_interrupt = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            &interrupted_agent,
+            "increment_scalar",
+        ])
+        .await;
+    assert!(after_interrupt.success_or_dump());
+    assert!(after_interrupt.stdout_contains("1"));
+}
 
 #[test]
 async fn test_rust_counter() {

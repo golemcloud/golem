@@ -2,6 +2,7 @@
 package "golemcloud/golem_sdk/schema_model"
 
 import {
+  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
 }
 
@@ -22,13 +23,17 @@ pub fn schema_graph_to_wit(SchemaGraph) -> @types.SchemaGraph raise SchemaModelE
 
 pub fn schema_type(SchemaTypeBody, metadata? : @types.MetadataEnvelope) -> SchemaType
 
-pub fn schema_value_from_wit(@types.SchemaValueTree) -> SchemaValue raise SchemaModelError
+pub fn schema_value_from_wit(@types.SchemaValueTree, SchemaValueResourceDrops) -> SchemaValue raise SchemaModelError
 
 pub fn schema_value_to_wit(SchemaValue) -> @types.SchemaValueTree raise SchemaModelError
 
-pub fn typed_schema_value_from_wit(@types.TypedSchemaValue) -> TypedSchemaValue raise SchemaModelError
+pub async fn schema_value_to_wit_async(SchemaValue) -> @types.SchemaValueTree raise SchemaModelError
+
+pub fn typed_schema_value_from_wit(@types.TypedSchemaValue, SchemaValueResourceDrops) -> TypedSchemaValue raise SchemaModelError
 
 pub fn typed_schema_value_to_wit(TypedSchemaValue) -> @types.TypedSchemaValue raise SchemaModelError
+
+pub async fn typed_schema_value_to_wit_async(TypedSchemaValue) -> @types.TypedSchemaValue raise SchemaModelError
 
 pub fn validate_graph(SchemaGraph) -> Array[SchemaError]
 
@@ -102,6 +107,15 @@ pub fn GuestQuotaTokenHandle::is_present(Self) -> Bool
 pub fn GuestQuotaTokenHandle::new(@types.QuotaToken) -> Self
 pub fn GuestQuotaTokenHandle::take(Self) -> @types.QuotaToken?
 pub fn[R] GuestQuotaTokenHandle::with_handle(Self, (@types.QuotaToken) -> R) -> R?
+
+pub(all) struct GuestSchemaValueStreamHandle {
+  // private fields
+}
+pub fn GuestSchemaValueStreamHandle::from_native(@async-core.Stream[@types.SchemaValueTree]) -> Self
+pub fn GuestSchemaValueStreamHandle::from_wrapped(@types.SchemaValueStream) -> Self
+pub fn GuestSchemaValueStreamHandle::is_present(Self) -> Bool
+pub fn GuestSchemaValueStreamHandle::put_native(Self, @async-core.Stream[@types.SchemaValueTree]) -> Unit
+pub async fn GuestSchemaValueStreamHandle::take_or_unwrap_native(Self) -> @async-core.Stream[@types.SchemaValueTree] raise SchemaModelError
 
 pub(all) struct GuestSecretHandle {
   // private fields
@@ -230,7 +244,16 @@ pub(all) enum SchemaValue {
   Union(String, SchemaValue)
   Secret(GuestSecretHandle)
   QuotaToken(GuestQuotaTokenHandle)
+  Stream(GuestSchemaValueStreamHandle)
 } derive(Eq, Show)
+pub fn SchemaValue::release_resources(Self, SchemaValueResourceDrops) -> Unit
+
+pub(all) struct SchemaValueResourceDrops {
+  drop_secret : (@types.Secret) -> Unit
+  drop_quota_token : (@types.QuotaToken) -> Unit
+  drop_stream : (@types.SchemaValueStream) -> Unit
+  drop_native_stream : (@async-core.Stream[@types.SchemaValueTree]) -> Unit
+}
 
 pub(all) struct SecretSpec {
   inner : SchemaType

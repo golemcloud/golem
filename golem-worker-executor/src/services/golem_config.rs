@@ -32,6 +32,7 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::warn;
@@ -375,6 +376,7 @@ impl Default for GolemConfig {
 pub struct Limits {
     pub max_active_workers: usize,
     pub invocation_result_broadcast_capacity: usize,
+    pub live_stream_event_broadcast_capacity: NonZeroUsize,
     pub max_concurrent_streams: u32,
     pub event_broadcast_capacity: usize,
     pub event_history_size: usize,
@@ -408,6 +410,11 @@ impl SafeDisplay for Limits {
             &mut result,
             "invocation result broadcast capacity: {}",
             self.invocation_result_broadcast_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "live stream event broadcast capacity: {}",
+            self.live_stream_event_broadcast_capacity
         );
         let _ = writeln!(
             &mut result,
@@ -1662,6 +1669,7 @@ impl Default for Limits {
         Self {
             max_active_workers: 1024,
             invocation_result_broadcast_capacity: 100000,
+            live_stream_event_broadcast_capacity: NonZeroUsize::new(32).unwrap(),
             max_concurrent_streams: 1024,
             event_broadcast_capacity: 1024,
             event_history_size: 128,
@@ -2065,4 +2073,41 @@ impl Default for QuotaServiceConfig {
 
 pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
     ConfigLoader::new_with_examples(Path::new("config/worker-executor.toml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Limits;
+    use golem_common::SafeDisplay;
+    use serde_json::Value;
+    use test_r::test;
+
+    #[test]
+    fn live_stream_event_broadcast_capacity_defaults_to_32() {
+        let limits = Limits::default();
+
+        assert_eq!(limits.live_stream_event_broadcast_capacity.get(), 32);
+        let decoded: Limits =
+            serde_json::from_value(serde_json::to_value(&limits).unwrap()).unwrap();
+        assert_eq!(decoded.live_stream_event_broadcast_capacity.get(), 32);
+        assert!(
+            limits
+                .to_safe_string()
+                .contains("live stream event broadcast capacity: 32")
+        );
+    }
+
+    #[test]
+    fn live_stream_event_broadcast_capacity_rejects_zero() {
+        let mut serialized = serde_json::to_value(Limits::default()).unwrap();
+        let Value::Object(fields) = &mut serialized else {
+            panic!("limits must serialize as an object");
+        };
+        fields.insert(
+            "live_stream_event_broadcast_capacity".to_string(),
+            Value::from(0),
+        );
+
+        assert!(serde_json::from_value::<Limits>(serialized).is_err());
+    }
 }

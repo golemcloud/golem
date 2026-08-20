@@ -24,6 +24,9 @@ import scala.collection.mutable
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.typedarray.Uint8Array
+import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.FutureInterop
 
 /**
  * Mechanical mapping between the host-agnostic flat carrier
@@ -56,6 +59,15 @@ object SchemaWireInterop {
 
   def valueTreeFromJs(j: JsSchemaValueTree): WitSchemaValueTree =
     WitSchemaValueTree(j.valueNodes.toList.toVector.map(valueNodeFromJs), j.root)
+
+  /**
+   * Async stream-aware lowering. No reader is advanced while constructing the
+   * tree.
+   */
+  def valueTreeToJsAsync(v: WitSchemaValueTree): Future[JsSchemaValueTree] = {
+    preflightValueTree(v)
+    Future.sequence(v.valueNodes.map(valueNodeToJsAsync)).map(nodes => JsSchemaValueTree(nodes.toJSArray, v.root))
+  }
 
   def typedToJs(t: WitTypedSchemaValue): JsTypedSchemaValue =
     JsTypedSchemaValue(graphToJs(t.graph), valueTreeToJs(t.value))
@@ -483,6 +495,7 @@ object SchemaWireInterop {
     import WitSchemaValueNode._
     val seenRawSecret = mutable.Set.empty[Any]
     val seenRawQuota  = mutable.Set.empty[Any]
+    val seenRawStream = mutable.Set.empty[Any]
 
     def checkRange(name: String, value: Long, min: Long, max: Long): Unit =
       if (value < min || value > max)
@@ -523,6 +536,11 @@ object SchemaWireInterop {
           )
         if (!seenRawQuota.add(raw))
           throw SchemaEncodeError("the same quota-token handle appeared more than once in one value tree")
+      case StreamValue(h) =>
+        val ownershipKey = h.ownershipKey
+          .getOrElse(throw SchemaEncodeError("schema value stream was already transferred"))
+        if (!seenRawStream.add(ownershipKey))
+          throw SchemaEncodeError("the same schema value stream appeared more than once in one value tree")
       case _ => ()
     }
   }
@@ -582,7 +600,37 @@ object SchemaWireInterop {
               "quota-token handle was already transferred; an owned quota-token can only be sent once"
             )
         }
+      case StreamValue(_) =>
+        throw SchemaEncodeError("schema value streams require asynchronous encoding")
     }
+  }
+
+  private def valueNodeToJsAsync(n: WitSchemaValueNode): Future[JsSchemaValueNode] = n match {
+    case WitSchemaValueNode.StreamValue(h) =>
+      h.take() match {
+        case Some(GuestSchemaValueStream.Wrapped(raw, _)) =>
+          Future.successful(JsSchemaValueNode.streamValue(raw.asInstanceOf[js.Any]))
+        case Some(GuestSchemaValueStream.Native(stream)) =>
+          val iterator = new js.Object {
+            def next(): js.Promise[js.Object] = FutureInterop.toPromise(
+              stream.pull().flatMap {
+                case None        => Future.successful(js.Dynamic.literal("done" -> true).asInstanceOf[js.Object])
+                case Some(value) =>
+                  valueTreeToJsAsync(SchemaWire.schemaValueToWit(value))
+                    .map(tree => js.Dynamic.literal("done" -> false, "value" -> tree).asInstanceOf[js.Object])
+              }
+            )
+          }
+          val iterable = new js.Object {
+            @scala.scalajs.js.annotation.JSName(js.Symbol.asyncIterator)
+            def asyncIterator(): js.Object = iterator
+          }
+          FutureInterop
+            .fromPromise(JsSchemaValueStreamWrap.wrap(iterable.asInstanceOf[JsSchemaValueIterable]))
+            .map(raw => JsSchemaValueNode.streamValue(raw))
+        case None => Future.failed(SchemaEncodeError("schema value stream was already transferred"))
+      }
+    case other => Future.successful(valueNodeToJs(other))
   }
 
   private def valueNodeFromJs(j: JsSchemaValueNode): WitSchemaValueNode = {
@@ -637,6 +685,23 @@ object SchemaWireInterop {
       case "quota-token-handle" =>
         // Wrap the owned `quota-token` resource in a fresh take-once handle.
         QuotaTokenHandle(GuestQuotaTokenHandle.fromRaw(valOf(j)))
+      case "stream-value" =>
+        val raw = valOf(j).asInstanceOf[JsSchemaValueStream]
+        StreamValue(
+          GuestSchemaValueStreamHandle.wrapped(
+            raw,
+            () =>
+              FutureInterop.fromPromise(JsSchemaValueStreamUnwrap.unwrap(raw)).map { iterable =>
+                val iterator = iterable.iterator()
+                AgentStream.fromPull(() =>
+                  FutureInterop.fromPromise(iterator.next()).map { result =>
+                    if (result.done) None
+                    else Some(SchemaWire.schemaValueFromWit(valueTreeFromJs(result.value)))
+                  }
+                )
+              }
+          )
+        )
       case other => throw new IllegalArgumentException(s"Unknown schema-value-node tag: $other")
     }
   }

@@ -16,6 +16,10 @@ use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, 
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::schema::SchemaValue;
 
+pub struct AgentInvocationResult {
+    pub value: Option<SchemaValue>,
+}
+
 #[derive(Debug)]
 pub struct SnapshotData {
     pub data: Vec<u8>,
@@ -36,7 +40,7 @@ pub trait BaseAgent {
         method_name: String,
         input: SchemaValue,
         principal: Principal,
-    ) -> Result<Option<SchemaValue>, AgentError>;
+    ) -> Result<AgentInvocationResult, AgentError>;
 
     /// Gets the agent type metadata of this agent
     fn get_definition(&self) -> AgentType;

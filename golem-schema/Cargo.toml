@@ -36,6 +36,7 @@ golem-schema-derive = { workspace = true }
 base64 = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
+blake3 = { workspace = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true }
 combine = { workspace = true }

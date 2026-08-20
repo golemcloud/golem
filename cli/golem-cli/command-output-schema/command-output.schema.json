@@ -79,6 +79,9 @@
       "$ref": "#/definitions/agent.invoke"
     },
     {
+      "$ref": "#/definitions/agent.invoke-session"
+    },
+    {
       "$ref": "#/definitions/agent.list"
     },
     {
@@ -1555,6 +1558,63 @@
         },
         "resultFormat": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.invoke-session": {
+      "type": "object",
+      "description": "One lifecycle document emitted per accepted, result, stream, or terminal event by `golem agent invoke` in structured formats. Parse stdout as a sequence of documents, not as one array or object.",
+      "x-golem-output-mode": "multi-document",
+      "x-golem-command": "agent invoke",
+      "required": [
+        "$type",
+        "kind",
+        "idempotencyKey"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.invoke-session"
+        },
+        "kind": {
+          "$ref": "#/definitions/AgentInvocationSessionEventKind"
+        },
+        "idempotencyKey": {
+          "type": "string"
+        },
+        "agentId": {
+          "type": "string"
+        },
+        "componentRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "streamId": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parentStreamId": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "path": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "value": {
+          "$ref": "#/definitions/JsonValue"
         }
       },
       "additionalProperties": false
@@ -4788,6 +4848,19 @@
         "missed-messages"
       ]
     },
+    "AgentInvocationSessionEventKind": {
+      "type": "string",
+      "enum": [
+        "accepted",
+        "rejected",
+        "result",
+        "item",
+        "end",
+        "stream-error",
+        "stream-cancel",
+        "finished"
+      ]
+    },
     "AgentDeletionMeta": {
       "type": "object",
       "required": ["componentName", "agentId"],
@@ -7372,6 +7445,10 @@
     {
       "type": "agent.invoke",
       "rustType": "InvokeResultView"
+    },
+    {
+      "type": "agent.invoke-session",
+      "rustType": "AgentInvocationSessionEvent"
     },
     {
       "type": "agent.list",
