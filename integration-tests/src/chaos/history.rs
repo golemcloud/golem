@@ -323,8 +323,8 @@ impl OperationRecord {
 /// over an archived run. The first S10 run learned that the expensive way — its
 /// delay percentiles turned out to need a correction that could not be applied
 /// afterwards, because only the reduced numbers had been archived.
-
-/// One fire, as the target agent recorded it.
+///
+/// This one is a single fire, as the target agent recorded it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FireRecord {

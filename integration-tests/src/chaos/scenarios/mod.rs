@@ -40,7 +40,7 @@ use crate::chaos::result::{ChaosResult, Phases, RESULT_SCHEMA_VERSION, RunScope}
 use crate::chaos::scheduled::ScheduledSelection;
 use crate::chaos::signal::SignalError;
 use crate::chaos::summary::{
-    AgentReadback, ChaosSummary, ExactlyOnceReport, RoutingSnapshot, TerminationReason,
+    AgentReadback, ChaosSummary, ExactlyOnceReport, Note, RoutingSnapshot, TerminationReason,
 };
 use crate::chaos::workload::{self, WorkloadContext};
 use chrono::{DateTime, Utc};
@@ -208,11 +208,14 @@ const ROUTING_POLL_SECS: u64 = 3;
 /// Blocks until the routing table covers every shard, or the timeout lapses.
 ///
 /// Returns the line to record, so the result says which of the two happened
-/// rather than leaving a reader to infer it from timings.
+/// rather than leaving a reader to infer it from timings. A settled table is
+/// context — it is what every healthy run reports. An unsettled one is a
+/// finding, because the baseline then measures convergence rather than the
+/// platform.
 pub async fn wait_for_settled_routing(
     deps: &BenchmarkTestDependencies,
     snapshots: &mut Vec<RoutingSnapshot>,
-) -> String {
+) -> Note {
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(ROUTING_SETTLE_TIMEOUT_SECS);
     // Assigned on every path through the loop below before it is read.
@@ -231,7 +234,7 @@ pub async fn wait_for_settled_routing(
                 if assigned == total && executors > 0 {
                     snapshots.push(snapshot_routing(deps, "settled-before-start").await);
                     info!("Chaos: {last} — settled");
-                    return format!("{last} (settled before measuring)");
+                    return Note::context(format!("{last} (settled before measuring)"));
                 }
                 info!("Chaos: {last} — waiting for the table to cover every shard");
             }
@@ -244,11 +247,11 @@ pub async fn wait_for_settled_routing(
         if std::time::Instant::now() >= deadline {
             snapshots.push(snapshot_routing(deps, "unsettled-before-start").await);
             warn!("Chaos: {last} — proceeding anyway after {ROUTING_SETTLE_TIMEOUT_SECS}s");
-            return format!(
+            return Note::attention(format!(
                 "WARNING: measured against an unsettled cluster — {last}. \
                  Baseline numbers may reflect routing convergence rather than the \
                  platform."
-            );
+            ));
         }
         tokio::time::sleep(std::time::Duration::from_secs(ROUTING_POLL_SECS)).await;
     }

@@ -159,7 +159,7 @@ use crate::chaos::scenarios::{
 };
 use crate::chaos::scheduled::{self, ScheduledSelection};
 use crate::chaos::signal::{BaselineReady, FaultSignals, FaultTarget};
-use crate::chaos::summary::{AgentReadback, ChaosSummary, TerminationReason};
+use crate::chaos::summary::{AgentReadback, ChaosSummary, Note, TerminationReason};
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig, ScheduledConfig};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -236,7 +236,7 @@ pub async fn run(
     let mut fault_id = None;
     let mut fault_target_observed = None;
     let mut selection: Option<ScheduledSelection> = None;
-    let mut attention_extra: Vec<String> = Vec::new();
+    let mut attention_extra: Vec<Note> = Vec::new();
 
     macro_rules! finish {
         ($reason:expr, $records:expr, $readback:expr, $fires:expr) => {{
@@ -246,7 +246,7 @@ pub async fn run(
                 routing_snapshots.clone(),
                 fault_injected_at,
             );
-            summary.attention.extend(attention_extra.clone());
+            summary.absorb(attention_extra.clone());
             if let Some(report) = $fires {
                 summary = summary.with_schedule_fires(report);
             }
@@ -418,7 +418,7 @@ pub async fn run(
         scheduled_config.lead(),
         &on_pod,
     );
-    attention_extra.push(pending.describe());
+    attention_extra.push(pending.note());
     info!("S10: {}", pending.describe());
 
     let recovered = match signals.await_fault_recovered(config.signal_timeout()).await {
@@ -453,12 +453,12 @@ pub async fn run(
         window.end(Utc::now());
     }
     if skipped > 0 {
-        attention_extra.push(format!(
+        attention_extra.push(Note::attention(format!(
             "S10 skipped {skipped} registration ticks because targets still had their budget \
              of {} in flight — the offered rate was clamped by the platform, so the phase \
              counts understate what the run intended to submit",
             scheduled::MAX_IN_FLIGHT_PER_TARGET
-        ));
+        )));
     }
     routing_snapshots.push(snapshot_routing(deps, "after-recovery").await);
 
@@ -546,6 +546,19 @@ pub struct PendingAtInjection {
 }
 
 impl PendingAtInjection {
+    /// Whether the kill landed anywhere near the mechanism under test.
+    ///
+    /// A run that caught nothing pending proves nothing however clean the rest
+    /// of its numbers look, which is the one thing here a human has to act on.
+    pub fn needs_attention(&self) -> bool {
+        self.total == 0
+    }
+
+    /// The same line as [`Self::describe`], classified.
+    pub fn note(&self) -> Note {
+        Note::leveled(self.needs_attention(), self.describe())
+    }
+
     /// The line an operator needs in order to know whether the kill landed
     /// anywhere near the mechanism under test.
     pub fn describe(&self) -> String {
@@ -625,6 +638,7 @@ async fn sample_fire_count(ctx: &WorkloadContext, targets: &[String]) -> u64 {
 mod tests {
     use super::*;
     use crate::chaos::history::AttemptRecord;
+    use crate::chaos::summary::NoteLevel;
     use test_r::test;
 
     fn at(offset_secs: i64) -> DateTime<Utc> {
@@ -712,6 +726,22 @@ mod tests {
             on_killed_executor: 0,
         };
         assert!(pending.describe().starts_with("WARNING"));
+        assert!(pending.needs_attention());
+        assert_eq!(pending.note().level, NoteLevel::Attention);
+    }
+
+    /// The same sentence on a run that landed properly is context. It is the
+    /// first thing a reader wants and it is true of every healthy run, so
+    /// putting it in `attention` would fire CI's annotation every time.
+    #[test]
+    fn a_kill_that_landed_reports_its_count_as_context() {
+        let pending = PendingAtInjection {
+            total: 353,
+            on_killed_executor: 226,
+        };
+        assert!(!pending.needs_attention());
+        assert_eq!(pending.note().level, NoteLevel::Context);
+        assert!(pending.note().message.contains("353"));
     }
 
     /// The last registration falls due one lead after the workload stops, and a
