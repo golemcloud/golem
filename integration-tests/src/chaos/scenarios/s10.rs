@@ -82,70 +82,28 @@
 //! asserted: how much a lease recovery may cost is a judgement, and the number
 //! that matters is in the result either way.
 //!
-//! ## What the first run found (2026-08-20)
+//! ## Reading a fire delay: registration first, scheduler second
 //!
-//! All 30,626 accepted registrations fired exactly once. Nothing was lost,
-//! nothing ran twice, no target failed to testify. Reassignment cost the
-//! scheduler almost nothing: the p99 fire delay on the killed executor's targets
-//! during the fault was 2,158ms against a baseline of 2,134ms, and both sit just
-//! under the scheduler's own 2s refresh interval, which is what a due action
-//! waits for when nothing is wrong.
+//! A large fire delay does not necessarily mean the scheduler was slow. The
+//! registering invocation mints its action's due time *before* the call goes
+//! out, so a registration that stalls in the client describes an action that was
+//! already overdue when the platform first heard about it. Those fire instantly
+//! and correctly, and would still arrive in the percentiles as minutes late.
 //!
-//! The delay percentiles needed a correction to say that, and the correction is
-//! now part of the account — see [`crate::chaos::fires`]. The kill stalled 26 of
-//! the 124 registrations that were in flight to that executor on the client's
-//! 120s attempt timeout; each retried and succeeded in about 60ms. Those
-//! actions fired immediately and correctly, and arrived in the percentiles as
-//! ~115s late, evenly split between the two groups because emitters are spread
-//! across both executors.
+//! [`crate::chaos::fires`] holds them out of the scheduler-delay cells and
+//! reports them as `overdue_on_arrival` instead. Two things follow for anyone
+//! reading a result:
 //!
-//! The stall is not a new finding, and it is not an unfixed one either. golem-dev
-//! ran `v1.5.10-dev.1`, which is a tag on the branch of golemcloud/golem#3748
-//! rather than on `1.5.x`, so the cluster already carried the first half of that
-//! work. It was cut on 2026-08-19, and ten further commits to the gRPC client
-//! landed on that branch the next day. One of them, `edd668f4c`, is this exact
-//! case: a pod killed with requests in flight reports most of them `Cancelled`,
-//! the connection was never retired, and every later request queued onto a
-//! channel that could never work again.
+//! * Check the registration latencies before concluding anything about the
+//!   scheduler. A client-side stall and a lease recovery look identical in a
+//!   delay percentile and have nothing to do with each other.
+//! * Read the `overdue_on_arrival` count together with its worst case, never
+//!   alone. The classification catches any registration slower than the
+//!   configured lead, so a stall shrinking from minutes to seconds moves entries
+//!   *into* the bucket rather than out of it: the count can rise while the
+//!   platform gets strictly better.
 //!
-//! ## What the second run showed (2026-08-20, `v1.5.10-dev.2`)
-//!
-//! The scenario was re-run unchanged against a cluster rebuilt from the tip of
-//! that branch, which is the ten client commits the first run's images predated.
-//! Same driver, same 100 targets, same 2s interval and 10s lead; the only thing
-//! that moved was the deployed image. It is the cleanest reading this harness
-//! has produced, because the fault landed comparably — 353 actions pending at
-//! the kill against the first run's 413 — and the undisturbed baseline windows
-//! did not move at all (p99 2,132ms and 2,101ms, against 2,134ms and 2,142ms).
-//!
-//! Exactly-once held, as it had before: 30,730 of 30,730. The stall did not.
-//!
-//! | | dev.1 | dev.2 |
-//! | -- | -- | -- |
-//! | registrations over 20s | 32 | 0 |
-//! | slowest registration | 125,188ms | 12,891ms |
-//! | slow registrations *submitted after* the kill | 79 | 0 |
-//! | fire delay past the 60s budget | 26 | 0 |
-//! | worst fire delay, killed executor's targets | 117,135ms | 2,177ms |
-//! | worst fire delay, control group | 117,095ms | 3,205ms |
-//!
-//! The last of those rows is the one that identifies the defect rather than
-//! merely measuring it. Under dev.1 the damage was not confined to calls that
-//! were riding the dying connection: 79 registrations submitted *after* the pod
-//! was already gone also stalled, because the dead channel stayed in the cache
-//! and kept accepting work. Under dev.2 that number is zero. Only the calls
-//! actually in flight at the moment of the kill paid anything, which is the
-//! shape a correctly retired connection produces.
-//!
-//! What remains is not a hang. The 62 registrations in flight at the kill took
-//! 10.0-12.9s each, on a single attempt, and that is inside the band the rest of
-//! the cluster pays for losing an executor. It does exceed the 10s lead, so those
-//! actions were due before their registration landed and are reported as
-//! `overdue_on_arrival` rather than as scheduler delay. Note that the count went
-//! *up* against dev.1's 26 while the magnitude fell by an order of magnitude:
-//! the classification counts anything slower than the lead, so shrinking a 125s
-//! stall to 13s moves entries into it rather than out. Read the two numbers
-//! together, never the count alone.
+//! Run-by-run findings live in the S10 runbook in golem-cloud, not here.
 
 use crate::chaos::fires::{FaultWindow, ScheduleFireReport};
 use crate::chaos::history::{
@@ -264,6 +222,7 @@ pub async fn run(
                     termination_reason: $reason,
                     pinned_selection: None,
                     scheduled_selection: selection.clone(),
+                    promise_selection: None,
                 },
             );
             write_outputs(&result, &history, outputs)?;
