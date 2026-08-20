@@ -72,12 +72,13 @@
 //! immediately and correctly, and the arithmetic still reports it as tens of
 //! seconds late.
 //!
-//! This is not hypothetical. The first S10 run (2026-08-20) killed an executor
-//! while 124 registrations were in flight to it; 26 of them stalled on the
-//! client's 120s attempt timeout and then succeeded on retry in about 60ms. All
-//! 26 fired correctly and instantly, and all 26 landed in the percentiles as
-//! ~115s late — 13 in each group, which made the untouched control group look
-//! exactly as damaged as the killed executor's targets.
+//! This is not hypothetical: killing an executor stalls the registrations that
+//! were in flight to it, and a stall longer than the lead puts every one of
+//! those actions into the delay cells as tens of seconds late even though each
+//! fired the instant it was accepted. Worse, it lands in *both* groups, because
+//! emitters are spread across executors independently of their targets — so an
+//! untouched control group can be made to look exactly as damaged as the killed
+//! executor's.
 //!
 //! So they are separated. A fire whose registration completed after its due time
 //! is counted as `overdueOnArrival` and kept out of the delay cells, because the
