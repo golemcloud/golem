@@ -97,8 +97,17 @@
 //! 120s attempt timeout; each retried and succeeded in about 60ms. Those
 //! actions fired immediately and correctly, and arrived in the percentiles as
 //! ~115s late, evenly split between the two groups because emitters are spread
-//! across both executors. The stall itself is the defect golemcloud/golem#3748
-//! addresses, reproduced here on the registration path.
+//! across both executors.
+//!
+//! The stall is not a new finding, and it is not an unfixed one either. golem-dev
+//! runs `v1.5.10-dev.1`, which is a tag on the branch of golemcloud/golem#3748
+//! rather than on `1.5.x`, so the cluster already carries the first half of that
+//! work. It was cut on 2026-08-19, and ten further commits to the gRPC client
+//! landed on that branch the next day. One of them, `edd668f4c`, is this exact
+//! case: a pod killed with requests in flight reports most of them `Cancelled`,
+//! the connection was never retired, and every later request queued onto a
+//! channel that could never work again. Read a stall in an S10 run against which
+//! cut of that branch the images were built before treating it as a regression.
 
 use crate::chaos::fires::{FaultWindow, ScheduleFireReport};
 use crate::chaos::history::{
