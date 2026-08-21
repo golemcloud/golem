@@ -115,6 +115,59 @@ impl LastUsed {
     }
 }
 
+/// Whether a connection has been retired, and whether it is also gone.
+///
+/// Two questions, because they have different answers. Anything that retires a
+/// connection stops it being handed out or installed again. Only a connection
+/// whose transport failed is also gone, and being gone is what releases the
+/// requests already riding it: a status the peer sent back is proof the
+/// transport works, however unwelcome the answer, and cutting those requests
+/// short would cost every one of them a retry.
+///
+/// Reading only the second question is how a connection one caller had just
+/// evicted came to be installed again by a sibling partway through installing
+/// it.
+#[derive(Clone)]
+struct Retirement {
+    retired: CancellationToken,
+    /// A cached `Channel` reconnects on its own, one queued request at a time,
+    /// and nothing above it can see those requests to share an attempt between
+    /// them. Releasing them at the moment the connection is known dead is what
+    /// keeps a cohort to one `connect_timeout` between them.
+    gone: CancellationToken,
+}
+
+impl Retirement {
+    fn new() -> Self {
+        Self {
+            retired: CancellationToken::new(),
+            gone: CancellationToken::new(),
+        }
+    }
+
+    /// Retires the connection, and releases the requests riding it if it is
+    /// gone.
+    ///
+    /// Callers do this before taking the lock that clears the caches, and an
+    /// installer reads it while holding that lock. So either the retirement
+    /// lands first and the installer refuses, or it lands afterwards and the
+    /// clearing takes out what the installer put in. Reading it before taking
+    /// the lock leaves an interleaving where neither happens.
+    ///
+    /// Retired before released, in that order, so a request woken by the
+    /// release cannot read this connection as live on its way back for another.
+    fn retire(&self, gone: bool) {
+        self.retired.cancel();
+        if gone {
+            self.gone.cancel();
+        }
+    }
+
+    fn is_retired(&self) -> bool {
+        self.retired.is_cancelled()
+    }
+}
+
 /// An established connection, and what tells it apart from the one that replaces
 /// it.
 #[derive(Clone)]
@@ -123,13 +176,7 @@ struct Connected {
     /// Distinguishes this connection from its successor, so a call that fails
     /// late cannot evict a replacement it never used.
     id: u64,
-    /// Cancelled when this connection is retired.
-    ///
-    /// A cached `Channel` reconnects on its own, one queued request at a time,
-    /// and nothing above it can see those requests to share an attempt between
-    /// them. Releasing them at the moment the connection is known dead is what
-    /// keeps a cohort to one `connect_timeout` between them.
-    retired: CancellationToken,
+    retirement: Retirement,
     last_used: LastUsed,
 }
 
@@ -142,7 +189,7 @@ fn connect_shared(endpoint: Endpoint, connect_timeout: Duration) -> SharedConnec
             Ok(Ok(channel)) => Ok(Connected {
                 channel,
                 id,
-                retired: CancellationToken::new(),
+                retirement: Retirement::new(),
                 last_used: LastUsed::now(),
             }),
             Ok(Err(err)) => Err(Status::unavailable(format!("tcp connect error: {err}"))),
@@ -189,21 +236,22 @@ impl Connections {
         {
             match existing.peek() {
                 // Already connected.
-                Some(Ok(connected)) if !connected.retired.is_cancelled() => {
+                Some(Ok(connected)) if !connected.retirement.is_retired() => {
                     connected.last_used.touch();
                     return Ok(connected.clone());
                 }
                 // Someone else is connecting; wait on theirs. What that
-                // resolves to is deliberately not weighed against `retired`: a
-                // waiter joining late can be handed a connection an earlier one
-                // has already used and retired, and `install` is where that is
-                // caught, under the lock that makes catching it worth anything.
+                // resolves to is deliberately not weighed against its
+                // retirement: a waiter joining late can be handed a connection
+                // an earlier one has already used and retired, and `install` is
+                // where that is caught, under the lock that makes catching it
+                // worth anything.
                 None => return existing.await,
                 // A failed attempt is not worth inheriting, and neither is a
-                // retired one: `retire` cancels before it forgets, so between
+                // retired one: `retire` marks before it forgets, so between
                 // those two moments this is still the cached answer and it
-                // describes a connection that is gone. Fall through and start a
-                // fresh one below.
+                // describes a connection nobody is meant to be given. Fall
+                // through and start a fresh one below.
                 Some(_) => {}
             }
         }
@@ -217,14 +265,15 @@ impl Connections {
         let attempt = match self.by_target.entry_async(target.clone()).await {
             Entry::Occupied(mut entry) => match entry.get().peek() {
                 // Already connected. This is the reuse path.
-                Some(Ok(connected)) if !connected.retired.is_cancelled() => {
+                Some(Ok(connected)) if !connected.retirement.is_retired() => {
                     connected.last_used.touch();
                     return Ok(connected.clone());
                 }
                 None => entry.get().clone(),
                 // A failed attempt describes a connection nobody is still making
-                // and a retired one describes a connection that is gone, so the
-                // caller gets its own rather than inheriting either verdict.
+                // and a retired one describes a connection its owner has given
+                // up on, so the caller gets its own rather than inheriting
+                // either verdict.
                 Some(_) => {
                     let attempt = connect_shared(endpoint, config.connect_timeout);
                     *entry.get_mut() = attempt.clone();
@@ -399,16 +448,17 @@ impl<T: Clone> GrpcClient<T> {
     /// construction, and the first user to need a connection makes it while
     /// everyone else waits on that same attempt.
     async fn connected_client(&self) -> Result<GrpcClientConnection<T>, Status> {
-        // A connection already known dead is skipped rather than handed back.
-        // `retire` cancels before it clears the cache, and cancelling is what
-        // wakes every request parked on the connection, so those callers arrive
-        // back here inside the window `retire` has not finished closing.
+        // A connection already retired is skipped rather than handed back.
+        // `retire` marks it before it clears the cache, and for a connection
+        // that is gone the marking is also what wakes every request parked on
+        // it, so those callers arrive back here inside the window `retire` has
+        // not finished closing.
         if let Some(connection) = self
             .client
             .lock()
             .await
             .clone()
-            .filter(|connection| !connection.retired.is_cancelled())
+            .filter(|connection| !connection.retirement.is_retired())
         {
             connection.last_used.touch();
             return Ok(connection);
@@ -422,7 +472,7 @@ impl<T: Clone> GrpcClient<T> {
         let mut entry = self.client.lock().await;
         if let Some(connection) = entry
             .as_ref()
-            .filter(|connection| !connection.retired.is_cancelled())
+            .filter(|connection| !connection.retirement.is_retired())
         {
             return Ok(connection.clone());
         }
@@ -436,7 +486,7 @@ impl<T: Clone> GrpcClient<T> {
         #[cfg(test)]
         self.install_interleave().await;
 
-        if connected.retired.is_cancelled() {
+        if connected.retirement.is_retired() {
             return Err(Status::unavailable("connection retired before it was used"));
         }
         let channel = ServiceBuilder::new()
@@ -445,7 +495,7 @@ impl<T: Clone> GrpcClient<T> {
         Ok(GrpcClientConnection {
             client: (self.client_factory)(channel, self.config.max_message_size),
             id: connected.id,
-            retired: connected.retired.clone(),
+            retirement: connected.retirement.clone(),
             last_used: connected.last_used.clone(),
         })
     }
@@ -467,9 +517,7 @@ impl<T: Clone> GrpcClient<T> {
 
     /// See [`MultiTargetGrpcClient::retire`].
     async fn retire(&self, connection: &GrpcClientConnection<T>, cause: &Status) {
-        if connection_is_gone(cause) {
-            connection.retired.cancel();
-        }
+        connection.retirement.retire(connection_is_gone(cause));
         {
             let mut cached = self.client.lock().await;
             if cached.as_ref().is_some_and(|held| held.id == connection.id) {
@@ -586,12 +634,12 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             .clients
             .read_async(&endpoint, |_, client| client.clone())
             .await
-            // A connection already known dead is skipped rather than handed
-            // back. `retire` cancels before it clears the cache, and cancelling
-            // is what wakes every request parked on the connection, so that
-            // whole cohort arrives back here inside the window `retire` has not
-            // finished closing.
-            .filter(|existing| !existing.retired.is_cancelled())
+            // A connection already retired is skipped rather than handed
+            // back. `retire` marks it before it clears the cache, and for a
+            // connection that is gone the marking is also what wakes every
+            // request parked on it, so that whole cohort arrives back here
+            // inside the window `retire` has not finished closing.
+            .filter(|existing| !existing.retirement.is_retired())
         {
             existing.last_used.touch();
             return Ok(existing);
@@ -613,7 +661,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
 
         match self.clients.entry_async(endpoint).await {
             Entry::Occupied(mut entry) => {
-                if !entry.get().retired.is_cancelled() {
+                if !entry.get().retirement.is_retired() {
                     return Ok(entry.get().clone());
                 }
                 let connection = self.install(&connected).await?;
@@ -630,19 +678,17 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
 
     /// Builds the client for a connection about to be cached, refusing one that
     /// has been retired since it was established. Caching that would hand every
-    /// later caller a connection failing the instant it is used, until one of
-    /// them retires it again.
+    /// later caller a connection its owner has already given up on, until one of
+    /// them gives up on it again.
     ///
     /// Both callers run this while holding the lock `retire` needs to clear the
-    /// cache, and `retire` cancels before it takes that lock. So either the
-    /// cancel lands first and is read here, or it lands afterwards and `retire`
-    /// clears what was installed. Reading it before taking the lock leaves an
-    /// interleaving where neither happens.
+    /// cache, which is what makes reading the retirement here worth anything.
+    /// See [`Retirement::retire`].
     async fn install(&self, connected: &Connected) -> Result<GrpcClientConnection<T>, Status> {
         #[cfg(test)]
         self.install_interleave().await;
 
-        if connected.retired.is_cancelled() {
+        if connected.retirement.is_retired() {
             return Err(Status::unavailable("connection retired before it was used"));
         }
         let channel = ServiceBuilder::new()
@@ -651,7 +697,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         Ok(GrpcClientConnection {
             client: (self.client_factory)(channel, self.config.max_message_size),
             id: connected.id,
-            retired: connected.retired.clone(),
+            retirement: connected.retirement.clone(),
             last_used: connected.last_used.clone(),
         })
     }
@@ -671,23 +717,19 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         }
     }
 
-    /// Retires the connection a failed call was riding: clears it from the caches
-    /// so the next call builds a new one and, when the transport is what failed,
-    /// releases every other request still on it.
+    /// Retires the connection a failed call was riding: marks it so nothing
+    /// hands it out or installs it again, and clears it from the caches so the
+    /// next call builds a new one.
     ///
     /// Keyed on the connection's identity rather than on the target alone. Two
     /// callers can fail on the same connection at different moments, and without
     /// that the later failure would evict the replacement the earlier one had
     /// already established.
     ///
-    /// A status the peer sent back is proof the transport works, however unwelcome
-    /// the answer, so that case evicts the connection without disturbing the
-    /// requests already riding it. Only a connection that is gone justifies
-    /// cutting those short.
+    /// Only a failure meaning the connection is gone also releases the requests
+    /// still riding it; see [`Retirement`].
     async fn retire(&self, endpoint: &Uri, connection: &GrpcClientConnection<T>, cause: &Status) {
-        if connection_is_gone(cause) {
-            connection.retired.cancel();
-        }
+        connection.retirement.retire(connection_is_gone(cause));
         self.clients
             .remove_if_async(endpoint, |cached| cached.id == connection.id)
             .await;
@@ -699,7 +741,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
 pub struct GrpcClientConnection<T: Clone> {
     client: T,
     id: u64,
-    retired: CancellationToken,
+    retirement: Retirement,
     last_used: LastUsed,
 }
 
@@ -890,7 +932,7 @@ impl EnabledGrpcClientTlsConfig {
 }
 
 /// Runs one attempt, and gives up the moment the connection it is riding is
-/// retired.
+/// gone.
 ///
 /// A request queued inside a dead `Channel` is waiting its turn to re-dial, and
 /// every turn costs a whole `connect_timeout`. tonic does that re-dialling below
@@ -912,7 +954,7 @@ where
         // same tick.
         biased;
         result = f(&mut connection.client).instrument(attempts.span()) => result,
-        () = connection.retired.cancelled() => Err(Status::unavailable(
+        () = connection.retirement.gone.cancelled() => Err(Status::unavailable(
             "connection retired while the request was waiting on it",
         )),
     }
@@ -1188,6 +1230,15 @@ mod test {
         (hook, at_seam, resume)
     }
 
+    /// Retires a connection the way a status the peer sent back does: marked,
+    /// and nothing released. The harder half of every guard below, because a
+    /// guard reading only whether the connection is gone reads nothing at all
+    /// here — and it is what a retirement whose caller was dropped partway
+    /// through leaves behind as well.
+    fn retired_by_the_peer(retirement: &Retirement) {
+        retirement.retire(false);
+    }
+
     /// Bounded, because a call that never arrives would otherwise hang the whole
     /// test run rather than fail this test.
     async fn expect(what: &str, f: impl Future<Output = ()>) {
@@ -1236,11 +1287,10 @@ mod test {
         );
     }
 
-    /// A connection can also be retired while a caller
-    /// is partway through installing it. Reading the retirement before taking
-    /// the lock `retire` takes let the caller install a connection it had
-    /// already been told was dead, and every later caller was handed it in
-    /// turn.
+    /// A connection can also be retired while a caller is partway through
+    /// installing it. Reading the retirement before taking the lock `retire`
+    /// takes let the caller install a connection it had already been told to
+    /// stop using, and every later caller was handed it in turn.
     #[test]
     async fn a_connection_retired_while_it_is_being_installed_is_not_cached() {
         let (target, _peer) = silent_peer().await;
@@ -1267,7 +1317,7 @@ mod test {
             .connect(target.clone(), &client.config)
             .await
             .unwrap();
-        connected.retired.cancel();
+        retired_by_the_peer(&connected.retirement);
         client.connections.forget(&target, connected.id).await;
 
         resume.notify_one();
@@ -1314,7 +1364,7 @@ mod test {
             .connect(target.clone(), &client.config)
             .await
             .unwrap();
-        connected.retired.cancel();
+        retired_by_the_peer(&connected.retirement);
         client.connections.forget(&target, connected.id).await;
 
         resume.notify_one();
@@ -1336,10 +1386,12 @@ mod test {
         );
     }
 
-    /// `retire` cancels a connection before it forgets it, so between those two
-    /// moments the cached attempt still answers with a connection that is gone.
-    /// Handing it back turns every caller arriving in that window into a failure
-    /// that had no reason to happen.
+    /// `retire` marks a connection before it forgets it, so between those two
+    /// moments the cached attempt still answers with a connection nobody is
+    /// meant to be given. Handing it back turns every caller arriving in that
+    /// window into a failure that had no reason to happen — and a retirement
+    /// that got no further than the mark, its caller dropped partway through,
+    /// leaves the attempt answering that way for good.
     #[test]
     async fn a_retired_connection_is_not_handed_to_the_next_caller() {
         let (target, _peer) = silent_peer().await;
@@ -1347,7 +1399,7 @@ mod test {
         let connections = Connections::new();
 
         let first = connections.connect(target.clone(), &config).await.unwrap();
-        first.retired.cancel();
+        retired_by_the_peer(&first.retirement);
 
         let next = connections.connect(target.clone(), &config).await.unwrap();
         assert_ne!(
@@ -1355,7 +1407,7 @@ mod test {
             "a connection that had been retired was handed straight back"
         );
         assert!(
-            !next.retired.is_cancelled(),
+            !next.retirement.is_retired(),
             "the replacement came out already retired"
         );
     }
@@ -1484,24 +1536,19 @@ mod test {
         assert!(!connection_is_gone(&timed_out));
     }
 
-    /// The install guard is only worth something if `retire` has already
-    /// cancelled by the time an installer holding the lock can read it. `retire`
-    /// cancels first and takes the lock second, so a caller holding that lock
-    /// must find the connection already retired. Swap that order and the guard
-    /// reads live every time, which is the bug it exists to stop.
-    #[test]
-    async fn retire_cancels_before_it_takes_the_lock_that_clears_the_cache() {
-        let (target, _peer) = silent_peer().await;
-        let (client, _built) = counting_client();
-        let cause = dead_transport_status().await;
-        assert!(
-            connection_is_gone(&cause),
-            "the cause has to be one that retires a connection at all"
-        );
-
-        let connection = client.connected_client(target.clone()).await.unwrap();
-
-        // Hold the very lock `retire` has to take to clear the connection.
+    /// Retires `connection` while the very lock `retire` has to take to clear
+    /// the cache is held, and comes back once the retirement has landed.
+    ///
+    /// The install guard is only worth something if it has landed by then:
+    /// `retire` marks first and takes the lock second, so a caller holding that
+    /// lock must find the connection already retired. Swap that order and the
+    /// guard reads live every time, which is the bug it exists to stop.
+    async fn retire_while_the_cache_lock_is_held(
+        client: &MultiTargetGrpcClient<()>,
+        target: &Uri,
+        connection: &GrpcClientConnection<()>,
+        cause: Status,
+    ) {
         let held = client.clients.entry_async(target.clone()).await;
         let retiring = tokio::spawn({
             let (client, target, connection) = (client.clone(), target.clone(), connection.clone());
@@ -1509,14 +1556,57 @@ mod test {
         });
 
         expect(
-            "retire had not cancelled by the time it wanted the lock, so an \
-             installer holding the lock would read the connection as live",
-            connection.retired.cancelled(),
+            "retire had not marked the connection by the time it wanted the \
+             lock, so an installer holding that lock would read it as live",
+            connection.retirement.retired.cancelled(),
         )
         .await;
 
         drop(held);
         retiring.await.unwrap();
+    }
+
+    #[test]
+    async fn retire_marks_a_dead_connection_before_it_takes_the_cache_lock() {
+        let (target, _peer) = silent_peer().await;
+        let (client, _built) = counting_client();
+        let cause = dead_transport_status().await;
+        assert!(
+            connection_is_gone(&cause),
+            "the cause has to be one that means the connection is gone"
+        );
+
+        let connection = client.connected_client(target.clone()).await.unwrap();
+        retire_while_the_cache_lock_is_held(&client, &target, &connection, cause).await;
+
+        assert!(
+            connection.retirement.gone.is_cancelled(),
+            "a connection that is gone left every request riding it parked on \
+             it, each waiting its turn to re-dial"
+        );
+    }
+
+    /// A status the peer sent back retires the connection too, and is the harder
+    /// half of the ordering: nothing is released, so a guard reading only
+    /// whether the connection is gone reads nothing at all.
+    #[test]
+    async fn retire_marks_a_connection_the_peer_gave_up_on_before_it_takes_the_cache_lock() {
+        let (target, _peer) = silent_peer().await;
+        let (client, _built) = counting_client();
+        let cause = Status::unavailable("shard is being reassigned");
+        assert!(
+            !connection_is_gone(&cause),
+            "the cause has to be one the peer sent back"
+        );
+
+        let connection = client.connected_client(target.clone()).await.unwrap();
+        retire_while_the_cache_lock_is_held(&client, &target, &connection, cause).await;
+
+        assert!(
+            !connection.retirement.gone.is_cancelled(),
+            "a status the peer sent back cut short every request riding the \
+             connection"
+        );
     }
 
     /// The single-target client keeps its connection behind its own lock, so the
@@ -1536,9 +1626,9 @@ mod test {
         });
 
         expect(
-            "retire had not cancelled by the time it wanted the lock, so an \
-             installer holding the lock would read the connection as live",
-            connection.retired.cancelled(),
+            "retire had not marked the connection by the time it wanted the \
+             lock, so an installer holding that lock would read it as live",
+            connection.retirement.retired.cancelled(),
         )
         .await;
 
@@ -1546,26 +1636,26 @@ mod test {
         retiring.await.unwrap();
     }
 
-    /// Cancelling is what releases every request parked on a connection, and it
-    /// happens before the connection is cleared from the cache. So the whole
-    /// cohort `retire` just released comes back for a connection while `retire`
-    /// is still clearing, and the cache would hand each of them the same dead
-    /// one it had already been told about.
+    /// Releasing a connection that is gone is what wakes every request parked
+    /// on it, and that happens before the connection is cleared from the cache.
+    /// So the whole cohort `retire` just released comes back for a connection
+    /// while `retire` is still clearing, and the cache would hand each of them
+    /// the same one it had already given up on.
     #[test]
     async fn a_connection_already_known_dead_is_not_handed_out_again() {
         let (target, _peer) = silent_peer().await;
         let (client, built) = counting_client();
 
         let first = client.connected_client(target.clone()).await.unwrap();
-        first.retired.cancel();
+        retired_by_the_peer(&first.retirement);
 
         let next = client.connected_client(target.clone()).await.unwrap();
         assert_ne!(
             next.id, first.id,
-            "the cache handed back a connection it had already been told was dead"
+            "the cache handed back a connection it had already given up on"
         );
         assert!(
-            !next.retired.is_cancelled(),
+            !next.retirement.is_retired(),
             "the connection put in its place came out retired too"
         );
         assert_eq!(
@@ -1585,15 +1675,15 @@ mod test {
         let (client, built) = counting_single_target_client(target);
 
         let first = client.connected_client().await.unwrap();
-        first.retired.cancel();
+        retired_by_the_peer(&first.retirement);
 
         let next = client.connected_client().await.unwrap();
         assert_ne!(
             next.id, first.id,
-            "the cache handed back a connection it had already been told was dead"
+            "the cache handed back a connection it had already given up on"
         );
         assert!(
-            !next.retired.is_cancelled(),
+            !next.retirement.is_retired(),
             "the connection put in its place came out retired too"
         );
         assert_eq!(
@@ -1635,6 +1725,49 @@ mod test {
             2,
             "a failure on the old connection threw away the replacement, so it \
              had to be built again"
+        );
+    }
+
+    /// The two halves of a retirement reach the request riding the connection
+    /// differently, and that is the whole reason there are two. A status the
+    /// peer sent back leaves the request running: the transport works, and
+    /// cutting it short would cost it a retry it never needed. A connection that
+    /// is gone ends it at once, because waiting its turn to re-dial inside a
+    /// dead `Channel` costs it a whole `connect_timeout` and everyone queued
+    /// behind it another.
+    #[test]
+    async fn only_a_connection_that_is_gone_cuts_short_the_request_riding_it() {
+        use std::task::Poll;
+
+        fn never(_: &mut ()) -> Pin<Box<dyn Future<Output = Result<(), Status>> + Send + '_>> {
+            Box::pin(std::future::pending())
+        }
+
+        let (target, _peer) = silent_peer().await;
+        let (client, _built) = counting_client();
+        let mut connection = client.connected_client(target).await.unwrap();
+        let retirement = connection.retirement.clone();
+
+        let config = RetryConfig::default();
+        let attempts = CallAttempts::new(&config, "test", "test", tracing::Span::none());
+        let mut running = std::pin::pin!(attempt(&mut connection, &never, &attempts));
+        assert!(
+            futures::poll!(running.as_mut()).is_pending(),
+            "the request ended before anything had happened to its connection"
+        );
+
+        retired_by_the_peer(&retirement);
+        assert!(
+            futures::poll!(running.as_mut()).is_pending(),
+            "a status the peer sent back cut short a request the transport was \
+             still carrying perfectly well"
+        );
+
+        retirement.retire(true);
+        assert!(
+            matches!(futures::poll!(running.as_mut()), Poll::Ready(Err(_))),
+            "the request was left parked on a connection that is gone, waiting \
+             its turn to re-dial"
         );
     }
 
