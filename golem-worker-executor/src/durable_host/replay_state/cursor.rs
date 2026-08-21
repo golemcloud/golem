@@ -1258,6 +1258,194 @@ impl ReplayState {
         self.cursor.replay_target()
     }
 
+    /// Reports whether the replay-visible owner oplog contains a terminal for `start_index`.
+    /// Entity reconstruction uses this before starting its fresh Store so the invocation context
+    /// distinguishes reconstruction of a completed body from repair of an incomplete Start. The
+    /// scan is read-only and respects fork/revert deleted regions.
+    pub(crate) async fn has_visible_terminal(&self, start_index: OplogIndex) -> bool {
+        let replay_target = self.replay_target();
+        if start_index >= replay_target {
+            return false;
+        }
+        let skipped_regions = {
+            let state = self.cursor.state.lock().await;
+            state.skipped_regions.clone()
+        };
+        let mut next = start_index.next();
+        while next <= replay_target {
+            let available = u64::from(replay_target) - u64::from(next) + 1;
+            let mut entries = self
+                .cursor
+                .oplog
+                .read_many(next, CHUNK_SIZE.min(available))
+                .await;
+            if entries.keys().next().copied() != Some(next) {
+                entries = self.cursor.oplog.read_many(next, 1).await;
+            }
+            let Some(last_read) = entries.keys().next_back().copied() else {
+                return false;
+            };
+            if entries.into_iter().any(|(index, entry)| {
+                index <= replay_target
+                    && !skipped_regions.is_in_deleted_region(index)
+                    && terminal_start_index(&entry) == Some(start_index)
+            }) {
+                return true;
+            }
+            next = last_read.next();
+        }
+        false
+    }
+
+    /// Waits until the replay cursor is blocked on a record in `root`'s call tree that no still
+    /// running reconstructed entity body or live resolver awaiter can consume. This turns a body
+    /// that returned before replaying its recorded subtree into permanent structural divergence
+    /// instead of leaving the outer terminal awaiter parked forever.
+    pub(crate) async fn await_unconsumed_scope_entry(
+        &self,
+        root: OplogIndex,
+        mut active_entity_bodies: tokio::sync::watch::Receiver<HashSet<OplogIndex>>,
+    ) -> Result<OplogIndex, WorkerExecutorError> {
+        loop {
+            let active_bodies = active_entity_bodies.borrow_and_update().clone();
+            let bodies_changed = active_entity_bodies.changed();
+            tokio::pin!(bodies_changed);
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+
+            if let Some(index) = self.unconsumed_scope_head(root, active_bodies).await? {
+                return Ok(index);
+            }
+
+            tokio::select! {
+                _ = progress.as_mut() => {}
+                changed = &mut bodies_changed => {
+                    if changed.is_err() {
+                        return Err(WorkerExecutorError::runtime(
+                            "owner reconstruction body tracker closed during replay",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) async fn unconsumed_scope_head(
+        &self,
+        root: OplogIndex,
+        active_entity_bodies: HashSet<OplogIndex>,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        self.run_owned_cursor_op(move |state| async move {
+            let cursor = &*state.cursor;
+            let st = cursor.state.lock().await;
+            let head = cursor.last_replayed_index().next();
+            if head > cursor.replay_target() {
+                return Ok(None);
+            }
+
+            let mut projection = OplogScopeProjection::new(root);
+            let mut parents = HashMap::new();
+            let mut previous_index = None;
+            let mut previous_included_start = None;
+            let mut next = root;
+            while next <= head {
+                let available = u64::from(head) - u64::from(next) + 1;
+                let mut entries = cursor
+                    .oplog
+                    .read_many(next, CHUNK_SIZE.min(available))
+                    .await;
+                if entries.keys().next().copied() != Some(next) {
+                    entries = cursor.oplog.read_many(next, 1).await;
+                }
+                let Some(last_read) = entries.keys().next_back().copied() else {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        format!("entity invocation subtree rooted at {root}"),
+                        format!("missing oplog entry at {next} while inspecting stalled replay"),
+                    ));
+                };
+
+                for (index, entry) in entries {
+                    if index > head {
+                        break;
+                    }
+                    if st.skipped_regions.is_in_deleted_region(index) {
+                        previous_index = Some(index);
+                        previous_included_start = None;
+                        continue;
+                    }
+                    let included = projection.includes(index, &entry);
+                    let included_start = if included
+                        && let OplogEntry::Start {
+                            parent_start_index, ..
+                        } = &entry
+                    {
+                        if let Some(parent) = parent_start_index {
+                            parents.insert(index, *parent);
+                        }
+                        Some(index)
+                    } else {
+                        None
+                    };
+
+                    if index == head {
+                        if !included {
+                            return Ok(None);
+                        }
+                        if terminal_start_index(&entry).is_some_and(|start_index| {
+                            st.concurrent_resolver.is_pending(start_index)
+                        }) || custom_subtree_entry_is_drainable(&st, &entry)
+                        {
+                            return Ok(None);
+                        }
+                        let owner = scope_entry_owner(
+                            index,
+                            &entry,
+                            previous_index,
+                            previous_included_start,
+                        );
+                        if owner.is_some_and(|mut owner| {
+                            while owner != root {
+                                if active_entity_bodies.contains(&owner) {
+                                    return true;
+                                }
+                                let Some(parent) = parents.get(&owner) else {
+                                    break;
+                                };
+                                owner = *parent;
+                            }
+                            false
+                        }) {
+                            return Ok(None);
+                        }
+                        if matches!(entry, OplogEntry::Start { .. })
+                            && st.claimed_starts.contains(&index)
+                        {
+                            return Ok(None);
+                        }
+                        if owner.is_some_and(|owner| {
+                            owner != root && st.concurrent_resolver.is_awaited(owner)
+                        }) {
+                            return Ok(None);
+                        }
+                        if terminal_start_index(&entry) == Some(root)
+                            && st.concurrent_resolver.is_awaited(root)
+                        {
+                            return Ok(None);
+                        }
+                        return Ok(Some(index));
+                    }
+
+                    previous_index = Some(index);
+                    previous_included_start = included_start;
+                }
+                next = last_read.next();
+            }
+            Ok(None)
+        })
+        .await
+    }
+
     /// Sets the replay target. This is a phase-boundary operation (e.g. refreshing the target
     /// before replay resumes); it must not race with concurrent cursor advances.
     ///
@@ -1532,7 +1720,7 @@ impl ReplayState {
     ) -> Result<Option<AgentInvocationStartedEntry>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
-                let (_, oplog_entry) = self.get_oplog_entry().await?;
+                let (oplog_index, oplog_entry) = self.get_oplog_entry().await?;
                 match oplog_entry {
                     OplogEntry::AgentInvocationStarted {
                         idempotency_key,
@@ -1557,6 +1745,7 @@ impl ReplayState {
                             InvocationContextStack::from_oplog_data(trace_id, trace_states, spans);
 
                         break Ok(Some(AgentInvocationStartedEntry {
+                            oplog_index,
                             idempotency_key,
                             invocation_payload,
                             invocation_context,
@@ -1637,6 +1826,126 @@ impl ReplayState {
     }
 }
 
+fn custom_subtree_entry_is_drainable(state: &CursorState, entry: &OplogEntry) -> bool {
+    let custom_root = |member| {
+        state
+            .custom_subtrees
+            .iter()
+            .find_map(|(root, members)| members.contains(&member).then_some(*root))
+    };
+    match entry {
+        OplogEntry::Start {
+            observational_owner,
+            parent_start_index,
+            ..
+        } => observational_owner
+            .and_then(custom_root)
+            .or_else(|| parent_start_index.and_then(custom_root))
+            .is_some(),
+        entry => terminal_start_index(entry)
+            .and_then(custom_root)
+            .is_some_and(|root| terminal_start_index(entry) != Some(root)),
+    }
+}
+
+fn scope_entry_owner(
+    index: OplogIndex,
+    entry: &OplogEntry,
+    previous_index: Option<OplogIndex>,
+    previous_included_start: Option<OplogIndex>,
+) -> Option<OplogIndex> {
+    match entry {
+        OplogEntry::Start { .. } => Some(index),
+        OplogEntry::End { start_index, .. }
+        | OplogEntry::Cancelled { start_index, .. }
+        | OplogEntry::CompletionDiscarded { start_index, .. } => Some(*start_index),
+        OplogEntry::HostStreamFrame {
+            parent_start_index, ..
+        }
+        | OplogEntry::Log {
+            parent_start_index: Some(parent_start_index),
+            ..
+        }
+        | OplogEntry::StartSpan {
+            parent_start_index: Some(parent_start_index),
+            ..
+        }
+        | OplogEntry::FinishSpan {
+            parent_start_index: Some(parent_start_index),
+            ..
+        }
+        | OplogEntry::SetSpanAttribute {
+            parent_start_index: Some(parent_start_index),
+            ..
+        } => Some(*parent_start_index),
+        OplogEntry::Error { retry_from, .. } => Some(*retry_from),
+        OplogEntry::BeginRemoteTransaction {
+            original_begin_index: Some(begin),
+            ..
+        } => Some(*begin),
+        OplogEntry::BeginRemoteTransaction {
+            original_begin_index: None,
+            ..
+        } => previous_index
+            .zip(previous_included_start)
+            .and_then(|(previous, start)| {
+                (previous == start && previous.next() == index).then_some(start)
+            }),
+        OplogEntry::PreCommitRemoteTransaction { begin_index, .. }
+        | OplogEntry::PreRollbackRemoteTransaction { begin_index, .. }
+        | OplogEntry::CommittedRemoteTransaction { begin_index, .. }
+        | OplogEntry::RolledBackRemoteTransaction { begin_index, .. } => Some(*begin_index),
+        OplogEntry::Create { .. }
+        | OplogEntry::AgentInvocationStarted { .. }
+        | OplogEntry::AgentInvocationFinished { .. }
+        | OplogEntry::Suspend { .. }
+        | OplogEntry::NoOp { .. }
+        | OplogEntry::Jump { .. }
+        | OplogEntry::Interrupted { .. }
+        | OplogEntry::Exited { .. }
+        | OplogEntry::BeginAtomicRegion { .. }
+        | OplogEntry::EndAtomicRegion { .. }
+        | OplogEntry::PendingAgentInvocation { .. }
+        | OplogEntry::PendingUpdate { .. }
+        | OplogEntry::SuccessfulUpdate { .. }
+        | OplogEntry::FailedUpdate { .. }
+        | OplogEntry::GrowMemory { .. }
+        | OplogEntry::FilesystemStorageUsageUpdate { .. }
+        | OplogEntry::CreateResource { .. }
+        | OplogEntry::DropResource { .. }
+        | OplogEntry::Log {
+            parent_start_index: None,
+            ..
+        }
+        | OplogEntry::Restart { .. }
+        | OplogEntry::ActivatePlugin { .. }
+        | OplogEntry::DeactivatePlugin { .. }
+        | OplogEntry::Revert { .. }
+        | OplogEntry::CancelPendingInvocation { .. }
+        | OplogEntry::StartSpan {
+            parent_start_index: None,
+            ..
+        }
+        | OplogEntry::FinishSpan {
+            parent_start_index: None,
+            ..
+        }
+        | OplogEntry::SetSpanAttribute {
+            parent_start_index: None,
+            ..
+        }
+        | OplogEntry::Snapshot { .. }
+        | OplogEntry::OplogProcessorCheckpoint { .. }
+        | OplogEntry::SetRetryPolicy { .. }
+        | OplogEntry::RemoveRetryPolicy { .. }
+        | OplogEntry::CardEventQueued { .. }
+        | OplogEntry::CardInstalled { .. }
+        | OplogEntry::CardInstallFailed { .. }
+        | OplogEntry::CardRevoked { .. }
+        | OplogEntry::CardExpired { .. } => None,
+    }
+}
+
 /// The `start_index` of the durable call `entry` terminates, when `entry` is a durable-call
 /// terminal (`End` / `Cancelled`); `None` for every other entry kind.
 pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
@@ -1644,6 +1953,50 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. } => {
             Some(*start_index)
         }
-        _ => None,
+        OplogEntry::Create { .. }
+        | OplogEntry::Start { .. }
+        | OplogEntry::CompletionDiscarded { .. }
+        | OplogEntry::AgentInvocationStarted { .. }
+        | OplogEntry::AgentInvocationFinished { .. }
+        | OplogEntry::Suspend { .. }
+        | OplogEntry::Error { .. }
+        | OplogEntry::NoOp { .. }
+        | OplogEntry::Jump { .. }
+        | OplogEntry::Interrupted { .. }
+        | OplogEntry::Exited { .. }
+        | OplogEntry::BeginAtomicRegion { .. }
+        | OplogEntry::EndAtomicRegion { .. }
+        | OplogEntry::PendingAgentInvocation { .. }
+        | OplogEntry::PendingUpdate { .. }
+        | OplogEntry::SuccessfulUpdate { .. }
+        | OplogEntry::FailedUpdate { .. }
+        | OplogEntry::GrowMemory { .. }
+        | OplogEntry::FilesystemStorageUsageUpdate { .. }
+        | OplogEntry::CreateResource { .. }
+        | OplogEntry::DropResource { .. }
+        | OplogEntry::Log { .. }
+        | OplogEntry::Restart { .. }
+        | OplogEntry::ActivatePlugin { .. }
+        | OplogEntry::DeactivatePlugin { .. }
+        | OplogEntry::Revert { .. }
+        | OplogEntry::CancelPendingInvocation { .. }
+        | OplogEntry::StartSpan { .. }
+        | OplogEntry::FinishSpan { .. }
+        | OplogEntry::SetSpanAttribute { .. }
+        | OplogEntry::BeginRemoteTransaction { .. }
+        | OplogEntry::PreCommitRemoteTransaction { .. }
+        | OplogEntry::PreRollbackRemoteTransaction { .. }
+        | OplogEntry::CommittedRemoteTransaction { .. }
+        | OplogEntry::RolledBackRemoteTransaction { .. }
+        | OplogEntry::Snapshot { .. }
+        | OplogEntry::OplogProcessorCheckpoint { .. }
+        | OplogEntry::SetRetryPolicy { .. }
+        | OplogEntry::RemoveRetryPolicy { .. }
+        | OplogEntry::CardEventQueued { .. }
+        | OplogEntry::CardInstalled { .. }
+        | OplogEntry::CardInstallFailed { .. }
+        | OplogEntry::CardRevoked { .. }
+        | OplogEntry::CardExpired { .. }
+        | OplogEntry::HostStreamFrame { .. } => None,
     }
 }

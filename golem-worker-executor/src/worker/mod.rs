@@ -14,8 +14,12 @@
 
 pub mod agent_config;
 pub mod cut_point;
+pub mod entity_invocation;
+pub mod entity_slot;
+pub mod instance;
 pub mod invocation;
 mod invocation_loop;
+pub mod owner_lane;
 pub mod read_only_cache;
 mod state_actor;
 pub mod status;
@@ -23,13 +27,14 @@ pub mod status_checkpointer;
 pub mod status_flusher;
 
 use self::agent_config::{
-    ensure_required_agent_secrets_are_configured, parse_worker_creation_agent_config,
+    effective_agent_config, ensure_required_agent_secrets_are_configured,
+    parse_worker_creation_agent_config,
 };
 use crate::durable_host::{agent_effective_surface_from_component_metadata, recover_stderr_logs};
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
-use crate::services::active_workers::{
+use crate::services::active_agents::{
     FilesystemStoragePermit, MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
 };
 use crate::services::card_interest::CardInterestIndex;
@@ -41,7 +46,7 @@ use crate::services::oplog::{CommitLevel, Oplog, OplogOps, downcast_oplog};
 use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    All, HasActiveWorkers, HasAgentTypesService, HasAgentWebhooksService, HasAll,
+    All, HasActiveAgents, HasAgentTypesService, HasAgentWebhooksService, HasAll,
     HasBlobStoreService, HasCardService, HasComponentService, HasConfig,
     HasEnvironmentStateService, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
     HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasQuotaService,
@@ -49,11 +54,11 @@ use crate::services::{
     HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
     HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
+use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use futures::FutureExt;
 use futures::channel::oneshot;
 use golem_common::base_model::agent::CachePolicy;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -69,12 +74,13 @@ use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::entity::{ExecutableTarget, FilesystemCapability, OwnerRuntime};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
 };
-use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
+use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget, TypedAgentConfigEntry};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
     AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef,
@@ -99,8 +105,8 @@ use tokio::sync::{Mutex, MutexGuard, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{Instrument, Level, debug, info, span, warn};
 use uuid::Uuid;
+use wasmtime::Store;
 use wasmtime::component::Instance;
-use wasmtime::{Store, StoreMemory, UpdateDeadline};
 
 /// Resolved read-only `AgentMethod` invocation data needed to build the
 /// cache key and entry.
@@ -321,6 +327,8 @@ pub struct Worker<Ctx: WorkerCtx> {
     /// (invocation-loop notification, memory-growth persistence). See [`state_actor`] for the
     /// concurrency invariants.
     state_actor: state_actor::WorkerStateActor<Ctx>,
+    owner_execution: Arc<OwnerExecution>,
+    owner_runtime_resources: Arc<OwnerRuntimeResources>,
     card_interest_index: Arc<CardInterestIndex>,
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
@@ -395,11 +403,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .unwrap_or_else(|| "-".to_string())
     }
 
-    pub(crate) async fn remove_from_active_workers(&self) {
-        self.deps
-            .active_workers()
-            .remove(&self.owned_agent_id.agent_id())
-            .await;
+    pub(crate) async fn remove_from_active_agents(&self) {
+        self.deps.active_agents().remove(&self.owned_agent_id).await;
     }
 
     /// Gets or creates a worker, but does not start it
@@ -444,7 +449,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        deps.active_workers()
+        deps.active_agents()
             .get_or_add_with_freshness(
                 deps,
                 owned_agent_id,
@@ -572,7 +577,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
     ) -> Option<AgentMetadata> {
-        if let Some(worker) = deps.active_workers().try_get(owned_agent_id).await {
+        if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
             Some(worker.get_latest_worker_metadata().await)
         } else if let Some(GetWorkerMetadataResult {
             mut initial_worker_metadata,
@@ -642,6 +647,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let metrics_status = Arc::new(WorkerStatusMetric::new(current_status_snapshot.status));
         let initial_invocation_results = current_status_snapshot.invocation_results.clone();
         let last_oplog_idx = current_status_snapshot.oplog_idx;
+        let initial_filesystem_storage_usage =
+            current_status_snapshot.current_filesystem_storage_usage;
         drop(current_status_snapshot);
 
         // Invocations already pending when this worker is loaded were enqueued by
@@ -679,8 +686,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .initialize_account(owner_account_id)
             .await?;
         let registered_concurrent_account = deps
-            .active_workers()
-            .register_account_concurrency(owner_account_id, resource_entry)
+            .active_agents()
+            .register_account_concurrency(owner_account_id, resource_entry.clone())
             .await;
 
         let read_only_cache_cfg = &deps.config().read_only_cache;
@@ -702,7 +709,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             initial_worker_metadata.agent_mode == AgentMode::Ephemeral,
             deps.config().agent_status_flush.enabled,
             deps.worker_service(),
-            deps.active_workers().status_flush_queue(),
+            deps.active_agents().status_flush_queue(),
             current_status.clone(),
             last_known_status_detached.clone(),
         );
@@ -729,6 +736,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             status_flusher.clone(),
             instance.clone(),
         );
+        let owner_execution = Arc::new(OwnerExecution::new(
+            owned_agent_id.clone(),
+            oplog.clone(),
+            state_actor.owner_commit_controller(),
+        ));
+        let owner_runtime_resources = Arc::new(OwnerRuntimeResources::new(
+            resource_entry,
+            execution_status.clone(),
+            initial_worker_metadata.agent_mode,
+            initial_filesystem_storage_usage,
+        ));
 
         let worker = Worker {
             owned_agent_id,
@@ -759,6 +777,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
             state_actor,
+            owner_execution,
+            owner_runtime_resources,
             last_known_status_detached,
             status_flusher,
             status_checkpointer,
@@ -809,6 +829,114 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub fn agent_id(&self) -> AgentId {
         self.owned_agent_id.agent_id()
+    }
+
+    pub(crate) fn component_id(&self) -> ComponentId {
+        self.owned_agent_id.component_id()
+    }
+
+    pub fn owner_execution(&self) -> Arc<OwnerExecution> {
+        self.owner_execution.clone()
+    }
+
+    pub fn owner_runtime_resources(&self) -> Arc<OwnerRuntimeResources> {
+        self.owner_runtime_resources.clone()
+    }
+
+    pub(crate) async fn create_entity_context(
+        self: &Arc<Self>,
+        runtime: OwnerRuntime,
+        filesystem: FilesystemCapability,
+        executable_component: golem_service_base::model::component::Component,
+        activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
+        owner_component_metadata: Arc<golem_service_base::model::component::Component>,
+    ) -> Result<Ctx, WorkerExecutorError> {
+        if !matches!(runtime, OwnerRuntime::Entity(_)) {
+            return Err(WorkerExecutorError::runtime(
+                "Entity context construction requires an entity runtime",
+            ));
+        }
+        let worker_metadata = self.get_latest_worker_metadata().await;
+        let agent_effective_surface = match &self.parsed_agent_id {
+            Some(agent_id) => agent_effective_surface_from_component_metadata(
+                &owner_component_metadata,
+                &self.owned_agent_id,
+                agent_id,
+            )?,
+            None => golem_common::model::card::EffectiveSurface::default(),
+        };
+        let executable_revision = executable_component.revision;
+        let initial_agent_config = match &self.parsed_agent_id {
+            Some(agent_id) => {
+                let component_config = owner_component_metadata
+                    .metadata
+                    .agent_type_config(&agent_id.agent_type)
+                    .map(|config| config.to_vec())
+                    .unwrap_or_default();
+                effective_agent_config(worker_metadata.config, component_config)?
+                    .into_iter()
+                    .map(|(path, value)| TypedAgentConfigEntry { path, value })
+                    .collect()
+            }
+            None => worker_metadata.config,
+        };
+
+        Ctx::create(
+            worker_metadata.created_by,
+            self.owned_agent_id.clone(),
+            self.parsed_agent_id.clone(),
+            self.promise_service(),
+            self.worker_service(),
+            self.worker_enumeration_service(),
+            self.key_value_service(),
+            self.blob_store_service(),
+            self.rdbms_service(),
+            self.quota_service(),
+            self.worker_event_service.clone(),
+            self.active_agents(),
+            self.oplog_service(),
+            self.oplog.clone(),
+            Arc::downgrade(self),
+            self.scheduler_service(),
+            self.rpc(),
+            self.worker_proxy(),
+            self.card_service(),
+            self.card_interest_index.clone(),
+            self.component_service(),
+            self.extra_deps(),
+            self.config(),
+            AgentConfig::new(
+                DeletedRegions::default(),
+                0,
+                0,
+                executable_revision,
+                worker_metadata.created_by,
+                worker_metadata.created_by_email,
+                initial_agent_config,
+                None,
+                agent_effective_surface,
+                Some(owner_component_metadata),
+            ),
+            self.execution_status.clone(),
+            self.file_loader(),
+            self.worker_fork_service(),
+            self.resource_limits(),
+            self.agent_types(),
+            self.environment_state_service(),
+            self.agent_webhooks(),
+            self.shard_service(),
+            self.http_connection_pool(),
+            self.websocket_connection_pool(),
+            None,
+            worker_metadata.original_phantom_id,
+            runtime,
+            self.owner_execution(),
+            self.owner_runtime_resources(),
+            filesystem,
+            executable_component,
+            activation,
+        )
+        .await
     }
 
     pub fn oom_retry_config(&self) -> &RetryConfig {
@@ -884,10 +1012,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// The `stopping` flag is only used to prevent re-entrance of the stopping sequence in case the invocation loop
     /// triggers a stop (in case of a failure - by the way it should not happen here because the worker is idle).
     pub async fn stop_if_idle(&self) -> bool {
+        let active_agent = self
+            .active_agents()
+            .try_get_active_agent(&self.owned_agent_id)
+            .await;
+        let reopen_entity_generation = match active_agent.as_ref() {
+            Some(active_agent) => match active_agent.try_fence_idle_entity_bodies() {
+                Some(reopen_generation) => reopen_generation,
+                None => return false,
+            },
+            None => None,
+        };
         let mut instance_guard = self.lock_non_stopping_worker().await;
         let stop_result = match &*instance_guard {
             WorkerInstance::Running(running) => {
                 if self.is_running_worker_idle(running).await {
+                    if let Some(active_agent) = active_agent.as_ref() {
+                        active_agent.resources().filesystem().fence();
+                    }
                     let stop_result = self
                         .stop_internal_locked(
                             &mut instance_guard,
@@ -916,6 +1058,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.handle_stop_result(stop_result).await;
             true
         } else {
+            if let (Some(generation), Some(active_agent)) = (reopen_entity_generation, active_agent)
+            {
+                active_agent.reopen_entity_admission_if_generation(generation);
+            }
             false
         }
     }
@@ -923,6 +1069,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Transition the worker into a deleting state.
     /// Rejects all new invocations and stops any running execution.
     pub async fn start_deleting(&self) -> Result<(), WorkerExecutorError> {
+        self.queue_interrupt(InterruptKind::Interrupt(Timestamp::now_utc()), false)
+            .await;
+        if let Some(active_agent) = self
+            .active_agents()
+            .try_get_active_agent(&self.owned_agent_id)
+            .await
+        {
+            active_agent.fence_entity_bodies();
+        }
         // Stop any future background flush or clean-checkpoint write from resurrecting the cached
         // status after the upcoming `WorkerService::remove`/`remove_cached_status` deletes it (the
         // latter clears both the live cache and the checkpoint). Each awaits any in-flight write so
@@ -1010,6 +1165,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
         {
             return None;
+        }
+        if let Some(active_agent) = self
+            .active_agents()
+            .try_get_active_agent(&self.owned_agent_id)
+            .await
+        {
+            active_agent.fence_entity_bodies();
         }
         if let WorkerInstance::Running(running) = &*instance_guard {
             let _ = running.sender.send(WorkerCommand::WorkAvailable);
@@ -1948,7 +2110,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// `Worker` shells can outlive their wasmtime instance — for example after
     /// memory-pressure eviction unloads the instance but the shell stays alive
-    /// in [`ActiveWorkers`] so its caches (read-only cache, pending
+    /// in [`ActiveAgents`] so its caches (read-only cache, pending
     /// invocations, …) can keep serving. This accessor lets callers
     /// distinguish those two states.
     pub async fn is_loaded(&self) -> bool {
@@ -1965,6 +2127,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// - `None`: worker is actively executing, has non-durable in-memory work
     ///   pending, or is not loaded. Never evicted.
     pub async fn eviction_class(&self) -> Option<EvictionClass> {
+        if self
+            .active_agents()
+            .try_get_active_agent(&self.owned_agent_id)
+            .await
+            .is_some_and(|active_agent| {
+                active_agent
+                    .entity_slots()
+                    .iter()
+                    .any(|slot| slot.active_invocation_count() != 0)
+            })
+        {
+            return None;
+        }
         match &*self.instance.lock().await {
             WorkerInstance::Running(running) => {
                 let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
@@ -1997,6 +2172,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Re-checks the eviction classification under the instance lock to avoid
     /// races. Returns `true` if the worker was actually stopped.
     pub async fn stop_if_evictable(&self, target_class: EvictionClass) -> bool {
+        let active_agent = self
+            .active_agents()
+            .try_get_active_agent(&self.owned_agent_id)
+            .await;
+        let reopen_entity_generation = match active_agent.as_ref() {
+            Some(active_agent) => match active_agent.try_fence_idle_entity_bodies() {
+                Some(reopen_generation) => reopen_generation,
+                None => return false,
+            },
+            None => None,
+        };
         let mut instance_guard = self.lock_non_stopping_worker().await;
         let should_stop = match &*instance_guard {
             WorkerInstance::Running(running) => {
@@ -2025,6 +2211,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         if should_stop {
+            if let Some(active_agent) = active_agent.as_ref() {
+                active_agent.resources().filesystem().fence();
+            }
             let stop_result = self
                 .stop_internal_locked(
                     &mut instance_guard,
@@ -2040,6 +2229,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             true
         } else {
             drop(instance_guard);
+            if let (Some(generation), Some(active_agent)) = (reopen_entity_generation, active_agent)
+            {
+                active_agent.reopen_entity_admission_if_generation(generation);
+            }
             false
         }
     }
@@ -2157,7 +2350,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// by the `RunningWorker`, preventing double-return when it later drops.
     pub async fn release_filesystem_storage_space(&self, freed_bytes: u64) {
         let permits_to_release =
-            crate::services::active_workers::bytes_to_filesystem_storage_permits(freed_bytes);
+            crate::services::active_agents::bytes_to_filesystem_storage_permits(freed_bytes);
         if permits_to_release == 0 {
             return;
         }
@@ -2171,7 +2364,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let actual_n = n.min(permit.num_permits());
             let to_drop = permit.split(actual_n);
             let released_bytes =
-                crate::services::active_workers::filesystem_storage_permits_to_bytes(
+                crate::services::active_agents::filesystem_storage_permits_to_bytes(
                     actual_n as u32,
                 );
             record_filesystem_pool_released(released_bytes);
@@ -2188,7 +2381,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         match &mut *self.instance.lock().await {
             WorkerInstance::Running(running) => {
                 if let Some(permit) = self
-                    .active_workers()
+                    .active_agents()
                     .try_acquire_filesystem_storage(new_bytes)
                     .await
                 {
@@ -2233,7 +2426,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         match &mut *self.instance.lock().await {
             WorkerInstance::Running(running) => {
                 if let Some(permit) = self
-                    .active_workers()
+                    .active_agents()
                     .try_acquire_filesystem_storage(total_bytes)
                     .await
                 {
@@ -3553,7 +3746,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         memory_grant: MemoryGrant,
         component_charge: WorkerComponentCharge,
         filesystem_storage_permit: Option<FilesystemStoragePermit>,
-        concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
+        concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
         oom_retry_count: u32,
         start_attempt: Uuid,
         worker_trace: WorkerTrace,
@@ -3563,6 +3756,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::WaitingForPermit(waiting_worker)
                 if waiting_worker.start_attempt == start_attempt =>
             {
+                this.interrupt_signal
+                    .lock()
+                    .await
+                    .reset_terminal_for_new_generation();
                 let mut running = RunningWorker::new(
                     this.owned_agent_id.clone(),
                     this.queue.clone(),
@@ -3838,7 +4035,7 @@ impl WaitingWorker {
             // memory headroom with workers that are not allowed to run yet.
             let phase_start = std::time::Instant::now();
             let (memory_grant, component_charge) = parent
-                .active_workers()
+                .active_agents()
                 .acquire_with_component_charge(
                     memory_requirement,
                     requirement.component_id,
@@ -3880,7 +4077,7 @@ impl WaitingWorker {
             let filesystem_storage_permit = if acquire_bytes > 0 {
                 let phase_start = std::time::Instant::now();
                 let mut permit = parent
-                    .active_workers()
+                    .active_agents()
                     .acquire_filesystem_storage(acquire_bytes)
                     .instrument(related_span!(
                         worker_trace.startup_origin,
@@ -3897,7 +4094,7 @@ impl WaitingWorker {
                 // Release the `desired_extra` portion back to the pool.
                 if desired_extra > 0 {
                     let extra_permits =
-                        crate::services::active_workers::bytes_to_filesystem_storage_permits(
+                        crate::services::active_agents::bytes_to_filesystem_storage_permits(
                             desired_extra,
                         ) as usize;
                     if let Some(extra) = permit.split(extra_permits) {
@@ -3987,6 +4184,10 @@ impl WorkerInterruptState {
 
     fn queue(&mut self, mut interrupt: PendingWorkerInterrupt) -> bool {
         match self {
+            Self::TerminalClaimed if interrupt.is_terminal() => {
+                *self = Self::Pending(interrupt);
+                true
+            }
             Self::TerminalClaimed => false,
             Self::Pending(current) if current.is_terminal() => false,
             Self::Pending(current) => {
@@ -4021,6 +4222,12 @@ impl WorkerInterruptState {
         match self {
             Self::Pending(interrupt) if interrupt.is_terminal() => self.take(),
             _ => None,
+        }
+    }
+
+    fn reset_terminal_for_new_generation(&mut self) {
+        if matches!(self, Self::TerminalClaimed) {
+            *self = Self::Idle;
         }
     }
 }
@@ -4077,7 +4284,7 @@ impl<Ctx: WorkerCtx> Drop for LinearMemoryGrantRegistration<Ctx> {
 impl Drop for RunningWorker {
     fn drop(&mut self) {
         if let Some(ref permit) = self.filesystem_storage_permit {
-            let bytes = crate::services::active_workers::filesystem_storage_permits_to_bytes(
+            let bytes = crate::services::active_agents::filesystem_storage_permits_to_bytes(
                 permit.num_permits() as u32,
             );
             if bytes > 0 {
@@ -4087,97 +4294,14 @@ impl Drop for RunningWorker {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LinearMemoryEnumerationError {
-    Shared,
-    Overflow,
-}
-
-fn allocated_linear_memory_bytes<T>(store: &Store<T>) -> Result<u64, LinearMemoryEnumerationError> {
-    store
-        .linear_memories()
-        .iter()
-        .try_fold(0u64, |allocated_bytes, memory| match memory {
-            StoreMemory::Unshared(memory) => allocated_bytes
-                .checked_add(memory.data_size(store) as u64)
-                .ok_or(LinearMemoryEnumerationError::Overflow),
-            StoreMemory::Shared(_) => Err(LinearMemoryEnumerationError::Shared),
-        })
-}
-
 impl RunningWorker {
-    async fn reconcile_linear_memories<Ctx: WorkerCtx>(
-        parent: &Arc<Worker<Ctx>>,
-        store: &mut Store<Ctx>,
-    ) -> Result<(), WorkerExecutorError> {
-        let durable = store.data().durable_ctx();
-        let tracker = durable.linear_memory_tracker();
-        let limit = durable.max_linear_memory_size();
-        let allocated_bytes =
-            allocated_linear_memory_bytes(store).map_err(|error| match error {
-                LinearMemoryEnumerationError::Shared => shared_linear_memory_error(parent),
-                LinearMemoryEnumerationError::Overflow => {
-                    WorkerExecutorError::runtime("linear-memory allocation total overflowed")
-                }
-            })?;
-
-        let required_grant_bytes = tracker.reconciliation_grant_bytes(allocated_bytes);
-        if required_grant_bytes > limit {
-            return Err(WorkerExecutorError::worker_creation_failed(
-                parent.owned_agent_id.agent_id(),
-                format!(
-                    "Linear memories require {required_grant_bytes} bytes, exceeding the per-worker limit of {limit} bytes"
-                ),
-            ));
-        }
-
-        let retained_grant = parent.linear_memory_grant();
-        let (grant_is_tracked, granted_bytes) = {
-            let grant = retained_grant.lock().unwrap();
-            (grant.is_tracked(), grant.bytes())
-        };
-        if grant_is_tracked && required_grant_bytes > granted_bytes {
-            let additional_grant = parent
-                .active_workers()
-                .acquire_memory(required_grant_bytes - granted_bytes)
-                .await;
-            retained_grant.lock().unwrap().merge(additional_grant);
-        }
-        if grant_is_tracked {
-            retained_grant
-                .lock()
-                .unwrap()
-                .shrink_to(required_grant_bytes);
-        }
-
-        parent
-            .memory_limit_interrupt_queued
-            .store(false, Ordering::Release);
-
-        let live_instantiation_growth =
-            tracker.reconcile(allocated_bytes, std::time::Instant::now());
-        crate::metrics::wasm::record_worker_allocated_linear_memory(allocated_bytes);
-        if live_instantiation_growth > 0 {
-            // Commit the growth oplog entry before publishing the instance. Otherwise a
-            // process crash can replay and persist the same instantiation growth again.
-            parent
-                .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
-                .await;
-            parent
-                .startup_linear_memory_bytes
-                .store(allocated_bytes, Ordering::Release);
-        }
-
-        Ok(())
-    }
-
     pub async fn new<Ctx: WorkerCtx>(
         owned_agent_id: OwnedAgentId,
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
         memory_grant: MemoryGrant,
         component_charge: WorkerComponentCharge,
-        concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
+        concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
         oom_retry_count: u32,
         worker_trace: WorkerTrace,
     ) -> Self {
@@ -4393,7 +4517,7 @@ impl RunningWorker {
             parent.rdbms_service(),
             parent.quota_service(),
             parent.worker_event_service.clone(),
-            parent.active_workers(),
+            parent.active_agents(),
             parent.oplog_service(),
             parent.oplog.clone(),
             Arc::downgrade(&parent),
@@ -4417,6 +4541,7 @@ impl RunningWorker {
                 worker_metadata.config,
                 last_snapshot_index,
                 agent_effective_surface,
+                None,
             ),
             parent.execution_status.clone(),
             parent.file_loader(),
@@ -4430,80 +4555,23 @@ impl RunningWorker {
             parent.websocket_connection_pool(),
             pending_update,
             worker_metadata.original_phantom_id,
+            OwnerRuntime::Agent,
+            parent.owner_execution(),
+            parent.owner_runtime_resources(),
+            FilesystemCapability::Capable,
+            component_metadata_for_replay,
+            None,
         )
         .await?;
 
-        let engine = parent.engine();
-        let mut store = Store::new(&engine, context);
-
-        // Set initial epoch deadline to 0 so the callback fires immediately on the
-        // first epoch check point in WASM code, ensuring fuel is checked even for
-        // very fast invocations that complete within a single epoch tick interval.
-        store.set_epoch_deadline(0);
-        store.epoch_deadline_callback(move |mut store| {
-            let current_level = store.get_fuel().unwrap_or(0);
-            let data_mut = store.data_mut();
-            if let Err(error) = data_mut.ensure_fuel(current_level) {
-                if data_mut.agent_mode() == AgentMode::Ephemeral {
-                    warn!(error = ?error, "Could not borrow more fuel for ephemeral agent");
-                    return Err(WorkerExecutorError::InvocationFailed {
-                        error,
-                        stderr: String::new(),
-                    }
-                    .into());
-                } else {
-                    warn!("Could not borrow more fuel, suspending");
-                    return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
-                }
-            }
-
-            match data_mut.check_interrupt() {
-                Some(kind) => Err(kind.into()),
-                None => Ok(UpdateDeadline::YieldCustom(
-                    1,
-                    tokio::task::yield_now().boxed(),
-                )),
-            }
-        });
-        store
-            .set_fuel(u64::MAX)
-            .map_err(|e| WorkerExecutorError::runtime(e.to_string()))?;
-
-        store.limiter_async(|ctx| ctx.resource_limiter());
-
-        let linker = (*parent.linker()).clone(); // fresh linker
-
-        let instance_pre = linker.instantiate_pre(&component).map_err(|e| {
-            WorkerExecutorError::worker_creation_failed(
-                parent.owned_agent_id.agent_id(),
-                format!(
-                    "Failed to pre-instantiate worker {}: {e}",
-                    parent.owned_agent_id
-                ),
-            )
-        })?;
-
-        let instance = instance_pre
-            .instantiate_async(&mut store)
-            .await
-            .map_err(|e| {
-                // Wasm may already execute during instantiation (start functions, ctors), so the
-                // epoch deadline callback can fire here: an `InterruptKind` trap (e.g. a fuel
-                // suspension) is a lifecycle event, not a creation failure, and must be kept
-                // distinguishable for the invocation loop.
-                if let Some(kind) = e.root_cause().downcast_ref::<InterruptKind>() {
-                    WorkerExecutorError::Interrupted { kind: *kind }
-                } else {
-                    WorkerExecutorError::worker_creation_failed(
-                        parent.owned_agent_id.agent_id(),
-                        format!(
-                            "Failed to instantiate worker {}: {e}",
-                            parent.owned_agent_id
-                        ),
-                    )
-                }
-            })?;
-        Self::reconcile_linear_memories(&parent, &mut store).await?;
+        let instance_host = instance::InstanceHost::new(
+            &parent,
+            OwnerRuntime::Agent,
+            ExecutableTarget::new(component_id, component_metadata.revision),
+        )?;
+        let mut hosted = instance_host.instantiate(context, &component).await?;
+        instance_host.reconcile_linear_memories(&mut hosted).await?;
+        let (instance, store) = hosted.into_parts();
         let store = async_lock::Mutex::new(store);
         Ok((instance, store))
     }
@@ -4516,7 +4584,7 @@ impl RunningWorker {
         waiting_for_command: Arc<AtomicBool>,
         interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
         oom_retry_count: u32,
-        concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
+        concurrent_agent_permit: crate::services::active_agents::ConcurrentAgentPermit,
         resume_replay_pending: Arc<AtomicBool>,
         worker_trace: WorkerTrace,
     ) {
@@ -4777,7 +4845,10 @@ mod tests {
         let mut store = Store::new(&engine, ());
         wasmtime::Instance::new(&mut store, &module, &[])?;
 
-        assert_eq!(allocated_linear_memory_bytes(&store), Ok(6 * 65_536));
+        assert_eq!(
+            instance::allocated_linear_memory_bytes(&store),
+            Ok(6 * 65_536)
+        );
         Ok(())
     }
 
@@ -5044,6 +5115,25 @@ mod tests {
         assert!(!terminal(InterruptKind::Jump));
         assert!(terminal(InterruptKind::Interrupt(Timestamp::now_utc())));
         assert!(terminal(InterruptKind::Suspend(Timestamp::now_utc())));
+    }
+
+    #[test]
+    fn terminal_interrupt_can_be_queued_for_a_resuming_claimed_generation() {
+        let mut state = WorkerInterruptState::Pending(PendingWorkerInterrupt {
+            kind: InterruptKind::Interrupt(Timestamp::now_utc()),
+            reacquire_permits: false,
+        });
+        assert!(state.take().is_some());
+        assert!(matches!(state, WorkerInterruptState::TerminalClaimed));
+
+        let delete_interrupt = PendingWorkerInterrupt {
+            kind: InterruptKind::Interrupt(Timestamp::now_utc()),
+            reacquire_permits: false,
+        };
+        assert!(state.queue(delete_interrupt));
+        assert!(matches!(state, WorkerInterruptState::Pending(_)));
+        state.reset_terminal_for_new_generation();
+        assert!(matches!(state, WorkerInterruptState::Pending(_)));
     }
 }
 

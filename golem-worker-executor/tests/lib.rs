@@ -37,6 +37,7 @@ pub mod http;
 pub mod ignite_service;
 pub mod in_function_retry;
 pub mod indexed_storage;
+pub mod instance_layer;
 pub mod key_value_storage;
 pub mod keyvalue;
 pub mod namespace_routed_key_value_storage;
@@ -98,6 +99,7 @@ tag_suite!(agent, group1);
 tag_suite!(agent_sdk_ts, group1);
 
 tag_suite!(hot_update, group2);
+tag_suite!(instance_layer, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
 tag_suite!(retry_policies, group2);

@@ -21,6 +21,7 @@ mod clocks;
 mod concurrent;
 mod config;
 pub mod durability;
+pub mod entity;
 mod filesystem;
 pub mod golem;
 pub mod http;
@@ -31,7 +32,7 @@ pub mod p3;
 pub mod quota;
 mod random;
 pub mod rdbms;
-mod replay_state;
+pub(crate) mod replay_state;
 mod secrets;
 mod sockets;
 mod suspendable_wait;
@@ -53,7 +54,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
-use crate::services::active_workers::MemoryGrant;
+use crate::services::active_agents::MemoryGrant;
 use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
@@ -81,14 +82,18 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
-    HasActiveWorkers, HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration,
+    HasActiveAgents, HasAll, HasConfig, HasOplog, HasWorker, worker_enumeration,
 };
 use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
+use crate::worker::instance::{
+    OwnerExecution, OwnerFilesystemAttachment, OwnerProvisionedFile, OwnerRuntimeResources,
+};
 use crate::worker::invocation::{
     AgentExportFuncs, InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
+use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, calculate_pending_card_events,
 };
@@ -113,6 +118,7 @@ use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
 };
+use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
@@ -123,7 +129,7 @@ use golem_common::model::oplog::{
     HostResponse, LogLevel, OplogEntry, OplogIndex, RawSnapshotData, ScopeScanState,
     TimestampedUpdateDescription, UpdateDescription,
 };
-use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
@@ -153,39 +159,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
-use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
-
-/// A worker's filesystem root directory. Either a random OS temp directory
-/// (the default) or a deterministic path derived from the agent id.
-///
-/// In both cases the directory is removed when this value is dropped.
-enum WorkerDir {
-    /// Random temp dir created by `tempfile`. Auto-deleted on drop.
-    Temp(TempDir),
-    /// Deterministic directory. Deleted explicitly on drop.
-    Deterministic(PathBuf),
-}
-
-impl WorkerDir {
-    fn path(&self) -> &Path {
-        match self {
-            WorkerDir::Temp(td) => td.path(),
-            WorkerDir::Deterministic(p) => p,
-        }
-    }
-}
-
-impl Drop for WorkerDir {
-    fn drop(&mut self) {
-        if let WorkerDir::Deterministic(p) = self
-            && p.exists()
-        {
-            let _ = std::fs::remove_dir_all(p);
-        }
-        // WorkerDir::Temp is dropped automatically by TempDir's own Drop impl
-    }
-}
 
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_service_base::model::auth::AuthCtx;
@@ -372,9 +346,15 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     wasi_http: WasiHttpCtx,
     http_hooks: DurableHttpHooks,
     pub owned_agent_id: OwnedAgentId,
+    runtime: OwnerRuntime,
+    filesystem: FilesystemCapability,
+    entity_invocation_scope: Option<EntityInvocationScope>,
+    primary_invocation_start_index: Option<OplogIndex>,
+    owner_execution: Arc<OwnerExecution>,
+    owner_resources: Arc<OwnerRuntimeResources>,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
-    worker_dir: Arc<WorkerDir>,
+    owner_filesystem: OwnerFilesystemAttachment,
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
@@ -383,7 +363,20 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
     agent_export_funcs: AgentExportFuncs,
+    registered_resource_meters: bool,
     _store_alive_guard: StoreAliveGuard,
+}
+
+pub(crate) struct PrimaryInvocationBody {
+    permit: Option<OwnerInvocationPermit>,
+}
+
+impl PrimaryInvocationBody {
+    pub(crate) async fn complete(mut self) {
+        if let Some(permit) = self.permit.take() {
+            permit.complete_and_wait().await;
+        }
+    }
 }
 
 pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
@@ -417,12 +410,15 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
 
 impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
     fn drop(&mut self) {
+        self.linear_memory.clear_limit_exceeded_callback();
         self.linear_memory.stop(Instant::now());
-        self.resource_limits
-            .unregister_memory_meter(&self.owned_agent_id, self.linear_memory.meter());
         self.storage_meter.flush(Instant::now());
-        self.resource_limits
-            .unregister_storage_meter(&self.owned_agent_id, &self.storage_meter);
+        if self.registered_resource_meters {
+            self.resource_limits
+                .unregister_memory_meter(&self.owned_agent_id, self.linear_memory.meter());
+            self.resource_limits
+                .unregister_storage_meter(&self.owned_agent_id, &self.storage_meter);
+        }
     }
 }
 
@@ -431,18 +427,35 @@ impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
 /// `Store`, so the gauge follows the `Store`'s true lifetime regardless of which
 /// reference keeps it alive. A persistent gap above the resident-worker count
 /// indicates `Store`s retained after their worker was deleted.
-struct StoreAliveGuard;
+struct StoreAliveGuard {
+    entity_kind: Option<&'static str>,
+}
 
 impl StoreAliveGuard {
-    fn new() -> Self {
+    fn new(runtime: &OwnerRuntime) -> Self {
         crate::metrics::workers::inc_worker_store_alive();
-        StoreAliveGuard
+        let entity_kind = match runtime {
+            OwnerRuntime::Agent => {
+                crate::metrics::workers::inc_primary_store_alive();
+                None
+            }
+            OwnerRuntime::Entity(entity) => {
+                let entity_kind = entity.kind_label();
+                crate::metrics::workers::inc_entity_store_alive(entity_kind);
+                Some(entity_kind)
+            }
+        };
+        StoreAliveGuard { entity_kind }
     }
 }
 
 impl Drop for StoreAliveGuard {
     fn drop(&mut self) {
         crate::metrics::workers::dec_worker_store_alive();
+        match self.entity_kind {
+            Some(entity_kind) => crate::metrics::workers::dec_entity_store_alive(entity_kind),
+            None => crate::metrics::workers::dec_primary_store_alive(),
+        }
     }
 }
 
@@ -576,31 +589,39 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         original_phantom_id: Option<Uuid>,
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
+        runtime: OwnerRuntime,
+        owner_execution: Arc<OwnerExecution>,
+        owner_resources: Arc<OwnerRuntimeResources>,
+        filesystem: FilesystemCapability,
+        executable_component: Component,
+        entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
-        let worker_dir = Arc::new(
-            if let Some(root) = &config.filesystem_storage.deterministic_root_dir {
-                let dir = root
-                    .join(owned_agent_id.environment_id.to_string())
-                    .join(owned_agent_id.agent_id.component_id.to_string())
-                    .join(owned_agent_id.agent_id.agent_name_encoded());
-                std::fs::create_dir_all(&dir).map_err(|e| {
-                    WorkerExecutorError::runtime(format!(
-                        "Failed to create deterministic directory {}: {e}",
-                        dir.display()
-                    ))
-                })?;
-                WorkerDir::Deterministic(dir)
-            } else {
-                WorkerDir::Temp(tempfile::Builder::new().prefix("golem").tempdir().map_err(
-                    |e| {
-                        WorkerExecutorError::runtime(format!(
-                            "Failed to create temporary directory: {e}",
-                        ))
-                    },
-                )?)
-            },
+        if runtime == OwnerRuntime::Agent && filesystem != FilesystemCapability::Capable {
+            return Err(WorkerExecutorError::runtime(
+                "The primary Store must be filesystem-capable",
+            ));
+        }
+        let filesystem_root = owner_resources.filesystem();
+        let owner_filesystem = match &runtime {
+            OwnerRuntime::Agent => {
+                let attachment = filesystem_root
+                    .begin_primary_generation(
+                        &owner_execution.lane(),
+                        config.filesystem_storage.deterministic_root_dir.as_deref(),
+                        &owned_agent_id,
+                    )
+                    .await?;
+                owner_resources
+                    .reset_filesystem_storage_usage(worker_config.current_filesystem_storage_usage);
+                attachment
+            }
+            OwnerRuntime::Entity(_) => filesystem_root.attach_entity()?,
+        };
+        debug!(
+            generation = owner_filesystem.generation(),
+            "Attached Store to owner file system root at {:?}",
+            owner_filesystem.path()
         );
-        debug!("Created file system root at {:?}", worker_dir.path());
 
         debug!(
             "Worker {} initialized with deleted regions {}",
@@ -611,12 +632,53 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             "Worker {} starting replay from component revision {}",
             owned_agent_id.agent_id, worker_config.component_revision_for_replay
         );
-        let component_metadata = component_service
-            .get_metadata(
-                owned_agent_id.component_id(),
-                Some(worker_config.component_revision_for_replay),
-            )
-            .await?;
+        if executable_component.revision != worker_config.component_revision_for_replay {
+            return Err(WorkerExecutorError::runtime(format!(
+                "Executable component revision {} does not match context revision {}",
+                executable_component.revision, worker_config.component_revision_for_replay
+            )));
+        }
+        if runtime == OwnerRuntime::Agent
+            && executable_component.id != owned_agent_id.component_id()
+        {
+            return Err(WorkerExecutorError::runtime(
+                "Primary Store executable must be the owner component",
+            ));
+        }
+        match (&runtime, &entity_activation) {
+            (OwnerRuntime::Agent, None) => {}
+            (OwnerRuntime::Entity(entity), Some(activation)) => {
+                if entity != &activation.entity() {
+                    return Err(WorkerExecutorError::runtime(
+                        "Entity Store activation does not match its runtime selector",
+                    ));
+                }
+            }
+            (OwnerRuntime::Agent, Some(_)) => {
+                return Err(WorkerExecutorError::runtime(
+                    "Primary Store cannot carry an entity activation",
+                ));
+            }
+            (OwnerRuntime::Entity(_), _) => {
+                return Err(WorkerExecutorError::runtime(
+                    "Entity Store requires an activation matching its runtime selector",
+                ));
+            }
+        }
+        match (&runtime, &worker_config.owner_component_metadata) {
+            (OwnerRuntime::Agent, None) | (OwnerRuntime::Entity(_), Some(_)) => {}
+            (OwnerRuntime::Agent, Some(_)) => {
+                return Err(WorkerExecutorError::runtime(
+                    "Primary Store cannot carry separate owner component metadata",
+                ));
+            }
+            (OwnerRuntime::Entity(_), None) => {
+                return Err(WorkerExecutorError::runtime(
+                    "Entity Store requires owner component metadata pinned at dispatch",
+                ));
+            }
+        }
+        let component_metadata = executable_component;
 
         if component_metadata.metadata.has_shared_linear_memory() {
             return Err(WorkerExecutorError::worker_creation_failed(
@@ -636,23 +698,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ));
         }
 
-        let agent_type_provision_configs = agent_id.as_ref().and_then(|agent_id| {
-            component_metadata
-                .metadata
-                .agent_type_provision_configs()
-                .get(&agent_id.agent_type)
-                .cloned()
-        });
-        let initial_read_write_file_bytes: u64 = agent_type_provision_configs
-            .as_ref()
-            .map(|c| c.files.as_slice())
-            .unwrap_or_default()
-            .iter()
-            .filter(|f| f.permissions == AgentFilePermissions::ReadWrite)
-            .map(|f| f.size)
-            .fold(0u64, u64::saturating_add);
-        let initial_filesystem_storage_usage = worker_config
-            .current_filesystem_storage_usage
+        let agent_type_provision_configs = match &runtime {
+            OwnerRuntime::Agent => agent_id.as_ref().and_then(|agent_id| {
+                component_metadata
+                    .metadata
+                    .agent_type_provision_configs()
+                    .get(&agent_id.agent_type)
+                    .cloned()
+            }),
+            OwnerRuntime::Entity(_) => None,
+        };
+        let provisioned_files = match (&runtime, entity_activation.as_deref()) {
+            (OwnerRuntime::Agent, _) => agent_type_provision_configs
+                .as_ref()
+                .map(|config| config.files.as_slice())
+                .unwrap_or_default(),
+            (OwnerRuntime::Entity(_), Some(activation)) => {
+                activation.policy().provision().files.as_slice()
+            }
+            (OwnerRuntime::Entity(_), None) => unreachable!("validated above"),
+        };
+        let initial_read_write_file_bytes = filesystem_root
+            .preflight_provisioning(&owner_filesystem, provisioned_files)
+            .await?;
+        let initial_filesystem_storage_usage = owner_resources
+            .filesystem_storage_usage()
             .saturating_add(initial_read_write_file_bytes);
         if initial_filesystem_storage_usage > resource_limits.max_disk_space_limit() {
             return Err(WorkerExecutorError::worker_creation_failed(
@@ -663,17 +733,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ),
             ));
         }
-
-        let files = prepare_filesystem(
-            &file_loader,
-            owned_agent_id.environment_id,
-            worker_dir.path(),
-            agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.files.as_slice())
-                .unwrap_or_default(),
-        )
-        .await?;
 
         // Acquire storage semaphore permits for read-write initial component files.
         //
@@ -692,6 +751,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .acquire_initial_filesystem_storage(initial_read_write_file_bytes)
                 .await
                 .map_err(|trap| WorkerExecutorError::runtime(trap.to_string()))?;
+        }
+
+        let (files, provisioned_read_write_file_bytes) = prepare_filesystem(
+            &filesystem_root,
+            &owner_filesystem,
+            &file_loader,
+            owned_agent_id.environment_id,
+            provisioned_files,
+        )
+        .await?;
+        debug_assert_eq!(
+            provisioned_read_write_file_bytes,
+            initial_read_write_file_bytes
+        );
+        if provisioned_read_write_file_bytes > 0 {
+            owner_resources.acquire_filesystem_storage(provisioned_read_write_file_bytes);
+            owner_resources
+                .storage_meter()
+                .on_acquire(provisioned_read_write_file_bytes, Instant::now());
         }
         worker_config.current_filesystem_storage_usage = initial_filesystem_storage_usage;
 
@@ -716,7 +794,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
-            worker_dir.path().to_path_buf(),
+            owner_filesystem.path().to_path_buf(),
+            filesystem == FilesystemCapability::Capable,
             stdin.clone(),
             stdout,
             stderr,
@@ -730,24 +809,58 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
         };
-        let storage_meter = AgentStorageMeter::new(
-            execution_status.read().unwrap().agent_mode(),
-            worker_config.current_filesystem_storage_usage,
-            resource_limits.clone(),
-            Instant::now(),
-        );
-        resource_limits.register_storage_meter(owned_agent_id.clone(), storage_meter.clone());
+        let storage_meter = owner_resources.storage_meter();
+        let deleted_regions = if let Some(snapshot_idx) = worker_config.last_snapshot_index {
+            let mut regions = worker_config.deleted_regions.clone();
+            let snapshot_skip =
+                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+                    OplogIndex::INITIAL.next()..=snapshot_idx,
+                )])
+                .build();
+            regions.set_override(snapshot_skip);
+            regions
+        } else {
+            worker_config.deleted_regions.clone()
+        };
+        let replay_state = match &runtime {
+            OwnerRuntime::Agent => {
+                owner_execution
+                    .begin_replay_generation(deleted_regions)
+                    .await?
+            }
+            OwnerRuntime::Entity(_) => owner_execution.replay().await?,
+        };
+        let registered_resource_meters = runtime == OwnerRuntime::Agent;
+        if registered_resource_meters {
+            resource_limits.register_storage_meter(owned_agent_id.clone(), storage_meter.clone());
+        }
         let worker = invocation_queue
             .upgrade()
             .expect("worker must remain alive while creating its context");
-        let retained_memory_grant = worker.linear_memory_grant();
-        let canonical_startup_bytes = worker.startup_linear_memory_bytes();
+        let (retained_memory_grant, canonical_startup_bytes) = match &runtime {
+            OwnerRuntime::Agent => (
+                worker.linear_memory_grant(),
+                worker.startup_linear_memory_bytes(),
+            ),
+            OwnerRuntime::Entity(_) => (
+                Arc::new(Mutex::new(
+                    worker
+                        .active_agents()
+                        .acquire_memory(initial_linear_memory)
+                        .await,
+                )),
+                initial_linear_memory,
+            ),
+        };
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
         let linear_memory = LinearMemoryTracker::new(
             canonical_startup_bytes,
             admitted_startup_bytes,
             execution_status.read().unwrap().agent_mode(),
-            true,
+            match &runtime {
+                OwnerRuntime::Agent => true,
+                OwnerRuntime::Entity(_) => !replay_state.is_live(),
+            },
             resource_limits.clone(),
             retained_memory_grant,
             Instant::now(),
@@ -781,8 +894,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             owned_agent_id.clone(),
             rpc,
             worker_proxy,
-            worker_config.deleted_regions.clone(),
+            replay_state,
+            runtime.clone(),
             component_metadata,
+            worker_config.owner_component_metadata,
             worker_config.current_filesystem_storage_usage,
             worker_config.agent_effective_surface,
             worker_fork,
@@ -805,8 +920,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if state.is_live() {
             linear_memory.switch_to_live();
         }
-        resource_limits
-            .register_memory_meter(owned_agent_id.clone(), linear_memory.meter().clone());
+        if registered_resource_meters {
+            resource_limits
+                .register_memory_meter(owned_agent_id.clone(), linear_memory.meter().clone());
+        }
+        let store_alive_guard = StoreAliveGuard::new(&runtime);
 
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
@@ -816,6 +934,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             wasi_http,
             http_hooks,
             owned_agent_id: owned_agent_id.clone(),
+            runtime,
+            filesystem,
+            entity_invocation_scope: None,
+            primary_invocation_start_index: None,
+            owner_execution,
+            owner_resources,
             websocket_connection_pool,
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
@@ -824,13 +948,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 oplog: oplog.clone(),
             },
             state,
-            worker_dir,
+            owner_filesystem,
             execution_status,
             resource_limits,
             linear_memory,
             storage_meter,
             agent_export_funcs: AgentExportFuncs::default(),
-            _store_alive_guard: StoreAliveGuard::new(),
+            registered_resource_meters,
+            _store_alive_guard: store_alive_guard,
         })
     }
 
@@ -956,6 +1081,117 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn owned_agent_id(&self) -> &OwnedAgentId {
         &self.owned_agent_id
+    }
+
+    pub fn runtime(&self) -> &OwnerRuntime {
+        &self.runtime
+    }
+
+    pub fn filesystem_capability(&self) -> FilesystemCapability {
+        self.filesystem
+    }
+
+    pub(crate) async fn acquire_owner_filesystem_inspection(
+        &self,
+    ) -> Result<crate::worker::owner_lane::OwnerLaneExclusiveGuard, WorkerExecutorError> {
+        self.owner_resources
+            .filesystem()
+            .acquire_inspection(&self.owner_execution.lane(), &self.owner_filesystem)
+            .await
+    }
+
+    pub fn set_entity_invocation_scope(
+        &mut self,
+        scope: Option<EntityInvocationScope>,
+    ) -> Result<(), WorkerExecutorError> {
+        match (&self.runtime, &self.entity_invocation_scope, &scope) {
+            (OwnerRuntime::Agent, _, Some(_)) => Err(WorkerExecutorError::runtime(
+                "Cannot install an entity invocation scope in the primary Store",
+            )),
+            (OwnerRuntime::Entity(_), Some(_), Some(_)) => Err(WorkerExecutorError::runtime(
+                "Entity invocation scope is already installed",
+            )),
+            (OwnerRuntime::Entity(_), None, None) => Err(WorkerExecutorError::runtime(
+                "Entity invocation scope is not installed",
+            )),
+            _ => {
+                self.entity_invocation_scope = scope;
+                Ok(())
+            }
+        }
+    }
+
+    pub fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope> {
+        self.entity_invocation_scope.as_ref()
+    }
+
+    pub(crate) fn child_parent_start_index(
+        &self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Option<OplogIndex> {
+        self.state
+            .child_parent_start_index(function_type, begin_index)
+            .or_else(|| {
+                self.entity_invocation_scope
+                    .as_ref()
+                    .map(|scope| scope.invocation_id().start_index())
+            })
+    }
+
+    fn entity_parent_start_index(&self) -> Option<OplogIndex> {
+        self.entity_invocation_scope
+            .as_ref()
+            .map(|scope| scope.invocation_id().start_index())
+    }
+
+    pub(crate) fn owner_invocation_id(&self) -> Result<OwnerInvocationId, WorkerExecutorError> {
+        match &self.runtime {
+            OwnerRuntime::Entity(_) => self
+                .entity_invocation_scope
+                .as_ref()
+                .map(|scope| OwnerInvocationId::Entity(scope.invocation_id().clone()))
+                .ok_or_else(|| {
+                    WorkerExecutorError::runtime(
+                        "Entity Store has no active entity invocation scope",
+                    )
+                }),
+            OwnerRuntime::Agent => self
+                .primary_invocation_start_index
+                .filter(|index| *index != OplogIndex::NONE)
+                .map(OwnerInvocationId::Agent)
+                .ok_or_else(|| {
+                    WorkerExecutorError::runtime("Primary Store has no active invocation Start")
+                }),
+        }
+    }
+
+    pub(crate) async fn enter_primary_invocation_body(
+        &self,
+    ) -> Result<Option<PrimaryInvocationBody>, WorkerExecutorError> {
+        if self.runtime != OwnerRuntime::Agent {
+            return Ok(None);
+        }
+        let start_index = if self.state.snapshotting_mode {
+            self.state.oplog.current_oplog_index().await
+        } else {
+            match self.owner_invocation_id()? {
+                OwnerInvocationId::Agent(index) => index,
+                OwnerInvocationId::Entity(_) => unreachable!(),
+            }
+        };
+        let ticket = self
+            .owner_execution
+            .lane()
+            .enter_primary(start_index)
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        let permit = ticket
+            .acquire()
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        Ok(Some(PrimaryInvocationBody {
+            permit: Some(permit),
+        }))
     }
 
     pub fn created_by(&self) -> AccountId {
@@ -1275,9 +1511,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.state.component_metadata
     }
 
+    pub fn owner_component_metadata(&self) -> &Component {
+        match &self.runtime {
+            OwnerRuntime::Agent => &self.state.component_metadata,
+            OwnerRuntime::Entity(_) => self
+                .state
+                .owner_component_metadata
+                .as_deref()
+                .expect("Entity Store must pin owner component metadata at dispatch"),
+        }
+    }
+
     pub fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig> {
         self.state.agent_id.as_ref().and_then(|agent_id| {
-            self.component_metadata()
+            self.owner_component_metadata()
                 .metadata
                 .agent_type_provision_config(&agent_id.agent_type)
         })
@@ -1373,6 +1620,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     async fn switch_to_live(&self) {
         self.state.replay_state.switch_to_live().await;
+        if self.runtime == OwnerRuntime::Agent {
+            // Incomplete concurrent calls must be woken first so their reconstruction tasks can
+            // repair the original Starts. The primary remains fenced at this await and cannot
+            // admit live guest execution until every historical entity coordinator exits.
+            self.owner_execution
+                .wait_for_historical_reconstructions()
+                .await;
+        }
         self.linear_memory.switch_to_live();
     }
 
@@ -1392,7 +1647,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn current_filesystem_storage_usage(&self) -> u64 {
-        self.state.current_filesystem_storage_usage
+        self.owner_resources.filesystem_storage_usage()
     }
 
     pub fn max_disk_space(&self) -> u64 {
@@ -1410,8 +1665,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(());
         }
         let after = self
-            .state
-            .current_filesystem_storage_usage
+            .owner_resources
+            .filesystem_storage_usage()
             .saturating_add(new_bytes);
         if after > self.resource_limits.max_disk_space_limit() {
             Err(anyhow!(
@@ -1451,7 +1706,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ))
             .await;
         self.storage_meter.on_acquire(new_bytes, Instant::now());
-        self.state.current_filesystem_storage_usage += new_bytes;
+        self.state.current_filesystem_storage_usage =
+            self.owner_resources.acquire_filesystem_storage(new_bytes);
         let account_id = self.created_by().to_string();
         let environment_id = self.state.owned_agent_id.environment_id().to_string();
         record_storage_bytes_written(
@@ -1470,7 +1726,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.state.is_replay() {
             return;
         }
-        let freed_bytes = freed_bytes.min(self.state.current_filesystem_storage_usage);
+        let freed_bytes = self.owner_resources.release_filesystem_storage(freed_bytes);
         if freed_bytes == 0 {
             return;
         }
@@ -1485,7 +1741,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .release_filesystem_storage_space(freed_bytes)
             .await;
         self.storage_meter.on_release(freed_bytes, Instant::now());
-        self.state.current_filesystem_storage_usage -= freed_bytes;
+        self.state.current_filesystem_storage_usage =
+            self.owner_resources.filesystem_storage_usage();
         let account_id = self.created_by().to_string();
         let environment_id = self.state.owned_agent_id.environment_id().to_string();
         record_storage_bytes_deleted(
@@ -1515,7 +1772,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(None);
         }
         self.check_filesystem_storage_quota(new_bytes)?;
-        self.state.current_filesystem_storage_usage += new_bytes;
+        self.state.current_filesystem_storage_usage =
+            self.owner_resources.acquire_filesystem_storage(new_bytes);
         Ok(Some(self.public_state.worker()))
     }
 
@@ -1523,13 +1781,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if new_bytes == 0 || self.state.is_replay() {
             return;
         }
-        self.state.current_filesystem_storage_usage -= new_bytes;
+        self.owner_resources.release_filesystem_storage(new_bytes);
+        self.state.current_filesystem_storage_usage =
+            self.owner_resources.filesystem_storage_usage();
     }
 
     pub(crate) fn finish_filesystem_storage_reservation(&mut self, new_bytes: u64) {
         if new_bytes == 0 || self.state.is_replay() {
             return;
         }
+        self.storage_meter.on_acquire(new_bytes, Instant::now());
         let account_id = self.created_by().to_string();
         let environment_id = self.state.owned_agent_id.environment_id().to_string();
         record_storage_bytes_written(
@@ -1547,11 +1808,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if freed_bytes == 0 || self.state.is_replay() {
             return None;
         }
-        let freed_bytes = freed_bytes.min(self.state.current_filesystem_storage_usage);
+        let freed_bytes = self.owner_resources.release_filesystem_storage(freed_bytes);
         if freed_bytes == 0 {
             None
         } else {
-            self.state.current_filesystem_storage_usage -= freed_bytes;
+            self.state.current_filesystem_storage_usage =
+                self.owner_resources.filesystem_storage_usage();
             Some((self.public_state.worker(), freed_bytes))
         }
     }
@@ -1560,6 +1822,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if freed_bytes == 0 || self.state.is_replay() {
             return;
         }
+        self.storage_meter.on_release(freed_bytes, Instant::now());
         let account_id = self.created_by().to_string();
         let environment_id = self.state.owned_agent_id.environment_id().to_string();
         record_storage_bytes_deleted(
@@ -1572,7 +1835,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn increase_memory(&mut self, delta: u64) {
         let (_, reconciling) = self.linear_memory.grow(delta, Instant::now());
-        if self.state.is_live() && !reconciling {
+        if self.runtime == OwnerRuntime::Agent && self.state.is_live() && !reconciling {
             // This is called from the `memory.grow` async resource limiter, which
             // Wasmtime runs through a blocking libcall on the store's fiber. While
             // that libcall waits, the store cannot make progress, so nothing may be
@@ -1587,7 +1850,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn try_acquire_linear_memory(&self, delta: u64) -> Option<MemoryGrant> {
         self.public_state
             .worker()
-            .active_workers()
+            .active_agents()
             .try_acquire(delta)
             .await
     }
@@ -1916,6 +2179,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &self.state.replay_state,
             &self.state.oplog,
             self.state.is_live(),
+            self.entity_parent_start_index(),
         )
         .await;
     }
@@ -1938,13 +2202,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // and re-runs the body, which appends a fresh `End` live).
             let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
             let result = if self.is_live() {
-                // A scope `Start` is top-level with respect to other durable scopes: long-lived
-                // HTTP / RPC scopes overlap as siblings, so there is no meaningful enclosing scope
-                // to point at. Nesting is expressed by the *child* host calls pointing back at this
-                // scope's `Start` (see `child_parent_start_index`), not by chaining scope `Start`s.
+                // Durable scopes are siblings rather than nested under other durable scopes. In an
+                // entity body they are direct children of the outer entity invocation; their own
+                // host calls point back at the scope Start through `child_parent_start_index`.
                 let entry = OplogEntry::Start {
                     timestamp: Timestamp::now_utc(),
-                    parent_start_index: None,
+                    parent_start_index: self.entity_parent_start_index(),
                     function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
                     invocation_id: None,
                     observational_owner: None,
@@ -1958,7 +2221,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 let (begin_index, scope_handle) = self
                     .state
                     .replay_state
-                    .claim_scope_start(&scope_name, function_type)
+                    .claim_scope_start(&scope_name, function_type, self.entity_parent_start_index())
                     .await?;
                 // The begin-side completion / legality probe stays a non-consuming forward scan: it
                 // decides whether the scope is safe to continue replaying or must be retried *before*
@@ -2294,11 +2557,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // A transaction is a durable scope: append the scope `Start` and the
             // `BeginRemoteTransaction` marker atomically so the pair is never split across a crash
             // boundary. The scope `Start` index is the stable begin index for the whole transaction.
-            // Like other scope `Start`s it is top-level (`parent_start_index: None`); its child host
-            // calls point back at it via `WriteRemoteTransaction(Some(begin_index))`.
+            // Like other scope Starts it is a direct child of the entity invocation, when present;
+            // its child host calls point back at it via `WriteRemoteTransaction(Some(begin_index))`.
             let scope_start = OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
-                parent_start_index: None,
+                parent_start_index: self.entity_parent_start_index(),
                 function_name: HostFunctionName::Custom("<scope:transaction>".to_string()),
                 invocation_id: None,
                 observational_owner: None,
@@ -2343,6 +2606,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .claim_scope_start(
                     &scope_name,
                     &DurableFunctionType::WriteRemoteTransaction(None),
+                    self.entity_parent_start_index(),
                 )
                 .await?;
             let (begin_index, begin_entry) = crate::get_oplog_entry!(
@@ -3493,7 +3757,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &mut current_files,
                 &self.state.file_loader,
                 self.owned_agent_id.environment_id,
-                self.worker_dir.path(),
+                self.owner_filesystem.path(),
                 new_agent_type_provision_configs
                     .as_ref()
                     .map(|c| c.files.as_slice())
@@ -3671,10 +3935,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 _ => {}
             }
 
-            self.public_state
+            let (start_index, _) = self
+                .public_state
                 .worker()
                 .oplog()
-                .add_agent_invocation_started(invocation)
+                .add_agent_invocation_started_with_index(invocation)
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
@@ -3682,6 +3947,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         self.agent_id()
                     )
                 });
+            self.primary_invocation_start_index = Some(start_index);
 
             self.public_state
                 .worker()
@@ -4182,6 +4448,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                 .worker()
                 .add_to_oplog(OplogEntry::StartSpan {
                     timestamp: span.start().unwrap_or(Timestamp::now_utc()),
+                    parent_start_index: self.entity_parent_start_index(),
                     span_id: span.span_id().clone(),
                     parent: Some(parent.clone()),
                     linked_context_id: span.linked_context().map(|link| link.span_id().clone()),
@@ -4220,7 +4487,10 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         if self.is_live() {
             self.public_state
                 .worker()
-                .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
+                .add_to_oplog(OplogEntry::finish_span(
+                    self.entity_parent_start_index(),
+                    span_id.clone(),
+                ))
                 .await;
         } else {
             crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
@@ -4259,6 +4529,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::set_span_attribute(
+                    self.entity_parent_start_index(),
                     span_id.clone(),
                     key.to_string(),
                     value,
@@ -4359,6 +4630,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         break Ok(None);
                     }
                     Ok(Some(replay_state::AgentInvocationStartedEntry {
+                        oplog_index,
                         idempotency_key,
                         invocation_payload,
                         invocation_context,
@@ -4413,6 +4685,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .data_mut()
                             .set_current_invocation_context(invocation_context)
                             .await?;
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .durable_ctx_mut()
+                            .primary_invocation_start_index = Some(oplog_index);
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,
@@ -5453,7 +5730,7 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
-        let root = self.worker_dir.path();
+        let root = self.owner_filesystem.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
@@ -5564,7 +5841,7 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
-        let root = self.worker_dir.path();
+        let root = self.owner_filesystem.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
@@ -6395,6 +6672,7 @@ struct PrivateDurableWorkerState {
     read_only_method_name: Option<String>,
 
     component_metadata: Component,
+    owner_component_metadata: Option<Arc<Component>>,
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
     agent_wallet_cards: BTreeMap<CardId, StoredCard>,
     card_event_boundary_scan: Option<CardEventBoundaryScan>,
@@ -6611,10 +6889,12 @@ impl PrivateDurableWorkerState {
         owned_agent_id: OwnedAgentId,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
-        deleted_regions: DeletedRegions,
+        replay_state: ReplayState,
+        runtime: OwnerRuntime,
         component_metadata: Component,
+        owner_component_metadata: Option<Arc<Component>>,
         current_filesystem_storage_usage: u64,
-        _agent_effective_surface: golem_common::model::card::EffectiveSurface,
+        configured_agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
@@ -6631,56 +6911,48 @@ impl PrivateDurableWorkerState {
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
     ) -> Result<Self, WorkerExecutorError> {
-        let deleted_regions = if let Some(snapshot_idx) = last_snapshot_index {
-            let mut regions = deleted_regions;
-            let snapshot_skip =
-                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
-                    OplogIndex::INITIAL.next()..=snapshot_idx,
-                )])
-                .build();
-            regions.set_override(snapshot_skip);
-            regions
-        } else {
-            deleted_regions
-        };
-        let replay_state =
-            ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         let dropped_call_events = tokio::sync::mpsc::unbounded_channel();
-        let initial_agent_wallet_cards =
-            || -> Result<BTreeMap<CardId, StoredCard>, WorkerExecutorError> {
-                match agent_id.as_ref() {
-                    Some(agent_id) => {
-                        let card = agent_initial_card_from_component_metadata(
-                            &component_metadata,
-                            agent_id,
-                        )?;
-                        Ok(BTreeMap::from([(card.card_id(), card)]))
+        let agent_wallet_cards = match &runtime {
+            OwnerRuntime::Agent => {
+                let initial_agent_wallet_cards =
+                    || -> Result<BTreeMap<CardId, StoredCard>, WorkerExecutorError> {
+                        match agent_id.as_ref() {
+                            Some(agent_id) => {
+                                let card = agent_initial_card_from_component_metadata(
+                                    &component_metadata,
+                                    agent_id,
+                                )?;
+                                Ok(BTreeMap::from([(card.card_id(), card)]))
+                            }
+                            None => Ok(BTreeMap::new()),
+                        }
+                    };
+                if let Some(snapshot_idx) = last_snapshot_index {
+                    match oplog.read(snapshot_idx).await {
+                        OplogEntry::Snapshot { active_cards, .. } => active_cards
+                            .into_iter()
+                            .map(|card| (card.card_id(), card))
+                            .collect(),
+                        _ => initial_agent_wallet_cards()?,
                     }
-                    None => Ok(BTreeMap::new()),
+                } else {
+                    initial_agent_wallet_cards()?
                 }
-            };
-        let agent_wallet_cards = if let Some(snapshot_idx) = last_snapshot_index {
-            match oplog.read(snapshot_idx).await {
-                OplogEntry::Snapshot { active_cards, .. } => active_cards
-                    .into_iter()
-                    .map(|card| (card.card_id(), card))
-                    .collect(),
-                _ => initial_agent_wallet_cards()?,
             }
-        } else {
-            initial_agent_wallet_cards()?
+            OwnerRuntime::Entity(_) => BTreeMap::new(),
         };
-        let agent_effective_surface = if let Some(agent_id) = agent_id.as_ref() {
-            let context =
-                agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
-            golem_common::model::card::agent_effective_surface_from_wallet(
-                &context,
-                agent_wallet_cards.values(),
-            )
-        } else {
-            golem_common::model::card::EffectiveSurface::default()
+        let agent_effective_surface = match (&runtime, agent_id.as_ref()) {
+            (OwnerRuntime::Agent, Some(agent_id)) => {
+                let context =
+                    agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
+                golem_common::model::card::agent_effective_surface_from_wallet(
+                    &context,
+                    agent_wallet_cards.values(),
+                )
+            }
+            _ => configured_agent_effective_surface,
         };
         Ok(Self {
             oplog_service,
@@ -6731,6 +7003,7 @@ impl PrivateDurableWorkerState {
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,
             component_metadata,
+            owner_component_metadata,
             agent_effective_surface,
             agent_wallet_cards,
             card_event_boundary_scan: None,
@@ -7557,42 +7830,30 @@ enum IFSWorkerFile {
 }
 
 async fn prepare_filesystem(
+    owner_filesystem: &crate::worker::instance::OwnerFilesystem,
+    attachment: &OwnerFilesystemAttachment,
     file_loader: &Arc<FileLoader>,
     environment_id: EnvironmentId,
-    root: &Path,
     files: &[InitialAgentFile],
-) -> Result<HashMap<PathBuf, IFSWorkerFile>, WorkerExecutorError> {
-    let futures = files.iter().map(|file| {
-        let path = root.join(PathBuf::from(file.path.to_rel_string()));
-        let file = file.clone();
-        let permissions = file.permissions;
-        let file_loader = file_loader.clone();
-        async move {
-            match permissions {
-                AgentFilePermissions::ReadOnly => {
-                    debug!("Loading read-only file {}", path.display());
-                    let token = file_loader
-                        .get_read_only_to(environment_id, file.content_hash, &path, file.size)
-                        .await?;
-                    Ok::<_, WorkerExecutorError>((
-                        path,
-                        IFSWorkerFile::Ro {
-                            file,
-                            _token: token,
-                        },
-                    ))
-                }
-                AgentFilePermissions::ReadWrite => {
-                    debug!("Loading read-write file {}", path.display());
-                    file_loader
-                        .get_read_write_to(environment_id, file.content_hash, &path)
-                        .await?;
-                    Ok((path, IFSWorkerFile::Rw))
-                }
-            }
-        }
-    });
-    Ok(HashMap::from_iter(try_join_all(futures).await?))
+) -> Result<(HashMap<PathBuf, IFSWorkerFile>, u64), WorkerExecutorError> {
+    let provisioning = owner_filesystem
+        .provision(attachment, file_loader, environment_id, files)
+        .await?;
+    let files = provisioning
+        .files
+        .into_iter()
+        .map(|(path, file)| {
+            let file = match file {
+                OwnerProvisionedFile::ReadOnly { file, token } => IFSWorkerFile::Ro {
+                    file,
+                    _token: token,
+                },
+                OwnerProvisionedFile::ReadWrite { .. } => IFSWorkerFile::Rw,
+            };
+            (path, file)
+        })
+        .collect();
+    Ok((files, provisioning.new_read_write_bytes))
 }
 
 async fn update_filesystem(

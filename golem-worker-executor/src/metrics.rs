@@ -350,6 +350,36 @@ pub mod workers {
             &["executor_id"]
         )
         .unwrap();
+        static ref OWNER_GROUP_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_owner_group_alive_count",
+            "Owner-routed active agent groups on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref PRIMARY_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_primary_store_alive_count",
+            "Live primary agent Stores on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref ENTITY_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_entity_store_alive_count",
+            "Live transient entity Stores on this executor",
+            &["executor_id", "entity_kind"]
+        )
+        .unwrap();
+        static ref ENTITY_INVOCATION_ACTIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_entity_invocation_active_count",
+            "Entity invocation bodies currently active on this executor",
+            &["entity_kind", "execution_mode"]
+        )
+        .unwrap();
+        static ref ENTITY_INVOCATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_entity_invocation_total",
+            "Entity invocation bodies by terminal outcome",
+            &["entity_kind", "execution_mode", "outcome"]
+        )
+        .unwrap();
         pub static ref WORKER_KV_CACHE_VALUE_SIZE_BYTES: HistogramVec = register_histogram_vec!(
             "worker_kv_cache_value_size_bytes",
             "Bytes of a value written to the Worker-namespace KV cache (worker status blob size)",
@@ -512,6 +542,23 @@ pub mod workers {
             .with_label_values(&[id])
             .set(0.0);
         WORKER_STORE_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        OWNER_GROUP_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        PRIMARY_STORE_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        for entity_kind in ["tool", "tool_middleware"] {
+            ENTITY_STORE_ALIVE_COUNT
+                .with_label_values(&[id, entity_kind])
+                .set(0.0);
+            for execution_mode in ["live", "replaying_completed", "replaying_incomplete"] {
+                ENTITY_INVOCATION_ACTIVE_COUNT
+                    .with_label_values(&[entity_kind, execution_mode])
+                    .set(0.0);
+                for outcome in ["succeeded", "failed", "cancelled"] {
+                    ENTITY_INVOCATION_TOTAL
+                        .with_label_values(&[entity_kind, execution_mode, outcome])
+                        .inc_by(0.0);
+                }
+            }
+        }
         WORKER_MEMORY_GROW_REJECTED_TOTAL
             .with_label_values(&[id])
             .inc_by(0.0);
@@ -544,6 +591,64 @@ pub mod workers {
         WORKER_STORE_ALIVE_COUNT
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .dec();
+    }
+
+    pub fn inc_owner_group_alive() {
+        OWNER_GROUP_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    pub fn dec_owner_group_alive() {
+        OWNER_GROUP_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    pub fn inc_primary_store_alive() {
+        PRIMARY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    pub fn dec_primary_store_alive() {
+        PRIMARY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    pub fn inc_entity_store_alive(entity_kind: &'static str) {
+        ENTITY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id(), entity_kind])
+            .inc();
+    }
+
+    pub fn dec_entity_store_alive(entity_kind: &'static str) {
+        ENTITY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id(), entity_kind])
+            .dec();
+    }
+
+    pub fn inc_entity_invocation_active(entity_kind: &'static str, execution_mode: &'static str) {
+        ENTITY_INVOCATION_ACTIVE_COUNT
+            .with_label_values(&[entity_kind, execution_mode])
+            .inc();
+    }
+
+    pub fn dec_entity_invocation_active(entity_kind: &'static str, execution_mode: &'static str) {
+        ENTITY_INVOCATION_ACTIVE_COUNT
+            .with_label_values(&[entity_kind, execution_mode])
+            .dec();
+    }
+
+    pub fn record_entity_invocation(
+        entity_kind: &'static str,
+        execution_mode: &'static str,
+        outcome: &'static str,
+    ) {
+        ENTITY_INVOCATION_TOTAL
+            .with_label_values(&[entity_kind, execution_mode, outcome])
+            .inc();
     }
 
     /// Phases a starting worker waits through before it can become resident. Each is

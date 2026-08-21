@@ -3492,8 +3492,8 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "write_file",
-            data_value!("/testfile.txt", "hello world"),
+            "stream_to_file",
+            data_value!("/testfile.txt", 131_072_u64),
         )
         .await?;
 
@@ -3521,6 +3521,12 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let replayed_contents = executor
+        .get_file_contents(&worker_id, "/testfile.txt")
+        .await?;
+    assert_eq!(replayed_contents.len(), 131_072);
+    assert!(replayed_contents.iter().all(|byte| *byte == 0));
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 

@@ -23,6 +23,7 @@ use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
 use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
+use golem_common::model::entity::EntityInvocationId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::public_oplog_entry::{
@@ -46,7 +47,7 @@ use golem_common::model::oplog::{
     AgentMethodInvocationParameters, FallibleResultParameters, HostRequest,
     HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostResponse,
     JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, MultipartPartData,
-    MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
+    MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex, OplogScopeProjection,
     PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttribute, PublicOplogEntry, PublicSnapshotData, PublicTypedAgentConfigEntry,
@@ -70,6 +71,19 @@ pub struct PublicOplogChunk {
     pub current_component_revision: ComponentRevision,
     pub first_index_in_chunk: OplogIndex,
     pub last_index: OplogIndex,
+}
+
+/// Projects one entity invocation's transitive durable-call tree from its owner's raw oplog.
+/// Entity histories remain owner records; this is a filtered view, not a child oplog or status.
+pub fn project_entity_oplog_entries(
+    invocation_id: &EntityInvocationId,
+    entries: impl IntoIterator<Item = (OplogIndex, OplogEntry)>,
+) -> Vec<(OplogIndex, OplogEntry)> {
+    let mut projection = OplogScopeProjection::new(invocation_id.start_index());
+    entries
+        .into_iter()
+        .filter(|(index, entry)| projection.includes(*index, entry))
+        .collect()
 }
 
 pub async fn get_public_oplog_chunk(
@@ -661,6 +675,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 level,
                 context,
                 message,
+                ..
             } => Ok(PublicOplogEntry::Log(LogParams {
                 timestamp,
                 level,
@@ -748,6 +763,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 parent: parent_id,
                 linked_context_id,
                 attributes,
+                ..
             } => Ok(PublicOplogEntry::StartSpan(StartSpanParams {
                 timestamp,
                 span_id,
@@ -762,17 +778,18 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     })
                     .collect(),
             })),
-            OplogEntry::FinishSpan { timestamp, span_id } => {
-                Ok(PublicOplogEntry::FinishSpan(FinishSpanParams {
-                    timestamp,
-                    span_id,
-                }))
-            }
+            OplogEntry::FinishSpan {
+                timestamp, span_id, ..
+            } => Ok(PublicOplogEntry::FinishSpan(FinishSpanParams {
+                timestamp,
+                span_id,
+            })),
             OplogEntry::SetSpanAttribute {
                 timestamp,
                 span_id,
                 key,
                 value,
+                ..
             } => Ok(PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParams {
                 timestamp,
                 span_id,

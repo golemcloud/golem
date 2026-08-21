@@ -27,14 +27,14 @@ use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
-    HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasCardService,
+    HasActiveAgents, HasAgentTypesService, HasBlobStoreService, HasCardService,
     HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
     HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService,
     HasPromiseService, HasQuotaService, HasResourceLimits, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWebSocketConnectionPool,
     HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
-    active_workers, agent_types, blob_store, card, component, golem_config, key_value, oplog,
+    active_agents, agent_types, blob_store, card, component, golem_config, key_value, oplog,
     promise, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
 };
 use crate::services::{HasOplog, HasRdbmsService, HasWorkerForkService, rdbms};
@@ -89,7 +89,7 @@ pub trait WorkerForkService: Send + Sync {
 
 pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub rpc: Arc<dyn Rpc>,
-    pub active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+    pub active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
     pub agent_types: Arc<dyn agent_types::AgentTypesService>,
     pub agent_webhooks: Arc<AgentWebhooksService>,
     pub engine: Arc<wasmtime::Engine>,
@@ -131,9 +131,9 @@ impl<Ctx: WorkerCtx> HasEvents for DefaultWorkerFork<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DefaultWorkerFork<Ctx> {
-    fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>> {
-        self.active_workers.clone()
+impl<Ctx: WorkerCtx> HasActiveAgents<Ctx> for DefaultWorkerFork<Ctx> {
+    fn active_agents(&self) -> Arc<active_agents::ActiveAgents<Ctx>> {
+        self.active_agents.clone()
     }
 }
 
@@ -337,7 +337,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
             rpc: self.rpc.clone(),
-            active_workers: self.active_workers.clone(),
+            active_agents: self.active_agents.clone(),
             agent_types: self.agent_types.clone(),
             agent_webhooks: self.agent_webhooks.clone(),
             engine: self.engine.clone(),
@@ -378,7 +378,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         rpc: Arc<dyn Rpc>,
-        active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+        active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
@@ -416,7 +416,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     ) -> Self {
         Self {
             rpc,
-            active_workers,
+            active_agents,
             agent_types,
             agent_webhooks,
             engine,

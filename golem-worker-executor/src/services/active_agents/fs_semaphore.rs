@@ -21,7 +21,7 @@ use tracing::debug;
 /// Executor-wide storage semaphore. One permit = `FILESYSTEM_STORAGE_PERMIT_SIZE_KB` KB.
 ///
 /// Extracted as a standalone struct so it can be unit-tested independently of
-/// the `WorkerCtx`-generic `ActiveWorkers`.
+/// the `WorkerCtx`-generic `ActiveAgents`.
 pub struct FilesystemStorageSemaphore {
     semaphore: Arc<Semaphore>,
     /// Held during non-blocking priority acquires to interrupt any in-progress

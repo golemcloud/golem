@@ -22,7 +22,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AtomicOplogIndex, DurableFunctionType, HostRequest, HostResponse, HostResponseGolemApiFork,
-    LogLevel, OplogEntry, OplogIndex, OplogPayload,
+    LogLevel, OplogEntry, OplogIndex, OplogPayload, OplogScopeProjection,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -55,6 +55,7 @@ pub enum ReplayEvent {
 
 #[derive(Debug, Clone)]
 pub struct AgentInvocationStartedEntry {
+    pub oplog_index: OplogIndex,
     pub idempotency_key: IdempotencyKey,
     pub invocation_payload: AgentInvocationPayload,
     pub invocation_context: InvocationContextStack,

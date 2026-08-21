@@ -33,7 +33,7 @@
 //!    `Reject` and no over-commit happens.
 
 use super::*;
-use crate::services::active_workers::memory_probe::{MemoryProbe, MemorySnapshot};
+use crate::services::active_agents::memory_probe::{MemoryProbe, MemorySnapshot};
 use proptest::prelude::*;
 use std::sync::{Arc, Mutex};
 use test_r::test;
@@ -919,7 +919,7 @@ async fn usable_ratio_caps_admission_below_full_limit() {
 // The composition test that the first worker's memory and module are gated
 // together — so a worker whose memory alone fits but whose memory + module does
 // not is refused rather than admitted and then over-committed — lives in the
-// `active_workers::tests::component_module_charge` module, where the admission
+// `active_agents::tests::component_module_charge` module, where the admission
 // controller and the component-charge registry are composed exactly as the
 // production start path composes them.
 
@@ -933,7 +933,7 @@ async fn usable_ratio_caps_admission_below_full_limit() {
 /// Workloads that never grow memory never exercise this path.
 mod grow_lock_ordering {
     use super::super::{AdmissionController, AdmissionPolicy, EvictionPriority, EvictionSource};
-    use crate::services::active_workers::memory_probe::{MemoryProbe, MemorySnapshot};
+    use crate::services::active_agents::memory_probe::{MemoryProbe, MemorySnapshot};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
