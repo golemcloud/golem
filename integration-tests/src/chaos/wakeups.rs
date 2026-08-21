@@ -84,6 +84,13 @@ const MAX_FINDINGS: usize = 200;
 /// The method name the completion operations are recorded under.
 const COMPLETE_METHOD: &str = "complete";
 
+/// The method name the parking invocations are recorded under.
+const WAIT_METHOD: &str = "wait";
+
+/// What [`WAIT_METHOD`] operations append to their round's token to form their
+/// own idempotency key.
+const WAIT_KEY_SUFFIX: &str = "-wait";
+
 /// Whether a waiter was on the executor the fault killed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -165,6 +172,17 @@ pub struct WakeupDelayStats {
     /// Armed-to-woken, on the executor's clock alone. Carries the round's dwell
     /// as well as the delay, and carries no skew.
     pub parked: LatencyStats,
+    /// How much longer the *caller* waited than the platform actually took.
+    ///
+    /// The `wait` invocation's own duration, less the round's dwell, less the
+    /// delay the waiter recorded. On a healthy round this is a few milliseconds
+    /// of round trip. A large value means the platform woke the agent on time
+    /// and the answer did not come back — which is a different defect from a
+    /// slow wakeup, and invisible in [`Self::delay`].
+    pub client_excess: LatencyStats,
+    /// Rounds whose caller waited longer than the whole wakeup budget *after*
+    /// the waiter had already woken.
+    pub client_stalled: u64,
 }
 
 /// The promise-wakeup account.
@@ -209,6 +227,14 @@ pub struct WakeupReport {
     /// invocation, which is what a wedged worker looks like from outside.
     pub waiters_wedged: Vec<String>,
     pub delay: Vec<WakeupDelayStats>,
+    /// Rounds across every cell whose caller waited past the budget after the
+    /// wakeup had already happened. See [`WakeupDelayStats::client_excess`].
+    pub client_stalled_total: u64,
+    /// The worst such gap, in milliseconds.
+    pub client_stall_worst_ms: u64,
+    /// How many of those callers had to retry to get their answer at all. A
+    /// stall that only ends on a retry is a request that was never coming back.
+    pub client_stall_retried: u64,
     pub findings: Vec<WakeupFinding>,
     /// Findings past [`MAX_FINDINGS`], which the report drops rather than
     /// carries. Non-zero means `findings` is a sample.
@@ -276,6 +302,9 @@ impl WakeupReport {
 
         let mut cells: BTreeMap<(WaiterGroup, Window), DelayCell> = BTreeMap::new();
         let mut claimed: BTreeSet<&str> = BTreeSet::new();
+        let waits = wait_observations(records);
+        let mut stall_worst_ms = 0u64;
+        let mut stall_retried = 0u64;
 
         for round in completions(records) {
             let group = if on_killed.contains(round.agent) {
@@ -333,11 +362,23 @@ impl WakeupReport {
                         report.indeterminate_that_woke += 1;
                     }
                     let delay_ms = (wakeup.woken_at - round.submitted_at).num_milliseconds();
-                    cells.entry((group, window)).or_default().push(
-                        delay_ms,
-                        wakeup.parked_ms(),
-                        budget_ms,
-                    );
+                    let cell = cells.entry((group, window)).or_default();
+                    cell.push(delay_ms, wakeup.parked_ms(), budget_ms);
+
+                    // The caller's own view of the same round. `wait` covers the
+                    // dwell as well as the wakeup, so the dwell comes off before
+                    // the two are compared.
+                    if let Some(observed) = waits.get(round.token) {
+                        let client_ms = observed.duration_ms.saturating_sub(dwell_ms);
+                        let excess = client_ms.saturating_sub(delay_ms.max(0) as u64);
+                        cell.push_client(excess, budget_ms);
+                        if excess > budget_ms {
+                            stall_worst_ms = stall_worst_ms.max(excess);
+                            if observed.attempts > 1 {
+                                stall_retried += 1;
+                            }
+                        }
+                    }
                 }
                 continue;
             }
@@ -398,6 +439,9 @@ impl WakeupReport {
             .into_iter()
             .map(|((group, window), cell)| cell.into_stats(group, window))
             .collect();
+        report.client_stalled_total = report.delay.iter().map(|c| c.client_stalled).sum();
+        report.client_stall_worst_ms = stall_worst_ms;
+        report.client_stall_retried = stall_retried;
         report
     }
 
@@ -419,6 +463,9 @@ impl WakeupReport {
             waiters_stood_down: 0,
             waiters_wedged: Vec::new(),
             delay: Vec::new(),
+            client_stalled_total: 0,
+            client_stall_worst_ms: 0,
+            client_stall_retried: 0,
             findings: Vec::new(),
             findings_omitted: 0,
         }
@@ -486,6 +533,14 @@ impl WakeupReport {
                 self.unverifiable
             ));
         }
+        if self.client_stalled_total > 0 {
+            lines.push(format!(
+                "S11: {} rounds woke on time and the caller was not told for up to {}ms — {} of \
+                 them only got an answer by retrying. The waiters' own logs say the platform \
+                 resumed them promptly, so this is the response path, not the wakeup",
+                self.client_stalled_total, self.client_stall_worst_ms, self.client_stall_retried
+            ));
+        }
         if self.unknown_tokens > 0 {
             lines.push(format!(
                 "S11 recorded {} wakeups whose token no completion claims — agent names carry \
@@ -530,6 +585,8 @@ impl WakeupReport {
 struct DelayCell {
     delays: Vec<u64>,
     parked: Vec<u64>,
+    client_excess: Vec<u64>,
+    client_stalled: u64,
     min_delay_ms: i64,
     over_budget: u64,
     any: bool,
@@ -549,6 +606,14 @@ impl DelayCell {
         self.parked.push(parked_ms.max(0) as u64);
     }
 
+    /// Records how much longer the caller waited than the platform took.
+    fn push_client(&mut self, excess_ms: u64, budget_ms: u64) {
+        if excess_ms > budget_ms {
+            self.client_stalled += 1;
+        }
+        self.client_excess.push(excess_ms);
+    }
+
     fn into_stats(self, group: WaiterGroup, window: Window) -> WakeupDelayStats {
         WakeupDelayStats {
             group,
@@ -557,8 +622,40 @@ impl DelayCell {
             min_delay_ms: self.min_delay_ms,
             over_budget: self.over_budget,
             parked: LatencyStats::from_durations(self.parked),
+            client_excess: LatencyStats::from_durations(self.client_excess),
+            client_stalled: self.client_stalled,
         }
     }
+}
+
+/// What the driver's own `wait` invocation cost, per round.
+///
+/// Keyed by the round's token: the `wait` operation is recorded under
+/// `{token}-wait`, which is what lets the caller's view be joined to the
+/// waiter's own.
+struct WaitObservation {
+    duration_ms: u64,
+    attempts: u32,
+}
+
+fn wait_observations(records: &[OperationRecord]) -> BTreeMap<&str, WaitObservation> {
+    records
+        .iter()
+        .filter(|r| r.stream == Stream::PromiseWait && r.method == WAIT_METHOD)
+        .filter_map(|r| {
+            r.idempotency_key
+                .strip_suffix(WAIT_KEY_SUFFIX)
+                .map(|token| {
+                    (
+                        token,
+                        WaitObservation {
+                            duration_ms: r.duration_ms,
+                            attempts: r.attempts,
+                        },
+                    )
+                })
+        })
+        .collect()
 }
 
 /// The completion operations, which are the rounds this report is about.
@@ -942,6 +1039,66 @@ mod tests {
         assert_eq!(report.findings.len(), MAX_FINDINGS);
         assert_eq!(report.findings_omitted, 10);
         assert_eq!(report.violations(), MAX_FINDINGS as u64 + 10);
+    }
+
+    /// The caller's view and the waiter's own can disagree, and when they do the
+    /// waiter's is the one that describes the platform.
+    ///
+    /// This is not hypothetical: the first completed S11 run woke every one of
+    /// 21,863 completions on time, and 89 of those callers were not told for 125
+    /// seconds. A report with only [`WakeupReport::delay`] in it would have
+    /// called that run flawless.
+    #[test]
+    fn a_wakeup_the_caller_was_not_told_about_is_counted_separately_from_the_delay() {
+        let mut waited = completion("w-1", "t-1-wait", at(110), Outcome::Confirmed);
+        waited.method = "wait".to_string();
+        // Parked 5s, then 125s before the caller heard anything back.
+        waited.duration_ms = 130_000;
+        waited.attempts = 2;
+
+        let records = vec![
+            completion("w-1", "t-1", at(110), Outcome::Confirmed),
+            waited,
+        ];
+        // The waiter itself woke one second after the completion.
+        let logs = vec![log("w-1", vec![wakeup("t-1", at(105), at(111))])];
+        let report = build(&records, &logs, &split_of(&["w-1"], &[]), 0);
+
+        // The platform did its job, and the delay table says so.
+        assert_eq!(report.woke_once, 1);
+        assert_eq!(report.delay[0].delay.max_ms, 1_000);
+        assert_eq!(report.delay[0].over_budget, 0);
+        assert!(!report.has_violations());
+
+        // And the caller still waited two minutes past that.
+        assert_eq!(report.client_stalled_total, 1);
+        assert_eq!(report.client_stall_worst_ms, 124_000);
+        assert_eq!(report.client_stall_retried, 1);
+        assert!(
+            report
+                .attention_lines()
+                .iter()
+                .any(|l| l.contains("response path, not the wakeup"))
+        );
+    }
+
+    /// A healthy round's caller waits the dwell plus the wakeup and nothing
+    /// more, so it must not be counted as stalled.
+    #[test]
+    fn a_prompt_round_records_no_client_stall() {
+        let mut waited = completion("w-1", "t-1-wait", at(110), Outcome::Confirmed);
+        waited.method = "wait".to_string();
+        waited.duration_ms = 5_040;
+
+        let records = vec![
+            completion("w-1", "t-1", at(110), Outcome::Confirmed),
+            waited,
+        ];
+        let logs = vec![log("w-1", vec![wakeup("t-1", at(105), at(110))])];
+        let report = build(&records, &logs, &split_of(&["w-1"], &[]), 0);
+
+        assert_eq!(report.client_stalled_total, 0);
+        assert!(report.attention_lines().is_empty());
     }
 
     /// Standing waiters down is normal on a run where recovery was slow. It only
