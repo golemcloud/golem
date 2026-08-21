@@ -1800,6 +1800,7 @@ const isCollectionElementBindableAst = (ast: SchemaAST.AST): boolean => {
     case "BigInt":
     case "Boolean":
     case "TemplateLiteral":
+    case "Enum":
       return true
     case "Literal": {
       const literal = (ast as SchemaAST.Literal).literal
@@ -1844,6 +1845,8 @@ const isStringBindableAst = (ast: SchemaAST.AST): boolean => {
     case "Literal":
       // string/number/boolean/bigint literals are all valid in URL
       // contexts; null literal also serialisable.
+      return true
+    case "Enum":
       return true
     case "TemplateLiteral":
       return true

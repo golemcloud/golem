@@ -225,6 +225,16 @@ const encodedShapeOf = (a: SchemaAST.AST): EncodedShape => {
         matches: (v) => typeof v === "object" && v !== null && !Array.isArray(v),
       }
     }
+    case "Enum": {
+      const values = (a as SchemaAST.Enum).enums.map(([, v]) => v)
+      const valuesSet = new Set<unknown>(values)
+      const allStrings = values.every((v) => typeof v === "string")
+      const allNumbers = values.every((v) => typeof v === "number")
+      return {
+        tag: allStrings ? "string" : allNumbers ? "number" : "unknown",
+        matches: (v) => valuesSet.has(v),
+      }
+    }
     default:
       return { tag: "unknown", matches: () => true }
   }
@@ -608,6 +618,33 @@ const walk = (
               }
             }
             return yield* declarationNode(a)
+          }
+
+          case "Enum": {
+            const astEnum = a as SchemaAST.Enum
+            if (astEnum.enums.length === 0) {
+              return yield* unsupported("empty enum")
+            }
+            const allStrings = astEnum.enums.every(([, v]) => typeof v === "string")
+            if (allStrings) {
+              const literals = astEnum.enums.map(([, v]) => v as string)
+              return {
+                node: { tag: "enum-type", val: literals },
+                pair: {
+                  toTree: (s: string) => ({ tag: "enum-value", val: literals.indexOf(s) }),
+                  fromTree: (t) => literals[(t as { val: number }).val]!,
+                },
+              }
+            }
+            const names = astEnum.enums.map(([name]) => name)
+            const values = astEnum.enums.map(([, v]) => v)
+            return {
+              node: { tag: "enum-type", val: names },
+              pair: {
+                toTree: (v: unknown) => ({ tag: "enum-value", val: values.indexOf(v as any) }),
+                fromTree: (t) => values[(t as { val: number }).val]!,
+              },
+            }
           }
 
           default:

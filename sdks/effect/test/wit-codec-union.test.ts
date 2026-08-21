@@ -223,4 +223,62 @@ describe("Schema.Union → WIT variant", () => {
       expect(b.back).toEqual({ _tag: "named", name: "x" })
     }),
   )
+
+  it.effect("string-literal union (Schema.Literals) emits enum-type and round-trips", () =>
+    Effect.gen(function* () {
+      const Color = Schema.Literals(["red", "green", "blue"])
+      const wc = yield* compile(Color)
+      expect(wc.witType.nodes[0]?.type).toEqual({
+        tag: "enum-type",
+        val: ["red", "green", "blue"],
+      })
+      for (const c of ["red", "green", "blue"] as const) {
+        const r = yield* roundtrip(Color, c)
+        expect(r.back).toBe(c)
+        expect((r.wv.nodes[0] as any).tag).toBe("enum-value")
+      }
+    }),
+  )
+
+  it.effect("Schema.Union of Schema.Literal strings emits enum-type and round-trips", () =>
+    Effect.gen(function* () {
+      const Fruit = Schema.Union([Schema.Literal("apple"), Schema.Literal("banana")])
+      const wc = yield* compile(Fruit)
+      expect(wc.witType.nodes[0]?.type).toEqual({
+        tag: "enum-type",
+        val: ["apple", "banana"],
+      })
+      for (const f of ["apple", "banana"] as const) {
+        const r = yield* roundtrip(Fruit, f)
+        expect(r.back).toBe(f)
+        expect((r.wv.nodes[0] as any).tag).toBe("enum-value")
+      }
+    }),
+  )
+
+  it.effect("single string literal emits prim-string-type and round-trips", () =>
+    Effect.gen(function* () {
+      const Only = Schema.Literal("constant")
+      const wc = yield* compile(Only)
+      expect(wc.witType.nodes[0]?.type).toEqual({
+        tag: "prim-string-type",
+      })
+      const r = yield* roundtrip(Only, "constant")
+      expect(r.back).toBe("constant")
+      expect((r.wv.nodes[0] as any).tag).toBe("prim-string")
+    }),
+  )
+
+  it.effect("single numeric literal emits prim-f64-type and round-trips", () =>
+    Effect.gen(function* () {
+      const FortyTwo = Schema.Literal(42)
+      const wc = yield* compile(FortyTwo)
+      expect(wc.witType.nodes[0]?.type).toEqual({
+        tag: "prim-f64-type",
+      })
+      const r = yield* roundtrip(FortyTwo, 42)
+      expect(r.back).toBe(42)
+      expect((r.wv.nodes[0] as any).tag).toBe("prim-float64")
+    }),
+  )
 })
