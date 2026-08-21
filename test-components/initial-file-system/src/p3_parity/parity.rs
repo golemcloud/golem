@@ -10,6 +10,8 @@ const P3_RECONSTRUCTION_TIMESTAMP_SECONDS: i64 = 978_307_200;
 fn p2_err(error: p2_types::ErrorCode) -> String {
     match error {
         p2_types::ErrorCode::NotPermitted => "not-permitted".to_string(),
+        p2_types::ErrorCode::NotDirectory => "not-directory".to_string(),
+        p2_types::ErrorCode::Unsupported => "unsupported".to_string(),
         other => format!("{other:?}"),
     }
 }
@@ -17,6 +19,8 @@ fn p2_err(error: p2_types::ErrorCode) -> String {
 fn p3_err(error: p3_types::ErrorCode) -> String {
     match error {
         p3_types::ErrorCode::NotPermitted => "not-permitted".to_string(),
+        p3_types::ErrorCode::NotDirectory => "not-directory".to_string(),
+        p3_types::ErrorCode::Unsupported => "unsupported".to_string(),
         other => format!("{other:?}"),
     }
 }
@@ -191,6 +195,33 @@ pub(crate) async fn run() -> Vec<String> {
                 "foo.txt".to_string(),
                 p3_types::OpenFlags::empty(),
                 p3_types::DescriptorFlags::WRITE,
+            )
+            .await
+        {
+            Ok(_) => "ok".to_string(),
+            Err(error) => format!("err:{}", p3_err(error)),
+        }
+    ));
+    results.push(format!(
+        "ro_invalid_flags_p2={}",
+        match root_p2.open_at(
+            p2_types::PathFlags::empty(),
+            "foo.txt",
+            p2_types::OpenFlags::TRUNCATE,
+            p2_types::DescriptorFlags::FILE_INTEGRITY_SYNC,
+        ) {
+            Ok(_) => "ok".to_string(),
+            Err(error) => format!("err:{}", p2_err(error)),
+        }
+    ));
+    results.push(format!(
+        "ro_invalid_flags_p3={}",
+        match root_p3
+            .open_at(
+                p3_types::PathFlags::empty(),
+                "foo.txt".to_string(),
+                p3_types::OpenFlags::TRUNCATE,
+                p3_types::DescriptorFlags::FILE_INTEGRITY_SYNC,
             )
             .await
         {

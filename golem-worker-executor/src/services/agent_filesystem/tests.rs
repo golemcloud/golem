@@ -281,7 +281,7 @@ async fn paused_effect_admission_drains_existing_effects_and_rejects_new_ones() 
 }
 
 #[test]
-async fn update_effect_waits_for_paused_admission_to_resume() {
+async fn internal_update_effect_waits_for_paused_admission_to_resume() {
     let runtime = AgentFilesystemRuntime::new_for_test();
     let admission_pause = runtime.pause_effect_admission();
     let update = tokio::spawn({
@@ -294,6 +294,18 @@ async fn update_effect_waits_for_paused_admission_to_resume() {
     drop(admission_pause);
 
     assert!(update.await.unwrap().is_ok());
+}
+
+#[test]
+fn sealed_admission_wins_over_paused_admission() {
+    let runtime = AgentFilesystemRuntime::new_for_test();
+    let _admission_pause = runtime.pause_effect_admission();
+    runtime.seal();
+
+    assert_eq!(
+        runtime.admit_effect().unwrap_err().to_string(),
+        "agent filesystem is closing"
+    );
 }
 
 #[test]

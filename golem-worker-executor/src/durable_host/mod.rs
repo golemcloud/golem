@@ -158,7 +158,6 @@ use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
-use wasmtime_wasi::p2::FsResult;
 use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::{
     I32Exit, IoCtx, IoData, IoView, ResourceTable, ResourceTableError, WasiCtx, WasiCtxView,
@@ -808,14 +807,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 Ok(read_only)
             }
             Descriptor::Dir(_) => Ok(false),
-        }
-    }
-
-    fn fail_if_read_only(&mut self, fd: &Resource<Descriptor>) -> FsResult<()> {
-        if self.check_if_file_is_readonly(fd)? {
-            Err(wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode::NotPermitted.into())
-        } else {
-            Ok(())
         }
     }
 

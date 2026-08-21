@@ -54,8 +54,8 @@ mod protocol;
     reason = "the mutation module defines the semantic host-adapter boundary"
 )]
 pub(crate) use protocol::{
-    AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemWriteMode,
-    AgentFilesystemWriter,
+    AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemStreamSetupAdmission,
+    AgentFilesystemWriteMode, AgentFilesystemWriter,
 };
 use protocol::{AgentFilesystemMutations, AgentFilesystemWriteCompletion};
 
@@ -296,10 +296,22 @@ pub(crate) struct NativeOpenOptions {
     pub write: bool,
 }
 
-pub(crate) fn validate_open(
-    directory: &Dir,
+pub(crate) fn validate_open_flags(
     options: NativeOpenOptions,
     unsupported_sync_flags: bool,
+) -> Result<(), NativeMutationGuestError> {
+    if unsupported_sync_flags {
+        return Err(NativeMutationGuestError::Unsupported);
+    }
+    if options.directory && (options.create || options.exclusive || options.truncate) {
+        return Err(NativeMutationGuestError::Invalid);
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_open_capabilities(
+    directory: &Dir,
+    options: NativeOpenOptions,
 ) -> Result<(), NativeMutationGuestError> {
     if !directory.perms.contains(DirPerms::READ) {
         return Err(NativeMutationGuestError::NotPermitted);
@@ -308,12 +320,6 @@ pub(crate) fn validate_open(
         && (options.create || options.truncate || options.write)
     {
         return Err(NativeMutationGuestError::NotPermitted);
-    }
-    if unsupported_sync_flags {
-        return Err(NativeMutationGuestError::Unsupported);
-    }
-    if options.directory && (options.create || options.exclusive || options.truncate) {
-        return Err(NativeMutationGuestError::Invalid);
     }
     let opens_for_write = options.create || options.truncate || options.write;
     if opens_for_write && !directory.file_perms.contains(FilePerms::WRITE) {
@@ -443,6 +449,22 @@ impl AgentFilesystemRuntime {
         let operation_guard = Arc::clone(&self.runtime_state.operations)
             .write_owned()
             .await;
+        Ok(AgentFilesystemUpdateEffectLease {
+            _lease_state: Arc::new(AgentFilesystemUpdateEffectLeaseState {
+                _admission: admission,
+                _operation_guard: operation_guard,
+            }),
+        })
+    }
+
+    pub(super) async fn begin_guest_update_effect(
+        &self,
+    ) -> Result<AgentFilesystemUpdateEffectLease, wasmtime::Error> {
+        let admission = self.admit_effect()?;
+        let operation_guard = Arc::clone(&self.runtime_state.operations)
+            .write_owned()
+            .await;
+        admission.ensure_open()?;
         Ok(AgentFilesystemUpdateEffectLease {
             _lease_state: Arc::new(AgentFilesystemUpdateEffectLeaseState {
                 _admission: admission,
@@ -1068,6 +1090,28 @@ mod classified_stream_tests {
         );
 
         assert!(validate_two_directory_mutation(&source, &destination).is_ok());
+    }
+
+    #[test]
+    fn open_flag_validation_is_independent_of_filesystem_capabilities() {
+        let invalid_directory_open = NativeOpenOptions {
+            create: true,
+            directory: true,
+            exclusive: false,
+            truncate: false,
+            follow: false,
+            read: true,
+            write: false,
+        };
+
+        assert_eq!(
+            validate_open_flags(invalid_directory_open, true),
+            Err(NativeMutationGuestError::Unsupported)
+        );
+        assert_eq!(
+            validate_open_flags(invalid_directory_open, false),
+            Err(NativeMutationGuestError::Invalid)
+        );
     }
 
     #[test]

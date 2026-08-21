@@ -28,8 +28,10 @@ use crate::durable_host::p3::{
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::agent_filesystem::{
     AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemRuntime,
-    AgentFilesystemWriteMode, AgentFilesystemWriter, NativeMutationGuestError, NativeOpenOptions,
-    NativeOpenResult, RequestedTime,
+    AgentFilesystemStreamSetupAdmission, AgentFilesystemWriteMode, AgentFilesystemWriter,
+    NativeMutationGuestError, NativeOpenOptions, NativeOpenResult, RequestedTime,
+    validate_descriptor_times, validate_directory_mutation, validate_open_capabilities,
+    validate_open_flags, validate_resize, validate_two_directory_mutation,
 };
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
@@ -323,21 +325,6 @@ where
     })
 }
 
-fn file_from_access<Ctx: WorkerCtx, U>(
-    store: &mut Access<'_, U, DurableP3<Ctx>>,
-    fd: &Resource<Descriptor>,
-) -> wasmtime::Result<File>
-where
-    U: 'static,
-{
-    let mut filesystem =
-        Access::<U, WasiFilesystem>::new(store.as_context_mut(), wasi_filesystem_view::<Ctx, U>);
-    match filesystem.get().table.get(fd)? {
-        Descriptor::File(file) => Ok(file.clone()),
-        Descriptor::Dir(_) => Err(FilesystemError::from(types::ErrorCode::BadDescriptor).into()),
-    }
-}
-
 fn descriptor_from_access<Ctx: WorkerCtx, U>(
     store: &mut Access<'_, U, DurableP3<Ctx>>,
     fd: &Resource<Descriptor>,
@@ -348,19 +335,6 @@ where
     let mut filesystem =
         Access::<U, WasiFilesystem>::new(store.as_context_mut(), wasi_filesystem_view::<Ctx, U>);
     Ok(filesystem.get().table.get(fd)?.clone())
-}
-
-fn directory_from_access<Ctx: WorkerCtx, U>(
-    store: &mut Access<'_, U, DurableP3<Ctx>>,
-    fd: &Resource<Descriptor>,
-) -> FilesystemResult<Dir>
-where
-    U: 'static,
-{
-    match descriptor_from_access::<Ctx, U>(store, fd).map_err(FilesystemError::trap)? {
-        Descriptor::Dir(directory) => Ok(directory),
-        Descriptor::File(_) => Err(types::ErrorCode::NotDirectory.into()),
-    }
 }
 
 fn dir_result_from_access<Ctx: WorkerCtx, U>(
@@ -419,6 +393,25 @@ fn p3_native_time(
     }
 }
 
+fn p3_validate_time(requested: types::NewTimestamp) -> Result<(), FilesystemError> {
+    match requested {
+        types::NewTimestamp::Timestamp(timestamp) => {
+            let time = if let Ok(seconds) = timestamp.seconds.try_into() {
+                std::time::SystemTime::UNIX_EPOCH
+                    .checked_add(Duration::new(seconds, timestamp.nanoseconds))
+            } else {
+                std::time::SystemTime::UNIX_EPOCH.checked_sub(Duration::new(
+                    timestamp.seconds.unsigned_abs(),
+                    timestamp.nanoseconds,
+                ))
+            };
+            time.map(|_| ())
+                .ok_or_else(|| types::ErrorCode::Overflow.into())
+        }
+        types::NewTimestamp::NoChange | types::NewTimestamp::Now => Ok(()),
+    }
+}
+
 fn push_descriptor<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     descriptor: Descriptor,
@@ -434,26 +427,50 @@ fn push_descriptor<Ctx: WorkerCtx, U: 'static>(
         .map_err(FilesystemError::trap)
 }
 
-fn write_validation_error_from_access<Ctx: WorkerCtx, U>(
-    store: &mut Access<'_, U, DurableP3<Ctx>>,
-    fd: &Resource<Descriptor>,
-) -> wasmtime::Result<Option<types::ErrorCode>>
-where
-    U: 'static,
-{
-    if durable_worker_ctx::<Ctx, U>(store.data_mut()).check_if_file_is_readonly(fd)? {
-        return Ok(Some(types::ErrorCode::NotPermitted));
-    }
+struct P3WriteStreamSetup {
+    file: File,
+    admission: AgentFilesystemStreamSetupAdmission,
+}
 
-    let mut filesystem =
-        Access::<U, WasiFilesystem>::new(store.as_context_mut(), wasi_filesystem_view::<Ctx, U>);
-    Ok(match filesystem.get().table.get(fd)? {
+#[derive(Debug)]
+enum P3WriteStreamSetupError {
+    Guest(types::ErrorCode),
+    Trap,
+}
+
+fn prepare_p3_write_stream_setup(
+    descriptor: &Descriptor,
+    runtime: &AgentFilesystemRuntime,
+) -> Result<P3WriteStreamSetup, P3WriteStreamSetupError> {
+    let file = match descriptor {
         Descriptor::File(file) if !file.perms.contains(FilePerms::WRITE) => {
-            Some(types::ErrorCode::NotPermitted)
+            return Err(P3WriteStreamSetupError::Guest(
+                types::ErrorCode::NotPermitted,
+            ));
         }
-        Descriptor::File(_) => None,
-        Descriptor::Dir(_) => Some(types::ErrorCode::BadDescriptor),
-    })
+        Descriptor::File(file) => file.clone(),
+        Descriptor::Dir(_) => {
+            return Err(P3WriteStreamSetupError::Guest(
+                types::ErrorCode::BadDescriptor,
+            ));
+        }
+    };
+    let admission = match runtime
+        .mutations()
+        .authorize_and_admit_stream_setup(descriptor)
+    {
+        Ok(admission) => admission,
+        Err(AgentFilesystemMutationError::Guest(error)) => {
+            let error = match error {
+                NativeMutationGuestError::Invalid => types::ErrorCode::Invalid,
+                NativeMutationGuestError::NotPermitted => types::ErrorCode::NotPermitted,
+                NativeMutationGuestError::Unsupported => types::ErrorCode::Unsupported,
+            };
+            return Err(P3WriteStreamSetupError::Guest(error));
+        }
+        Err(_) => return Err(P3WriteStreamSetupError::Trap),
+    };
+    Ok(P3WriteStreamSetup { file, admission })
 }
 
 fn map_directory_entry(
@@ -791,23 +808,36 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "write-via-stream",
             )
         });
-        let write_error = accessor
-            .with(|mut store| write_validation_error_from_access::<Ctx, U>(&mut store, &fd))?;
-        if let Some(error) = write_error {
-            let mut data = data;
-            accessor.with(|mut store| data.close(&mut store))?;
-            return accessor.with(|mut store| {
-                FutureReader::new(&mut store, async move {
-                    Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(Err(error))
-                })
-            });
-        }
-
-        let file = accessor.with(|mut store| file_from_access::<Ctx, U>(&mut store, &fd))?;
-        let (chunks_tx, chunks_rx) = tokio::sync::mpsc::unbounded_channel();
+        let descriptor =
+            accessor.with(|mut store| descriptor_from_access::<Ctx, U>(&mut store, &fd))?;
         let filesystem_runtime = accessor.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
+        let P3WriteStreamSetup { file, admission } =
+            match prepare_p3_write_stream_setup(&descriptor, &filesystem_runtime) {
+                Ok(setup) => setup,
+                Err(P3WriteStreamSetupError::Guest(error)) => {
+                    let mut data = data;
+                    accessor.with(|mut store| data.close(&mut store))?;
+                    return accessor.with(|mut store| {
+                        FutureReader::new(&mut store, async move {
+                            Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(Err(error))
+                        })
+                    });
+                }
+                Err(P3WriteStreamSetupError::Trap) => {
+                    let mut data = data;
+                    accessor.with(|mut store| data.close(&mut store))?;
+                    return accessor.with(|mut store| {
+                        FutureReader::new(&mut store, async move {
+                            Err(wasmtime::Error::msg(
+                                "agent filesystem mutation invalidated the runtime",
+                            ))
+                        })
+                    });
+                }
+            };
+        let (chunks_tx, chunks_rx) = tokio::sync::mpsc::unbounded_channel();
         let writer = filesystem_runtime
             .mutations()
             .writer(file, AgentFilesystemWriteMode::Position(offset));
@@ -819,7 +849,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         })?;
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        accessor.with(|mut store| {
+        let future = accessor.with(|mut store| {
             let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                 .tail_work_tracker()
                 .activity();
@@ -831,7 +861,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             ));
 
             FutureReader::new(&mut store, wait_filesystem_task_result(result_rx))
-        })
+        })?;
+        drop(admission);
+        Ok(future)
     }
 
     async fn append_via_stream(
@@ -846,23 +878,36 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "append-via-stream",
             )
         });
-        let write_error = accessor
-            .with(|mut store| write_validation_error_from_access::<Ctx, U>(&mut store, &fd))?;
-        if let Some(error) = write_error {
-            let mut data = data;
-            accessor.with(|mut store| data.close(&mut store))?;
-            return accessor.with(|mut store| {
-                FutureReader::new(&mut store, async move {
-                    Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(Err(error))
-                })
-            });
-        }
-
-        let file = accessor.with(|mut store| file_from_access::<Ctx, U>(&mut store, &fd))?;
-        let (chunks_tx, chunks_rx) = tokio::sync::mpsc::unbounded_channel();
+        let descriptor =
+            accessor.with(|mut store| descriptor_from_access::<Ctx, U>(&mut store, &fd))?;
         let filesystem_runtime = accessor.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
+        let P3WriteStreamSetup { file, admission } =
+            match prepare_p3_write_stream_setup(&descriptor, &filesystem_runtime) {
+                Ok(setup) => setup,
+                Err(P3WriteStreamSetupError::Guest(error)) => {
+                    let mut data = data;
+                    accessor.with(|mut store| data.close(&mut store))?;
+                    return accessor.with(|mut store| {
+                        FutureReader::new(&mut store, async move {
+                            Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(Err(error))
+                        })
+                    });
+                }
+                Err(P3WriteStreamSetupError::Trap) => {
+                    let mut data = data;
+                    accessor.with(|mut store| data.close(&mut store))?;
+                    return accessor.with(|mut store| {
+                        FutureReader::new(&mut store, async move {
+                            Err(wasmtime::Error::msg(
+                                "agent filesystem mutation invalidated the runtime",
+                            ))
+                        })
+                    });
+                }
+            };
+        let (chunks_tx, chunks_rx) = tokio::sync::mpsc::unbounded_channel();
         let writer = filesystem_runtime
             .mutations()
             .writer(file, AgentFilesystemWriteMode::Append);
@@ -874,7 +919,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         })?;
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        accessor.with(|mut store| {
+        let future = accessor.with(|mut store| {
             let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                 .tail_work_tracker()
                 .activity();
@@ -886,7 +931,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             ));
 
             FutureReader::new(&mut store, wait_filesystem_task_result(result_rx))
-        })
+        })?;
+        drop(admission);
+        Ok(future)
     }
 
     async fn advise(
@@ -924,10 +971,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let runtime = store.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
-        let admitted = p3_mutation_result(runtime.mutations().admit_sync().await)?;
         let descriptor = store
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
+        let admitted = p3_mutation_result(runtime.mutations().admit_sync().await)?;
         p3_mutation_result(runtime.mutations().sync(admitted, descriptor, true).await)
     }
 
@@ -991,16 +1038,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
         let mutations = runtime.mutations();
-        let admitted = p3_mutation_result(mutations.admit_resize().await)?;
         let descriptor = accessor
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
-        let checked =
-            p3_mutation_result(mutations.check_resize_policy(admitted, descriptor.clone(), size))?;
-        let file = match descriptor {
-            Descriptor::File(file) => file,
+        let file = match &descriptor {
+            Descriptor::File(file) => file.clone(),
             Descriptor::Dir(_) => return Err(types::ErrorCode::BadDescriptor.into()),
         };
+        validate_resize(&file).map_err(p3_native_guest)?;
+        let checked = p3_mutation_result(
+            mutations
+                .authorize_and_admit_resize(descriptor.clone(), size)
+                .await,
+        )?;
         let prepared = p3_mutation_result(mutations.prepare_resize(checked, file).await)?;
         p3_mutation_result(mutations.resize(prepared).await.map(|_| ()))
     }
@@ -1015,13 +1065,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
         let mutations = runtime.mutations();
-        let admitted = p3_mutation_result(mutations.admit_descriptor_times().await)?;
         let policy_descriptor = accessor
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
+        validate_descriptor_times(&policy_descriptor).map_err(p3_native_guest)?;
+        p3_validate_time(data_access_timestamp)?;
+        p3_validate_time(data_modification_timestamp)?;
         let checked = p3_mutation_result(
-            mutations.check_descriptor_times_policy(admitted, policy_descriptor),
+            mutations
+                .authorize_and_admit_descriptor_times(policy_descriptor)
+                .await,
         )?;
+        let accessed = p3_native_time(data_access_timestamp)?;
+        let modified = p3_native_time(data_modification_timestamp)?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1034,8 +1090,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .map_err(FilesystemError::trap)?;
         let validated =
             p3_mutation_result(mutations.prepare_descriptor_times(checked, descriptor))?;
-        let accessed = p3_native_time(data_access_timestamp)?;
-        let modified = p3_native_time(data_modification_timestamp)?;
         let prepared = mutations.bind_descriptor_times(
             validated,
             accessed,
@@ -1115,10 +1169,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let runtime = store.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
-        let admitted = p3_mutation_result(runtime.mutations().admit_sync().await)?;
         let descriptor = store
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
+        let admitted = p3_mutation_result(runtime.mutations().admit_sync().await)?;
         p3_mutation_result(runtime.mutations().sync(admitted, descriptor, false).await)
     }
 
@@ -1138,15 +1192,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
         let mutations = runtime.mutations();
-        let admitted = p3_mutation_result(mutations.admit_create_directory().await)?;
         let descriptor = store
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
+        let directory = match &descriptor {
+            Descriptor::Dir(directory) => directory.clone(),
+            Descriptor::File(_) => return Err(types::ErrorCode::NotDirectory.into()),
+        };
+        validate_directory_mutation(&directory).map_err(p3_native_guest)?;
         let checked = p3_mutation_result(
-            mutations.check_create_directory_policy(admitted, descriptor, path),
+            mutations
+                .authorize_and_admit_create_directory(descriptor, path)
+                .await,
         )?;
-        let directory =
-            store.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
         let prepared = p3_mutation_result(mutations.prepare_create_directory(checked, directory))?;
         p3_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
@@ -1244,17 +1302,24 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
         let mutations = runtime.mutations();
-        let admitted = p3_mutation_result(mutations.admit_path_times().await)?;
         let follow = path_flags.contains(types::PathFlags::SYMLINK_FOLLOW);
         let policy_descriptor = accessor
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
-        let checked = p3_mutation_result(mutations.check_path_times_policy(
-            admitted,
-            policy_descriptor,
-            path,
-            follow,
-        ))?;
+        let directory = match &policy_descriptor {
+            Descriptor::Dir(directory) => directory.clone(),
+            Descriptor::File(_) => return Err(types::ErrorCode::NotDirectory.into()),
+        };
+        validate_directory_mutation(&directory).map_err(p3_native_guest)?;
+        p3_validate_time(data_access_timestamp)?;
+        p3_validate_time(data_modification_timestamp)?;
+        let checked = p3_mutation_result(
+            mutations
+                .authorize_and_admit_path_times(policy_descriptor, path, follow)
+                .await,
+        )?;
+        let accessed = p3_native_time(data_access_timestamp)?;
+        let modified = p3_native_time(data_modification_timestamp)?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1262,11 +1327,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "set-times-at",
             )
         });
-        let directory =
-            accessor.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
         let validated = p3_mutation_result(mutations.prepare_path_times(checked, directory))?;
-        let accessed = p3_native_time(data_access_timestamp)?;
-        let modified = p3_native_time(data_modification_timestamp)?;
         let prepared = mutations.bind_path_times(
             validated,
             accessed,
@@ -1296,33 +1357,37 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
         let mutations = runtime.mutations();
-        let admitted = p3_mutation_result(mutations.admit_hard_link().await)?;
         let source_descriptor = store
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
-        let source_follow = old_path_flags.contains(types::PathFlags::SYMLINK_FOLLOW);
-        let source_checked =
-            p3_mutation_result(mutations.check_hard_link_source_descriptor_policy(
-                admitted,
-                source_descriptor,
-                old_path,
-                source_follow,
-            ))?;
         let destination_descriptor = store
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &new_fd))
             .map_err(FilesystemError::trap)?;
-        let destination_checked =
-            p3_mutation_result(mutations.check_hard_link_destination_descriptor_policy(
-                source_checked,
-                destination_descriptor,
-                new_path,
-            ))?;
-        let checked =
-            p3_mutation_result(mutations.check_hard_link_path_policy(destination_checked))?;
-        let source_directory =
-            store.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
-        let destination_directory =
-            store.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &new_fd))?;
+        let source_follow = old_path_flags.contains(types::PathFlags::SYMLINK_FOLLOW);
+        if source_follow {
+            return Err(types::ErrorCode::Invalid.into());
+        }
+        let source_directory = match &source_descriptor {
+            Descriptor::Dir(directory) => directory.clone(),
+            Descriptor::File(_) => return Err(types::ErrorCode::NotDirectory.into()),
+        };
+        let destination_directory = match &destination_descriptor {
+            Descriptor::Dir(directory) => directory.clone(),
+            Descriptor::File(_) => return Err(types::ErrorCode::NotDirectory.into()),
+        };
+        validate_two_directory_mutation(&source_directory, &destination_directory)
+            .map_err(p3_native_guest)?;
+        let checked = p3_mutation_result(
+            mutations
+                .authorize_and_admit_hard_link(
+                    source_descriptor,
+                    old_path,
+                    source_follow,
+                    destination_descriptor,
+                    new_path,
+                )
+                .await,
+        )?;
         let prepared = p3_mutation_result(mutations.prepare_hard_link(
             checked,
             source_directory,
@@ -1351,56 +1416,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
         let mutations = runtime.mutations();
-        let admitted = if mutating {
-            Some(p3_mutation_result(mutations.admit_mutating_open().await)?)
-        } else {
-            None
-        };
         let follow = path_flags.contains(types::PathFlags::SYMLINK_FOLLOW);
         let writable = open_flags.contains(types::OpenFlags::TRUNCATE)
             || flags.contains(types::DescriptorFlags::WRITE);
-        let checked = match (admitted, writable) {
-            (Some(admitted), true) => {
-                let descriptor = accessor
-                    .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
-                    .map_err(FilesystemError::trap)?;
-                Some(p3_mutation_result(mutations.check_mutating_open_policy(
-                    admitted,
-                    descriptor,
-                    path.clone(),
-                    follow,
-                ))?)
-            }
-            (Some(admitted), false) => {
-                Some(mutations.bind_nonwritable_mutating_open(admitted, path.clone(), follow))
-            }
-            (None, true) => {
-                let descriptor = accessor
-                    .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
-                    .map_err(FilesystemError::trap)?;
-                p3_mutation_result(mutations.check_writable_open_policy(
-                    &descriptor,
-                    &path,
-                    follow,
-                ))?;
-                None
-            }
-            (None, false) => None,
+        let descriptor = accessor
+            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
+            .map_err(FilesystemError::trap)?;
+        let directory = match &descriptor {
+            Descriptor::Dir(directory) => directory.clone(),
+            Descriptor::File(_) => return Err(types::ErrorCode::NotDirectory.into()),
         };
-        if !mutating {
-            let filesystem = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
-            return <WasiFilesystem as types::HostDescriptorWithStore<U>>::open_at(
-                &filesystem,
-                fd,
-                path_flags,
-                path,
-                open_flags,
-                flags,
-            )
-            .await;
-        }
-        let directory =
-            accessor.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
         let native_options = NativeOpenOptions {
             create: open_flags.contains(types::OpenFlags::CREATE),
             directory: open_flags.contains(types::OpenFlags::DIRECTORY),
@@ -1415,11 +1440,36 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 | types::DescriptorFlags::DATA_INTEGRITY_SYNC
                 | types::DescriptorFlags::REQUESTED_WRITE_SYNC,
         );
+        validate_open_flags(native_options, unsupported_sync_flags).map_err(p3_native_guest)?;
+        validate_open_capabilities(&directory, native_options).map_err(p3_native_guest)?;
+        if writable && !mutating {
+            p3_mutation_result(mutations.authorize_writable_open(&descriptor, &path, follow))?;
+        }
+        let checked = if mutating {
+            Some(p3_mutation_result(
+                mutations
+                    .authorize_and_admit_mutating_open(descriptor.clone(), path.clone(), follow)
+                    .await,
+            )?)
+        } else {
+            None
+        };
+        if !mutating {
+            let filesystem = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
+            return <WasiFilesystem as types::HostDescriptorWithStore<U>>::open_at(
+                &filesystem,
+                fd,
+                path_flags,
+                path,
+                open_flags,
+                flags,
+            )
+            .await;
+        }
         let prepared = p3_mutation_result(mutations.prepare_mutating_open(
             checked.expect("mutating open has checked admission"),
             directory,
             native_options,
-            unsupported_sync_flags,
         ))?;
         match p3_mutation_result(mutations.open_mutating(prepared).await)? {
             NativeOpenResult::Descriptor(descriptor) => push_descriptor(accessor, descriptor),
@@ -1461,15 +1511,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
         let mutations = runtime.mutations();
-        let admitted = p3_mutation_result(mutations.admit_remove_directory().await)?;
         let descriptor = store
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
+        let directory = match &descriptor {
+            Descriptor::Dir(directory) => directory.clone(),
+            Descriptor::File(_) => return Err(types::ErrorCode::NotDirectory.into()),
+        };
+        validate_directory_mutation(&directory).map_err(p3_native_guest)?;
         let checked = p3_mutation_result(
-            mutations.check_remove_directory_policy(admitted, descriptor, path),
+            mutations
+                .authorize_and_admit_remove_directory(descriptor, path)
+                .await,
         )?;
-        let directory =
-            store.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
         let prepared = p3_mutation_result(mutations.prepare_remove_directory(checked, directory))?;
         p3_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
@@ -1485,25 +1539,32 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
         let mutations = runtime.mutations();
-        let admitted = p3_mutation_result(mutations.admit_rename().await)?;
         let source_descriptor = accessor
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
-        let source_checked = p3_mutation_result(mutations.check_rename_source_descriptor_policy(
-            admitted,
-            source_descriptor,
-            old_path,
-        ))?;
         let destination_descriptor = accessor
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &new_fd))
             .map_err(FilesystemError::trap)?;
-        let destination_checked =
-            p3_mutation_result(mutations.check_rename_destination_descriptor_policy(
-                source_checked,
-                destination_descriptor,
-                new_path,
-            ))?;
-        let checked = p3_mutation_result(mutations.check_rename_path_policy(destination_checked))?;
+        let source_directory = match &source_descriptor {
+            Descriptor::Dir(directory) => directory.clone(),
+            Descriptor::File(_) => return Err(types::ErrorCode::NotDirectory.into()),
+        };
+        let destination_directory = match &destination_descriptor {
+            Descriptor::Dir(directory) => directory.clone(),
+            Descriptor::File(_) => return Err(types::ErrorCode::NotDirectory.into()),
+        };
+        validate_two_directory_mutation(&source_directory, &destination_directory)
+            .map_err(p3_native_guest)?;
+        let checked = p3_mutation_result(
+            mutations
+                .authorize_and_admit_rename(
+                    source_descriptor,
+                    old_path,
+                    destination_descriptor,
+                    new_path,
+                )
+                .await,
+        )?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1511,10 +1572,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "rename-at",
             )
         });
-        let source_directory =
-            accessor.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
-        let destination_directory =
-            accessor.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &new_fd))?;
         let prepared = p3_mutation_result(mutations.prepare_rename(
             checked,
             source_directory,
@@ -1533,12 +1590,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
         let mutations = runtime.mutations();
-        let admitted = p3_mutation_result(mutations.admit_symlink().await)?;
         let descriptor = accessor
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
+        let directory = match &descriptor {
+            Descriptor::Dir(directory) => directory.clone(),
+            Descriptor::File(_) => return Err(types::ErrorCode::NotDirectory.into()),
+        };
+        validate_directory_mutation(&directory).map_err(p3_native_guest)?;
         let checked = p3_mutation_result(
-            mutations.check_symlink_policy(admitted, descriptor, old_path, new_path),
+            mutations
+                .authorize_and_admit_symlink(descriptor, old_path, new_path)
+                .await,
         )?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
@@ -1547,8 +1610,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "symlink-at",
             )
         });
-        let directory =
-            accessor.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
         let prepared = p3_mutation_result(mutations.prepare_symlink(checked, directory))?;
         p3_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
@@ -1562,12 +1623,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
         let mutations = runtime.mutations();
-        let admitted = p3_mutation_result(mutations.admit_unlink_file().await)?;
         let descriptor = accessor
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
-        let checked =
-            p3_mutation_result(mutations.check_unlink_file_policy(admitted, descriptor, path))?;
+        let directory = match &descriptor {
+            Descriptor::Dir(directory) => directory.clone(),
+            Descriptor::File(_) => return Err(types::ErrorCode::NotDirectory.into()),
+        };
+        validate_directory_mutation(&directory).map_err(p3_native_guest)?;
+        let checked = p3_mutation_result(
+            mutations
+                .authorize_and_admit_unlink_file(descriptor, path)
+                .await,
+        )?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1575,8 +1643,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "unlink-file-at",
             )
         });
-        let directory =
-            accessor.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
         let prepared = p3_mutation_result(mutations.prepare_unlink_file(checked, directory))?;
         p3_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
@@ -1638,6 +1704,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::durable_host::filesystem::types::{
+        P2WriteStreamSetupError, prepare_p2_write_stream_setup,
+    };
     use fs_set_times::{SystemTimeSpec, set_symlink_times, set_times};
     use golem_common::model::oplog::types::SerializableDateTime;
     use std::time::{Duration, SystemTime};
@@ -1651,6 +1720,59 @@ mod tests {
             false,
             path,
         )
+    }
+
+    #[test]
+    fn p2_p3_write_stream_setup_precedence_is_identical() {
+        let tempdir = tempfile::TempDir::new().unwrap();
+        let read_only_path = tempdir.path().join("read-only");
+        std::fs::write(&read_only_path, b"contents").unwrap();
+        let p2_runtime = AgentFilesystemRuntime::new_for_test();
+        let p3_runtime = AgentFilesystemRuntime::new_for_test();
+        p2_runtime.mark_read_only_for_test(read_only_path.clone());
+        p3_runtime.mark_read_only_for_test(read_only_path.clone());
+        p2_runtime.seal();
+        p3_runtime.seal();
+        let p2_descriptor = Descriptor::File(test_file(read_only_path.clone()));
+        let p3_descriptor = Descriptor::File(test_file(read_only_path));
+
+        assert!(matches!(
+            prepare_p2_write_stream_setup(&p2_descriptor, &p2_runtime),
+            Err(P2WriteStreamSetupError::Guest(
+                wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode::NotPermitted,
+            ))
+        ));
+        assert!(matches!(
+            prepare_p3_write_stream_setup(&p3_descriptor, &p3_runtime),
+            Err(P3WriteStreamSetupError::Guest(
+                types::ErrorCode::NotPermitted
+            ))
+        ));
+
+        let writable_path = tempdir.path().join("writable");
+        std::fs::write(&writable_path, b"").unwrap();
+        let p2_runtime = AgentFilesystemRuntime::new_for_test();
+        let p3_runtime = AgentFilesystemRuntime::new_for_test();
+        let p2_descriptor = Descriptor::File(test_file(writable_path.clone()));
+        let p3_descriptor = Descriptor::File(test_file(writable_path));
+        let p2_setup = prepare_p2_write_stream_setup(&p2_descriptor, &p2_runtime).unwrap();
+        let p3_setup = prepare_p3_write_stream_setup(&p3_descriptor, &p3_runtime).unwrap();
+        assert!(p2_runtime.has_active_effects());
+        assert!(p3_runtime.has_active_effects());
+        let _p2_pause = p2_runtime.pause_effect_admission();
+        let _p3_pause = p3_runtime.pause_effect_admission();
+
+        assert!(matches!(
+            prepare_p2_write_stream_setup(&p2_descriptor, &p2_runtime),
+            Err(P2WriteStreamSetupError::Trap)
+        ));
+        assert!(matches!(
+            prepare_p3_write_stream_setup(&p3_descriptor, &p3_runtime),
+            Err(P3WriteStreamSetupError::Trap)
+        ));
+        drop((p2_setup, p3_setup));
+        assert!(!p2_runtime.has_active_effects());
+        assert!(!p3_runtime.has_active_effects());
     }
 
     #[test]

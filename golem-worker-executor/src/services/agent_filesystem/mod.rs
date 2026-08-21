@@ -45,10 +45,12 @@ mod xfs;
 
 pub(crate) use failure::FilesystemPressureOperation;
 pub(crate) use mutation::{
-    AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemUpdateEffectLease,
-    AgentFilesystemWriteMode, AgentFilesystemWriter, ClassifiedFileOutputStream,
-    FilesystemStreamMode, NativeMutationGuestError, NativeOpenOptions, NativeOpenResult,
-    RequestedTime, classified_filesystem_stream_error_code,
+    AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemStreamSetupAdmission,
+    AgentFilesystemUpdateEffectLease, AgentFilesystemWriteMode, AgentFilesystemWriter,
+    ClassifiedFileOutputStream, FilesystemStreamMode, NativeMutationGuestError, NativeOpenOptions,
+    NativeOpenResult, RequestedTime, classified_filesystem_stream_error_code,
+    validate_descriptor_times, validate_directory_mutation, validate_open_capabilities,
+    validate_open_flags, validate_resize, validate_two_directory_mutation,
 };
 use quota::FilesystemLimitExceededCallback;
 pub(crate) use quota::{
@@ -440,6 +442,22 @@ impl AgentFilesystemRuntime {
                 available_filesystem_objects: 1,
             },
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_read_only_for_test(&self, path: PathBuf) {
+        self.runtime_state.initial_files.write().unwrap().insert(
+            path,
+            InitialAgentFile {
+                content_hash: golem_common::model::agent::AgentFileContentHash(
+                    golem_common::model::diff::Hash::empty(),
+                ),
+                path: golem_common::model::component::AgentFilePath::from_abs_str("/read-only")
+                    .unwrap(),
+                permissions: golem_common::model::component::AgentFilePermissions::ReadOnly,
+                size: 0,
+            },
+        );
     }
 
     #[cfg(test)]

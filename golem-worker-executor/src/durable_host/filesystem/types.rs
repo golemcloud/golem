@@ -33,8 +33,11 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
 use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, FilesystemOutputStreamState};
 use crate::services::agent_filesystem::{
-    AgentFilesystemMutationError, ClassifiedFileOutputStream, FilesystemStreamMode,
-    NativeMutationGuestError, NativeOpenOptions, NativeOpenResult, RequestedTime,
+    AgentFilesystemMutationError, AgentFilesystemRuntime, AgentFilesystemStreamSetupAdmission,
+    ClassifiedFileOutputStream, FilesystemStreamMode, NativeMutationGuestError, NativeOpenOptions,
+    NativeOpenResult, RequestedTime, validate_descriptor_times, validate_directory_mutation,
+    validate_open_capabilities, validate_open_flags, validate_resize,
+    validate_two_directory_mutation,
 };
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
@@ -84,6 +87,16 @@ fn p2_native_time(requested: NewTimestamp) -> Result<Option<SystemTime>, FsError
     }
 }
 
+fn p2_validate_time(requested: NewTimestamp) -> Result<(), FsError> {
+    match requested {
+        NewTimestamp::Timestamp(timestamp) => SystemTime::UNIX_EPOCH
+            .checked_add(Duration::new(timestamp.seconds, timestamp.nanoseconds))
+            .map(|_| ())
+            .ok_or_else(|| ErrorCode::Overflow.into()),
+        NewTimestamp::NoChange | NewTimestamp::Now => Ok(()),
+    }
+}
+
 fn p2_write_result(result: Result<u64, AgentFilesystemMutationError>) -> Result<Filesize, FsError> {
     match result {
         Ok(written) => Ok(written),
@@ -122,6 +135,59 @@ fn p2_mutation_result<T>(result: Result<T, AgentFilesystemMutationError>) -> Res
     }
 }
 
+pub(crate) struct P2WriteStreamSetup {
+    file: wasmtime_wasi::filesystem::File,
+    admission: AgentFilesystemStreamSetupAdmission,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum P2WriteStreamSetupError {
+    Guest(ErrorCode),
+    Trap,
+}
+
+impl P2WriteStreamSetupError {
+    fn into_fs_error(self) -> FsError {
+        match self {
+            Self::Guest(error) => error.into(),
+            Self::Trap => FsError::trap(wasmtime::Error::msg(
+                "agent filesystem mutation invalidated the runtime",
+            )),
+        }
+    }
+}
+
+pub(crate) fn prepare_p2_write_stream_setup(
+    descriptor: &Descriptor,
+    runtime: &AgentFilesystemRuntime,
+) -> Result<P2WriteStreamSetup, P2WriteStreamSetupError> {
+    let file = match descriptor {
+        Descriptor::File(file) if file.perms.contains(FilePerms::WRITE) => file.clone(),
+        Descriptor::File(_) => {
+            return Err(P2WriteStreamSetupError::Guest(ErrorCode::NotPermitted));
+        }
+        Descriptor::Dir(_) => {
+            return Err(P2WriteStreamSetupError::Guest(ErrorCode::BadDescriptor));
+        }
+    };
+    let admission = match runtime
+        .mutations()
+        .authorize_and_admit_stream_setup(descriptor)
+    {
+        Ok(admission) => admission,
+        Err(AgentFilesystemMutationError::Guest(error)) => {
+            let error = match error {
+                NativeMutationGuestError::Invalid => ErrorCode::Invalid,
+                NativeMutationGuestError::NotPermitted => ErrorCode::NotPermitted,
+                NativeMutationGuestError::Unsupported => ErrorCode::Unsupported,
+            };
+            return Err(P2WriteStreamSetupError::Guest(error));
+        }
+        Err(_) => return Err(P2WriteStreamSetupError::Trap),
+    };
+    Ok(P2WriteStreamSetup { file, admission })
+}
+
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     fn read_via_stream(
         &mut self,
@@ -142,14 +208,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         fd: Resource<Descriptor>,
         offset: Filesize,
     ) -> Result<Resource<OutputStream>, FsError> {
-        self.fail_if_read_only(&fd)?;
         self.observe_function_call("filesystem::types::descriptor", "write_via_stream");
-        let file = match self.table().get(&fd)? {
-            Descriptor::File(file) if file.perms.contains(FilePerms::WRITE) => file.clone(),
-            Descriptor::File(_) => return Err(ErrorCode::NotPermitted.into()),
-            Descriptor::Dir(_) => return Err(ErrorCode::BadDescriptor.into()),
-        };
+        let descriptor = self.table().get(&fd)?.clone();
         let filesystem_runtime = self.filesystem_runtime();
+        let P2WriteStreamSetup { file, admission } =
+            prepare_p2_write_stream_setup(&descriptor, &filesystem_runtime)
+                .map_err(P2WriteStreamSetupError::into_fs_error)?;
         let stream = self.table().push(
             ClassifiedFileOutputStream::new(
                 file,
@@ -161,6 +225,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.state
             .open_filesystem_output_streams
             .insert(stream.rep(), FilesystemOutputStreamState);
+        drop(admission);
         Ok(stream)
     }
 
@@ -168,14 +233,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         &mut self,
         fd: Resource<Descriptor>,
     ) -> Result<Resource<OutputStream>, FsError> {
-        self.fail_if_read_only(&fd)?;
         self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
-        let file = match self.table().get(&fd)? {
-            Descriptor::File(file) if file.perms.contains(FilePerms::WRITE) => file.clone(),
-            Descriptor::File(_) => return Err(ErrorCode::NotPermitted.into()),
-            Descriptor::Dir(_) => return Err(ErrorCode::BadDescriptor.into()),
-        };
+        let descriptor = self.table().get(&fd)?.clone();
         let filesystem_runtime = self.filesystem_runtime();
+        let P2WriteStreamSetup { file, admission } =
+            prepare_p2_write_stream_setup(&descriptor, &filesystem_runtime)
+                .map_err(P2WriteStreamSetupError::into_fs_error)?;
         let stream = self.table().push(
             ClassifiedFileOutputStream::new(file, filesystem_runtime, FilesystemStreamMode::Append)
                 .into_dyn(),
@@ -183,6 +246,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.state
             .open_filesystem_output_streams
             .insert(stream.rep(), FilesystemOutputStreamState);
+        drop(admission);
         Ok(stream)
     }
 
@@ -201,8 +265,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     async fn sync_data(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "sync_data");
         let mutations = self.filesystem_runtime().mutations();
-        let admitted = p2_mutation_result(mutations.admit_sync().await)?;
         let descriptor = self.table().get(&self_)?.clone();
+        let admitted = p2_mutation_result(mutations.admit_sync().await)?;
         p2_mutation_result(mutations.sync(admitted, descriptor, true).await)
     }
 
@@ -228,14 +292,17 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
         let mutations = self.filesystem_runtime().mutations();
-        let admitted = p2_mutation_result(mutations.admit_resize().await)?;
         let descriptor = self.table().get(&fd)?.clone();
-        let checked =
-            p2_mutation_result(mutations.check_resize_policy(admitted, descriptor.clone(), size))?;
         let file = match &descriptor {
             Descriptor::File(file) => file.clone(),
             Descriptor::Dir(_) => return Err(ErrorCode::BadDescriptor.into()),
         };
+        validate_resize(&file).map_err(p2_native_guest)?;
+        let checked = p2_mutation_result(
+            mutations
+                .authorize_and_admit_resize(descriptor.clone(), size)
+                .await,
+        )?;
         let prepared = p2_mutation_result(mutations.prepare_resize(checked, file).await)?;
         self.observe_function_call("filesystem::types::descriptor", "set_size");
         p2_mutation_result(mutations.resize(prepared).await.map(|_| ()))
@@ -248,17 +315,21 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
         let mutations = self.filesystem_runtime().mutations();
-        let admitted = p2_mutation_result(mutations.admit_descriptor_times().await)?;
         let policy_descriptor = self.table().get(&fd)?.clone();
+        validate_descriptor_times(&policy_descriptor).map_err(p2_native_guest)?;
+        p2_validate_time(data_access_timestamp)?;
+        p2_validate_time(data_modification_timestamp)?;
         let checked = p2_mutation_result(
-            mutations.check_descriptor_times_policy(admitted, policy_descriptor),
+            mutations
+                .authorize_and_admit_descriptor_times(policy_descriptor)
+                .await,
         )?;
+        let accessed = p2_native_time(data_access_timestamp)?;
+        let modified = p2_native_time(data_modification_timestamp)?;
         self.observe_function_call("filesystem::types::descriptor", "set_times");
         let descriptor = self.table().get(&fd)?.clone();
         let validated =
             p2_mutation_result(mutations.prepare_descriptor_times(checked, descriptor))?;
-        let accessed = p2_native_time(data_access_timestamp)?;
-        let modified = p2_native_time(data_modification_timestamp)?;
         let prepared = mutations.bind_descriptor_times(
             validated,
             accessed,
@@ -286,22 +357,20 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         buffer: Vec<u8>,
         offset: Filesize,
     ) -> Result<Filesize, FsError> {
-        self.fail_if_read_only(&fd)?;
-        let file = match self.table().get(&fd)? {
+        let descriptor = self.table().get(&fd)?.clone();
+        let file = match &descriptor {
             Descriptor::File(file) if file.perms.contains(FilePerms::WRITE) => file.clone(),
             Descriptor::File(_) => return Err(ErrorCode::NotPermitted.into()),
             Descriptor::Dir(_) => return Err(ErrorCode::BadDescriptor.into()),
         };
         self.observe_function_call("filesystem::types::descriptor", "write");
-        let completion = self
-            .filesystem_runtime()
-            .mutations()
-            .positioned_write(file, offset, Bytes::from(buffer))
-            .map_err(|_| {
-                FsError::trap(wasmtime::Error::msg(
-                    "agent filesystem mutation invalidated the runtime",
-                ))
-            })?;
+        let mutations = self.filesystem_runtime().mutations();
+        let completion = p2_mutation_result(mutations.positioned_write(
+            &descriptor,
+            file,
+            offset,
+            Bytes::from(buffer),
+        ))?;
         p2_write_result(completion.await)
     }
 
@@ -328,8 +397,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     async fn sync(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "sync");
         let mutations = self.filesystem_runtime().mutations();
-        let admitted = p2_mutation_result(mutations.admit_sync().await)?;
         let descriptor = self.table().get(&self_)?.clone();
+        let admitted = p2_mutation_result(mutations.admit_sync().await)?;
         p2_mutation_result(mutations.sync(admitted, descriptor, false).await)
     }
 
@@ -340,12 +409,14 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "create_directory_at");
         let mutations = self.filesystem_runtime().mutations();
-        let admitted = p2_mutation_result(mutations.admit_create_directory().await)?;
         let descriptor = self.table().get(&self_)?.clone();
+        let directory = p2_directory(&descriptor)?;
+        validate_directory_mutation(&directory).map_err(p2_native_guest)?;
         let checked = p2_mutation_result(
-            mutations.check_create_directory_policy(admitted, descriptor, path),
+            mutations
+                .authorize_and_admit_create_directory(descriptor, path)
+                .await,
         )?;
-        let directory = p2_directory(self.table().get(&self_)?)?;
         let prepared = p2_mutation_result(mutations.prepare_create_directory(checked, directory))?;
         p2_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
@@ -514,20 +585,21 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
         let mutations = self.filesystem_runtime().mutations();
-        let admitted = p2_mutation_result(mutations.admit_path_times().await)?;
         let follow = path_flags.contains(PathFlags::SYMLINK_FOLLOW);
         let policy_descriptor = self.table().get(&fd)?.clone();
-        let checked = p2_mutation_result(mutations.check_path_times_policy(
-            admitted,
-            policy_descriptor,
-            path,
-            follow,
-        ))?;
-        self.observe_function_call("filesystem::types::descriptor", "set_times_at");
-        let directory = p2_directory(self.table().get(&fd)?)?;
-        let validated = p2_mutation_result(mutations.prepare_path_times(checked, directory))?;
+        let directory = p2_directory(&policy_descriptor)?;
+        validate_directory_mutation(&directory).map_err(p2_native_guest)?;
+        p2_validate_time(data_access_timestamp)?;
+        p2_validate_time(data_modification_timestamp)?;
+        let checked = p2_mutation_result(
+            mutations
+                .authorize_and_admit_path_times(policy_descriptor, path, follow)
+                .await,
+        )?;
         let accessed = p2_native_time(data_access_timestamp)?;
         let modified = p2_native_time(data_modification_timestamp)?;
+        self.observe_function_call("filesystem::types::descriptor", "set_times_at");
+        let validated = p2_mutation_result(mutations.prepare_path_times(checked, directory))?;
         let prepared = mutations.bind_path_times(
             validated,
             accessed,
@@ -548,27 +620,27 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "link_at");
         let mutations = self.filesystem_runtime().mutations();
-        let admitted = p2_mutation_result(mutations.admit_hard_link().await)?;
         let source_descriptor = self.table().get(&self_)?.clone();
-        let source_follow = old_path_flags.contains(PathFlags::SYMLINK_FOLLOW);
-        let source_checked =
-            p2_mutation_result(mutations.check_hard_link_source_descriptor_policy(
-                admitted,
-                source_descriptor,
-                old_path,
-                source_follow,
-            ))?;
         let destination_descriptor = self.table().get(&new_descriptor)?.clone();
-        let destination_checked =
-            p2_mutation_result(mutations.check_hard_link_destination_descriptor_policy(
-                source_checked,
-                destination_descriptor,
-                new_path,
-            ))?;
-        let checked =
-            p2_mutation_result(mutations.check_hard_link_path_policy(destination_checked))?;
-        let source_directory = p2_directory(self.table().get(&self_)?)?;
-        let destination_directory = p2_directory(self.table().get(&new_descriptor)?)?;
+        let source_follow = old_path_flags.contains(PathFlags::SYMLINK_FOLLOW);
+        if source_follow {
+            return Err(ErrorCode::Invalid.into());
+        }
+        let source_directory = p2_directory(&source_descriptor)?;
+        let destination_directory = p2_directory(&destination_descriptor)?;
+        validate_two_directory_mutation(&source_directory, &destination_directory)
+            .map_err(p2_native_guest)?;
+        let checked = p2_mutation_result(
+            mutations
+                .authorize_and_admit_hard_link(
+                    source_descriptor,
+                    old_path,
+                    source_follow,
+                    destination_descriptor,
+                    new_path,
+                )
+                .await,
+        )?;
         let prepared = p2_mutation_result(mutations.prepare_hard_link(
             checked,
             source_directory,
@@ -587,37 +659,38 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<Resource<Descriptor>, FsError> {
         let mutating = open_flags.intersects(OpenFlags::CREATE | OpenFlags::TRUNCATE);
         let mutations = self.filesystem_runtime().mutations();
-        let admitted = if mutating {
-            Some(p2_mutation_result(mutations.admit_mutating_open().await)?)
-        } else {
-            None
-        };
         let follow = path_flags.contains(PathFlags::SYMLINK_FOLLOW);
         let writable =
             open_flags.contains(OpenFlags::TRUNCATE) || flags.contains(DescriptorFlags::WRITE);
-        let checked = match (admitted, writable) {
-            (Some(admitted), true) => {
-                let descriptor = self.table().get(&self_)?.clone();
-                Some(p2_mutation_result(mutations.check_mutating_open_policy(
-                    admitted,
-                    descriptor,
-                    path.clone(),
-                    follow,
-                ))?)
-            }
-            (Some(admitted), false) => {
-                Some(mutations.bind_nonwritable_mutating_open(admitted, path.clone(), follow))
-            }
-            (None, true) => {
-                let descriptor = self.table().get(&self_)?.clone();
-                p2_mutation_result(mutations.check_writable_open_policy(
-                    &descriptor,
-                    &path,
-                    follow,
-                ))?;
-                None
-            }
-            (None, false) => None,
+        let descriptor = self.table().get(&self_)?.clone();
+        let directory = p2_directory(&descriptor)?;
+        let native_options = NativeOpenOptions {
+            create: open_flags.contains(OpenFlags::CREATE),
+            directory: open_flags.contains(OpenFlags::DIRECTORY),
+            exclusive: open_flags.contains(OpenFlags::EXCLUSIVE),
+            truncate: open_flags.contains(OpenFlags::TRUNCATE),
+            follow,
+            read: flags.contains(DescriptorFlags::READ),
+            write: flags.contains(DescriptorFlags::WRITE),
+        };
+        let unsupported_sync_flags = flags.intersects(
+            DescriptorFlags::FILE_INTEGRITY_SYNC
+                | DescriptorFlags::DATA_INTEGRITY_SYNC
+                | DescriptorFlags::REQUESTED_WRITE_SYNC,
+        );
+        validate_open_flags(native_options, unsupported_sync_flags).map_err(p2_native_guest)?;
+        validate_open_capabilities(&directory, native_options).map_err(p2_native_guest)?;
+        if writable && !mutating {
+            p2_mutation_result(mutations.authorize_writable_open(&descriptor, &path, follow))?;
+        }
+        let checked = if mutating {
+            Some(p2_mutation_result(
+                mutations
+                    .authorize_and_admit_mutating_open(descriptor.clone(), path.clone(), follow)
+                    .await,
+            )?)
+        } else {
+            None
         };
         self.observe_function_call("filesystem::types::descriptor", "open_at");
         if !mutating {
@@ -633,26 +706,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             .await;
         }
 
-        let directory = p2_directory(self.table().get(&self_)?)?;
-        let native_options = NativeOpenOptions {
-            create: open_flags.contains(OpenFlags::CREATE),
-            directory: open_flags.contains(OpenFlags::DIRECTORY),
-            exclusive: open_flags.contains(OpenFlags::EXCLUSIVE),
-            truncate: open_flags.contains(OpenFlags::TRUNCATE),
-            follow,
-            read: flags.contains(DescriptorFlags::READ),
-            write: flags.contains(DescriptorFlags::WRITE),
-        };
-        let unsupported_sync_flags = flags.intersects(
-            DescriptorFlags::FILE_INTEGRITY_SYNC
-                | DescriptorFlags::DATA_INTEGRITY_SYNC
-                | DescriptorFlags::REQUESTED_WRITE_SYNC,
-        );
         let prepared = p2_mutation_result(mutations.prepare_mutating_open(
             checked.expect("mutating open has checked admission"),
             directory,
             native_options,
-            unsupported_sync_flags,
         ))?;
         match p2_mutation_result(mutations.open_mutating(prepared).await)? {
             NativeOpenResult::Descriptor(descriptor) => Ok(self.table().push(descriptor)?),
@@ -679,12 +736,14 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "remove_directory_at");
         let mutations = self.filesystem_runtime().mutations();
-        let admitted = p2_mutation_result(mutations.admit_remove_directory().await)?;
         let descriptor = self.table().get(&self_)?.clone();
+        let directory = p2_directory(&descriptor)?;
+        validate_directory_mutation(&directory).map_err(p2_native_guest)?;
         let checked = p2_mutation_result(
-            mutations.check_remove_directory_policy(admitted, descriptor, path),
+            mutations
+                .authorize_and_admit_remove_directory(descriptor, path)
+                .await,
         )?;
-        let directory = p2_directory(self.table().get(&self_)?)?;
         let prepared = p2_mutation_result(mutations.prepare_remove_directory(checked, directory))?;
         p2_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
@@ -697,24 +756,23 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_path: String,
     ) -> Result<(), FsError> {
         let mutations = self.filesystem_runtime().mutations();
-        let admitted = p2_mutation_result(mutations.admit_rename().await)?;
         let source_descriptor = self.table().get(&old_fd)?.clone();
-        let source_checked = p2_mutation_result(mutations.check_rename_source_descriptor_policy(
-            admitted,
-            source_descriptor,
-            old_path,
-        ))?;
         let destination_descriptor = self.table().get(&new_fd)?.clone();
-        let destination_checked =
-            p2_mutation_result(mutations.check_rename_destination_descriptor_policy(
-                source_checked,
-                destination_descriptor,
-                new_path,
-            ))?;
-        let checked = p2_mutation_result(mutations.check_rename_path_policy(destination_checked))?;
+        let source_directory = p2_directory(&source_descriptor)?;
+        let destination_directory = p2_directory(&destination_descriptor)?;
+        validate_two_directory_mutation(&source_directory, &destination_directory)
+            .map_err(p2_native_guest)?;
+        let checked = p2_mutation_result(
+            mutations
+                .authorize_and_admit_rename(
+                    source_descriptor,
+                    old_path,
+                    destination_descriptor,
+                    new_path,
+                )
+                .await,
+        )?;
         self.observe_function_call("filesystem::types::descriptor", "rename_at");
-        let source_directory = p2_directory(self.table().get(&old_fd)?)?;
-        let destination_directory = p2_directory(self.table().get(&new_fd)?)?;
         let prepared = p2_mutation_result(mutations.prepare_rename(
             checked,
             source_directory,
@@ -730,13 +788,15 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_path: String,
     ) -> Result<(), FsError> {
         let mutations = self.filesystem_runtime().mutations();
-        let admitted = p2_mutation_result(mutations.admit_symlink().await)?;
         let descriptor = self.table().get(&fd)?.clone();
+        let directory = p2_directory(&descriptor)?;
+        validate_directory_mutation(&directory).map_err(p2_native_guest)?;
         let checked = p2_mutation_result(
-            mutations.check_symlink_policy(admitted, descriptor, old_path, new_path),
+            mutations
+                .authorize_and_admit_symlink(descriptor, old_path, new_path)
+                .await,
         )?;
         self.observe_function_call("filesystem::types::descriptor", "symlink_at");
-        let directory = p2_directory(self.table().get(&fd)?)?;
         let prepared = p2_mutation_result(mutations.prepare_symlink(checked, directory))?;
         p2_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
@@ -747,12 +807,15 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         let mutations = self.filesystem_runtime().mutations();
-        let admitted = p2_mutation_result(mutations.admit_unlink_file().await)?;
         let descriptor = self.table().get(&fd)?.clone();
-        let checked =
-            p2_mutation_result(mutations.check_unlink_file_policy(admitted, descriptor, path))?;
+        let directory = p2_directory(&descriptor)?;
+        validate_directory_mutation(&directory).map_err(p2_native_guest)?;
+        let checked = p2_mutation_result(
+            mutations
+                .authorize_and_admit_unlink_file(descriptor, path)
+                .await,
+        )?;
         self.observe_function_call("filesystem::types::descriptor", "unlink_file_at");
-        let directory = p2_directory(self.table().get(&fd)?)?;
         let prepared = p2_mutation_result(mutations.prepare_unlink_file(checked, directory))?;
         p2_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
