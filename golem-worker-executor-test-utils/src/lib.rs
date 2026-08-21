@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// `store_component_with` in `dsl_impl.rs` is an instrumented async fn whose
+// layout needs more depth than rustc's default of 128. On rustc 1.98 the
+// observed minimum is 129; 256 matches `golem-worker-executor/tests/lib.rs`.
+#![recursion_limit = "256"]
+
 pub mod agent_deployments_service;
 pub mod component_service;
 pub mod component_writer;
