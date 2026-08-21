@@ -201,15 +201,15 @@ impl Drop for Riding {
 /// Whether a connection has been retired, and whether it is also gone.
 ///
 /// Two questions, because they have different answers. Anything that retires a
-/// connection stops it being handed out or installed again. Only a connection
-/// whose transport failed is also gone, and being gone is what releases the
-/// requests already riding it: a status the peer sent back is proof the
-/// transport works, however unwelcome the answer, and cutting those requests
-/// short would cost every one of them a retry.
+/// connection stops it being handed out again. Only a connection whose transport
+/// failed is also gone, and being gone is what releases the requests already
+/// riding it: a status the peer sent back is proof the transport works, however
+/// unwelcome the answer, and cutting those requests short would cost every one
+/// of them a retry.
 ///
-/// Reading only the second question is how a connection one caller had just
-/// evicted came to be installed again by a sibling partway through installing
-/// it.
+/// A guard that reads only the second question reads nothing at all on the
+/// commoner path, which is how a connection one caller had just evicted came to
+/// be handed straight to the next.
 #[derive(Clone)]
 struct Retirement {
     retired: CancellationToken,
@@ -231,11 +231,10 @@ impl Retirement {
     /// Retires the connection, and releases the requests riding it if it is
     /// gone.
     ///
-    /// Callers do this before taking the lock that clears the caches, and an
-    /// installer reads it while holding that lock. So either the retirement
-    /// lands first and the installer refuses, or it lands afterwards and the
-    /// clearing takes out what the installer put in. Reading it before taking
-    /// the lock leaves an interleaving where neither happens.
+    /// Marked before `forget` takes the lock over the cached entry, so a caller
+    /// reading that entry under the lock finds the connection already retired
+    /// rather than reusing one its owner has given up on. The other order leaves
+    /// the reader seeing it live.
     ///
     /// Retired before released, in that order, so a request woken by the
     /// release cannot read this connection as live on its way back for another.
@@ -945,12 +944,8 @@ enum NextAttempt {
     GiveUp,
 }
 
-/// The retry bookkeeping both clients' `call` loops share: decide whether there
-/// is another attempt to make, and record the outcome either way.
-///
-/// Kept in one place because the two loops previously carried byte-identical
-/// copies of it, which is how more than one fix in this area came to be needed
-/// twice.
+/// The retry bookkeeping the `call` loop uses: decide whether there is another
+/// attempt to make, and record the outcome either way.
 struct CallAttempts<'a> {
     retries: RetryState<'a>,
     target_name: &'a str,
@@ -1063,23 +1058,31 @@ fn request_timed_out(e: &Status) -> bool {
     false
 }
 
-/// Whether the connection carrying this request is gone, as opposed to one
-/// request on it having gone wrong.
+/// [`connection_gone`], asked of a status.
 ///
-/// This is a stricter question than [`requires_reconnect`], and deliberately so.
-/// Dropping a connection from the cache costs one reconnect, so it is worth doing
-/// on a hint. Declaring it gone releases every other request riding it, so it
-/// needs to be right.
+/// Only ever asked about one [`requires_reconnect`] has already accepted, so a
+/// request that ran out of its own time cannot reach here: it is excluded there,
+/// once.
+fn connection_is_gone(e: &Status) -> bool {
+    connection_gone(e.code(), has_transport_source(e))
+}
+
+/// Whether the connection carrying a request is gone, as opposed to one request
+/// on it having gone wrong.
 ///
-/// The source alone cannot answer it. `Channel` reports every failure as a
-/// `tonic::transport::Error`, a single reset stream included, so the code is what
-/// separates them. Measured against a real peer: a connect into a blackhole and
-/// an expired keep-alive ping arrive as `Unavailable`, a connection the kernel
-/// gives up on arrives as `Unknown`, and a connection that closes with requests
-/// still on it arrives as `Cancelled` — the commonest of the three, because it is
-/// what killing a busy pod looks like.
+/// A stricter question than [`worth_reconnecting`], deliberately. Dropping a
+/// connection from the cache costs one reconnect, so it is worth doing on a
+/// hint; declaring it gone releases every other request riding it, so it has to
+/// be right.
 ///
-/// `Internal`, `ResourceExhausted` and `PermissionDenied` are left out. tonic
+/// Both halves are needed, because the source alone cannot answer it: `Channel`
+/// reports every failure as a `tonic::transport::Error`, a single reset stream
+/// included, so the code is what separates them. Measured against a real peer, a
+/// connect into a blackhole and an expired keep-alive ping arrive as
+/// `Unavailable`, a connection the kernel gives up on arrives as `Unknown`, and
+/// a connection that closes with requests still on it arrives as `Cancelled` —
+/// the commonest of the three, because it is what killing a busy pod looks like.
+/// `Internal`, `ResourceExhausted` and `PermissionDenied` are left out: tonic
 /// derives those from an HTTP/2 reset, which ends one stream and leaves the
 /// connection carrying everyone else.
 ///
@@ -1088,27 +1091,6 @@ fn request_timed_out(e: &Status) -> bool {
 /// arrives too, so no code tells those two apart. Reading a refused stream as a
 /// dead connection costs a reconnect and a retry, which is the cheaper way to be
 /// wrong.
-/// Whether the connection under this status has failed, as against the peer
-/// having sent an answer back over one that works.
-///
-/// Only ever asked about a status `requires_reconnect` has already accepted, so
-/// a request that ran out of its own time cannot reach here: that is excluded
-/// there, once. Excluding it twice only hid which of the two was doing the work,
-/// and the second copy could not be shown to matter either way.
-fn connection_is_gone(e: &Status) -> bool {
-    connection_gone(e.code(), has_transport_source(e))
-}
-
-/// Whether a status describes the connection under it having failed, rather than
-/// an answer the peer sent back over one that works.
-///
-/// Both halves are needed. Measured against a real peer, a blackholed connect
-/// and an expired keep-alive ping arrive as `Unavailable`, a connection the
-/// kernel gives up on arrives as `Unknown`, and a connection closing with
-/// requests still on it arrives as `Cancelled`. The codes tonic derives from an
-/// HTTP/2 reset — `Internal`, `ResourceExhausted`, `PermissionDenied` — each end
-/// one stream and leave the connection carrying everybody else, and they arrive
-/// with a transport error attached just the same.
 fn connection_gone(code: Code, transport_failed: bool) -> bool {
     matches!(code, Code::Unavailable | Code::Unknown | Code::Cancelled) && transport_failed
 }
@@ -1229,7 +1211,7 @@ mod test {
     }
 
     /// Counts how many times the client factory ran, which is once per
-    /// connection actually installed.
+    /// connection established.
     fn counting_client() -> (MultiTargetGrpcClient<()>, Arc<AtomicU64>) {
         let built = Arc::new(AtomicU64::new(0));
         let counter = built.clone();
