@@ -355,9 +355,6 @@ pub async fn run(
     phases.fault = Some(PhaseWindow::started(injected.injected_at));
 
     let on_pod: BTreeSet<String> = chosen.on_pod.iter().cloned().collect();
-    let parked = parked_at_injection(&history.snapshot(), injected.injected_at, &on_pod);
-    attention_extra.push(parked.note());
-    info!("S11: {}", parked.describe());
 
     let recovered = match signals.await_fault_recovered(config.signal_timeout()).await {
         Ok(recovered) => recovered,
@@ -399,6 +396,15 @@ pub async fn run(
     tokio::time::sleep(settle).await;
 
     let records = history.snapshot();
+
+    // Only now, with every `wait` record landed, can the parked population be
+    // counted — see [`parked_at_injection`].
+    if let Some(injected_at) = fault_injected_at {
+        let parked = parked_at_injection(&records, injected_at, &on_pod);
+        attention_extra.push(parked.note());
+        info!("S11: {}", parked.describe());
+    }
+
     let logs = waiters::read_logs(&ctx, &waiter_names).await;
     // Archived alongside the operations, not just reduced into the report: the
     // reduced numbers cannot be recomputed later, and a correction to how a
@@ -476,9 +482,12 @@ impl ParkedAtInjection {
     /// Whether the kill landed anywhere near the mechanism under test.
     ///
     /// A run that caught nothing parked proves nothing however clean the rest of
-    /// its numbers look, which is the one thing here a human has to act on.
+    /// its numbers look, which is the one thing here a human has to act on. So
+    /// does a run that caught waiters but none of them *on the pod it killed*:
+    /// the affected group would be empty and every number in the report would
+    /// describe an undisturbed cluster.
     pub fn needs_attention(&self) -> bool {
-        self.total == 0
+        self.total == 0 || self.on_killed_executor == 0
     }
 
     /// The same line as [`Self::describe`], classified.
@@ -491,6 +500,14 @@ impl ParkedAtInjection {
             return "WARNING: no waiter was suspended on a promise when the executor died, so \
                     this run says nothing about promise-completion recovery"
                 .to_string();
+        }
+        if self.on_killed_executor == 0 {
+            return format!(
+                "WARNING: {} waiters were suspended when the executor died but none of them \
+                 were on it, so the affected group is empty and this run says nothing about \
+                 promise-completion recovery",
+                self.total
+            );
         }
         format!(
             "S11 killed the executor with {} waiters suspended on promises, {} of them on \
@@ -506,6 +523,13 @@ impl ParkedAtInjection {
 /// returned by then. Not derived from the round arithmetic, because a platform
 /// that had slowed down would have armed fewer rounds than the cadence says, and
 /// the whole point of this number is to say whether the kill landed in anything.
+///
+/// **This must be computed from the finished history, not from a snapshot taken
+/// at injection time.** [`crate::chaos::workload::run_operation`] appends a
+/// record only once the operation has completed, so a snapshot taken at the
+/// moment of the kill contains none of the invocations that were open across it
+/// — which is precisely the population being counted. The first S11 run reported
+/// 5 waiters parked when 200 were, and read as a run that had tested nothing.
 pub fn parked_at_injection(
     records: &[OperationRecord],
     injected_at: DateTime<Utc>,
@@ -606,6 +630,20 @@ mod tests {
         let records = vec![wait_record("w-1", 90, None)];
         let on_pod = BTreeSet::new();
         assert_eq!(parked_at_injection(&records, at(100), &on_pod).total, 1);
+    }
+
+    /// A kill that caught waiters but none of its *own* is exactly as
+    /// uninformative as one that caught none at all — the affected group is
+    /// empty either way — and the first completed S11 run reported this shape as
+    /// ordinary context because the rule only looked at the total.
+    #[test]
+    fn a_kill_that_caught_none_of_its_own_waiters_needs_attention() {
+        let parked = ParkedAtInjection {
+            total: 200,
+            on_killed_executor: 0,
+        };
+        assert!(parked.needs_attention());
+        assert!(parked.describe().contains("none of them"));
     }
 
     #[test]
