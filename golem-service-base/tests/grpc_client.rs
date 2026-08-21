@@ -356,6 +356,44 @@ async fn serve_silent_peer() -> TestPeer {
     }
 }
 
+/// A peer that speaks HTTP/2 and resets every stream it is sent, for a reason of
+/// the caller's choosing.
+///
+/// RST_STREAM ends one stream and leaves the connection carrying every other
+/// request on it, which is the whole point: a client that tears the connection
+/// down over one takes all of those with it.
+async fn serve_resetting_peer(reason: h2::Reason) -> TestPeer {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let counter = connections.clone();
+    let server = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            held.push(tokio::spawn(async move {
+                let Ok(mut connection) = h2::server::handshake(socket).await else {
+                    return;
+                };
+                while let Some(Ok((_request, mut respond))) = connection.accept().await {
+                    respond.send_reset(reason);
+                }
+            }));
+        }
+        for task in held {
+            task.abort();
+        }
+    });
+
+    TestPeer {
+        addr,
+        connections,
+        shutdown: None,
+        server,
+    }
+}
+
 /// The marker the parent sets on the child it spawns in [`delegated_to_namespace`].
 const IN_OWN_NAMESPACE: &str = "GOLEM_TEST_NET_NAMESPACE";
 
@@ -1389,5 +1427,56 @@ async fn a_request_timeout_does_not_tear_down_the_shared_connection() {
         connections, 1,
         "a request timeout was treated as a dead connection: the second call \
          reconnected instead of reusing the channel"
+    );
+}
+
+/// A reset stream must not take down the connection carrying it.
+///
+/// tonic derives a gRPC code from the reason an HTTP/2 reset carries and then
+/// attaches the `tonic::transport::Error` the reset arrived in, so by source
+/// alone the result is indistinguishable from what a dead connection produces.
+/// Reading only the source, as this once did, rebuilt a channel every other
+/// caller was sharing because one stream had been reset.
+///
+/// Measured against the real mapping rather than reasoned about, because the
+/// chain is long enough to get wrong: `Channel::ResponseFuture` wraps the error
+/// in `transport::Error`, `Status::try_from_error` fails to downcast that to
+/// `h2::Error` and falls through to `find_status_in_source_chain`, which reaches
+/// the nested `hyper::Error` and from there `Status::code_from_h2`, and the
+/// outer `transport::Error` is then attached as the source. Stopping at the
+/// failed downcast is how this was first written off as unreachable.
+#[test]
+async fn a_reset_stream_does_not_tear_down_the_connection_carrying_it() {
+    // What a peer under load sends. tonic maps it to ResourceExhausted, which is
+    // neither Unavailable nor anything a dead connection reports.
+    let peer = serve_resetting_peer(h2::Reason::ENHANCE_YOUR_CALM).await;
+    let uri: Uri = format!("http://{}", peer.addr).parse().unwrap();
+    let client = executor_client(no_keepalive(Duration::from_secs(5)));
+
+    let first = ping(&client, uri.clone())
+        .await
+        .expect_err("the peer resets every stream it is sent");
+    eprintln!("[RESET] first call: {:?} - {}", first.code(), first.message());
+    assert_eq!(
+        first.code(),
+        tonic::Code::ResourceExhausted,
+        "expected the code tonic derives from the reset reason; if this has \
+         changed, the predicate under test is guarding the wrong set of codes"
+    );
+    assert!(
+        std::error::Error::source(&first)
+            .map(|source| source.is::<tonic::transport::Error>())
+            .unwrap_or(false),
+        "expected a transport error under the status, which is what made \
+         reading the source alone look like enough"
+    );
+
+    let _ = ping(&client, uri).await;
+    let connections = peer.connections.load(std::sync::atomic::Ordering::SeqCst);
+    eprintln!("[RESET] connections opened across two reset calls: {connections}");
+    assert_eq!(
+        connections, 1,
+        "a reset stream was read as a dead connection: the second call opened a \
+         new one instead of reusing the channel every other request rides"
     );
 }

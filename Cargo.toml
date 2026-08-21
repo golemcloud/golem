@@ -121,6 +121,7 @@ git-version = "0.3.9"
 glob-match = "0.2.1"
 goldenfile = "1.8.0"
 governor = { version = "0.10.4", features = ["std"], default-features = false }
+h2 = "0.4.13"
 half = "2"
 headers = "0.4.0"
 heck = "0.5.0"

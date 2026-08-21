@@ -4031,6 +4031,7 @@ dependencies = [
  "golem-common",
  "golem-wasm",
  "golem-wasm-derive",
+ "h2 0.4.13",
  "headers",
  "hex",
  "hmac",
