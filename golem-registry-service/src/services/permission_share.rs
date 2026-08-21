@@ -26,7 +26,7 @@ use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     AccountPermissionShareResourcePattern, AccountPermissionShareVerb, Card, CardAlgebraError,
     CardId, CardManagedBy, CardManagedByPermissionShare, CardParseError, ClassPermissionTarget,
-    DelegationSurface, PermissionPattern, PermissionTarget,
+    DelegationSurface, PermissionPattern, PermissionTarget, parse_permission_grant,
 };
 use golem_common::model::permission_share::{
     PermissionShare, PermissionShareCreation, PermissionShareData, PermissionShareId,
@@ -34,7 +34,6 @@ use golem_common::model::permission_share::{
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use std::str::FromStr;
 use std::sync::Arc;
 
 const MAX_CARD_TREE_DELETE_ATTEMPTS: usize = 5;
@@ -562,12 +561,15 @@ fn parse_and_validate_grants(
     grants
         .iter()
         .map(|grant| {
-            let permission =
-                PermissionPattern::from_str(grant).map_err(|err| invalid_grant(grant, err))?;
-            validate_recipient(permission.recipient(), target_account)?;
-            Ok(permission)
+            let permissions =
+                parse_permission_grant(grant).map_err(|err| invalid_grant(grant, err))?;
+            for permission in &permissions {
+                validate_recipient(permission.recipient(), target_account)?;
+            }
+            Ok(permissions)
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()
+        .map(|permissions| permissions.into_iter().flatten().collect())
 }
 
 fn validate_recipient(

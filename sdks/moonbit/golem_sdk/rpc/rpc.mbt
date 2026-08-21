@@ -197,17 +197,15 @@ pub fn AgentClient::schedule_invocation(
   function_name : String,
   input : @types.SchemaValueTree,
 ) -> ScheduledInvocationReceipt {
-  let value = self.rpc.schedule_invocation(
-    scheduled_at,
-    function_name,
-    input,
-    None,
-  )
-  {
-    metadata: {
-      agent_id: value.metadata.agent_id,
-      idempotency_key: value.metadata.idempotency_key,
-    },
+  match self.rpc.schedule_invocation(scheduled_at, function_name, input, None) {
+    Ok(value) =>
+      {
+        metadata: {
+          agent_id: value.metadata.agent_id,
+          idempotency_key: value.metadata.idempotency_key,
+        },
+      }
+    Err(e) => panic_on_rpc_error(e)
   }
 }
 
@@ -218,18 +216,22 @@ pub fn AgentClient::schedule_cancelable_invocation(
   function_name : String,
   input : @types.SchemaValueTree,
 ) -> CancelableScheduledInvocationReceipt {
-  let value = self.rpc.schedule_cancelable_invocation(
-    scheduled_at,
-    function_name,
-    input,
-    None,
-  )
-  {
-    metadata: {
-      agent_id: value.metadata.agent_id,
-      idempotency_key: value.metadata.idempotency_key,
-    },
-    cancellation_token: value.cancellation_token,
+  match
+    self.rpc.schedule_cancelable_invocation(
+      scheduled_at,
+      function_name,
+      input,
+      None,
+    ) {
+    Ok(value) =>
+      {
+        metadata: {
+          agent_id: value.metadata.agent_id,
+          idempotency_key: value.metadata.idempotency_key,
+        },
+        cancellation_token: value.cancellation_token,
+      }
+    Err(e) => panic_on_rpc_error(e)
   }
 }
 

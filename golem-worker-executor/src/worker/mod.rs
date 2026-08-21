@@ -40,7 +40,7 @@ use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR};
 use crate::services::oplog::plugin::ForwardingOplog;
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps, downcast_oplog};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService, downcast_oplog};
 use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
@@ -74,10 +74,10 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
+    AgentError, OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
+use golem_common::model::worker::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
     AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId, PendingInvocationRef,
@@ -108,6 +108,47 @@ use wasmtime::{Store, StoreMemory, UpdateDeadline};
 pub const PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT: &str =
     "permission card transfer payload conflict";
 pub const PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH: &str = "install-recipient-mismatch";
+
+pub async fn resolve_revert_last_invocations(
+    oplog_service: &dyn OplogService,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    number_of_invocations: u64,
+) -> Result<ResolvedRevert, WorkerExecutorError> {
+    let observed_oplog_index = oplog_service
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
+    let mut current = observed_oplog_index;
+    let mut found = 0;
+
+    loop {
+        let entries = oplog_service
+            .read(owned_agent_id, agent_mode, current, 1)
+            .await;
+        let entry = entries.get(&current).ok_or_else(|| {
+            WorkerExecutorError::invalid_request(format!(
+                "Could not read oplog entry {current} while resolving revert"
+            ))
+        })?;
+
+        if matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
+            found += 1;
+            if found == number_of_invocations {
+                return Ok(ResolvedRevert {
+                    last_oplog_index: current.previous(),
+                    observed_oplog_index,
+                });
+            }
+        }
+
+        if current == OplogIndex::INITIAL {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "Could not find {number_of_invocations} invocations to revert"
+            )));
+        }
+        current = current.previous();
+    }
+}
 
 /// Resolved read-only `AgentMethod` invocation data needed to build the
 /// cache key and entry.
@@ -332,6 +373,9 @@ pub struct Worker<Ctx: WorkerCtx> {
     card_interest_index: Arc<CardInterestIndex>,
     /// Serializes permission-card event appends with the durable boundaries that consume them.
     card_event_boundary_lock: Arc<Mutex<()>>,
+    /// Release-published by the status actor after committed card authority
+    /// entries are folded into worker status.
+    published_authority_generation: Arc<AtomicU64>,
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<Mutex<WorkerInstance>>,
@@ -728,6 +772,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         );
 
         let all_deps = All::from_other(deps);
+        // Start stale so a newly restored store must reconcile status/oplog
+        // authority before it can use lock-free host-call authorization.
+        let published_authority_generation = Arc::new(AtomicU64::new(1));
 
         let state_actor = state_actor::WorkerStateActor::new(
             all_deps.clone(),
@@ -739,6 +786,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status_detached.clone(),
             metrics_status.clone(),
             status_flusher.clone(),
+            published_authority_generation.clone(),
             instance.clone(),
         );
 
@@ -769,6 +817,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             metrics_status,
             card_interest_index,
             card_event_boundary_lock: Arc::new(Mutex::new(())),
+            published_authority_generation,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
             state_actor,
@@ -1726,7 +1775,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     // should only be called from invocation loop
     pub async fn store_invocation_failure(&self, key: &IdempotencyKey, trap_type: &TrapType) {
         let status = self.last_known_status.load_full().as_ref().clone();
-        let keys_to_fail = invocation_keys_to_fail(&status, Some(key));
+        let keys_to_fail =
+            invocation_keys_to_fail(&status, Some(key), !trap_type.is_invocation_rejection());
         let stderr = self.worker_event_service.get_last_invocation_errors();
         let golem_error = trap_type.as_golem_error(&stderr);
         let mut map = self.invocation_results.write().await;
@@ -2371,6 +2421,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 return Err(err.clone());
             }
 
+            if let Some(idempotency_key) = invocation.idempotency_key() {
+                let has_result = self
+                    .invocation_results
+                    .read()
+                    .await
+                    .contains_key(idempotency_key);
+                let status = self.last_known_status.load();
+                let is_pending = status
+                    .pending_invocations
+                    .iter()
+                    .any(|entry| entry.has_idempotency_key(idempotency_key));
+                let is_current = status.current_idempotency_key.as_ref() == Some(idempotency_key);
+                if has_result || is_pending || is_current {
+                    return Ok(None);
+                }
+            }
+
             let (idempotency_key, invocation_payload, invocation_context) = invocation.into_parts();
             let invocation_context = invocation_context
                 .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
@@ -2772,6 +2839,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.card_event_boundary_lock.clone()
     }
 
+    pub(crate) fn published_authority_generation(&self) -> Arc<AtomicU64> {
+        self.published_authority_generation.clone()
+    }
+
     async fn add_and_commit_oplog_internal(
         &self,
         instance_guard: &MutexGuard<'_, WorkerInstance>,
@@ -2853,25 +2924,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// The revert operations is implemented by inserting a special oplog entry that
     /// extends the worker's deleted oplog regions, skipping entries from the end of the oplog.
-    pub async fn revert(&self, target: RevertWorkerTarget) -> Result<(), WorkerExecutorError> {
+    pub async fn revert(
+        &self,
+        target: RevertWorkerTarget,
+        resolved_revert: Option<ResolvedRevert>,
+    ) -> Result<(), WorkerExecutorError> {
         match target {
             RevertWorkerTarget::RevertToOplogIndex(target) => {
-                self.revert_to_last_oplog_index(target.last_oplog_index)
+                if resolved_revert.is_some() {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "Resolved revert must only be supplied for a count-based revert",
+                    ));
+                }
+                self.revert_to_last_oplog_index(target.last_oplog_index, None)
                     .await
             }
-            RevertWorkerTarget::RevertLastInvocations(target) => {
-                if let Some(last_oplog_index) = self
-                    .find_nth_invocation_from_end(target.number_of_invocations as usize)
-                    .await
-                {
-                    self.revert_to_last_oplog_index(last_oplog_index.previous())
-                        .await
-                } else {
-                    Err(WorkerExecutorError::invalid_request(format!(
-                        "Could not find {} invocations to revert",
-                        target.number_of_invocations
-                    )))
-                }
+            RevertWorkerTarget::RevertLastInvocations(_) => {
+                let resolved_revert = resolved_revert.ok_or_else(|| {
+                    WorkerExecutorError::invalid_request(
+                        "Count-based revert requires a resolved cutoff",
+                    )
+                })?;
+                self.revert_to_last_oplog_index(
+                    resolved_revert.last_oplog_index,
+                    Some(resolved_revert.observed_oplog_index),
+                )
+                .await
             }
         }
     }
@@ -2899,31 +2977,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(())
     }
 
-    /// Starting from the end of the oplog, find the Nth AgentInvocationStarted entry's index.
-    async fn find_nth_invocation_from_end(&self, n: usize) -> Option<OplogIndex> {
-        let mut current = self.oplog.current_oplog_index().await;
-        let mut found = 0;
-        loop {
-            let entry = self.oplog.read(current).await;
-
-            if matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
-                found += 1;
-                if found == n {
-                    return Some(current);
-                }
-            }
-
-            if current == OplogIndex::INITIAL {
-                return None;
-            } else {
-                current = current.previous();
-            }
-        }
-    }
-
     async fn revert_to_last_oplog_index(
         &self,
         last_oplog_index: OplogIndex,
+        expected_oplog_index: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
         if last_oplog_index == OplogIndex::NONE {
             return Err(WorkerExecutorError::invalid_request(
@@ -2943,6 +3000,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         let region_end = self.oplog.current_oplog_index().await;
+        if let Some(expected_oplog_index) = expected_oplog_index
+            && region_end != expected_oplog_index
+        {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "Stale count-based revert resolution: expected oplog index {expected_oplog_index}, found {region_end}"
+            )));
+        }
         let region_start = last_oplog_index.next();
         let last_known_status = self.get_latest_worker_metadata().await.last_known_status;
 
@@ -3294,7 +3358,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         let status = self.last_known_status.load_full().as_ref().clone();
-        let keys_to_fail = invocation_keys_to_fail(&status, None);
+        let keys_to_fail = invocation_keys_to_fail(&status, None, true);
 
         let mut invocation_results = self.invocation_results.write().await;
         for idempotency_key in &keys_to_fail {
@@ -4885,6 +4949,18 @@ fn lookup_result_from_cached_result(
         InvocationResult::Cached {
             result:
                 Err(FailedInvocationResult {
+                    trap_type:
+                        TrapType::Error {
+                            error: AgentError::PermissionDenied(details),
+                            ..
+                        },
+                    ..
+                }),
+            ..
+        } => LookupResult::Complete(Err(WorkerExecutorError::permission_denied(details))),
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
                     trap_type: TrapType::Error { error, .. },
                     stderr,
                 }),
@@ -4907,7 +4983,6 @@ fn lookup_result_from_cached_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::oplog::AgentError;
     use test_r::test;
 
     #[test]
@@ -5071,6 +5146,57 @@ mod tests {
             }
             other => panic!("expected terminal lookup failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn reconstructed_permission_denial_keeps_its_executor_error_type() {
+        let key = IdempotencyKey::fresh();
+        let lookup = lookup_result_from_cached_result(
+            &AgentStatusRecord::default(),
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult {
+                    trap_type: TrapType::Error {
+                        error: AgentError::PermissionDenied("permission denied".to_string()),
+                        retry_from: OplogIndex::from_u64(17),
+                        in_atomic_region: false,
+                        atomic_region_had_side_effects: false,
+                        semantic_trap_retry_override: None,
+                    },
+                    stderr: String::new(),
+                }),
+            },
+        );
+
+        assert!(matches!(
+            lookup,
+            LookupResult::Complete(Err(WorkerExecutorError::PermissionDenied { details }))
+                if details == "permission denied"
+        ));
+    }
+
+    #[test]
+    fn invocation_rejection_fails_only_the_rejected_pending_key() {
+        let rejected = IdempotencyKey::fresh();
+        let still_pending = IdempotencyKey::fresh();
+        let status = AgentStatusRecord {
+            pending_invocations: vec![PendingInvocationRef {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::from_u64(2),
+                idempotency_key: Some(still_pending.clone()),
+                manual_update_target_revision: None,
+            }],
+            ..AgentStatusRecord::default()
+        };
+
+        assert_eq!(
+            invocation_keys_to_fail(&status, Some(&rejected), false),
+            vec![rejected]
+        );
+        assert_eq!(
+            invocation_keys_to_fail(&status, None, true),
+            vec![still_pending]
+        );
     }
 
     #[test]
@@ -5287,11 +5413,16 @@ fn is_snapshot_capable_oplog_processor(
 fn invocation_keys_to_fail(
     status: &AgentStatusRecord,
     first_key: Option<&IdempotencyKey>,
+    include_pending_and_current: bool,
 ) -> Vec<IdempotencyKey> {
     let mut keys = Vec::new();
 
     if let Some(key) = first_key {
         keys.push(key.clone());
+    }
+
+    if !include_pending_and_current {
+        return keys;
     }
 
     for pending_key in status

@@ -957,6 +957,72 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
 }
 
 #[test]
+async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
+    let card_id = CardId::new();
+    let mut card = stored_test_card(card_id);
+    let StoredCard::Concrete(card_data) = &mut card else {
+        unreachable!("the test fixture always creates a concrete card");
+    };
+    card_data.expires_at = Some(chrono::DateTime::UNIX_EPOCH);
+
+    // ReplayState's complete input is this oplog. In particular, it has no clock, card service,
+    // effective surface, or authorization callback. An already-expired card therefore remains a
+    // recorded installation until a recorded removal is encountered, and cannot invalidate the
+    // recorded successful operation that follows it.
+    let rs = replay_state_over(vec![
+        noop(),
+        OplogEntry::CardInstalled {
+            timestamp: Timestamp::now_utc(),
+            queued_event_index: None,
+            card: card.clone(),
+            wallet_generation: Some(7),
+        },
+        custom_start("durable-operation", 41, None, 1),
+        custom_end(3, 42),
+    ])
+    .await;
+
+    let claimed = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("durable-operation".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            Uuid::from_u128(1),
+            &custom_request(41),
+        )
+        .await
+        .expect("recorded durable operation must be claimable");
+    match rs
+        .await_resolution_outcome(claimed.handle)
+        .await
+        .expect("recorded durable operation must resolve")
+    {
+        ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
+            assert_eq!(
+                response,
+                Some(OplogPayload::Inline(Box::new(HostResponse::Custom(
+                    42.into_typed_schema_value().unwrap(),
+                ))))
+            );
+        }
+        other => panic!("expected the recorded successful result, got {other:?}"),
+    }
+
+    assert!(rs.is_live());
+    assert_eq!(
+        rs.take_new_replay_events(),
+        vec![
+            ReplayEvent::CardInstalled {
+                card,
+                wallet_generation: Some(7),
+            },
+            ReplayEvent::ReplayFinished,
+        ],
+        "replay must preserve recorded admission state and must not synthesize expiry"
+    );
+}
+
+#[test]
 async fn permission_events_are_recovered_from_skipped_regions() {
     let transfer_id = Uuid::new_v4();
     let source_card_id = CardId::new();

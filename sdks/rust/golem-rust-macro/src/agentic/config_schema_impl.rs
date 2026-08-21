@@ -90,7 +90,7 @@ fn generate_config_schema_impl(
                 #field_ident: {
                     let mut field_path = path.to_vec();
                     field_path.push(#field_name_str.to_string());
-                    <#field_ty as #golem_rust_crate_ident::agentic::ConfigSchema>::load(&field_path)
+                    <#field_ty as #golem_rust_crate_ident::agentic::ConfigSchema>::load(&field_path)?
                 }
             });
         } else if has_secret_attr(field) {
@@ -137,7 +137,7 @@ fn generate_config_schema_impl(
                     let value = #golem_rust_crate_ident::golem_agentic::golem::agent::host::get_config_value(
                         &field_path,
                         &#golem_rust_crate_ident::encode_schema_graph(&graph).expect("failed to encode config schema graph"),
-                    );
+                    )?;
                     let value = #golem_rust_crate_ident::decode_schema_value(value)
                         .expect("failed to decode config schema value");
                     #golem_rust_crate_ident::schema::FromSchema::from_value(&value)
@@ -157,10 +157,10 @@ fn generate_config_schema_impl(
                 config_entries
             }
 
-            fn load(path: &[String]) -> Self {
-                Self {
+            fn load(path: &[String]) -> Result<Self, #golem_rust_crate_ident::agentic::ConfigValueError> {
+                Ok(Self {
                     #(#load_entries),*
-                }
+                })
             }
         }
     }

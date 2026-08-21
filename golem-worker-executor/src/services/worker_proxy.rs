@@ -36,7 +36,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
+use golem_common::model::worker::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
     InvocationStatus, OwnedAgentId, PromiseId,
@@ -59,6 +59,7 @@ pub trait WorkerProxy: Send + Sync {
     async fn start(
         &self,
         owned_agent_id: &OwnedAgentId,
+        method_name: &str,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -123,6 +124,7 @@ pub trait WorkerProxy: Send + Sync {
         &self,
         agent_id: &AgentId,
         target: RevertWorkerTarget,
+        resolved_revert: Option<ResolvedRevert>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError>;
 
@@ -280,6 +282,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn start(
         &self,
         owned_agent_id: &OwnedAgentId,
+        method_name: &str,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -306,6 +309,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     principal: Some(principal.clone().into()),
+                    method_name: Some(method_name.to_string()),
                 }))
             })
             .await?
@@ -618,6 +622,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         agent_id: &AgentId,
         target: RevertWorkerTarget,
+        resolved_revert: Option<ResolvedRevert>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         let response: RevertWorkerResponse = self
@@ -627,6 +632,12 @@ impl WorkerProxy for RemoteWorkerProxy {
                     agent_id: Some(agent_id.clone().into()),
                     target: Some(target.clone().into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    resolved_revert: resolved_revert.clone().map(|resolved| {
+                        golem_api_grpc::proto::golem::common::ResolvedRevert {
+                            last_oplog_index: resolved.last_oplog_index.as_u64(),
+                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
+                        }
+                    }),
                 }))
             })
             .await?

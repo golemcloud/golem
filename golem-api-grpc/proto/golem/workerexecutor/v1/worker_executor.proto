@@ -50,6 +50,7 @@ service WorkerExecutor {
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
   rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
   rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
+  rpc ResolveRevertLastInvocations(ResolveRevertLastInvocationsRequest) returns (ResolveRevertLastInvocationsResponse);
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
   rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
 
@@ -444,6 +445,21 @@ message RevertWorkerRequest {
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
   optional golem.component.Principal principal = 5;
+  optional golem.common.ResolvedRevert resolved_revert = 6;
+}
+
+message ResolveRevertLastInvocationsRequest {
+  golem.worker.AgentId agent_id = 1;
+  uint64 number_of_invocations = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
+message ResolveRevertLastInvocationsResponse {
+  oneof result {
+    golem.common.ResolvedRevert success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
 }
 
 message RevertWorkerResponse {

@@ -560,6 +560,24 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
             AgentResourcePattern::OplogIndex(42),
             true,
         ),
+        (
+            "agent_any_subsumes_empty",
+            AgentResourcePattern::Any,
+            AgentResourcePattern::Empty,
+            true,
+        ),
+        (
+            "agent_empty_only_subsumes_empty",
+            AgentResourcePattern::Empty,
+            AgentResourcePattern::Empty,
+            true,
+        ),
+        (
+            "agent_empty_does_not_subsume_method",
+            AgentResourcePattern::Empty,
+            AgentResourcePattern::Method(AgentMethodName("charge".to_string())),
+            false,
+        ),
     ];
 
     for (name, left, right, expected) in agent_cases {

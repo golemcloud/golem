@@ -64,6 +64,7 @@ pub trait Rpc: Send + Sync {
     async fn create_demand(
         &self,
         owned_agent_id: &OwnedAgentId,
+        method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -302,6 +303,7 @@ impl Rpc for RemoteInvocationRpc {
     async fn create_demand(
         &self,
         owned_agent_id: &OwnedAgentId,
+        method_name: &str,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -317,6 +319,7 @@ impl Rpc for RemoteInvocationRpc {
             .worker_proxy
             .start(
                 owned_agent_id,
+                method_name,
                 self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
@@ -822,6 +825,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn create_demand(
         &self,
         owned_agent_id: &OwnedAgentId,
+        method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -837,16 +841,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .is_ok()
         {
             debug!(target_agent_id = %owned_agent_id, "Ensuring local target worker exists");
-
-            self.direct_invocation_auth
-                .check(
-                    self_created_by,
-                    owned_agent_id,
-                    AgentVerb::Invoke,
-                    AgentResourcePattern::Any,
-                    auth_ctx,
-                )
-                .await?;
 
             let worker = Worker::get_or_create_running(
                 self,
@@ -871,6 +865,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             self.remote_rpc
                 .create_demand(
                     owned_agent_id,
+                    method_name,
                     self_created_by,
                     self_agent_id,
                     self_env,

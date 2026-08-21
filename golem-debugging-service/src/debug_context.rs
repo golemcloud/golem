@@ -451,7 +451,7 @@ impl HostWasmRpc for DebugContext {
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
         scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<ScheduledInvocationReceipt> {
+    ) -> anyhow::Result<Result<ScheduledInvocationReceipt, RpcError>> {
         self.durable_ctx
             .schedule_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
@@ -464,7 +464,7 @@ impl HostWasmRpc for DebugContext {
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
         scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
+    ) -> anyhow::Result<Result<CancelableScheduledInvocationReceipt, RpcError>> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await

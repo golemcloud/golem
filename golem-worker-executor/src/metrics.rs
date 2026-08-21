@@ -900,6 +900,24 @@ pub mod wasm {
             "Number of live custom-durability ownership scopes opened"
         )
         .unwrap();
+        static ref AGENT_PERMISSION_AUTHORIZATION_TOTAL: CounterVec = register_counter_vec!(
+            "agent_permission_authorization_total",
+            "Number of live host-call permission authorization decisions",
+            &["permission_class", "outcome"]
+        )
+        .unwrap();
+        static ref AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL: CounterVec = register_counter_vec!(
+            "agent_permission_authority_sync_total",
+            "Number of host-call authority boundary checks by path",
+            &["path"]
+        )
+        .unwrap();
+        static ref AGENT_PERMISSION_AUTHORITY_SYNC_SECONDS: Histogram = register_histogram!(
+            "agent_permission_authority_sync_seconds",
+            "Time spent refreshing host-call permission authority on the slow path",
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
     }
 
     pub fn record_host_function_call(iface: &str, name: &str) {
@@ -915,6 +933,25 @@ pub mod wasm {
 
     pub fn record_custom_invocation_scope_open() {
         CUSTOM_INVOCATION_SCOPE_OPEN_TOTAL.inc();
+    }
+
+    pub fn record_agent_permission_authorization(permission_class: &str, allowed: bool) {
+        AGENT_PERMISSION_AUTHORIZATION_TOTAL
+            .with_label_values(&[permission_class, if allowed { "allowed" } else { "denied" }])
+            .inc();
+    }
+
+    pub fn record_agent_permission_authority_fast_path() {
+        AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL
+            .with_label_values(&["fast"])
+            .inc();
+    }
+
+    pub fn record_agent_permission_authority_slow_path(duration: Duration) {
+        AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL
+            .with_label_values(&["slow"])
+            .inc();
+        AGENT_PERMISSION_AUTHORITY_SYNC_SECONDS.observe(duration.as_secs_f64());
     }
 
     pub fn record_resume_worker(duration: Duration) {

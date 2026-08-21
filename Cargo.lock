@@ -203,6 +203,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c757e77a2f5cc274e130a69db2159a6ae82cc6543b0d13f4a71e6671142a8d59"
 
 [[package]]
+name = "ar_archive_writer"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73cd58deff2140a0a8eae87e417bd01db68a33e148aa93d1e8cd837e55e312b6"
+dependencies = [
+ "object 0.39.1",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1686,7 +1695,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -1966,7 +1975,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cranelift-assembler-x64-meta",
 ]
@@ -1974,7 +1983,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64-meta"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cranelift-srcgen",
 ]
@@ -1982,7 +1991,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bforest"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cranelift-entity",
  "wasmtime-internal-core",
@@ -1991,7 +2000,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bitset"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "serde",
  "serde_derive",
@@ -2001,7 +2010,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "bumpalo",
  "cranelift-assembler-x64",
@@ -2031,7 +2040,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-meta"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cranelift-assembler-x64-meta",
  "cranelift-codegen-shared",
@@ -2043,12 +2052,12 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-shared"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 
 [[package]]
 name = "cranelift-control"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "arbitrary",
 ]
@@ -2056,7 +2065,7 @@ dependencies = [
 [[package]]
 name = "cranelift-entity"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cranelift-bitset",
  "serde",
@@ -2067,7 +2076,7 @@ dependencies = [
 [[package]]
 name = "cranelift-frontend"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cranelift-codegen",
  "hashbrown 0.17.1",
@@ -2079,12 +2088,12 @@ dependencies = [
 [[package]]
 name = "cranelift-isle"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 
 [[package]]
 name = "cranelift-native"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cranelift-codegen",
  "libc",
@@ -2094,7 +2103,7 @@ dependencies = [
 [[package]]
 name = "cranelift-srcgen"
 version = "0.133.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 
 [[package]]
 name = "crc"
@@ -4358,6 +4367,7 @@ dependencies = [
  "scc",
  "serde",
  "serde_json",
+ "sqlparser",
  "sqlx",
  "sqlx-core",
  "sysinfo",
@@ -4980,7 +4990,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -6555,7 +6565,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.21.7",
  "chrono",
  "getrandom 0.2.17",
  "http 1.4.0",
@@ -7652,7 +7662,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "petgraph 0.8.3",
@@ -7673,7 +7683,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -7686,7 +7696,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -7761,6 +7771,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "psm"
+version = "0.1.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622"
+dependencies = [
+ "ar_archive_writer",
+ "cc",
+]
+
+[[package]]
 name = "ptr_meta"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7812,7 +7832,7 @@ dependencies = [
 [[package]]
 name = "pulley-interpreter"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cranelift-bitset",
  "log",
@@ -7823,7 +7843,7 @@ dependencies = [
 [[package]]
 name = "pulley-macros"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7868,7 +7888,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.37",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -7906,7 +7926,7 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -8080,6 +8100,26 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "recursive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0786a43debb760f491b1bc0269fe5e84155353c67482b9e60d0cfb596054b43e"
+dependencies = [
+ "recursive-proc-macro-impl",
+ "stacker",
+]
+
+[[package]]
+name = "recursive-proc-macro-impl"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76009fbe0614077fc1a2ce255e3a1881a2e3a3527097d5dc6d8212c585e7e38b"
+dependencies = [
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -9480,6 +9520,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlparser"
+version = "0.62.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13c6d1b651dc4edf07eead2a0c6c78016ce971bc2c10da5266861b13f25e7cec"
+dependencies = [
+ "log",
+ "recursive",
+ "sqlparser_derive",
+]
+
+[[package]]
+name = "sqlparser_derive"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6dd45d8fc1c79299bfbb7190e42ccbbdf6a5f52e4a6ad98d92357ea965bd289"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "sqlx"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9716,6 +9778,19 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "stacker"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "707f49d46706bacf8a2b00d51dace3f9de527c13eec3778f570c411f89e69967"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "psm",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "static_assertions"
@@ -11619,7 +11694,7 @@ dependencies = [
 [[package]]
 name = "wasmtime"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "addr2line 0.26.0",
  "async-trait",
@@ -11672,7 +11747,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-environ"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "anyhow",
  "cpp_demangle",
@@ -11702,7 +11777,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-cache"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "base64 0.22.1",
  "directories-next",
@@ -11721,7 +11796,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-component-macro"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "anyhow",
  "proc-macro2",
@@ -11735,12 +11810,12 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-component-util"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 
 [[package]]
 name = "wasmtime-internal-core"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "anyhow",
  "hashbrown 0.17.1",
@@ -11751,7 +11826,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-cranelift"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cfg-if",
  "cranelift-codegen",
@@ -11777,7 +11852,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-fiber"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cc",
  "cfg-if",
@@ -11791,7 +11866,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-jit-debug"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cc",
  "object 0.39.1",
@@ -11802,7 +11877,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-jit-icache-coherence"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cfg-if",
  "libc",
@@ -11813,7 +11888,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-unwinder"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "cfg-if",
  "cranelift-codegen",
@@ -11825,7 +11900,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-versioned-export-macros"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -11835,7 +11910,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-wit-bindgen"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "anyhow",
  "bitflags 2.11.1",
@@ -11847,7 +11922,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-wasi"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "async-trait",
  "bitflags 2.11.1",
@@ -11875,7 +11950,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-wasi-http"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "async-trait",
  "bytes",
@@ -11900,7 +11975,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-wasi-io"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "async-trait",
  "bytes",
@@ -11912,7 +11987,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-wizer"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "log",
  "rayon",
@@ -12056,7 +12131,7 @@ checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 [[package]]
 name = "wiggle"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "bitflags 2.11.1",
  "thiserror 2.0.18",
@@ -12069,7 +12144,7 @@ dependencies = [
 [[package]]
 name = "wiggle-generate"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -12082,7 +12157,7 @@ dependencies = [
 [[package]]
 name = "wiggle-macro"
 version = "46.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v46.0.1-p3#2cdf4998b92986fe19f8efd0cb9930714d68b3ce"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=gol-122-async-p3-environment#85a12fa3def898a4331ec6ef2530a472404a4b80"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -12118,7 +12193,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

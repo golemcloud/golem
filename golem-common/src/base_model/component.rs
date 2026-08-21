@@ -261,10 +261,16 @@ declare_structs! {
 
     #[derive(Default, Eq)]
     pub struct AgentTypeInitialPermissionsBound {
-        #[serde(default)]
+        #[serde(
+            default,
+            deserialize_with = "crate::base_model::card::deserialize_polymorphic_permission_grants"
+        )]
         #[cfg_attr(feature = "full", oai(default))]
         pub positive: Vec<PolymorphicPermissionPattern>,
-        #[serde(default)]
+        #[serde(
+            default,
+            deserialize_with = "crate::base_model::card::deserialize_polymorphic_permission_grants"
+        )]
         #[cfg_attr(feature = "full", oai(default))]
         pub negative: Vec<PolymorphicPermissionPattern>,
     }
@@ -423,8 +429,11 @@ mod tests {
                 "component(?component) @ * : view : *",
                 "agent(?env/*/*) @ * : view : *",
                 "agent(?env/*/*) @ * : invoke : *",
-                "agent(?env/*/*) @ * : resume : *",
-                "agent(?env/*/*) @ * : update-revision : *",
+                "env(?agent) @ * : read : GOLEM_AGENT_ID",
+                "env(?agent) @ * : read : GOLEM_AGENT_TYPE",
+                "env(?agent) @ * : read : GOLEM_WORKER_NAME",
+                "env(?agent) @ * : read : GOLEM_COMPONENT_ID",
+                "env(?agent) @ * : read : GOLEM_COMPONENT_REVISION",
             ]
         );
     }

@@ -1721,6 +1721,7 @@ impl From<golem_common::model::oplog::AgentError> for oplog::WorkerError {
                     host_function: inner.host_function,
                 })
             }
+            AgentError::PermissionDenied(message) => Self::PermanentError(message),
         }
     }
 }

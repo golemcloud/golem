@@ -18,6 +18,15 @@ use crate::schema::{FromSchema, IntoSchema, SchemaGraph, SchemaType, SecretSpec}
 use crate::secrets::GuestSecretHandle;
 use std::marker::PhantomData;
 
+pub use crate::bindings::golem::secrets::types::SecretError;
+pub use crate::golem_agentic::golem::agent::host::ConfigValueError;
+
+#[derive(Debug)]
+pub enum SecretAccessError {
+    Config(ConfigValueError),
+    Reveal(SecretError),
+}
+
 pub struct Config<T>(PhantomData<T>);
 
 impl<T> Default for Config<T> {
@@ -38,7 +47,7 @@ impl<T> Config<T> {
         Self(PhantomData)
     }
 
-    pub fn get(&self) -> T
+    pub fn get(&self) -> Result<T, ConfigValueError>
     where
         T: ConfigSchema,
     {
@@ -59,7 +68,7 @@ pub trait ConfigSchema: Sized {
     type RpcType: IntoRpcConfigParam;
 
     fn describe_config(path: &[String]) -> Vec<ExtendedAgentConfigDeclaration>;
-    fn load(path: &[String]) -> Self;
+    fn load(path: &[String]) -> Result<Self, ConfigValueError>;
 }
 
 #[doc(hidden)]
@@ -83,13 +92,15 @@ impl<T> Secret<T> {
         }
     }
 
-    pub fn get(&self) -> T
+    pub fn get(&self) -> Result<T, SecretAccessError>
     where
         T: FromSchema + IntoSchema,
     {
         let inner_graph = crate::schema::try_into_schema_graph::<T>()
             .expect("failed to build config schema graph");
-        let handle = self.handle_with_inner_graph(&inner_graph);
+        let handle = self
+            .handle_with_inner_graph(&inner_graph)
+            .map_err(SecretAccessError::Config)?;
         let value = handle
             .with_handle(|handle| {
                 crate::bindings::golem::secrets::reveal::reveal(
@@ -99,12 +110,12 @@ impl<T> Secret<T> {
                 )
             })
             .expect("secret handle has already been transferred")
-            .expect("failed to reveal secret");
+            .map_err(SecretAccessError::Reveal)?;
         let value = crate::decode_schema_value(value).expect("failed to decode secret value");
-        T::from_value(&value).expect("failed deserializing secret value")
+        Ok(T::from_value(&value).expect("failed deserializing secret value"))
     }
 
-    pub fn handle(&self) -> GuestSecretHandle
+    pub fn handle(&self) -> Result<GuestSecretHandle, ConfigValueError>
     where
         T: IntoSchema,
     {
@@ -113,15 +124,18 @@ impl<T> Secret<T> {
         self.handle_with_inner_graph(&inner_graph)
     }
 
-    fn handle_with_inner_graph(&self, inner_graph: &SchemaGraph) -> GuestSecretHandle {
+    fn handle_with_inner_graph(
+        &self,
+        inner_graph: &SchemaGraph,
+    ) -> Result<GuestSecretHandle, ConfigValueError> {
         let graph = secret_schema_graph_from_inner(inner_graph.clone());
         let value = get_config_value(
             &self.path,
             &crate::encode_schema_graph(&graph).expect("failed to encode config schema graph"),
-        );
+        )?;
         let value =
             crate::decode_schema_value(value).expect("failed to decode config schema value");
-        GuestSecretHandle::from_value(&value).expect("failed deserializing secret handle")
+        Ok(GuestSecretHandle::from_value(&value).expect("failed deserializing secret handle"))
     }
 }
 

@@ -27,25 +27,11 @@ declare module 'golem:agent/host@2.0.0' {
    */
   export function parseAgentId(agentId: string): [string, TypedSchemaValue, Uuid | undefined];
   /**
-   * Creates a webhook that can be used to integrate with webhook driven apis.
-   * When the created url is called with a post request, the provided promise-id is completed with the body of the post request.
-   * Note the following behaviours:
-   * * Only agents whoose agent types are _currently_ deployed via an http api are allowed to create a webhook. Calling this function while the agent
-   *    is not deployed via an http api will trap.
-   * * Only the agent type that created the promise is allowed to create a webhook for it. Using this host function
-   *   from a different agent type will trap.
+   * @throws WebhookError
    */
   export function createWebhook(promiseId: PromiseId): string;
   /**
-   * Get the current value of the config key.
-   * The expected schema is a hint to the host what type of value is expected by the guest and can be used
-   * by the host to automatically migrate config values to fit the expected schema.
-   * Only keys that are declared by the agent-type are allowed to be accessed. Trying
-   * to access an undeclared key will trap, unless the expected type is an option. In that case
-   * none is returned.
-   * Getting a local key will get values defined as part of the current
-   * component revision + overrides declared during agent creation.
-   * Getting a shared key will get the current value of the key in the environment.
+   * @throws ConfigValueError
    */
   export function getConfigValue(key: string[], expected: SchemaGraph): SchemaValueTree;
   export class WasmRpc {
@@ -76,12 +62,14 @@ declare module 'golem:agent/host@2.0.0' {
     asyncInvokeAndAwait(methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): AsyncInvocationWithMetadata;
     /**
      * Schedules an invocation for later and returns its final identity.
+     * @throws RpcError
      */
     scheduleInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): ScheduledInvocationReceipt;
     /**
      * Schedules an invocation for later and returns its final identity and
      * cancellation capability. Call cancel on the returned resource to
      * cancel the invocation before the scheduled time.
+     * @throws RpcError
      */
     scheduleCancelableInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): CancelableScheduledInvocationReceipt;
   }
@@ -115,6 +103,23 @@ declare module 'golem:agent/host@2.0.0' {
   export type AgentType = golemAgent200Common.AgentType;
   export type RegisteredAgentType = golemAgent200Common.RegisteredAgentType;
   export type TypedAgentConfigValue = golemAgent200Common.TypedAgentConfigValue;
+  /**
+   * Creates a webhook that can be used to integrate with webhook driven apis.
+   * When the created url is called with a post request, the provided promise-id is completed with the body of the post request.
+   * Note the following behaviours:
+   * * Only agents whoose agent types are _currently_ deployed via an http api are allowed to create a webhook. Calling this function while the agent
+   *    is not deployed via an http api will trap.
+   * * Only the agent type that created the promise is allowed to create a webhook for it. Using this host function
+   *   from a different agent type will trap.
+   */
+  export type WebhookError =
+  {
+    tag: 'permission-denied'
+  } |
+  {
+    tag: 'internal-error'
+    val: string
+  };
   /**
    * Possible failures of an RPC call
    */
@@ -178,6 +183,21 @@ declare module 'golem:agent/host@2.0.0' {
   export type CancelableScheduledInvocationReceipt = {
     metadata: InvocationMetadata;
     cancellationToken: CancellationToken;
+  };
+  /**
+   * Get the current value of the config key.
+   * The expected schema is a hint to the host what type of value is expected by the guest and can be used
+   * by the host to automatically migrate config values to fit the expected schema.
+   * Only keys that are declared by the agent-type are allowed to be accessed. Trying
+   * to access an undeclared key will trap, unless the expected type is an option. In that case
+   * none is returned.
+   * Getting a local key will get values defined as part of the current
+   * component revision + overrides declared during agent creation.
+   * Getting a shared key will get the current value of the key in the environment.
+   */
+  export type ConfigValueError =
+  {
+    tag: 'permission-denied'
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

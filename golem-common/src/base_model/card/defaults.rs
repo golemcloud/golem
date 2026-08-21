@@ -18,15 +18,15 @@ use super::owner::{
 };
 use super::recipient::RecipientPattern;
 use super::{
-    AgentResourcePattern, AgentVerb, ComponentResourcePattern, ComponentVerb,
-    EnvironmentResourcePattern, EnvironmentVerb, PolymorphicClassPermissionPattern,
-    PolymorphicPermissionPattern,
+    AgentResourcePattern, AgentVerb, ComponentResourcePattern, ComponentVerb, EnvResourcePattern,
+    EnvVarName, EnvVerb, EnvironmentResourcePattern, EnvironmentVerb,
+    PolymorphicClassPermissionPattern, PolymorphicPermissionPattern,
 };
 
 pub fn default_agent_initial_permission_grants(
     recipient: RecipientPattern,
 ) -> Vec<PolymorphicPermissionPattern> {
-    vec![
+    let mut grants = vec![
         PolymorphicPermissionPattern::Environment(PolymorphicClassPermissionPattern {
             owner: PolymorphicEnvironmentOwnerPattern::Env,
             recipient: recipient.clone(),
@@ -39,18 +39,49 @@ pub fn default_agent_initial_permission_grants(
             verb: Some(ComponentVerb::View),
             resource: ComponentResourcePattern::Any,
         }),
-        agent_permission(AgentVerb::View, recipient.clone()),
-        agent_permission(AgentVerb::Invoke, recipient.clone()),
-        agent_permission(AgentVerb::Resume, recipient.clone()),
-        agent_permission(AgentVerb::UpdateRevision, recipient),
-    ]
+        agent_permission(
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+            recipient.clone(),
+        ),
+        agent_permission(
+            AgentVerb::Invoke,
+            AgentResourcePattern::Any,
+            recipient.clone(),
+        ),
+    ];
+    grants.extend(
+        [
+            "GOLEM_AGENT_ID",
+            "GOLEM_AGENT_TYPE",
+            "GOLEM_WORKER_NAME",
+            "GOLEM_COMPONENT_ID",
+            "GOLEM_COMPONENT_REVISION",
+        ]
+        .into_iter()
+        .map(|name| env_permission(name, recipient.clone())),
+    );
+    grants
 }
 
-fn agent_permission(verb: AgentVerb, recipient: RecipientPattern) -> PolymorphicPermissionPattern {
+fn agent_permission(
+    verb: AgentVerb,
+    resource: AgentResourcePattern,
+    recipient: RecipientPattern,
+) -> PolymorphicPermissionPattern {
     PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern {
         owner: PolymorphicAgentOwnerPattern::EnvAgents,
         recipient,
         verb: Some(verb),
-        resource: AgentResourcePattern::Any,
+        resource,
+    })
+}
+
+fn env_permission(name: &str, recipient: RecipientPattern) -> PolymorphicPermissionPattern {
+    PolymorphicPermissionPattern::Env(PolymorphicClassPermissionPattern {
+        owner: PolymorphicAgentOwnerPattern::Agent,
+        recipient,
+        verb: Some(EnvVerb::Read),
+        resource: EnvResourcePattern::VarName(EnvVarName(name.to_string())),
     })
 }

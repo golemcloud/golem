@@ -13,9 +13,13 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::{
+    LiveAuthorizationPermit, authority_snapshot_is_current_at, authorize_effective_surface,
+    record_permission_decisions,
+};
 use crate::services::card::CardState;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
-use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 
 pub(super) fn ambient_trap_context<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
@@ -759,7 +763,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 "p3 accessor durable call path currently supports only ReadLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
             )));
         }
-        synchronize_agent_wallet_at_serialized_access(store, get_ctx).await?;
+        let is_live = store.with(|mut access| get_ctx(access.data_mut()).state.is_live());
+        if !is_live {
+            process_pending_replay_events_access(store, get_ctx).await?;
+        }
         let prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             Self::prepare_access_start(ctx, function_type, claim_options, custom_invocation_scope)
@@ -772,9 +779,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
 
         match Self::execute_access_start(store, get_ctx, prepared, build_request).await {
             Ok(executed) => {
-                if executed.replay.is_some() {
-                    synchronize_agent_wallet_at_serialized_access(store, get_ctx).await?;
-                }
                 let result = store.with(|mut access| {
                     let ctx = get_ctx(access.data_mut());
                     Self::finish_access_start(ctx, executed)
@@ -999,16 +1003,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 if live_call_permit.is_none() {
                     live_call_permit = Some(LiveCallPermit::new(prepared.live_host_calls.clone()));
                 }
-                synchronize_agent_wallet_at_serialized_access(store, get_ctx)
-                    .await
-                    .map_err(|err| {
-                        (
-                            err,
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        )
-                    })?;
             }
         }
 
@@ -1440,7 +1434,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         Self::begin_inner(ctx, function_type, true).await
     }
 
-    async fn begin_with_agent_authority_capture<Ctx: WorkerCtx, T>(
+    pub(crate) async fn begin_with_agent_authority_capture<Ctx: WorkerCtx, T>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
         capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> T,
@@ -1558,6 +1552,40 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
 
     pub fn start_index(&self) -> OplogIndex {
         self.start_idx
+    }
+
+    pub async fn recorded_request<Ctx: WorkerCtx>(
+        &self,
+        ctx: &DurableWorkerCtx<Ctx>,
+    ) -> Result<Pair::Req, WorkerExecutorError>
+    where
+        Pair::Req: TryFrom<HostRequest, Error = String>,
+    {
+        let entry = ctx.state.oplog.read(self.start_idx).await;
+        let OplogEntry::Start {
+            request: Some(request),
+            ..
+        } = entry
+        else {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                format!("Start with request at {}", self.start_idx),
+                format!("{entry:?}"),
+            ));
+        };
+        let request = ctx
+            .state
+            .oplog
+            .download_payload(request)
+            .await
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to load durable call request at {}: {error}",
+                    self.start_idx
+                ))
+            })?;
+        Pair::Req::try_from(request).map_err(|actual| {
+            WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN.to_string(), actual)
+        })
     }
 
     /// The index returned by `begin_durable_function`: the durable scope `Start` for a
@@ -2306,7 +2334,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         Err(error) => Err(error),
                     }
                 } else {
-                    synchronize_agent_wallet_at_serialized_access(store, get_ctx).await
+                    Ok(())
                 };
                 if let Err(error) = synchronization {
                     self.abandon_for_trap();
@@ -2417,7 +2445,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         Err(error) => Err(error),
                     }
                 } else {
-                    synchronize_agent_wallet_at_serialized_access(store, get_ctx).await
+                    Ok(())
                 };
                 if let Err(error) = synchronization {
                     self.abandon_for_trap();
@@ -3159,17 +3187,100 @@ fn is_accessor_terminal_supported_function_type(function_type: &DurableFunctionT
         || matches!(function_type, DurableFunctionType::WriteRemote)
 }
 
-async fn synchronize_agent_wallet_at_serialized_access<T, D, Ctx>(
+pub(crate) async fn authorize_live_permissions_at_serialized_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-) -> Result<(), WorkerExecutorError>
+    targets: &[golem_common::model::card::PermissionTarget],
+) -> Result<Result<LiveAuthorizationPermit, AuthorizationError>, WorkerExecutorError>
 where
     T: 'static,
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let _boundary_guard = lock_synchronized_card_event_boundary_access(store, get_ctx).await?;
-    Ok(())
+    enum FastResult {
+        OperatorAuthorized,
+        Stable(Result<(), AuthorizationError>),
+        Slow,
+    }
+
+    let fast_result = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        assert!(
+            ctx.state.is_live(),
+            "live permission authorization must not run during replay"
+        );
+        if ctx.operator_authorizes_current_invocation() {
+            return FastResult::OperatorAuthorized;
+        }
+        let published_generation = ctx
+            .state
+            .published_authority_generation
+            .load(Ordering::Acquire);
+        let now = chrono::Utc::now();
+        if authority_snapshot_is_current_at(
+            ctx.state.authority_initialized,
+            ctx.state.card_interest_index.authority_is_open(),
+            ctx.state.processed_authority_generation,
+            published_generation,
+            ctx.state.next_authority_expiration,
+            now,
+        ) {
+            let result = authorize_effective_surface(&ctx.state.agent_effective_surface, targets);
+            if ctx.authority_snapshot_is_stable(published_generation) {
+                FastResult::Stable(result)
+            } else {
+                FastResult::Slow
+            }
+        } else {
+            FastResult::Slow
+        }
+    });
+    match fast_result {
+        FastResult::OperatorAuthorized => {
+            record_permission_decisions(targets, true);
+            return Ok(Ok(LiveAuthorizationPermit { _private: () }));
+        }
+        FastResult::Stable(result) => {
+            crate::metrics::wasm::record_agent_permission_authority_fast_path();
+            record_permission_decisions(targets, result.is_ok());
+            return Ok(result.map(|()| LiveAuthorizationPermit { _private: () }));
+        }
+        FastResult::Slow => {}
+    }
+
+    let started = std::time::Instant::now();
+    loop {
+        let boundary_guard =
+            lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, true)
+                .await?
+                .expect("waiting authority boundary always returns a guard");
+        let result = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            if ctx.operator_authorizes_current_invocation() {
+                return Some(Ok(()));
+            }
+            let generation = ctx
+                .state
+                .published_authority_generation
+                .load(Ordering::Acquire);
+            let result = authorize_effective_surface(&ctx.state.agent_effective_surface, targets);
+            // A due cached deadline sent us through synchronization. Recompute it from the
+            // synchronized wallet before deciding whether the snapshot is stable.
+            ctx.refresh_authority_expiration_deadline();
+            if ctx.authority_snapshot_is_stable(generation) {
+                ctx.adopt_authority_generation(generation);
+                Some(result)
+            } else {
+                None
+            }
+        });
+        if let Some(result) = result {
+            crate::metrics::wasm::record_agent_permission_authority_slow_path(started.elapsed());
+            record_permission_decisions(targets, result.is_ok());
+            return Ok(result.map(|()| LiveAuthorizationPermit { _private: () }));
+        }
+        drop(boundary_guard);
+    }
 }
 
 pub(crate) async fn try_agent_auth_ctx_at_serialized_access<T, D, Ctx>(
@@ -4506,6 +4617,12 @@ pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
 impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     pub fn is_live(&self) -> bool {
         self.retry.durable_execution_state().is_live
+    }
+
+    pub fn agent_auth_ctx(&self) -> &AuthCtx {
+        self.agent_auth_ctx
+            .as_ref()
+            .expect("agent authority context requested from a call without live agent authority")
     }
 
     /// The index returned by `begin_durable_function` — see [`CallHandle::begin_index`]. Available

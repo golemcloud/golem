@@ -32,7 +32,12 @@ interface host {
     ///    is not deployed via an http api will trap.
     /// * Only the agent type that created the promise is allowed to create a webhook for it. Using this host function
     ///   from a different agent type will trap.
-    create-webhook: func(promise-id: promise-id) -> string;
+    variant webhook-error {
+      permission-denied,
+      internal-error(string),
+    }
+
+    create-webhook: func(promise-id: promise-id) -> result<string, webhook-error>;
 
     /// Possible failures of an RPC call
     variant rpc-error {
@@ -103,12 +108,12 @@ interface host {
       async-invoke-and-await: func(method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> async-invocation-with-metadata;
 
       /// Schedules an invocation for later and returns its final identity.
-      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> scheduled-invocation-receipt;
+      schedule-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<scheduled-invocation-receipt, rpc-error>;
 
       /// Schedules an invocation for later and returns its final identity and
       /// cancellation capability. Call cancel on the returned resource to
       /// cancel the invocation before the scheduled time.
-      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> cancelable-scheduled-invocation-receipt;
+      schedule-cancelable-invocation: func(scheduled-time: datetime, method-name: string, input: schema-value-tree, scope-card: option<borrow<permission-card>>) -> result<cancelable-scheduled-invocation-receipt, rpc-error>;
     }
 
     /// Represents an asynchronous invocation result
@@ -139,5 +144,9 @@ interface host {
     /// component revision + overrides declared during agent creation.
     ///
     /// Getting a shared key will get the current value of the key in the environment.
-    get-config-value: func(key: list<string>, expected: schema-graph) -> schema-value-tree;
+    variant config-value-error {
+      permission-denied,
+    }
+
+    get-config-value: func(key: list<string>, expected: schema-graph) -> result<schema-value-tree, config-value-error>;
 }

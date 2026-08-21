@@ -548,6 +548,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
                     host_function: inner.host_function,
                 }))
             }
+            Error::PermissionDenied(inner) => Ok(Self::PermissionDenied(inner.details)),
         }
     }
 }
@@ -625,6 +626,9 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
                 method,
                 host_function,
             }),
+            AgentError::PermissionDenied(details) => {
+                Error::PermissionDenied(grpc_worker::PermissionDenied { details })
+            }
         };
         Self { error: Some(error) }
     }
@@ -4691,6 +4695,23 @@ mod read_only_violation_roundtrip {
             err in read_only_violation_strat(),
         ) {
             let original = AgentError::ReadOnlyViolation(err);
+            let proto: golem_api_grpc::proto::golem::worker::AgentError = original.clone().into();
+            let roundtrip: AgentError = proto.try_into().unwrap();
+            prop_assert_eq!(roundtrip, original);
+        }
+    }
+}
+
+#[cfg(test)]
+mod permission_denied_roundtrip {
+    use crate::model::oplog::AgentError;
+    use proptest::prelude::*;
+    use test_r::test;
+
+    proptest! {
+        #[test]
+        fn agent_error_permission_denied_protobuf_roundtrip(details in any::<String>()) {
+            let original = AgentError::PermissionDenied(details);
             let proto: golem_api_grpc::proto::golem::worker::AgentError = original.clone().into();
             let roundtrip: AgentError = proto.try_into().unwrap();
             prop_assert_eq!(roundtrip, original);

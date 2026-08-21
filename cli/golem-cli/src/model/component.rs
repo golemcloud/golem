@@ -30,9 +30,11 @@ use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
-use golem_common::model::card::PolymorphicCard;
-use golem_common::model::card::PolymorphicManifestPermissionPattern;
 use golem_common::model::card::recipient::{RecipientMonomorphizationContext, RecipientPattern};
+use golem_common::model::card::{
+    PolymorphicCard, PolymorphicManifestPermissionPattern,
+    parse_polymorphic_manifest_permission_grant,
+};
 use golem_common::model::component::{
     AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision,
 };
@@ -56,7 +58,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::str::FromStr;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedInitialPermissionCard {
@@ -112,10 +113,11 @@ fn parse_manifest_grants(
     grants
         .into_iter()
         .map(|grant| {
-            PolymorphicManifestPermissionPattern::from_str(&grant)
+            parse_polymorphic_manifest_permission_grant(&grant)
                 .map_err(|err| anyhow::anyhow!("invalid grant '{}': {}", grant, err))
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map(|grants| grants.into_iter().flatten().collect())
 }
 
 pub enum ComponentRevisionSelection<'a> {
@@ -584,6 +586,35 @@ mod tests {
             }
             other => panic!("unexpected second grant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn initial_permission_card_expands_legacy_agent_debug_alias() {
+        let card = ParsedInitialPermissionCard::from_grant_strings(
+            vec!["agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : debug : *".to_string()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert_eq!(card.lower_positive.len(), 8);
+        assert_eq!(
+            card.lower_positive
+                .iter()
+                .map(|grant| grant.render().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "oplog(?env/payment-svc/PaymentAgent(*)) @ ?agent : read : *",
+                "agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : view : ",
+                "filesystem(?env/payment-svc/PaymentAgent(*)) @ ?agent : read : /**",
+                "env(?env/payment-svc/PaymentAgent(*)) @ ?agent : read : *",
+                "config(?env/payment-svc/PaymentAgent(*)) @ ?agent : read : *",
+                "agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : fork : ",
+                "agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : interrupt : ",
+                "agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : resume : ",
+            ]
+        );
     }
 
     #[test]

@@ -65,8 +65,9 @@ use golem_common::model::{
     AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction, Timestamp,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
+use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{Mutex, OwnedMutexGuard, mpsc, oneshot};
 use tracing::debug;
 
@@ -158,6 +159,10 @@ struct StatusState<Ctx: WorkerCtx> {
     detached: Arc<AtomicBool>,
     metrics_status: Arc<WorkerStatusMetric>,
     status_flusher: Arc<AgentStatusFlusher>,
+    /// Monotonically publishes committed authority changes after the matching
+    /// status fold. Live host-call authorization uses this as its lock-free
+    /// invalidation signal.
+    published_authority_generation: Arc<AtomicU64>,
 }
 
 impl<Ctx: WorkerCtx> Drop for WorkerStateActor<Ctx> {
@@ -172,6 +177,22 @@ impl<Ctx: WorkerCtx> Drop for WorkerStateActor<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
+    async fn run_status_job<R>(
+        &self,
+        make_job: impl FnOnce(oneshot::Sender<R>) -> StatusJob<Ctx>,
+    ) -> R {
+        let (done, done_rx) = oneshot::channel();
+        self.status_jobs.send(make_job(done)).unwrap_or_else(|_| {
+            panic!("Worker state actor for {} terminated", self.owned_agent_id)
+        });
+        done_rx.await.unwrap_or_else(|_| {
+            panic!(
+                "Worker state actor for {} dropped a request",
+                self.owned_agent_id
+            )
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         deps: All<Ctx>,
@@ -183,6 +204,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         detached: Arc<AtomicBool>,
         metrics_status: Arc<WorkerStatusMetric>,
         status_flusher: Arc<AgentStatusFlusher>,
+        published_authority_generation: Arc<AtomicU64>,
         instance: Arc<Mutex<WorkerInstance>>,
     ) -> Self {
         let state = StatusState {
@@ -195,6 +217,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             detached,
             metrics_status,
             status_flusher,
+            published_authority_generation,
         };
 
         let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob<Ctx>>();
@@ -202,9 +225,15 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             while let Some(job) = status_rx.recv().await {
                 match job {
                     StatusJob::CommitAndUpdateState { level, done } => {
-                        let changed = state.commit_and_update_state(level).await;
-                        let index = state.oplog.current_oplog_index().await;
-                        let _ = done.send((index, changed));
+                        complete_status_job(
+                            async {
+                                let changed = state.commit_and_update_state(level).await;
+                                let index = state.oplog.current_oplog_index().await;
+                                (index, changed)
+                            },
+                            done,
+                        )
+                        .await;
                     }
                     StatusJob::AppendAndCommitAttached {
                         entry,
@@ -213,10 +242,15 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         _card_event_boundary_guard,
                         done,
                     } => {
-                        state.oplog.add(*entry).await;
-                        state.commit_and_update_state(CommitLevel::Always).await;
-                        state.ensure_status_attached().await;
-                        let _ = done.send(());
+                        complete_status_job(
+                            async {
+                                state.oplog.add(*entry).await;
+                                state.commit_and_update_state(CommitLevel::Always).await;
+                                state.ensure_status_attached().await;
+                            },
+                            done,
+                        )
+                        .await;
                     }
                     StatusJob::AttachedStatus { done } => {
                         if state.detached.load(Ordering::Acquire) {
@@ -401,31 +435,11 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         }
         done_rx
     }
+}
 
-    /// Sends a job to the status task and waits for its reply.
-    ///
-    /// Panics if the task is gone: it is only aborted from `Drop` (when no caller can be in
-    /// flight anymore), so a missing reply means the task itself panicked and the worker's
-    /// status state is no longer trustworthy.
-    async fn run_status_job<R>(
-        &self,
-        make_job: impl FnOnce(oneshot::Sender<R>) -> StatusJob<Ctx>,
-    ) -> R {
-        let (done, done_rx) = oneshot::channel();
-        if self.status_jobs.send(make_job(done)).is_err() {
-            panic!(
-                "Worker state actor for {} terminated unexpectedly",
-                self.owned_agent_id
-            );
-        }
-        match done_rx.await {
-            Ok(result) => result,
-            Err(_) => panic!(
-                "Worker state actor for {} dropped a request without replying",
-                self.owned_agent_id
-            ),
-        }
-    }
+async fn complete_status_job<R>(transaction: impl Future<Output = R>, done: oneshot::Sender<R>) {
+    let result = transaction.await;
+    let _ = done.send(result);
 }
 
 impl<Ctx: WorkerCtx> StatusState<Ctx> {
@@ -435,8 +449,12 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// whether the published status (or its detachment) changed.
     async fn commit_and_update_state(&self, commit_level: CommitLevel) -> bool {
         let new_entries = self.oplog.commit(commit_level).await;
+        let authority_change_count = new_entries
+            .values()
+            .filter(|entry| is_authority_state_entry(entry))
+            .count() as u64;
 
-        if !self.detached.load(Ordering::Acquire) {
+        let changed = if !self.detached.load(Ordering::Acquire) {
             let old_status = self.last_known_status.load_full();
 
             let updated_status = update_status_with_new_entries(
@@ -470,7 +488,19 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             }
         } else {
             false
+        };
+
+        // This release-publish is deliberately owned by the cancellation-proof
+        // status actor and happens only after the committed entries were folded
+        // (or the status was marked detached). A producer cannot report success
+        // for a committed card event while authorization still considers the
+        // old generation current.
+        if authority_change_count != 0 {
+            self.published_authority_generation
+                .fetch_add(authority_change_count, Ordering::Release);
         }
+
+        changed
     }
 
     async fn reattach(&self) {
@@ -568,5 +598,69 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 )
                 .await;
         }
+    }
+}
+
+fn is_authority_state_entry(entry: &OplogEntry) -> bool {
+    matches!(
+        entry,
+        OplogEntry::CardEventQueued { .. }
+            | OplogEntry::CardInstalled { .. }
+            | OplogEntry::CardInstallFailed { .. }
+            | OplogEntry::CardRevoked { .. }
+            | OplogEntry::CardExpired { .. }
+            | OplogEntry::CardDerived { .. }
+            | OplogEntry::CardTransferStarted { .. }
+            | OplogEntry::CardTransferred { .. }
+            | OplogEntry::CardRevokedCascade { .. }
+            | OplogEntry::CardTransferConfirmed { .. }
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::complete_status_job;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use test_r::test;
+    use tokio::sync::{Notify, oneshot};
+
+    #[test]
+    async fn authority_publication_survives_producer_cancellation_before_actor_reply() {
+        let generation = Arc::new(AtomicU64::new(0));
+        let committed = Arc::new(AtomicU64::new(0));
+        let before_reply = Arc::new(Notify::new());
+        let release_reply = Arc::new(Notify::new());
+        let (done, done_rx) = oneshot::channel();
+
+        let actor = tokio::spawn({
+            let generation = generation.clone();
+            let committed = committed.clone();
+            let before_reply = before_reply.clone();
+            let release_reply = release_reply.clone();
+            async move {
+                complete_status_job(
+                    async move {
+                        committed.store(1, Ordering::Release);
+                        generation.store(1, Ordering::Release);
+                        before_reply.notify_one();
+                        release_reply.notified().await;
+                    },
+                    done,
+                )
+                .await;
+            }
+        });
+        let producer = tokio::spawn(done_rx);
+
+        before_reply.notified().await;
+        producer.abort();
+        release_reply.notify_one();
+        actor
+            .await
+            .expect("status actor must finish the transaction");
+
+        assert_eq!(committed.load(Ordering::Acquire), 1);
+        assert_eq!(generation.load(Ordering::Acquire), 1);
     }
 }

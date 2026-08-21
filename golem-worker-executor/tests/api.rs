@@ -27,7 +27,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::{
-    AgentConfigEntryDto, AgentMetadataDto, RevertToOplogIndex, RevertWorkerTarget,
+    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
 };
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatus, FilterComparator,
@@ -208,6 +208,7 @@ impl WorkerProxy for RecordingWorkerProxy {
     async fn start(
         &self,
         owned_agent_id: &OwnedAgentId,
+        method_name: &str,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -218,6 +219,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         self.inner
             .start(
                 owned_agent_id,
+                method_name,
                 caller_agent_id,
                 caller_env,
                 caller_stack,
@@ -375,9 +377,12 @@ impl WorkerProxy for RecordingWorkerProxy {
         &self,
         agent_id: &AgentId,
         target: RevertWorkerTarget,
+        resolved_revert: Option<ResolvedRevert>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
-        self.inner.revert(agent_id, target, auth_ctx).await
+        self.inner
+            .revert(agent_id, target, resolved_revert, auth_ctx)
+            .await
     }
 
     async fn complete_promise(
@@ -3180,7 +3185,7 @@ async fn get_worker_metadata(
     )?
     .len();
     assert_eq!(metadata2.component_size, component_file_size);
-    assert_eq!(metadata2.total_linear_memory_size, 2031616);
+    assert_eq!(metadata2.total_linear_memory_size, 34 * 65536);
     Ok(())
 }
 

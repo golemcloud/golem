@@ -71,10 +71,12 @@ declare module 'golem:api/host@1.5.0' {
   /**
    * Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
    * not waiting for the agent to get updated.
+   * @throws AgentOperationError
    */
   export function updateAgent(agentId: AgentId, targetRevision: ComponentRevision, mode: UpdateMode): void;
   /**
    * Get the current agent's metadata
+   * @throws AgentOperationError
    */
   export function getSelfMetadata(): AgentMetadata;
   /**
@@ -83,10 +85,12 @@ declare module 'golem:api/host@1.5.0' {
   export function getAgentMetadata(agentId: AgentId): AgentMetadata | undefined;
   /**
    * Fork an agent to another agent at a given oplog index
+   * @throws AgentOperationError
    */
   export function forkAgent(sourceAgentId: AgentId, targetAgentId: AgentId, oplogIdxCutOff: OplogIndex): void;
   /**
    * Revert an agent to a previous state
+   * @throws AgentOperationError
    */
   export function revertAgent(agentId: AgentId, revertTarget: RevertAgentTarget): void;
   /**
@@ -115,6 +119,7 @@ declare module 'golem:api/host@1.5.0' {
    * with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
    * both sides. The newly created agent continues running from the same point, but the return value is
    * going to be different in this agent and the forked agent.
+   * @throws AgentOperationError
    */
   export function fork(): ForkResult;
   export class GetAgents {
@@ -127,6 +132,7 @@ declare module 'golem:api/host@1.5.0' {
     constructor(componentId: ComponentId, filter: AgentAnyFilter | undefined, precise: boolean);
     /**
      * Retrieves the next batch of agent metadata.
+     * @throws AgentOperationError
      */
     getNext(): AgentMetadata[] | undefined;
   }
@@ -287,6 +293,17 @@ declare module 'golem:api/host@1.5.0' {
     val: bigint
   };
   /**
+   * Error returned by an operation targeting another agent.
+   */
+  export type AgentOperationError =
+  {
+    tag: 'permission-denied'
+  } |
+  {
+    tag: 'backend-error'
+    val: string
+  };
+  /**
    * Details about the fork result
    */
   export type ForkDetails = {
@@ -315,4 +332,5 @@ declare module 'golem:api/host@1.5.0' {
     payload: Uint8Array;
     mimeType: string;
   };
+  export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

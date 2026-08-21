@@ -201,6 +201,13 @@ pub trait PermissionClass {
 
     const NAME: &'static str;
 
+    fn parse_resource(
+        _verb: Option<Self::Verb>,
+        resource: &str,
+    ) -> Result<Self::Resource, CardParseError> {
+        Self::Resource::parse_resource(resource)
+    }
+
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern
     where
         Self: Sized;

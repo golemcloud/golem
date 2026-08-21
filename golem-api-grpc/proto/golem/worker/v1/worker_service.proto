@@ -52,6 +52,7 @@ message LaunchNewWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 6;
   optional golem.worker.InvocationContext context = 7;
   optional golem.component.Principal principal = 8;
+  optional string method_name = 9;
 }
 
 message LaunchNewWorkerResponse {
@@ -130,6 +131,7 @@ message RevertWorkerRequest {
   golem.worker.AgentId agent_id = 1;
   golem.common.RevertWorkerTarget target = 2;
   golem.auth.AuthCtx auth_ctx = 3;
+  optional golem.common.ResolvedRevert resolved_revert = 4;
 }
 
 message RevertWorkerResponse {

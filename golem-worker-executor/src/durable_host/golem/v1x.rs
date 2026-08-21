@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::authorization::targets::{agent_worker_target, oplog_target};
 use crate::durable_host::concurrent::{
     CallHandle, CallReplayOutcome, Cancellable, NotCancellable, drain_dropped_call_events_access,
     drain_queued_dropped_call_events,
@@ -33,34 +34,41 @@ use crate::preview2::golem_api_1_x::host::{
     HostGetPromiseResultWithStore,
 };
 use crate::preview2::golem_api_1_x::oplog::{
-    Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
+    Host as OplogHost, HostGetOplog, HostSearchOplog, OplogReadError, SearchOplog,
 };
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
 use crate::services::{HasOplogService, HasWorker};
+use crate::worker::resolve_revert_last_invocations;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::{StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
+use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::{
-    GolemApiCompletePromise, GolemApiCreatePromise, GolemApiFork, GolemApiForkWorker,
-    GolemApiGenerateIdempotencyKey, GolemApiGetAgentMetadata, GolemApiGetPromiseResult,
-    GolemApiGetSelfMetadata, GolemApiResolveAgentIdStrict, GolemApiResolveComponentId,
-    GolemApiRevertWorker, GolemApiUpdateWorker,
+    GolemApiCompletePromise, GolemApiCreatePromise, GolemApiEnrichOplogEntries, GolemApiFork,
+    GolemApiForkWorker, GolemApiGenerateIdempotencyKey, GolemApiGetAgentMetadata,
+    GolemApiGetAgents, GolemApiGetOplogNext, GolemApiGetPromiseResult, GolemApiGetSelfMetadata,
+    GolemApiResolveAgentIdStrict, GolemApiResolveComponentId, GolemApiRevertWorker,
+    GolemApiSearchOplogNext, GolemApiUpdateWorker,
 };
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemApiAgentId, HostRequestGolemApiComponentSlug,
     HostRequestGolemApiComponentSlugAndAgentName, HostRequestGolemApiForkAgent,
+    HostRequestGolemApiGetAgents, HostRequestGolemApiOplogEnrich, HostRequestGolemApiOplogRead,
     HostRequestGolemApiPromiseId, HostRequestGolemApiRevertAgent, HostRequestGolemApiUpdateAgent,
     HostRequestNoInput, HostResponseGolemApiAgentId, HostResponseGolemApiAgentMetadata,
-    HostResponseGolemApiComponentId, HostResponseGolemApiFork, HostResponseGolemApiIdempotencyKey,
-    HostResponseGolemApiPromiseCompletion, HostResponseGolemApiPromiseId,
-    HostResponseGolemApiPromiseResult, HostResponseGolemApiSelfAgentMetadata,
-    HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
+    HostResponseGolemApiAgents, HostResponseGolemApiComponentId, HostResponseGolemApiFork,
+    HostResponseGolemApiIdempotencyKey, HostResponseGolemApiOplogChunk,
+    HostResponseGolemApiOplogEntries, HostResponseGolemApiPromiseCompletion,
+    HostResponseGolemApiPromiseId, HostResponseGolemApiPromiseResult,
+    HostResponseGolemApiSelfAgentMetadata, HostResponseGolemApiUnit, OplogEntry, PublicOplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor, Timestamp};
@@ -85,6 +93,16 @@ fn classify_worker_proxy_error(err: &WorkerProxyError) -> HostFailureKind {
     }
 }
 
+const AGENT_OPERATION_PERMISSION_DENIED: &str = "agent operation permission denied";
+
+fn agent_operation_error(error: String) -> golem_api_1_x::host::AgentOperationError {
+    if error == AGENT_OPERATION_PERMISSION_DENIED {
+        golem_api_1_x::host::AgentOperationError::PermissionDenied
+    } else {
+        golem_api_1_x::host::AgentOperationError::BackendError(error)
+    }
+}
+
 fn classify_worker_executor_error(err: &WorkerExecutorError) -> HostFailureKind {
     match err {
         WorkerExecutorError::InvalidRequest { .. }
@@ -103,6 +121,224 @@ fn classify_worker_executor_error(err: &WorkerExecutorError) -> HostFailureKind 
         | WorkerExecutorError::ComponentNotFound { .. } => HostFailureKind::Permanent,
         _ => HostFailureKind::Transient,
     }
+}
+
+async fn resolve_agent_owner<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    component_id: &ComponentId,
+    agent: Option<&str>,
+) -> Result<(AgentOwnerPattern, EnvironmentId), WorkerExecutorError> {
+    let component = if *component_id == ctx.owned_agent_id.component_id() {
+        ctx.component_metadata().clone()
+    } else {
+        ctx.state
+            .component_service
+            .get_metadata(*component_id, None)
+            .await?
+    };
+    let environment_id = component.environment_id;
+    let owner = match agent {
+        Some(agent) => AgentOwnerPattern::Agent {
+            account: component.account_email,
+            application: component.application_name,
+            environment: component.environment_name,
+            component: component.component_name,
+            agent: AgentOwnerLeafPattern::Agent(agent.to_string()),
+        },
+        None => AgentOwnerPattern::ComponentAgents {
+            account: component.account_email,
+            application: component.application_name,
+            environment: component.environment_name,
+            component: component.component_name,
+        },
+    };
+    Ok((owner, environment_id))
+}
+
+async fn agent_operation_denied<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    agent_id: &AgentId,
+    verb: AgentVerb,
+    resource: AgentResourcePattern,
+) -> Result<bool, WorkerExecutorError> {
+    let (owner, _) =
+        resolve_agent_owner(ctx, &agent_id.component_id, Some(&agent_id.agent_id)).await?;
+    let target = agent_worker_target(owner, verb, resource);
+    Ok(ctx.authorize_live_permission(&target).await?.is_err())
+}
+
+async fn component_agents_view_denied<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    component_id: &ComponentId,
+) -> Result<bool, WorkerExecutorError> {
+    let (owner, _) = resolve_agent_owner(ctx, component_id, None).await?;
+    let target = agent_worker_target(owner, AgentVerb::View, AgentResourcePattern::Empty);
+    Ok(ctx.authorize_live_permission(&target).await?.is_err())
+}
+
+async fn oplog_read_denied<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    owned_agent_id: &OwnedAgentId,
+    start: OplogIndex,
+    page_size: usize,
+) -> Result<bool, WorkerExecutorError> {
+    let (owner, environment_id) = resolve_agent_owner(
+        ctx,
+        &owned_agent_id.component_id(),
+        Some(&owned_agent_id.agent_id.agent_id),
+    )
+    .await?;
+    if owned_agent_id.environment_id != environment_id {
+        return Ok(true);
+    }
+    let Some(end) = (page_size as u64)
+        .checked_sub(1)
+        .and_then(|offset| start.as_u64().checked_add(offset))
+        .map(OplogIndex::from_u64)
+    else {
+        return Ok(true);
+    };
+    let target = match oplog_target(owner, Some(start.into()), Some(end.into())) {
+        Ok(target) => target,
+        Err(_) => return Ok(true),
+    };
+    Ok(ctx.authorize_live_permission(&target).await?.is_err())
+}
+
+async fn oplog_entries_denied<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    owned_agent_id: &OwnedAgentId,
+    indexes: &[OplogIndex],
+) -> Result<bool, WorkerExecutorError> {
+    let (owner, environment_id) = resolve_agent_owner(
+        ctx,
+        &owned_agent_id.component_id(),
+        Some(&owned_agent_id.agent_id.agent_id),
+    )
+    .await?;
+    if owned_agent_id.environment_id != environment_id {
+        return Ok(true);
+    }
+    let targets = indexes
+        .iter()
+        .map(|index| oplog_target(owner.clone(), Some((*index).into()), Some((*index).into())))
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(targets) = targets else {
+        return Ok(true);
+    };
+    Ok(ctx.authorize_live_permissions(&targets).await?.is_err())
+}
+
+fn prepare_oplog_enrichment_entries<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    entries: Vec<(u64, golem_api_1_x::oplog::OplogEntry)>,
+) -> (Vec<(u64, Vec<u8>)>, Result<Vec<(u64, OplogEntry)>, String>) {
+    let indexes = entries.iter().map(|(index, _)| *index).collect::<Vec<_>>();
+    let mut entries =
+        crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(entries, ctx)
+            .and_then(|entries| {
+                entries
+                    .into_iter()
+                    .map(|(index, entry)| OplogEntry::try_from(entry).map(|entry| (index, entry)))
+                    .collect::<Result<Vec<_>, _>>()
+            });
+    let request_entries = match &entries {
+        Ok(entries) => entries
+            .iter()
+            .map(|(index, entry)| {
+                golem_common::serialization::serialize(entry).map(|entry| (*index, entry))
+            })
+            .collect::<Result<Vec<_>, _>>(),
+        Err(error) => Err(error.clone()),
+    };
+    match request_entries {
+        Ok(request_entries) => (request_entries, entries),
+        Err(error) => {
+            entries = Err(error);
+            (
+                indexes
+                    .into_iter()
+                    .map(|index| (index, Vec::new()))
+                    .collect(),
+                entries,
+            )
+        }
+    }
+}
+
+async fn get_oplog_chunk<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    entry: &GetOplogEntry,
+) -> Result<crate::model::public_oplog::PublicOplogChunk, String> {
+    let agent_mode = ctx
+        .state
+        .worker_service
+        .get_agent_mode(&entry.owned_agent_id)
+        .await
+        .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
+    let current_component_revision = if entry.initialized {
+        entry.current_component_revision
+    } else {
+        find_component_revision_at(
+            ctx.state.oplog_service(),
+            &entry.owned_agent_id,
+            agent_mode,
+            entry.next_oplog_index,
+        )
+        .await
+        .map_err(|error| error.to_string())?
+    };
+    let agent_type =
+        ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
+    get_public_oplog_chunk(
+        ctx.state.component_service.clone(),
+        ctx.state.oplog_service(),
+        &entry.owned_agent_id,
+        agent_mode,
+        agent_type.as_ref(),
+        current_component_revision,
+        entry.next_oplog_index,
+        entry.page_size,
+    )
+    .await
+}
+
+async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    entry: &SearchOplogEntry,
+) -> Result<crate::model::public_oplog::PublicOplogSearchResult, String> {
+    let agent_mode = ctx
+        .state
+        .worker_service
+        .get_agent_mode(&entry.owned_agent_id)
+        .await
+        .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
+    let current_component_revision = if entry.initialized {
+        entry.current_component_revision
+    } else {
+        find_component_revision_at(
+            ctx.state.oplog_service(),
+            &entry.owned_agent_id,
+            agent_mode,
+            entry.next_oplog_index,
+        )
+        .await
+        .map_err(|error| error.to_string())?
+    };
+    let agent_type =
+        ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
+    search_public_oplog(
+        ctx.state.component_service.clone(),
+        ctx.state.oplog_service(),
+        &entry.owned_agent_id,
+        agent_mode,
+        agent_type.as_ref(),
+        current_component_revision,
+        entry.next_oplog_index,
+        entry.page_size,
+        &entry.query,
+    )
+    .await
 }
 
 impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
@@ -128,7 +364,12 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
     async fn get_next(
         &mut self,
         self_: Resource<GetAgents>,
-    ) -> anyhow::Result<Option<Vec<golem_api_1_x::host::AgentMetadata>>> {
+    ) -> anyhow::Result<
+        Result<
+            Option<Vec<golem_api_1_x::host::AgentMetadata>>,
+            golem_api_1_x::host::AgentOperationError,
+        >,
+    > {
         self.observe_function_call("golem::api::get-workers", "get-next");
         let (component_id, filter, count, precise, cursor) = self
             .as_wasi_view()
@@ -145,27 +386,57 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
             })?;
 
         if let Some(cursor) = cursor {
-            let (new_cursor, workers) = self
-                .state
-                .get_workers(&component_id, filter, cursor, count, precise)
+            let denied =
+                self.state.is_live() && component_agents_view_denied(self, &component_id).await?;
+            let handle = CallHandle::<GolemApiGetAgents, NotCancellable>::start(
+                self,
+                HostRequestGolemApiGetAgents { component_id },
+                DurableFunctionType::ReadRemote,
+            )
+            .await?;
+            let result = handle
+                .run(self, async |ctx| {
+                    if denied {
+                        return Ok::<_, anyhow::Error>(HostResponseGolemApiAgents {
+                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                        });
+                    }
+                    let result = ctx
+                        .state
+                        .get_workers(&component_id, filter, cursor, count, precise)
+                        .await
+                        .map(|(new_cursor, workers)| {
+                            (
+                                new_cursor.map(|cursor| (cursor.cursor, cursor.layer as u64)),
+                                workers
+                                    .into_iter()
+                                    .map(AgentMetadataForGuests::from)
+                                    .collect(),
+                            )
+                        })
+                        .map_err(|error| error.to_string());
+                    Ok::<_, anyhow::Error>(HostResponseGolemApiAgents { result })
+                })
                 .await?;
+            let (new_cursor, workers) = match result.result {
+                Ok((cursor, workers)) => (
+                    cursor.map(|(cursor, layer)| ScanCursor {
+                        cursor,
+                        layer: layer as usize,
+                    }),
+                    workers,
+                ),
+                Err(error) => return Ok(Err(agent_operation_error(error))),
+            };
 
             self.as_wasi_view()
                 .table()
                 .get_mut::<GetAgentsEntry>(&self_)
                 .map(|e| e.set_next_cursor(new_cursor))?;
 
-            Ok(Some(
-                workers
-                    .into_iter()
-                    .map(|w| {
-                        let metadata: AgentMetadataForGuests = w.into();
-                        metadata.into()
-                    })
-                    .collect(),
-            ))
+            Ok(Ok(Some(workers.into_iter().map(Into::into).collect())))
         } else {
-            Ok(None)
+            Ok(Ok(None))
         }
     }
 
@@ -646,7 +917,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         agent_id: golem_api_1_x::host::AgentId,
         target_version: u64,
         mode: golem_api_1_x::host::UpdateMode,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Result<(), golem_api_1_x::host::AgentOperationError>> {
         // NOTE: Mode-changing updates are rejected by the target worker-executor's gRPC
         // `update_worker` handler. The error returned by `worker_proxy.update` below
         // propagates back to the caller agent as a regular update error, so no additional
@@ -666,6 +937,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let target_revision: ComponentRevision =
             target_version.try_into().map_err(|e: String| anyhow!(e))?;
 
+        let denied = self.state.is_live()
+            && agent_operation_denied(
+                self,
+                &agent_id,
+                AgentVerb::UpdateRevision,
+                AgentResourcePattern::Empty,
+            )
+            .await?;
+
         let mut handle =
             CallHandle::<GolemApiUpdateWorker, NotCancellable>::start_with_agent_authority(
                 self,
@@ -684,6 +964,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(replayed) => break 'result replayed,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if denied {
+                break 'result handle
+                    .complete(
+                        self,
+                        HostResponseGolemApiUnit {
+                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                        },
+                    )
+                    .await?;
             }
 
             let retry_properties = RetryContext::golem_api("update-agent");
@@ -718,10 +1009,23 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await?
         };
 
-        result.result.map_err(|err| anyhow!(err))
+        Ok(result.result.map_err(agent_operation_error))
     }
 
-    async fn get_self_metadata(&mut self) -> anyhow::Result<golem_api_1_x::host::AgentMetadata> {
+    async fn get_self_metadata(
+        &mut self,
+    ) -> anyhow::Result<
+        Result<golem_api_1_x::host::AgentMetadata, golem_api_1_x::host::AgentOperationError>,
+    > {
+        let self_agent_id = self.agent_id().clone();
+        let denied = self.state.is_live()
+            && agent_operation_denied(
+                self,
+                &self_agent_id,
+                AgentVerb::View,
+                AgentResourcePattern::Empty,
+            )
+            .await?;
         let handle = CallHandle::<GolemApiGetSelfMetadata, NotCancellable>::start(
             self,
             HostRequestNoInput {},
@@ -731,17 +1035,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let result = handle
             .run(self, async |ctx| {
+                if denied {
+                    return Ok::<_, anyhow::Error>(HostResponseGolemApiSelfAgentMetadata {
+                        result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                    });
+                }
                 let metadata = ctx
                     .public_state
                     .worker()
                     .get_latest_worker_metadata()
                     .await
                     .into();
-                Ok::<_, anyhow::Error>(HostResponseGolemApiSelfAgentMetadata { metadata })
+                Ok::<_, anyhow::Error>(HostResponseGolemApiSelfAgentMetadata {
+                    result: Ok(metadata),
+                })
             })
             .await?;
 
-        Ok(result.metadata.into())
+        Ok(result.result.map(Into::into).map_err(agent_operation_error))
     }
 
     async fn get_agent_metadata(
@@ -749,6 +1060,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         agent_id: golem_api_1_x::host::AgentId,
     ) -> anyhow::Result<Option<golem_api_1_x::host::AgentMetadata>> {
         let agent_id: AgentId = agent_id.into();
+
+        let denied = self.state.is_live()
+            && agent_operation_denied(
+                self,
+                &agent_id,
+                AgentVerb::View,
+                AgentResourcePattern::Empty,
+            )
+            .await?;
 
         let handle = CallHandle::<GolemApiGetAgentMetadata, NotCancellable>::start(
             self,
@@ -761,6 +1081,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let result = handle
             .run(self, async |ctx| {
+                if denied {
+                    return Ok::<_, anyhow::Error>(HostResponseGolemApiAgentMetadata {
+                        result: Ok(None),
+                    });
+                }
                 let owned_agent_id =
                     OwnedAgentId::new(ctx.owned_agent_id.environment_id, &agent_id);
                 let result = ctx.state.worker_service.get(&owned_agent_id).await;
@@ -784,11 +1109,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 } else {
                     None
                 };
-                Ok::<_, anyhow::Error>(HostResponseGolemApiAgentMetadata { metadata })
+                Ok::<_, anyhow::Error>(HostResponseGolemApiAgentMetadata {
+                    result: Ok(metadata),
+                })
             })
             .await?;
 
-        Ok(result.metadata.map(|metadata| metadata.into()))
+        result
+            .result
+            .map(|metadata| metadata.map(Into::into))
+            .map_err(|error| anyhow!(error))
     }
 
     async fn fork_agent(
@@ -796,11 +1126,20 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         source_agent_id: golem_api_1_x::host::AgentId,
         target_agent_id: golem_api_1_x::host::AgentId,
         oplog_idx_cut_off: golem_api_1_x::host::OplogIndex,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Result<(), golem_api_1_x::host::AgentOperationError>> {
         let source_agent_id: AgentId = source_agent_id.into();
         let target_agent_id: AgentId = target_agent_id.into();
 
         let oplog_index_cut_off: OplogIndex = OplogIndex::from_u64(oplog_idx_cut_off);
+
+        let denied = self.state.is_live()
+            && agent_operation_denied(
+                self,
+                &source_agent_id,
+                AgentVerb::Fork,
+                AgentResourcePattern::Empty,
+            )
+            .await?;
 
         let mut handle =
             CallHandle::<GolemApiForkWorker, NotCancellable>::start_with_agent_authority(
@@ -820,6 +1159,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(replayed) => break 'result replayed,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if denied {
+                break 'result handle
+                    .complete(
+                        self,
+                        HostResponseGolemApiUnit {
+                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                        },
+                    )
+                    .await?;
             }
 
             let retry_properties = RetryContext::golem_api("fork-agent");
@@ -853,16 +1203,63 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await?
         };
 
-        result.result.map_err(|err| anyhow!(err))
+        Ok(result.result.map_err(agent_operation_error))
     }
 
     async fn revert_agent(
         &mut self,
         agent_id: golem_api_1_x::host::AgentId,
         revert_target: golem_api_1_x::host::RevertAgentTarget,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Result<(), golem_api_1_x::host::AgentOperationError>> {
         let agent_id: AgentId = agent_id.into();
         let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
+
+        let mut resolved_revert = if self.state.is_live() {
+            match &target {
+                golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(_) => None,
+                golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(target) => {
+                    let owned_agent_id =
+                        OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
+                    let Some(agent_mode) = self
+                        .state
+                        .worker_service
+                        .get_agent_mode(&owned_agent_id)
+                        .await
+                    else {
+                        return Ok(Err(agent_operation_error(format!(
+                            "agent {owned_agent_id} does not exist"
+                        ))));
+                    };
+                    match resolve_revert_last_invocations(
+                        self.state.oplog_service().as_ref(),
+                        &owned_agent_id,
+                        agent_mode,
+                        target.number_of_invocations,
+                    )
+                    .await
+                    {
+                        Ok(resolved) => Some(resolved),
+                        Err(error) => return Ok(Err(agent_operation_error(error.to_string()))),
+                    }
+                }
+            }
+        } else {
+            None
+        };
+        let resource = match (&target, &resolved_revert) {
+            (golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(index), _) => {
+                AgentResourcePattern::OplogIndex(index.last_oplog_index.into())
+            }
+            (
+                golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(_),
+                Some(resolved),
+            ) => AgentResourcePattern::OplogIndex(resolved.last_oplog_index.into()),
+            (golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(_), None) => {
+                AgentResourcePattern::Empty
+            }
+        };
+        let denied = self.state.is_live()
+            && agent_operation_denied(self, &agent_id, AgentVerb::Revert, resource).await?;
 
         let mut handle =
             CallHandle::<GolemApiRevertWorker, NotCancellable>::start_with_agent_authority(
@@ -870,6 +1267,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 HostRequestGolemApiRevertAgent {
                     agent_id: agent_id.clone(),
                     target: target.clone(),
+                    resolved_revert: resolved_revert.clone(),
                 },
                 DurableFunctionType::WriteRemote,
             )
@@ -879,15 +1277,35 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(replayed) => break 'result replayed,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+                    CallReplayOutcome::Incomplete(live) => {
+                        let recorded_request = live.recorded_request(self).await?;
+                        resolved_revert = recorded_request.resolved_revert;
+                        handle = live;
+                    }
                 }
+            }
+
+            if denied {
+                break 'result handle
+                    .complete(
+                        self,
+                        HostResponseGolemApiUnit {
+                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                        },
+                    )
+                    .await?;
             }
 
             let retry_properties = RetryContext::golem_api("revert-agent");
             let result = loop {
                 let result = self
                     .worker_proxy()
-                    .revert(&agent_id, target.clone(), handle.agent_auth_ctx())
+                    .revert(
+                        &agent_id,
+                        target.clone(),
+                        resolved_revert.clone(),
+                        handle.agent_auth_ctx(),
+                    )
                     .await;
                 match handle
                     .try_trigger_retry_or_loop_with_properties(
@@ -908,7 +1326,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await?
         };
 
-        result.result.map_err(|err| anyhow!(err))
+        Ok(result.result.map_err(agent_operation_error))
     }
 
     async fn resolve_component_id(
@@ -988,11 +1406,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         component_slug: String,
         agent_name: String,
     ) -> anyhow::Result<Option<golem_api_1_x::host::AgentId>> {
+        let Some(component_id) = self.resolve_component_id(component_slug.clone()).await? else {
+            return Ok(None);
+        };
+        let agent_id = AgentId {
+            component_id: component_id.into(),
+            agent_id: agent_name.clone(),
+        };
+        let denied = self.state.is_live()
+            && agent_operation_denied(
+                self,
+                &agent_id,
+                AgentVerb::View,
+                AgentResourcePattern::Empty,
+            )
+            .await?;
         let mut handle = CallHandle::<GolemApiResolveAgentIdStrict, NotCancellable>::start(
             self,
             HostRequestGolemApiComponentSlugAndAgentName {
-                component_slug: component_slug.clone(),
-                agent_name: agent_name.clone(),
+                component_slug,
+                agent_name,
             },
             DurableFunctionType::WriteRemote,
         )
@@ -1006,11 +1439,22 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
+            if denied {
+                break 'result handle
+                    .complete(self, HostResponseGolemApiAgentId { result: Ok(None) })
+                    .await?;
+            }
+
             let retry_properties = RetryContext::golem_api("resolve-agent-id-strict");
             let result = loop {
-                let result = self
-                    .resolve_agent_id_strict_internal(component_slug.clone(), agent_name.clone())
-                    .await;
+                let owned_id = OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
+                let result = Ok(
+                    if self.state.worker_service.get(&owned_id).await.is_some() {
+                        Some(agent_id.clone())
+                    } else {
+                        None
+                    },
+                );
 
                 match handle
                     .try_trigger_retry_or_loop_with_properties(
@@ -1034,10 +1478,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         result
             .result
             .map(|opt| opt.map(golem_api_1_x::host::AgentId::from))
-            .map_err(|err| anyhow!(err))
+            .map_err(|error| anyhow!(error))
     }
 
-    async fn fork(&mut self) -> anyhow::Result<ForkResult> {
+    async fn fork(
+        &mut self,
+    ) -> anyhow::Result<Result<ForkResult, golem_api_1_x::host::AgentOperationError>> {
+        let self_agent_id = self.agent_id().clone();
+        let denied = self.state.is_live()
+            && agent_operation_denied(
+                self,
+                &self_agent_id,
+                AgentVerb::Fork,
+                AgentResourcePattern::Empty,
+            )
+            .await?;
         let mut handle = CallHandle::<GolemApiFork, NotCancellable>::start_with_agent_authority(
             self,
             HostRequestNoInput {},
@@ -1051,6 +1506,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(replayed) => break 'result replayed,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if denied {
+                break 'result handle
+                    .complete(
+                        self,
+                        HostResponseGolemApiFork {
+                            forked_phantom_id: Uuid::nil(),
+                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                        },
+                    )
+                    .await?;
             }
 
             let retry_properties = RetryContext::golem_api("fork");
@@ -1139,12 +1606,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let details = ForkDetails {
                     forked_phantom_id: result.forked_phantom_id.into(),
                 };
-                Ok(match fork_result {
+                Ok(Ok(match fork_result {
                     golem_common::model::ForkResult::Original => ForkResult::Original(details),
                     golem_common::model::ForkResult::Forked => ForkResult::Forked(details),
-                })
+                }))
             }
-            Err(err) => Err(anyhow!(err)),
+            Err(err) => Ok(Err(agent_operation_error(err))),
         }
     }
 }
@@ -1161,21 +1628,12 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id(), &agent_id);
 
         let start = OplogIndex::from_u64(start);
-        let agent_mode = self
-            .state
-            .worker_service
-            .get_agent_mode(&owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("agent {} does not exist", owned_agent_id))?;
-        let initial_component_version = find_component_revision_at(
-            self.state.oplog_service(),
-            &owned_agent_id,
-            agent_mode,
+        let entry = GetOplogEntry::new(
+            owned_agent_id,
             start,
-        )
-        .await?;
-
-        let entry = GetOplogEntry::new(owned_agent_id, start, initial_component_version, 100);
+            self.component_metadata().revision,
+            100,
+        );
         let resource = self.as_wasi_view().table().push(entry)?;
         Ok(resource)
     }
@@ -1183,51 +1641,107 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     async fn get_next(
         &mut self,
         self_: Resource<GetOplogEntry>,
-    ) -> anyhow::Result<Option<Vec<golem_api_1_x::oplog::PublicOplogEntry>>> {
+    ) -> anyhow::Result<Result<Option<Vec<golem_api_1_x::oplog::PublicOplogEntry>>, OplogReadError>>
+    {
         self.observe_function_call("golem::api::get-oplog", "get-next");
 
-        let entry = self.as_wasi_view().table().get(&self_)?.clone();
-        let agent_type =
-            ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
-        let component_service = self.state.component_service.clone();
-        let oplog_service = self.state.oplog_service();
-
-        let agent_mode = self
-            .state
-            .worker_service
-            .get_agent_mode(&entry.owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("agent {} does not exist", entry.owned_agent_id))?;
-
-        let chunk = get_public_oplog_chunk(
-            component_service,
-            oplog_service,
-            &entry.owned_agent_id,
-            agent_mode,
-            agent_type.as_ref(),
-            entry.current_component_revision,
-            entry.next_oplog_index,
-            entry.page_size,
+        let begun = CallHandle::<GolemApiGetOplogNext, NotCancellable>::begin(
+            self,
+            DurableFunctionType::ReadRemote,
         )
-        .await
-        .map_err(|msg| anyhow!(msg))?;
+        .await?;
+        let response = 'response: {
+            let (handle, entry, denied) = if begun.is_live() {
+                let entry = self.as_wasi_view().table().get(&self_)?.clone();
+                let denied = oplog_read_denied(
+                    self,
+                    &entry.owned_agent_id,
+                    entry.next_oplog_index,
+                    entry.page_size,
+                )
+                .await?;
+                let request = HostRequestGolemApiOplogRead {
+                    agent_id: entry.owned_agent_id.agent_id(),
+                    next_oplog_index: entry.next_oplog_index,
+                    query: None,
+                    page_size: entry.page_size,
+                    current_component_revision: entry
+                        .initialized
+                        .then_some(entry.current_component_revision),
+                };
+                (begun.start_live(self, request).await?, entry, denied)
+            } else {
+                let mut handle = begun.start_replay(self).await?;
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'response response,
+                    CallReplayOutcome::Incomplete(live) => {
+                        handle = live;
+                    }
+                }
+                let entry = self.as_wasi_view().table().get(&self_)?.clone();
+                (handle, entry, false)
+            };
 
-        if chunk.next_oplog_index != entry.next_oplog_index {
-            let entries = chunk
-                .entries
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, String>>()
-                .map_err(|error| {
-                    anyhow!("cannot project oplog entry to golem:api/oplog@1.5.0: {error}")
-                })?;
-            self.as_wasi_view()
-                .table()
-                .get_mut(&self_)?
-                .update(chunk.next_oplog_index, chunk.current_component_revision);
-            Ok(Some(entries))
-        } else {
-            Ok(None)
+            if denied {
+                break 'response handle
+                    .complete(
+                        self,
+                        HostResponseGolemApiOplogChunk {
+                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                            next_oplog_index: entry.next_oplog_index,
+                            current_component_revision: entry.current_component_revision,
+                        },
+                    )
+                    .await?;
+            }
+
+            let result = get_oplog_chunk(self, &entry).await;
+            let response = match result {
+                Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
+                    HostResponseGolemApiOplogChunk {
+                        result: serde_json::to_vec(&chunk.entries)
+                            .map(Some)
+                            .map_err(|error| error.to_string()),
+                        next_oplog_index: chunk.next_oplog_index,
+                        current_component_revision: chunk.current_component_revision,
+                    }
+                }
+                Ok(chunk) => HostResponseGolemApiOplogChunk {
+                    result: Ok(None),
+                    next_oplog_index: chunk.next_oplog_index,
+                    current_component_revision: chunk.current_component_revision,
+                },
+                Err(error) => HostResponseGolemApiOplogChunk {
+                    result: Err(error),
+                    next_oplog_index: entry.next_oplog_index,
+                    current_component_revision: entry.current_component_revision,
+                },
+            };
+            handle.complete(self, response).await?
+        };
+
+        self.as_wasi_view().table().get_mut(&self_)?.update(
+            response.next_oplog_index,
+            response.current_component_revision,
+        );
+        match response.result {
+            Ok(Some(entries)) => {
+                let entries: Vec<PublicOplogEntry> = serde_json::from_slice(&entries)
+                    .map_err(|error| anyhow!("invalid persisted public oplog chunk: {error}"))?;
+                let entries = entries
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<_>, String>>()
+                    .map_err(|error| {
+                        anyhow!("cannot project oplog entry to golem:api/oplog@1.5.0: {error}")
+                    })?;
+                Ok(Ok(Some(entries)))
+            }
+            Ok(None) => Ok(Ok(None)),
+            Err(error) if error == AGENT_OPERATION_PERMISSION_DENIED => {
+                Ok(Err(OplogReadError::PermissionDenied))
+            }
+            Err(error) => Ok(Err(OplogReadError::InternalError(error))),
         }
     }
 
@@ -1417,6 +1931,7 @@ pub struct GetOplogEntry {
     pub next_oplog_index: OplogIndex,
     pub current_component_revision: ComponentRevision,
     pub page_size: usize,
+    pub initialized: bool,
 }
 
 impl GetOplogEntry {
@@ -1431,6 +1946,7 @@ impl GetOplogEntry {
             next_oplog_index: initial_oplog_index,
             current_component_revision: initial_component_revision,
             page_size,
+            initialized: false,
         }
     }
 
@@ -1441,6 +1957,7 @@ impl GetOplogEntry {
     ) {
         self.next_oplog_index = next_oplog_index;
         self.current_component_revision = current_component_revision;
+        self.initialized = true;
     }
 }
 
@@ -1456,22 +1973,13 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id(), &agent_id);
 
         let start = OplogIndex::INITIAL;
-        let agent_mode = self
-            .state
-            .worker_service
-            .get_agent_mode(&owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("agent {} does not exist", owned_agent_id))?;
-        let initial_component_version = find_component_revision_at(
-            self.state.oplog_service(),
-            &owned_agent_id,
-            agent_mode,
+        let entry = SearchOplogEntry::new(
+            owned_agent_id,
             start,
-        )
-        .await?;
-
-        let entry =
-            SearchOplogEntry::new(owned_agent_id, start, initial_component_version, 100, text);
+            self.component_metadata().revision,
+            100,
+            text,
+        );
         let resource = self.as_wasi_view().table().push(entry)?;
         Ok(resource)
     }
@@ -1480,62 +1988,121 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<SearchOplog>,
     ) -> anyhow::Result<
-        Option<
-            Vec<(
-                golem_api_1_x::oplog::OplogIndex,
-                golem_api_1_x::oplog::PublicOplogEntry,
-            )>,
+        Result<
+            Option<
+                Vec<(
+                    golem_api_1_x::oplog::OplogIndex,
+                    golem_api_1_x::oplog::PublicOplogEntry,
+                )>,
+            >,
+            OplogReadError,
         >,
     > {
         self.observe_function_call("golem::api::search-oplog", "get-next");
 
-        let entry = self.as_wasi_view().table().get(&self_)?.clone();
-        let agent_type =
-            ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
-        let component_service = self.state.component_service.clone();
-        let oplog_service = self.state.oplog_service();
-
-        let agent_mode = self
-            .state
-            .worker_service
-            .get_agent_mode(&entry.owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow!("agent {} does not exist", entry.owned_agent_id))?;
-
-        let chunk = search_public_oplog(
-            component_service,
-            oplog_service,
-            &entry.owned_agent_id,
-            agent_mode,
-            agent_type.as_ref(),
-            entry.current_component_revision,
-            entry.next_oplog_index,
-            entry.page_size,
-            &entry.query,
+        let begun = CallHandle::<GolemApiSearchOplogNext, NotCancellable>::begin(
+            self,
+            DurableFunctionType::ReadRemote,
         )
-        .await
-        .map_err(|msg| anyhow!(msg))?;
+        .await?;
+        let response = 'response: {
+            let (handle, entry, denied) = if begun.is_live() {
+                let entry = self.as_wasi_view().table().get(&self_)?.clone();
+                let denied = oplog_read_denied(
+                    self,
+                    &entry.owned_agent_id,
+                    entry.next_oplog_index,
+                    entry.page_size,
+                )
+                .await?;
+                let request = HostRequestGolemApiOplogRead {
+                    agent_id: entry.owned_agent_id.agent_id(),
+                    next_oplog_index: entry.next_oplog_index,
+                    query: Some(entry.query.clone()),
+                    page_size: entry.page_size,
+                    current_component_revision: entry
+                        .initialized
+                        .then_some(entry.current_component_revision),
+                };
+                (begun.start_live(self, request).await?, entry, denied)
+            } else {
+                let mut handle = begun.start_replay(self).await?;
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'response response,
+                    CallReplayOutcome::Incomplete(live) => {
+                        handle = live;
+                    }
+                }
+                let entry = self.as_wasi_view().table().get(&self_)?.clone();
+                (handle, entry, false)
+            };
 
-        if chunk.next_oplog_index != entry.next_oplog_index {
-            let entries = chunk
-                .entries
-                .into_iter()
-                .map(|(idx, entry)| {
-                    let idx: golem_api_1_x::oplog::OplogIndex = idx.into();
-                    let entry: golem_api_1_x::oplog::PublicOplogEntry = entry.try_into()?;
-                    Ok((idx, entry))
-                })
-                .collect::<Result<Vec<_>, String>>()
-                .map_err(|error| {
-                    anyhow!("cannot project oplog entry to golem:api/oplog@1.5.0: {error}")
-                })?;
-            self.as_wasi_view()
-                .table()
-                .get_mut(&self_)?
-                .update(chunk.next_oplog_index, chunk.current_component_revision);
-            Ok(Some(entries))
-        } else {
-            Ok(None)
+            if denied {
+                break 'response handle
+                    .complete(
+                        self,
+                        HostResponseGolemApiOplogChunk {
+                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                            next_oplog_index: entry.next_oplog_index,
+                            current_component_revision: entry.current_component_revision,
+                        },
+                    )
+                    .await?;
+            }
+
+            let result = get_search_oplog_chunk(self, &entry).await;
+            let response = match result {
+                Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
+                    HostResponseGolemApiOplogChunk {
+                        result: serde_json::to_vec(&chunk.entries)
+                            .map(Some)
+                            .map_err(|error| error.to_string()),
+                        next_oplog_index: chunk.next_oplog_index,
+                        current_component_revision: chunk.current_component_revision,
+                    }
+                }
+                Ok(chunk) => HostResponseGolemApiOplogChunk {
+                    result: Ok(None),
+                    next_oplog_index: chunk.next_oplog_index,
+                    current_component_revision: chunk.current_component_revision,
+                },
+                Err(error) => HostResponseGolemApiOplogChunk {
+                    result: Err(error),
+                    next_oplog_index: entry.next_oplog_index,
+                    current_component_revision: entry.current_component_revision,
+                },
+            };
+            handle.complete(self, response).await?
+        };
+
+        self.as_wasi_view().table().get_mut(&self_)?.update(
+            response.next_oplog_index,
+            response.current_component_revision,
+        );
+        match response.result {
+            Ok(Some(entries)) => {
+                let entries: Vec<(OplogIndex, PublicOplogEntry)> = serde_json::from_slice(&entries)
+                    .map_err(|error| {
+                        anyhow!("invalid persisted public oplog search chunk: {error}")
+                    })?;
+                let entries = entries
+                    .into_iter()
+                    .map(|(idx, entry)| {
+                        let idx: golem_api_1_x::oplog::OplogIndex = idx.into();
+                        let entry: golem_api_1_x::oplog::PublicOplogEntry = entry.try_into()?;
+                        Ok((idx, entry))
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+                    .map_err(|error| {
+                        anyhow!("cannot project oplog entry to golem:api/oplog@1.5.0: {error}")
+                    })?;
+                Ok(Ok(Some(entries)))
+            }
+            Ok(None) => Ok(Ok(None)),
+            Err(error) if error == AGENT_OPERATION_PERMISSION_DENIED => {
+                Ok(Err(OplogReadError::PermissionDenied))
+            }
+            Err(error) => Ok(Err(OplogReadError::InternalError(error))),
         }
     }
 
@@ -1546,44 +2113,6 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    async fn resolve_agent_id_strict_internal(
-        &self,
-        component_slug: String,
-        agent_name: String,
-    ) -> Result<Option<AgentId>, WorkerExecutorError> {
-        let component_id = self
-            .state
-            .component_service
-            .resolve_component(
-                component_slug.clone(),
-                self.state.component_metadata.environment_id,
-                self.state.component_metadata.application_id,
-                self.state.component_metadata.account_id,
-            )
-            .await?;
-
-        let agent_id = component_id.map(|component_id| AgentId {
-            component_id,
-            agent_id: agent_name.clone(),
-        });
-
-        if let Some(agent_id) = agent_id.clone() {
-            let owned_id = OwnedAgentId {
-                environment_id: self.state.owned_agent_id.environment_id(),
-                agent_id,
-            };
-
-            let metadata = self.state.worker_service.get(&owned_id).await;
-
-            if metadata.is_none() {
-                return Ok(None);
-            };
-        };
-        Ok(agent_id)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct SearchOplogEntry {
     pub owned_agent_id: OwnedAgentId,
@@ -1591,6 +2120,7 @@ pub struct SearchOplogEntry {
     pub current_component_revision: ComponentRevision,
     pub page_size: usize,
     pub query: String,
+    pub initialized: bool,
 }
 
 impl SearchOplogEntry {
@@ -1607,6 +2137,7 @@ impl SearchOplogEntry {
             current_component_revision: initial_component_revision,
             page_size,
             query,
+            initialized: false,
         }
     }
 
@@ -1617,6 +2148,7 @@ impl SearchOplogEntry {
     ) {
         self.next_oplog_index = next_oplog_index;
         self.current_component_revision = current_component_revision;
+        self.initialized = true;
     }
 }
 
@@ -1630,82 +2162,180 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Vec<golem_api_1_x::oplog::PublicOplogEntry>, String>> {
         self.observe_function_call("golem::api::oplog", "enrich-oplog-entries");
 
-        // The raw oplog entries are guest-owned: their only live
-        // `schema-value-tree` (each `create.local-agent-config[].value`) may
-        // carry owned `quota-token` handles that were transferred into the
-        // resource table at the WIT boundary. The pure `TryFrom` conversion
-        // below rejects quota tokens but cannot delete the handles, and this
-        // function returns its error as a non-trapping `result::err`, so drain
-        // any such handle up front (rejecting the batch) before any other
-        // non-trapping early return can drop the entries without cleanup.
-        let entries = match crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(
-            entries, self,
-        ) {
-            Ok(entries) => entries,
-            Err(e) => return Ok(Err(e)),
-        };
+        let begun = CallHandle::<GolemApiEnrichOplogEntries, NotCancellable>::begin(
+            self,
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
 
-        let component_service = self.state.component_service.clone();
-        let oplog_service = self.state.oplog_service();
-        let environment_id = golem_common::model::environment::EnvironmentId::from(
-            Uuid::from_u64_pair(environment_id.uuid.high_bits, environment_id.uuid.low_bits),
-        );
-        let agent_id: AgentId = agent_id.into();
-        let agent_type = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
-        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-
-        let mut current_revision = match ComponentRevision::try_from(component_revision) {
-            Ok(rev) => rev,
-            Err(e) => return Ok(Err(e.to_string())),
-        };
-
-        let agent_mode = match self
-            .state
-            .worker_service
-            .get_agent_mode(&owned_agent_id)
-            .await
-        {
-            Some(mode) => mode,
-            None => return Ok(Err(format!("agent {owned_agent_id} does not exist"))),
-        };
-
-        let mut result = Vec::with_capacity(entries.len());
-        for (index, wit_entry) in entries {
-            let entry = match OplogEntry::try_from(wit_entry) {
-                Ok(e) => e,
-                Err(e) => return Ok(Err(e)),
+        let response = 'response: {
+            let mut raw_entries = Some(entries);
+            let (handle, owned_agent_id, denied, prepared_entries) = if begun.is_live() {
+                let environment_id =
+                    golem_common::model::environment::EnvironmentId::from(Uuid::from_u64_pair(
+                        environment_id.uuid.high_bits,
+                        environment_id.uuid.low_bits,
+                    ));
+                let agent_id: AgentId = agent_id.into();
+                let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+                let entry_indexes = raw_entries
+                    .as_ref()
+                    .expect("raw oplog entries must be present")
+                    .iter()
+                    .map(|(index, _)| OplogIndex::from_u64(*index))
+                    .collect::<Vec<_>>();
+                let denied = oplog_entries_denied(self, &owned_agent_id, &entry_indexes).await?;
+                let (request_entries, prepared_entries) = if denied {
+                    (
+                        entry_indexes
+                            .iter()
+                            .map(|index| (index.as_u64(), Vec::new()))
+                            .collect(),
+                        None,
+                    )
+                } else {
+                    let (request_entries, prepared_entries) = prepare_oplog_enrichment_entries(
+                        self,
+                        raw_entries
+                            .take()
+                            .expect("raw oplog entries must be present"),
+                    );
+                    (request_entries, Some(prepared_entries))
+                };
+                let request = HostRequestGolemApiOplogEnrich {
+                    environment_id,
+                    agent_id,
+                    entries: request_entries,
+                    component_revision,
+                };
+                (
+                    begun.start_live(self, request).await?,
+                    owned_agent_id,
+                    denied,
+                    prepared_entries,
+                )
+            } else {
+                let mut handle = begun.start_replay(self).await?;
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => {
+                        let _ =
+                            crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(
+                                raw_entries
+                                    .take()
+                                    .expect("raw oplog entries must be present"),
+                                self,
+                            );
+                        break 'response response;
+                    }
+                    CallReplayOutcome::Incomplete(live) => {
+                        handle = live;
+                    }
+                }
+                let environment_id =
+                    golem_common::model::environment::EnvironmentId::from(Uuid::from_u64_pair(
+                        environment_id.uuid.high_bits,
+                        environment_id.uuid.low_bits,
+                    ));
+                let agent_id: AgentId = agent_id.into();
+                let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+                let (_, prepared_entries) = prepare_oplog_enrichment_entries(
+                    self,
+                    raw_entries
+                        .take()
+                        .expect("raw oplog entries must be present"),
+                );
+                (handle, owned_agent_id, false, Some(prepared_entries))
             };
 
-            if let Some(rev) = entry.specifies_component_revision() {
-                current_revision = rev;
+            if denied {
+                let _ = crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(
+                    raw_entries
+                        .take()
+                        .expect("raw oplog entries must be present"),
+                    self,
+                );
+                break 'response handle
+                    .complete(
+                        self,
+                        HostResponseGolemApiOplogEntries {
+                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                        },
+                    )
+                    .await?;
             }
 
-            let oplog_index = OplogIndex::from_u64(index);
-            match PublicOplogEntry::from_oplog_entry(
-                oplog_index,
-                entry,
-                oplog_service.clone(),
-                component_service.clone(),
-                &owned_agent_id,
-                agent_mode,
-                agent_type.as_ref(),
-                current_revision,
-            )
-            .await
+            let entries = match prepared_entries
+                .expect("authorized oplog enrichment must have prepared entries")
             {
-                Ok(public_entry) => {
-                    let wit_entry: golem_api_1_x::oplog::PublicOplogEntry =
-                        match public_entry.try_into() {
-                            Ok(entry) => entry,
-                            Err(error) => return Ok(Err(error)),
-                        };
-                    result.push(wit_entry);
+                Ok(entries) => entries,
+                Err(error) => {
+                    break 'response handle
+                        .complete(
+                            self,
+                            HostResponseGolemApiOplogEntries { result: Err(error) },
+                        )
+                        .await?;
                 }
-                Err(e) => return Ok(Err(e)),
-            }
-        }
+            };
 
-        Ok(Ok(result))
+            let result = async {
+                let component_service = self.state.component_service.clone();
+                let oplog_service = self.state.oplog_service();
+                let agent_type =
+                    ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+                let mut current_revision = ComponentRevision::try_from(component_revision)?;
+                let agent_mode = self
+                    .state
+                    .worker_service
+                    .get_agent_mode(&owned_agent_id)
+                    .await
+                    .ok_or_else(|| format!("agent {owned_agent_id} does not exist"))?;
+
+                let mut result = Vec::with_capacity(entries.len());
+                for (index, entry) in entries {
+                    if let Some(revision) = entry.specifies_component_revision() {
+                        current_revision = revision;
+                    }
+                    result.push(
+                        PublicOplogEntry::from_oplog_entry(
+                            OplogIndex::from_u64(index),
+                            entry,
+                            oplog_service.clone(),
+                            component_service.clone(),
+                            &owned_agent_id,
+                            agent_mode,
+                            agent_type.as_ref(),
+                            current_revision,
+                        )
+                        .await?,
+                    );
+                }
+                serde_json::to_vec(&result).map_err(|error| error.to_string())
+            }
+            .await;
+
+            handle
+                .complete(self, HostResponseGolemApiOplogEntries { result })
+                .await?
+        };
+
+        match response.result {
+            Ok(entries) => {
+                let entries: Vec<PublicOplogEntry> =
+                    serde_json::from_slice(&entries).map_err(|error| {
+                        anyhow!("invalid persisted enriched public oplog entries: {error}")
+                    })?;
+                entries
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<_>, String>>()
+                    .map(Ok)
+                    .map_err(|error| {
+                        anyhow!("cannot project oplog entry to golem:api/oplog@1.5.0: {error}")
+                    })
+            }
+            Err(error) => Ok(Err(error)),
+        }
     }
 }
 

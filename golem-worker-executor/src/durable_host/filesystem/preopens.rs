@@ -15,6 +15,8 @@
 use wasmtime::component::Resource;
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::authorization::targets::CanonicalGuestPath;
+use crate::durable_host::filesystem::remember_path;
 use crate::workerctx::WorkerCtx;
 use wasmtime_wasi::filesystem::WasiFilesystemView as _;
 use wasmtime_wasi::p2::bindings::filesystem::preopens::{Descriptor, Host};
@@ -23,6 +25,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_directories(&mut self) -> wasmtime::Result<Vec<(Resource<Descriptor>, String)>> {
         let mut view = self.as_wasi_view();
         let current_dirs = Host::get_directories(&mut view.filesystem()).await?;
+        for (descriptor, guest_path) in &current_dirs {
+            let path = CanonicalGuestPath::new(if guest_path == "." { "/" } else { guest_path })
+                .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
+            remember_path(self, descriptor.rep(), path);
+        }
         Ok(current_dirs)
     }
 }

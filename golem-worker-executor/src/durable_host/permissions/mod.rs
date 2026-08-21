@@ -892,7 +892,7 @@ async fn persist_runtime_card<Ctx, Pair, DeriveCardId, BuildCard, RepairAuthoriz
     ctx: &mut DurableWorkerCtx<Ctx>,
     derive_card_id: DeriveCardId,
     build_card: BuildCard,
-    repair_authorization: RepairAuthorization,
+    _repair_authorization: RepairAuthorization,
 ) -> anyhow::Result<StoredCard>
 where
     Ctx: WorkerCtx,
@@ -942,17 +942,7 @@ where
     } else {
         match handle.replay(ctx).await? {
             CallReplayOutcome::Replayed(response) => response,
-            CallReplayOutcome::Incomplete(mut handle) => {
-                let authorization = ctx
-                    .with_agent_authority_at_boundary(repair_authorization)
-                    .await;
-                match authorization {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => {
-                        return Err(handle.trap(permission_error_to_anyhow(error)));
-                    }
-                    Err(error) => return Err(handle.trap(error)),
-                }
+            CallReplayOutcome::Incomplete(handle) => {
                 complete_runtime_card_creation(ctx, handle, card.clone(), provenance).await?
             }
         }
@@ -2782,23 +2772,6 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                         transfer = CardTransferData::from_request(
                             load_card_transfer_request(self, start_index).await?,
                         )?;
-                        let authorization = self
-                            .with_agent_authority_at_boundary(|ctx| {
-                                ensure_install_permission_in_surface(
-                                    &ctx.state.agent_effective_surface,
-                                    &ctx.state.created_by_email,
-                                    transfer.source_card.card_id(),
-                                    &target_recipient,
-                                )
-                            })
-                            .await;
-                        match authorization {
-                            Ok(Ok(())) => {}
-                            Ok(Err(error)) => {
-                                return Err(handle.trap(permission_error_to_anyhow(error)));
-                            }
-                            Err(error) => return Err(handle.trap(error)),
-                        }
                     }
                 }
             }

@@ -1864,10 +1864,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .capture_live_agent_authority_at_boundary(&mut capture)
             .await?;
         let begin_index = self.begin_function(function_type).await?;
-        if captured.is_none() && self.state.is_live() {
-            captured = self
-                .capture_live_agent_authority_at_boundary(&mut capture)
-                .await?;
+        if captured.is_none() {
+            if self.state.snapshotting_mode && self.state.is_replay() {
+                // Snapshot loading executes guest code without durable host-call records while
+                // replay is positioned at the snapshot. Use the authority reconstructed from the
+                // persisted snapshot rather than consulting current card state.
+                captured = Some(capture(self));
+            } else if self.state.is_live() {
+                captured = self
+                    .capture_live_agent_authority_at_boundary(&mut capture)
+                    .await?;
+            }
         }
         Ok((begin_index, captured))
     }

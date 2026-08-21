@@ -677,7 +677,6 @@ impl TestWorkerExecutor {
             .await;
         Ok(())
     }
-
     pub async fn store_component_with_id(
         &self,
         name: &str,
@@ -1911,7 +1910,7 @@ impl HostWasmRpc for TestWorkerCtx {
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
         scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<ScheduledInvocationReceipt> {
+    ) -> anyhow::Result<Result<ScheduledInvocationReceipt, RpcError>> {
         self.durable_ctx
             .schedule_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
@@ -1924,7 +1923,7 @@ impl HostWasmRpc for TestWorkerCtx {
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
         scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
+    ) -> anyhow::Result<Result<CancelableScheduledInvocationReceipt, RpcError>> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
@@ -3679,6 +3678,7 @@ impl Rpc for FailingRpc {
     async fn create_demand(
         &self,
         owned_agent_id: &OwnedAgentId,
+        method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -3689,6 +3689,7 @@ impl Rpc for FailingRpc {
         self.inner
             .create_demand(
                 owned_agent_id,
+                method_name,
                 self_created_by,
                 self_agent_id,
                 self_env,

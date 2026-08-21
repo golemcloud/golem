@@ -960,13 +960,18 @@ interface oplog {
     /// and augmenting entries with component metadata.
     enrich-oplog-entries: func(environment-id: environment-id, agent-id: agent-id, entries: list<tuple<oplog-index, oplog-entry>>, component-revision: component-revision) -> result<list<public-oplog-entry>, string>;
 
+    variant oplog-read-error {
+        permission-denied,
+        internal-error(string),
+    }
+
     resource get-oplog {
         constructor(agent-id: agent-id, start: oplog-index);
-        get-next: func() -> option<list<public-oplog-entry>>;
+        get-next: func() -> result<option<list<public-oplog-entry>>, oplog-read-error>;
     }
 
     resource search-oplog {
         constructor(agent-id: agent-id, text: string);
-        get-next: func() -> option<list<tuple<oplog-index, public-oplog-entry>>>;
+        get-next: func() -> result<option<list<tuple<oplog-index, public-oplog-entry>>>, oplog-read-error>;
     }
 }

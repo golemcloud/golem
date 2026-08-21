@@ -615,7 +615,7 @@ render_verb!(EnvVerb { Read => "read" });
 render_verb!(OplogVerb { Read => "read" });
 render_verb!(ConfigVerb { Read => "read" });
 render_verb!(SecretVerb { Hold => "hold", Mint => "mint", Reveal => "reveal" });
-render_verb!(AgentVerb { Invoke => "invoke", View => "view", Delete => "delete", Interrupt => "interrupt", Resume => "resume", UpdateRevision => "update-revision", Fork => "fork", Revert => "revert", CancelInvocation => "cancel-invocation", ActivatePlugin => "activate-plugin", DeactivatePlugin => "deactivate-plugin", Debug => "debug" });
+render_verb!(AgentVerb { Invoke => "invoke", View => "view", Delete => "delete", Interrupt => "interrupt", Resume => "resume", UpdateRevision => "update-revision", Fork => "fork", Revert => "revert", CancelInvocation => "cancel-invocation", ActivatePlugin => "activate-plugin", DeactivatePlugin => "deactivate-plugin" });
 render_verb!(ToolVerb { Invoke => "invoke" });
 render_verb!(KvVerb { Read => "read", Write => "write", Delete => "delete", List => "list" });
 render_verb!(BlobVerb { Read => "read", Write => "write", Delete => "delete", List => "list" });
@@ -779,6 +779,7 @@ impl RenderFragment for AgentResourcePattern {
             Self::InvocationId(AgentInvocationIdPattern::Uuid(id)) => id.to_string(),
             Self::InvocationId(AgentInvocationIdPattern::Identifier(id)) => id.0.clone(),
             Self::PluginName(name) => name.0.clone(),
+            Self::Empty => String::new(),
         })
     }
 }

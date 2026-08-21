@@ -1136,7 +1136,7 @@ mod tests {
         }
 
         async fn create_webhook_and_trigger(&self) -> String {
-            let webhook = create_webhook();
+            let webhook = create_webhook().expect("webhook creation should be allowed");
 
             webhook_placeholder(webhook.url());
 

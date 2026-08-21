@@ -27,7 +27,6 @@ use crate::worker::{
     Worker, WorkerCommand, WorkerInterruptState, WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
-use anyhow::anyhow;
 use async_lock::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
@@ -1064,6 +1063,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         debug!(
                             "Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result"
                         );
+                        if let Err(error) =
+                            self.parent.cancel_invocation(idempotency_key.clone()).await
+                        {
+                            warn!(
+                                agent_id = %self.owned_agent_id.agent_id,
+                                "Failed to remove completed invocation from the pending queue: {error}"
+                            );
+                            return CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
+                        }
                         CommandOutcome::Continue
                     }
                 } else {
@@ -1286,8 +1294,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     ) -> CommandOutcome {
         let trap_type = match result {
             Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
-            Err(error) => Some(TrapType::from_error::<Ctx>(
-                &anyhow!(error),
+            Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
+                error,
                 OplogIndex::INITIAL,
                 false,
                 false,

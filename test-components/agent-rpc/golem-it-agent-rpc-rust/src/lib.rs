@@ -198,20 +198,26 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
     fn test1(&self, server_agent_name: String) {
         let mut server = ScheduledInvocationServerClient::get(server_agent_name);
         let scheduled_for = datetime_200ms_from_now();
-        server.schedule_inc_global_by(1, scheduled_for);
+        server
+            .schedule_inc_global_by(1, scheduled_for)
+            .expect("failed to schedule invocation");
     }
 
     fn test2(&self, server_agent_name: String) {
         let mut server = ScheduledInvocationServerClient::get(server_agent_name);
         let scheduled_for = datetime_200ms_from_now();
-        let token = server.schedule_cancelable_inc_global_by(1, scheduled_for);
+        let token = server
+            .schedule_cancelable_inc_global_by(1, scheduled_for)
+            .expect("failed to schedule cancelable invocation");
         token.cancel();
     }
 
     fn test3(&mut self) {
         let mut self_client = ScheduledInvocationClientClient::get(self._name.clone());
         let scheduled_for = datetime_200ms_from_now();
-        self_client.schedule_inc_global_by(1, scheduled_for);
+        self_client
+            .schedule_inc_global_by(1, scheduled_for)
+            .expect("failed to schedule invocation");
     }
 
     fn inc_global_by(&mut self, value: u64) {
@@ -652,6 +658,7 @@ impl HttpPollingSelfScheduler for HttpPollingSelfSchedulerImpl {
             .await;
 
         let me = HttpPollingSelfSchedulerClient::get(self.name.clone());
-        me.schedule_tick(host, port, datetime_500ms_from_now());
+        me.schedule_tick(host, port, datetime_500ms_from_now())
+            .expect("failed to schedule polling tick");
     }
 }

@@ -216,7 +216,7 @@ async fn search_oplog_1(
     }
 
     assert_eq!(result1.len(), 2, "G1002"); // TODO: this is temporarily not working because of using the dynamic invoke API and not having structured information in the oplog
-    assert_eq!(result2.len(), 2, "imported-function");
+    assert_eq!(result2.len(), 3, "imported-function");
     assert_eq!(result3.len(), 0, "id:G1001 OR id:G1000"); // TODO: this is temporarily not working because of using the dynamic invoke API and not having structured information in the oplog
 
     Ok(())
@@ -280,7 +280,7 @@ async fn get_oplog_with_api_changing_updates(
 
     let _ = executor.check_oplog_is_queryable(&worker_id).await;
 
-    assert_eq!(oplog.len(), 15);
+    assert_eq!(oplog.len(), 17);
 
     Ok(())
 }
@@ -327,7 +327,7 @@ async fn get_oplog_starting_with_updated_component(
         .collect::<Vec<_>>();
 
     assert_eq!(result.into_typed::<u64>()?, 11);
-    assert_eq!(oplog.len(), 11);
+    assert_eq!(oplog.len(), 13);
 
     Ok(())
 }

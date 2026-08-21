@@ -112,6 +112,22 @@ pub fn parse_permission(value: &str) -> Result<PermissionPattern, CardParseError
     )
 }
 
+pub fn parse_permission_grant(value: &str) -> Result<Vec<PermissionPattern>, CardParseError> {
+    let parts = permission_parts(value).map_err(CardParseError::Malformed)?;
+    reject_slot_variables(&parts)?;
+
+    if is_legacy_agent_debug_alias(&parts)? {
+        legacy_agent_debug_alias_fields()
+            .into_iter()
+            .map(|(class, verb, resource)| {
+                parse_permission_fields(class, &parts.owner, &parts.recipient, verb, resource)
+            })
+            .collect()
+    } else {
+        parse_permission(value).map(|permission| vec![permission])
+    }
+}
+
 pub fn parse_permission_fields(
     class: &str,
     owner: &str,
@@ -142,14 +158,53 @@ pub fn parse_polymorphic_permission(
 ) -> Result<PolymorphicPermissionPattern, CardParseError> {
     let parts = permission_parts(value).map_err(CardParseError::Malformed)?;
 
-    dispatch_permission_class!(
-        parse_polymorphic_permission_case,
+    parse_polymorphic_permission_fields(
         parts.class.as_str(),
         &parts.owner,
         &parts.recipient,
         &parts.verb,
-        &parts.resource
+        &parts.resource,
     )
+}
+
+fn parse_polymorphic_permission_fields(
+    class: &str,
+    owner: &str,
+    recipient: &str,
+    verb: &str,
+    resource: &str,
+) -> Result<PolymorphicPermissionPattern, CardParseError> {
+    dispatch_permission_class!(
+        parse_polymorphic_permission_case,
+        class,
+        owner,
+        recipient,
+        verb,
+        resource
+    )
+}
+
+pub fn parse_polymorphic_permission_grant(
+    value: &str,
+) -> Result<Vec<PolymorphicPermissionPattern>, CardParseError> {
+    let parts = permission_parts(value).map_err(CardParseError::Malformed)?;
+
+    if is_legacy_agent_debug_alias(&parts)? {
+        legacy_agent_debug_alias_fields()
+            .into_iter()
+            .map(|(class, verb, resource)| {
+                parse_polymorphic_permission_fields(
+                    class,
+                    &parts.owner,
+                    &parts.recipient,
+                    verb,
+                    resource,
+                )
+            })
+            .collect()
+    } else {
+        parse_polymorphic_permission(value).map(|permission| vec![permission])
+    }
 }
 
 pub fn parse_polymorphic_manifest_permission(
@@ -157,14 +212,53 @@ pub fn parse_polymorphic_manifest_permission(
 ) -> Result<PolymorphicManifestPermissionPattern, CardParseError> {
     let parts = permission_parts(value).map_err(CardParseError::Malformed)?;
 
-    dispatch_permission_class!(
-        parse_polymorphic_manifest_permission_case,
+    parse_polymorphic_manifest_permission_fields(
         parts.class.as_str(),
         &parts.owner,
         &parts.recipient,
         &parts.verb,
-        &parts.resource
+        &parts.resource,
     )
+}
+
+fn parse_polymorphic_manifest_permission_fields(
+    class: &str,
+    owner: &str,
+    recipient: &str,
+    verb: &str,
+    resource: &str,
+) -> Result<PolymorphicManifestPermissionPattern, CardParseError> {
+    dispatch_permission_class!(
+        parse_polymorphic_manifest_permission_case,
+        class,
+        owner,
+        recipient,
+        verb,
+        resource
+    )
+}
+
+pub fn parse_polymorphic_manifest_permission_grant(
+    value: &str,
+) -> Result<Vec<PolymorphicManifestPermissionPattern>, CardParseError> {
+    let parts = permission_parts(value).map_err(CardParseError::Malformed)?;
+
+    if is_legacy_agent_debug_alias(&parts)? {
+        legacy_agent_debug_alias_fields()
+            .into_iter()
+            .map(|(class, verb, resource)| {
+                parse_polymorphic_manifest_permission_fields(
+                    class,
+                    &parts.owner,
+                    &parts.recipient,
+                    verb,
+                    resource,
+                )
+            })
+            .collect()
+    } else {
+        parse_polymorphic_manifest_permission(value).map(|permission| vec![permission])
+    }
 }
 
 impl FromStr for PermissionPattern {
@@ -267,6 +361,24 @@ impl<'de> Deserialize<'de> for PolymorphicPermissionPattern {
     }
 }
 
+pub fn deserialize_permission_grants<'de, D>(
+    deserializer: D,
+) -> Result<Vec<PermissionPattern>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_grant_strings(deserializer, parse_permission_grant)
+}
+
+pub fn deserialize_polymorphic_permission_grants<'de, D>(
+    deserializer: D,
+) -> Result<Vec<PolymorphicPermissionPattern>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_grant_strings(deserializer, parse_polymorphic_permission_grant)
+}
+
 #[cfg(feature = "full")]
 impl poem_openapi::types::Type for PolymorphicPermissionPattern {
     const IS_REQUIRED: bool = true;
@@ -344,6 +456,46 @@ fn permission_parts(value: &str) -> Result<PermissionParts, String> {
     })
 }
 
+fn is_legacy_agent_debug_alias(parts: &PermissionParts) -> Result<bool, CardParseError> {
+    if parts.class != "agent" || parts.verb != "debug" {
+        return Ok(false);
+    }
+    if parts.resource != "*" {
+        return Err(CardParseError::InvalidResource {
+            class: parts.class.clone(),
+            resource: parts.resource.clone(),
+        });
+    }
+    Ok(true)
+}
+
+fn legacy_agent_debug_alias_fields() -> [(&'static str, &'static str, &'static str); 8] {
+    [
+        ("oplog", "read", "*"),
+        ("agent", "view", ""),
+        ("filesystem", "read", "/**"),
+        ("env", "read", "*"),
+        ("config", "read", "*"),
+        ("agent", "fork", ""),
+        ("agent", "interrupt", ""),
+        ("agent", "resume", ""),
+    ]
+}
+
+fn deserialize_grant_strings<'de, D, T>(
+    deserializer: D,
+    parse: fn(&str) -> Result<Vec<T>, CardParseError>,
+) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Vec::<String>::deserialize(deserializer)?
+        .into_iter()
+        .map(|grant| parse(&grant).map_err(serde::de::Error::custom))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|grants| grants.into_iter().flatten().collect())
+}
+
 fn permission_tail_parts(value: &str) -> Result<(&str, &str, &str), String> {
     let (recipient, rest) = value
         .split_once(" : ")
@@ -382,7 +534,6 @@ fn parse_class_permission<C: PermissionClass>(
     })?;
     let recipient =
         RecipientPattern::parse(recipient).map_err(CardParseError::InvalidRecipientPath)?;
-    let resource = C::Resource::parse_resource(resource)?;
     let verb = if verb == "*" {
         None
     } else {
@@ -393,6 +544,7 @@ fn parse_class_permission<C: PermissionClass>(
             })?,
         )
     };
+    let resource = C::parse_resource(verb, resource)?;
     let pattern = ClassPermissionPattern::<C> {
         verb,
         owner,
@@ -421,7 +573,6 @@ fn parse_polymorphic_class_permission<C: PermissionClass>(
             resource: resource.to_string(),
         });
     }
-    let resource = C::Resource::parse_resource(resource)?;
     let verb = if verb == "*" {
         None
     } else {
@@ -432,6 +583,7 @@ fn parse_polymorphic_class_permission<C: PermissionClass>(
             })?,
         )
     };
+    let resource = C::parse_resource(verb, resource)?;
     let pattern = PolymorphicClassPermissionPattern::<C> {
         verb,
         owner,
@@ -460,7 +612,6 @@ fn parse_polymorphic_manifest_class_permission<C: PermissionClass>(
             resource: resource.to_string(),
         });
     }
-    let resource = C::Resource::parse_resource(resource)?;
     let verb = if verb == "*" {
         None
     } else {
@@ -471,6 +622,7 @@ fn parse_polymorphic_manifest_class_permission<C: PermissionClass>(
             })?,
         )
     };
+    let resource = C::parse_resource(verb, resource)?;
     Ok(PolymorphicManifestClassPermissionPattern::<C> {
         verb,
         owner,

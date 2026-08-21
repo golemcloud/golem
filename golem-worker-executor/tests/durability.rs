@@ -65,7 +65,7 @@ fn total_memory_growth(entries: &[PublicOplogEntryWithIndex]) -> u64 {
         .sum()
 }
 
-async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiver<LogEvent>) {
+pub(crate) async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiver<LogEvent>) {
     tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(event) = events.recv().await {
             match AgentEvent::try_from(event) {

@@ -411,22 +411,27 @@ fn calculate_latest_worker_status(
                 ..
             } = entry
         {
-            let count = current_retry_state
-                .get(retry_from)
-                .map(|s| s.retry_count())
-                .unwrap_or_default();
-            if is_worker_error_retriable(
-                current_retry_policy
-                    .as_ref()
-                    .unwrap_or(default_retry_policy),
-                error,
-                count,
-                *inside_atomic_region,
-                retry_policy_state.as_ref(),
-            ) {
-                current_status = AgentStatus::Retrying;
+            if matches!(error, AgentError::PermissionDenied(_)) {
+                current_status = AgentStatus::Idle;
+                current_retry_state.clear();
             } else {
-                current_status = AgentStatus::Failed;
+                let count = current_retry_state
+                    .get(retry_from)
+                    .map(|s| s.retry_count())
+                    .unwrap_or_default();
+                if is_worker_error_retriable(
+                    current_retry_policy
+                        .as_ref()
+                        .unwrap_or(default_retry_policy),
+                    error,
+                    count,
+                    *inside_atomic_region,
+                    retry_policy_state.as_ref(),
+                ) {
+                    current_status = AgentStatus::Retrying;
+                } else {
+                    current_status = AgentStatus::Failed;
+                }
             }
         }
 
@@ -1048,10 +1053,12 @@ fn calculate_invocation_results(
 ) -> (HashMap<IdempotencyKey, OplogIndex>, Option<IdempotencyKey>) {
     let mut invocation_results = invocation_results;
     let mut current_idempotency_key = current_idempotency_key;
+    let mut cancelled_idempotency_key = None;
 
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
         if deleted_regions.is_in_deleted_region(*oplog_idx) {
+            cancelled_idempotency_key = None;
             continue;
         }
 
@@ -1059,25 +1066,46 @@ fn calculate_invocation_results(
             OplogEntry::AgentInvocationStarted {
                 idempotency_key, ..
             } => {
+                cancelled_idempotency_key = None;
                 current_idempotency_key = Some(idempotency_key.clone());
             }
             OplogEntry::AgentInvocationFinished { .. } => {
+                cancelled_idempotency_key = None;
                 if let Some(idempotency_key) = &current_idempotency_key {
                     invocation_results.insert(idempotency_key.clone(), *oplog_idx);
                 }
                 current_idempotency_key = None;
             }
+            OplogEntry::CancelPendingInvocation {
+                idempotency_key, ..
+            } => {
+                cancelled_idempotency_key = Some(idempotency_key.clone());
+            }
+            OplogEntry::Error {
+                error: AgentError::PermissionDenied(_),
+                ..
+            } => {
+                if let Some(idempotency_key) = cancelled_idempotency_key.take() {
+                    invocation_results.insert(idempotency_key, *oplog_idx);
+                } else if let Some(idempotency_key) = &current_idempotency_key {
+                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
+                }
+            }
             OplogEntry::Error { .. } => {
+                cancelled_idempotency_key = None;
                 if let Some(idempotency_key) = &current_idempotency_key {
                     invocation_results.insert(idempotency_key.clone(), *oplog_idx);
                 }
             }
             OplogEntry::Exited { .. } => {
+                cancelled_idempotency_key = None;
                 if let Some(idempotency_key) = &current_idempotency_key {
                     invocation_results.insert(idempotency_key.clone(), *oplog_idx);
                 }
             }
-            _ => {}
+            _ => {
+                cancelled_idempotency_key = None;
+            }
         }
     }
 
@@ -1345,6 +1373,7 @@ fn is_worker_error_retriable(
         AgentError::EphemeralFuelExhausted(_) => false,
         AgentError::EphemeralCannotSuspend(_) => false,
         AgentError::ReadOnlyViolation(_) => false,
+        AgentError::PermissionDenied(_) => false,
     }
 }
 
@@ -2016,6 +2045,50 @@ mod test {
     }
 
     #[test]
+    async fn permission_denied_rejection_survives_status_reconstruction() {
+        let idempotency_key = IdempotencyKey::fresh();
+        let test_case = TestCase::builder(0)
+            .pending_invocation(AgentInvocation::AgentMethod {
+                idempotency_key: idempotency_key.clone(),
+                method_name: "denied".to_string(),
+                input: SchemaValue::Record { fields: vec![] },
+                invocation_context: InvocationContextStack::fresh(),
+                principal: Principal::anonymous(),
+                scope_card: None,
+            })
+            .permission_denied_pending_invocation(idempotency_key.clone())
+            .build();
+        let expected = test_case.entries.last().unwrap().expected_status.clone();
+        let pending_baseline = test_case.entries[1].expected_status.clone();
+
+        let from_start = calculate_last_known_status(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            None,
+        )
+        .await
+        .unwrap();
+        let from_before_atomic_pair = calculate_last_known_status_for_existing_worker(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            Some(pending_baseline),
+        )
+        .await;
+
+        assert_eq!(from_start, expected);
+        assert_eq!(from_before_atomic_pair, expected);
+        assert_eq!(expected.status, AgentStatus::Idle);
+        assert!(expected.pending_invocations.is_empty());
+        assert_eq!(expected.current_idempotency_key, None);
+        assert_eq!(
+            expected.invocation_results.get(&idempotency_key),
+            Some(&expected.oplog_idx)
+        );
+    }
+
+    #[test]
     async fn snapshot_tracking() {
         let k1 = IdempotencyKey::fresh();
 
@@ -2494,6 +2567,25 @@ mod test {
                     .retain(|ti| ti.idempotency_key() != Some(&idempotency_key));
                 status
             })
+        }
+
+        pub fn permission_denied_pending_invocation(self, idempotency_key: IdempotencyKey) -> Self {
+            self.cancel_pending_invocation(idempotency_key.clone()).add(
+                OplogEntry::error(
+                    AgentError::PermissionDenied("permission denied".to_string()),
+                    OplogIndex::INITIAL,
+                    false,
+                    None,
+                ),
+                move |mut status| {
+                    status
+                        .invocation_results
+                        .insert(idempotency_key, status.oplog_idx);
+                    status.status = AgentStatus::Idle;
+                    status.current_retry_state.clear();
+                    status
+                },
+            )
         }
 
         pub fn pending_update(

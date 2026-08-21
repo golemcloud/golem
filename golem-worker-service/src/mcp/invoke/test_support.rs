@@ -35,7 +35,9 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::oplog::{OplogCursor, OplogIndex};
-use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
+use golem_common::model::worker::{
+    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertWorkerTarget,
+};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
@@ -480,9 +482,20 @@ impl WorkerClient for RecordingWorkerClient {
         &self,
         _: &AgentId,
         _: RevertWorkerTarget,
+        _: Option<ResolvedRevert>,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> WorkerResult<()> {
+        unimplemented!()
+    }
+
+    async fn resolve_revert_last_invocations(
+        &self,
+        _: &AgentId,
+        _: u64,
+        _: EnvironmentId,
+        _: AuthCtx,
+    ) -> WorkerResult<ResolvedRevert> {
         unimplemented!()
     }
 

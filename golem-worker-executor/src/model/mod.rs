@@ -282,6 +282,31 @@ pub enum TrapType {
 }
 
 impl TrapType {
+    pub fn from_worker_executor_error<Ctx: WorkerCtx>(
+        error: WorkerExecutorError,
+        fallback_retry_from: OplogIndex,
+        fallback_in_atomic_region: bool,
+        fallback_atomic_region_had_side_effects: bool,
+        agent_mode: AgentMode,
+    ) -> TrapType {
+        match error {
+            WorkerExecutorError::PermissionDenied { details } => TrapType::Error {
+                error: AgentError::PermissionDenied(details),
+                retry_from: fallback_retry_from,
+                in_atomic_region: fallback_in_atomic_region,
+                atomic_region_had_side_effects: fallback_atomic_region_had_side_effects,
+                semantic_trap_retry_override: None,
+            },
+            error => Self::from_error::<Ctx>(
+                &anyhow::Error::new(error),
+                fallback_retry_from,
+                fallback_in_atomic_region,
+                fallback_atomic_region_had_side_effects,
+                agent_mode,
+            ),
+        }
+    }
+
     /// Classifies an escaping error into a [`TrapType`].
     ///
     /// `fallback_retry_from`, `fallback_in_atomic_region`, and
@@ -450,7 +475,7 @@ impl TrapType {
                                 make_error(AgentError::InvalidRequest(details.clone()))
                             }
                             Some(WorkerExecutorError::PermissionDenied { details }) => {
-                                make_error(AgentError::PermanentError(details.clone()))
+                                make_error(AgentError::PermissionDenied(details.clone()))
                             }
                             Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
                                 make_error(AgentError::InvalidRequest(details.clone()))
@@ -512,6 +537,9 @@ impl TrapType {
                 AgentError::InvalidRequest(msg) => {
                     Some(WorkerExecutorError::invalid_request(msg.clone()))
                 }
+                AgentError::PermissionDenied(msg) => {
+                    Some(WorkerExecutorError::permission_denied(msg.clone()))
+                }
                 _ => Some(WorkerExecutorError::InvocationFailed {
                     error: error.clone(),
                     stderr: error_logs.to_string(),
@@ -520,6 +548,16 @@ impl TrapType {
             TrapType::Exit => Some(WorkerExecutorError::runtime("Process exited")),
             _ => None,
         }
+    }
+
+    pub fn is_invocation_rejection(&self) -> bool {
+        matches!(
+            self,
+            TrapType::Error {
+                error: AgentError::InvalidRequest(_) | AgentError::PermissionDenied(_),
+                ..
+            }
+        )
     }
 }
 
@@ -947,12 +985,10 @@ mod tests {
     }
 
     #[test]
-    fn permission_denied_is_non_retriable() {
-        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
-            &anyhow::Error::from(
-                golem_service_base::error::worker_executor::WorkerExecutorError::permission_denied(
-                    "card-revoked: scope root was revoked while the invocation was queued",
-                ),
+    fn permission_denied_is_a_non_retriable_invocation_rejection() {
+        let trap = TrapType::from_worker_executor_error::<crate::workerctx::default::Context>(
+            golem_service_base::error::worker_executor::WorkerExecutorError::permission_denied(
+                "card-revoked: scope root was revoked while the invocation was queued",
             ),
             OplogIndex::INITIAL,
             false,
@@ -963,10 +999,17 @@ mod tests {
         assert!(matches!(
             trap,
             TrapType::Error {
-                error: AgentError::PermanentError(ref details),
+                error: AgentError::PermissionDenied(ref details),
                 ..
             } if details.starts_with("card-revoked:")
         ));
+
+        assert!(matches!(
+            trap.as_golem_error(""),
+            Some(WorkerExecutorError::PermissionDenied { details })
+                if details.starts_with("card-revoked:")
+        ));
+        assert!(trap.is_invocation_rejection());
 
         let decision = crate::durable_host::DurableWorkerCtx::<
             crate::workerctx::default::Context,

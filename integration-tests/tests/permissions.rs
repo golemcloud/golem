@@ -244,3 +244,116 @@ async fn permission_cards_work_across_services_and_replay(
 
     Ok(())
 }
+
+#[test]
+#[timeout("8m")]
+#[tracing::instrument]
+async fn filesystem_permissions_enforce_recipient_isolation_across_recovery(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (app, env) = user.app_and_env().await?;
+    let component_name = "permissions-filesystem";
+    let filesystem_recipient = RecipientPattern::Agent {
+        account: user.account_email.clone(),
+        application: app.name.clone(),
+        environment: env.name.clone(),
+        component: ComponentName(component_name.to_string()),
+        agent_type: AgentTypeName("FileSystem".to_string()),
+    };
+    let other_recipient = RecipientPattern::Agent {
+        account: user.account_email.clone(),
+        application: app.name.clone(),
+        environment: env.name.clone(),
+        component: ComponentName(component_name.to_string()),
+        agent_type: AgentTypeName("Environment".to_string()),
+    };
+    let component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name(component_name)
+        .without_default_host_permissions("FileSystem")
+        .try_update_agent_provision_config("FileSystem", |config| {
+            for grant in [
+                format!(
+                    "filesystem(?agent) @ {} : write : /allowed.txt",
+                    filesystem_recipient.render()
+                ),
+                format!(
+                    "filesystem(?agent) @ {} : read : /allowed.txt",
+                    filesystem_recipient.render()
+                ),
+                format!(
+                    "filesystem(?agent) @ {} : write : /wrong-recipient.txt",
+                    other_recipient.render()
+                ),
+            ] {
+                config
+                    .initial_permissions
+                    .lower_bound
+                    .positive
+                    .push(parse_polymorphic_permission(&grant)?);
+            }
+            Ok::<_, golem_common::model::card::CardParseError>(())
+        })?
+        .store()
+        .await?;
+    let agent = agent_id!("FileSystem", "host-permission-recovery");
+    let worker = user.start_agent(&component.id, agent.clone()).await?;
+
+    let allowed = user
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/allowed.txt", "persisted"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(allowed, Ok(()));
+
+    let denied = user
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/wrong-recipient.txt", "must not exist"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert!(
+        denied
+            .expect_err("a grant addressed to another agent type must be filtered out")
+            .to_ascii_lowercase()
+            .contains("not permitted"),
+        "filesystem policy denial must be returned as a typed guest error"
+    );
+    assert!(
+        user.get_file_contents(&worker, "/wrong-recipient.txt")
+            .await
+            .is_err(),
+        "a denied write must not create its target"
+    );
+
+    user.interrupt(&worker).await?;
+    user.resume(&worker, false).await?;
+    user.simulated_crash(&worker).await?;
+    let recovered = user
+        .invoke_and_await_agent(&component, &agent, "read_file", data_value!("/allowed.txt"))
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert_eq!(recovered, Ok("persisted".to_string()));
+
+    let denied_after_recovery = user
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "write_file",
+            data_value!("/wrong-recipient.txt", "still denied"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert!(denied_after_recovery.is_err());
+
+    Ok(())
+}

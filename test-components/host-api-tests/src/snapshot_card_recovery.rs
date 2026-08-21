@@ -326,28 +326,32 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
 
     fn schedule_scope(&self, target: String) {
         let scope_card = derive_scope_card();
-        scope_card_rpc(target).schedule_invocation(
-            Datetime {
-                seconds: 0,
-                nanoseconds: 0,
-            },
-            "inspect_scope",
-            encode_parameters(vec![]),
-            Some(&scope_card),
-        );
+        scope_card_rpc(target)
+            .schedule_invocation(
+                Datetime {
+                    seconds: 0,
+                    nanoseconds: 0,
+                },
+                "inspect_scope",
+                encode_parameters(vec![]),
+                Some(&scope_card),
+            )
+            .unwrap();
     }
 
     fn schedule_cancelable_scope(&self, target: String) {
         let scope_card = derive_scope_card();
-        scope_card_rpc(target).schedule_cancelable_invocation(
-            Datetime {
-                seconds: 0,
-                nanoseconds: 0,
-            },
-            "inspect_scope",
-            encode_parameters(vec![]),
-            Some(&scope_card),
-        );
+        scope_card_rpc(target)
+            .schedule_cancelable_invocation(
+                Datetime {
+                    seconds: 0,
+                    nanoseconds: 0,
+                },
+                "inspect_scope",
+                encode_parameters(vec![]),
+                Some(&scope_card),
+            )
+            .unwrap();
     }
 
     fn inspect_scope(&self, scope_card_id: CardId, root_card_id: CardId) -> (bool, bool, bool) {

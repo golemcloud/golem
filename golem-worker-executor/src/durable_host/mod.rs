@@ -15,6 +15,7 @@
 // WASI Host implementation for Golem, delegating to the core WASI implementation (wasmtime_wasi)
 // implementing the Golem specific instrumentation on top of it.
 
+pub(crate) mod authorization;
 pub mod blobstore;
 mod cli;
 mod clocks;
@@ -111,8 +112,8 @@ use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::card::{
-    AgentCardHolder, CardHolder, CardId, InvocationWalletPin, ScopeCard, StoredCard,
-    WalletVersionToken,
+    AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
+    StoredCard, WalletVersionToken,
 };
 use golem_common::model::component::{
     AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
@@ -193,7 +194,7 @@ impl Drop for WorkerDir {
 }
 
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
-use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
@@ -319,6 +320,13 @@ pub enum InvocationStrictness {
     /// The invocation is restricted to read-only host calls. Outgoing HTTP and RPC calls
     /// trap immediately with [`AgentError::ReadOnlyViolation`].
     ReadOnly,
+}
+
+/// Proof that one stable live authority snapshot admitted a semantic host operation.
+/// It deliberately carries no authority state and does not retain the boundary lock.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LiveAuthorizationPermit {
+    pub(crate) _private: (),
 }
 
 pub(crate) fn agent_effective_surface_from_component_metadata(
@@ -846,6 +854,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let retained_memory_grant = worker.linear_memory_grant();
         let canonical_startup_bytes = worker.startup_linear_memory_bytes();
         let card_event_boundary_lock = worker.card_event_boundary_lock();
+        let published_authority_generation = worker.published_authority_generation();
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
         let linear_memory = LinearMemoryTracker::new(
             canonical_startup_bytes,
@@ -905,6 +914,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             per_invocation_rpc_call_limit,
             resource_limits.clone(),
             card_event_boundary_lock,
+            published_authority_generation,
         )
         .await?;
         if state.is_live() {
@@ -1062,7 +1072,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub fn owned_agent_id(&self) -> &OwnedAgentId {
         &self.owned_agent_id
     }
-
     pub fn created_by(&self) -> AccountId {
         self.state.created_by
     }
@@ -1160,7 +1169,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn synchronize_agent_wallet_at_boundary(
         &mut self,
     ) -> Result<(), WorkerExecutorError> {
-        let _boundary_guard = self.lock_synchronized_card_event_boundary().await?;
+        if self.state.is_live() {
+            self.capture_live_agent_authority_at_boundary(&mut |_| ())
+                .await?;
+        } else {
+            let _boundary_guard = self.lock_synchronized_card_event_boundary().await?;
+        }
         Ok(())
     }
 
@@ -1175,10 +1189,168 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         capture: &mut impl FnMut(&mut Self) -> T,
     ) -> Result<Option<T>, WorkerExecutorError> {
-        let _boundary_guard = self
-            .lock_synchronized_card_event_boundary_with_authority()
-            .await?;
-        Ok(self.state.is_live().then(|| capture(self)))
+        if !self.state.is_live() {
+            return Ok(None);
+        }
+
+        let published_generation = self
+            .state
+            .published_authority_generation
+            .load(Ordering::Acquire);
+        let now = Utc::now();
+        if authority_snapshot_is_current_at(
+            self.state.authority_initialized,
+            self.state.card_interest_index.authority_is_open(),
+            self.state.processed_authority_generation,
+            published_generation,
+            self.state.next_authority_expiration,
+            now,
+        ) {
+            let captured = capture(self);
+            if self.authority_snapshot_is_stable(published_generation) {
+                crate::metrics::wasm::record_agent_permission_authority_fast_path();
+                return Ok(Some(captured));
+            }
+        }
+
+        let started = Instant::now();
+        loop {
+            let boundary_guard = self
+                .lock_synchronized_card_event_boundary_with_authority()
+                .await?;
+            let generation = self
+                .state
+                .published_authority_generation
+                .load(Ordering::Acquire);
+            let captured = self.state.is_live().then(|| capture(self));
+            self.refresh_authority_expiration_deadline();
+            if self.authority_snapshot_is_stable(generation) {
+                self.adopt_authority_generation(generation);
+                crate::metrics::wasm::record_agent_permission_authority_slow_path(
+                    started.elapsed(),
+                );
+                return Ok(captured);
+            }
+            drop(boundary_guard);
+        }
+    }
+
+    fn authority_snapshot_is_stable(&self, generation: u64) -> bool {
+        authority_snapshot_is_current_at(
+            true,
+            self.state.card_interest_index.authority_is_open(),
+            generation,
+            self.state
+                .published_authority_generation
+                .load(Ordering::Acquire),
+            self.state.next_authority_expiration,
+            Utc::now(),
+        )
+    }
+
+    fn refresh_authority_expiration_deadline(&mut self) {
+        self.state.next_authority_expiration = self
+            .state
+            .agent_wallet_cards
+            .values()
+            .chain(self.state.invocation_scope_root_cards.values())
+            .filter_map(StoredCard::expires_at)
+            .min();
+    }
+
+    fn adopt_authority_generation(&mut self, generation: u64) {
+        self.refresh_authority_expiration_deadline();
+        self.state.processed_authority_generation = generation;
+        self.state.authority_initialized = true;
+    }
+
+    pub(crate) async fn authorize_live_permission(
+        &mut self,
+        target: &PermissionTarget,
+    ) -> Result<Result<LiveAuthorizationPermit, AuthorizationError>, WorkerExecutorError> {
+        self.authorize_live_permissions(std::slice::from_ref(target))
+            .await
+    }
+
+    pub(crate) async fn authorize_live_permissions(
+        &mut self,
+        targets: &[PermissionTarget],
+    ) -> Result<Result<LiveAuthorizationPermit, AuthorizationError>, WorkerExecutorError> {
+        assert_live_authorization(self.state.is_live());
+
+        if self.operator_authorizes_current_invocation() {
+            record_permission_decisions(targets, true);
+            return Ok(Ok(LiveAuthorizationPermit { _private: () }));
+        }
+
+        let published_generation = self
+            .state
+            .published_authority_generation
+            .load(Ordering::Acquire);
+        let now = Utc::now();
+        if authority_snapshot_is_current_at(
+            self.state.authority_initialized,
+            self.state.card_interest_index.authority_is_open(),
+            self.state.processed_authority_generation,
+            published_generation,
+            self.state.next_authority_expiration,
+            now,
+        ) {
+            let result = authorize_effective_surface(&self.state.agent_effective_surface, targets);
+            if self.authority_snapshot_is_stable(published_generation) {
+                crate::metrics::wasm::record_agent_permission_authority_fast_path();
+                record_permission_decisions(targets, result.is_ok());
+                return Ok(result.map(|()| LiveAuthorizationPermit { _private: () }));
+            }
+        }
+
+        let started = Instant::now();
+        loop {
+            let boundary_guard = self
+                .lock_synchronized_card_event_boundary_with_authority()
+                .await?;
+            let generation = self
+                .state
+                .published_authority_generation
+                .load(Ordering::Acquire);
+            let result = authorize_effective_surface(&self.state.agent_effective_surface, targets);
+            // The previous cached deadline may be due even though synchronization just removed
+            // every expired card. Refresh it before validating the synchronized snapshot.
+            self.refresh_authority_expiration_deadline();
+            if self.authority_snapshot_is_stable(generation) {
+                self.adopt_authority_generation(generation);
+                crate::metrics::wasm::record_agent_permission_authority_slow_path(
+                    started.elapsed(),
+                );
+                record_permission_decisions(targets, result.is_ok());
+                return Ok(result.map(|()| LiveAuthorizationPermit { _private: () }));
+            }
+            drop(boundary_guard);
+        }
+    }
+
+    pub(crate) async fn filter_live_permissions(
+        &mut self,
+        targets: &[PermissionTarget],
+    ) -> Result<Vec<bool>, WorkerExecutorError> {
+        assert!(self.state.is_live());
+        if self.operator_authorizes_current_invocation() {
+            record_permission_decisions(targets, true);
+            return Ok(vec![true; targets.len()]);
+        }
+        self.capture_live_agent_authority_at_boundary(&mut |ctx| {
+            targets
+                .iter()
+                .map(|target| {
+                    ctx.state
+                        .agent_effective_surface
+                        .authorize(target)
+                        .unwrap_or(false)
+                })
+                .collect()
+        })
+        .await?
+        .ok_or_else(|| WorkerExecutorError::runtime("authorization left live execution"))
     }
 
     pub(crate) async fn with_agent_authority_at_boundary<T>(
@@ -1188,7 +1360,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let _boundary_guard = self
             .lock_synchronized_card_event_boundary_with_authority()
             .await?;
-        Ok(capture(self))
+        let result = capture(self);
+        self.state.authority_initialized = false;
+        Ok(result)
     }
 
     pub(crate) async fn try_agent_auth_ctx_at_boundary(
@@ -1200,6 +1374,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         else {
             return Ok(None);
         };
+        let generation = self
+            .state
+            .published_authority_generation
+            .load(Ordering::Acquire);
+        self.refresh_authority_expiration_deadline();
+        if !self.authority_snapshot_is_stable(generation) {
+            return Ok(None);
+        }
+        self.adopt_authority_generation(generation);
         Ok(Some(self.agent_auth_ctx()))
     }
 
@@ -1336,6 +1519,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         scope_card: Option<ScopeCard>,
         root_cards: Vec<StoredCard>,
     ) {
+        // Invocation scope is part of the effective authority but is not represented by a
+        // worker-status generation. Force the first live authorization for this invocation
+        // through the synchronized path so the cached expiration deadline includes its roots.
+        self.state.authority_initialized = false;
         let (_, handles) = clear_invocation_scope_state(
             &mut self.state.invocation_scope_card,
             &mut self.state.invocation_scope_handles,
@@ -1355,6 +1542,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn clear_invocation_scope_card(&mut self) {
+        self.state.authority_initialized = false;
         let (scope_changed, handles) = clear_invocation_scope_state(
             &mut self.state.invocation_scope_card,
             &mut self.state.invocation_scope_handles,
@@ -2113,6 +2301,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => Some(RetryDecision::None),
             TrapType::Error {
+                error: AgentError::PermissionDenied(_),
+                ..
+            } => Some(RetryDecision::None),
+            TrapType::Error {
                 error: AgentError::StackOverflow,
                 ..
             } => Some(RetryDecision::None),
@@ -2206,6 +2398,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentError::EphemeralFuelExhausted(_) => "ephemeral-fuel-exhausted",
             AgentError::EphemeralCannotSuspend(_) => "ephemeral-cannot-suspend",
             AgentError::ReadOnlyViolation(_) => "read-only-violation",
+            AgentError::PermissionDenied(_) => "permission-denied",
         }
     }
 
@@ -3752,6 +3945,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.invocation_strictness
     }
 
+    pub(crate) fn enter_operator_authorized_oplog_processor_invocation(
+        &mut self,
+    ) -> OperatorAuthorizedOplogProcessorInvocationGuard {
+        OperatorAuthorizedOplogProcessorInvocationGuard::enter(
+            &self.state.operator_authorized_oplog_processor_invocation,
+        )
+    }
+
+    pub(crate) fn operator_authorizes_current_invocation(&self) -> bool {
+        self.state
+            .operator_authorized_oplog_processor_invocation
+            .load(Ordering::Acquire)
+    }
+
     pub(crate) fn unregister_open_websocket(&mut self, rep: u32) {
         self.state.open_websocket_connections.remove(&rep);
     }
@@ -4290,6 +4497,18 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             self.install_invocation_scope_card(scope_card.clone(), scope_root_cards)
                 .await;
 
+            let input = match &invocation {
+                AgentInvocation::AgentInitialization { input, .. }
+                | AgentInvocation::AgentMethod { input, .. } => Some(input),
+                _ => None,
+            };
+            if let Some(input) = input
+                && !self.secret_holds_allowed_for_value(input).await?
+            {
+                self.clear_invocation_scope_card().await;
+                return Err(WorkerExecutorError::permission_denied("permission denied"));
+            }
+
             match &mut invocation {
                 AgentInvocation::AgentInitialization {
                     invocation_context, ..
@@ -4387,6 +4606,45 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )
             .await;
 
+        let permission_denial_persisted = if let (
+            Some(idempotency_key),
+            TrapType::Error {
+                error: AgentError::PermissionDenied(error),
+                retry_from,
+                atomic_region_had_side_effects,
+                ..
+            },
+        ) = (&current_idempotency_key, trap_type)
+        {
+            self.state
+                .oplog
+                .add_pair(
+                    OplogEntry::cancel_pending_invocation(idempotency_key.clone()),
+                    Box::new({
+                        let error = error.clone();
+                        let retry_policy_state = retry_policy_state.clone();
+                        let retry_from = *retry_from;
+                        let inside_atomic_region = *atomic_region_had_side_effects;
+                        move |_| {
+                            OplogEntry::error(
+                                AgentError::PermissionDenied(error),
+                                retry_from,
+                                inside_atomic_region,
+                                retry_policy_state,
+                            )
+                        }
+                    }),
+                )
+                .await;
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
+            true
+        } else {
+            false
+        };
+
         let oplog_entry = match trap_type {
             TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(OplogEntry::interrupted()),
             TrapType::Interrupt(InterruptKind::Suspend(_)) => Some(OplogEntry::suspend()),
@@ -4394,9 +4652,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Restart) => None,
             TrapType::Exit => Some(OplogEntry::exited()),
             TrapType::Error {
-                error: AgentError::InvalidRequest(_),
+                error: AgentError::PermissionDenied(_),
                 ..
-            } => current_idempotency_key.map(OplogEntry::cancel_pending_invocation),
+            } if permission_denial_persisted => None,
+            TrapType::Error { .. } if trap_type.is_invocation_rejection() => {
+                current_idempotency_key.map(OplogEntry::cancel_pending_invocation)
+            }
             TrapType::Error {
                 error,
                 retry_from,
@@ -4420,19 +4681,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .get_non_detached_last_known_status()
             .await;
 
-        let giving_up = matches!(
-            trap_type,
-            TrapType::Error {
-                error: AgentError::InvalidRequest(_),
-                ..
-            }
-        ) || matches!(
-            latest_status.status,
-            AgentStatus::Interrupted | AgentStatus::Exited
-        ) || decision == RetryDecision::None;
+        let giving_up = trap_type.is_invocation_rejection()
+            || matches!(
+                latest_status.status,
+                AgentStatus::Interrupted | AgentStatus::Exited
+            )
+            || decision == RetryDecision::None;
 
         if giving_up {
-            // Giving up, associating the stored result with the current and upcoming invocations
+            // Terminal worker failures also fail queued invocations. A rejected request completes
+            // only its own idempotency key so later queued work remains available.
             if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                 self.public_state
                     .worker()
@@ -5134,13 +5392,15 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             _ => {
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
-                                    Err(error) => Some(TrapType::from_error::<Ctx>(
-                                        &anyhow!(error),
-                                        OplogIndex::INITIAL,
-                                        false,
-                                        false,
-                                        store.as_context().data().agent_mode(),
-                                    )),
+                                    Err(error) => {
+                                        Some(TrapType::from_worker_executor_error::<Ctx>(
+                                            error,
+                                            OplogIndex::INITIAL,
+                                            false,
+                                            false,
+                                            store.as_context().data().agent_mode(),
+                                        ))
+                                    }
                                 };
                                 let decision = match trap_type {
                                     Some(trap_type) => {
@@ -5429,6 +5689,88 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
 fn card_holder_is_agent(holder: &CardHolder, agent_id: &AgentId) -> bool {
     matches!(holder, CardHolder::Agent(holder) if holder.agent_id == *agent_id)
+}
+
+pub(crate) struct OperatorAuthorizedOplogProcessorInvocationGuard {
+    active: Arc<AtomicBool>,
+}
+
+impl OperatorAuthorizedOplogProcessorInvocationGuard {
+    fn enter(active: &Arc<AtomicBool>) -> Self {
+        active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .expect("operator-authorized oplog-processor invocation mode cannot be nested");
+        Self {
+            active: active.clone(),
+        }
+    }
+}
+
+impl Drop for OperatorAuthorizedOplogProcessorInvocationGuard {
+    fn drop(&mut self) {
+        let was_active = self.active.swap(false, Ordering::AcqRel);
+        debug_assert!(
+            was_active,
+            "operator-authorized oplog-processor invocation mode was not active"
+        );
+    }
+}
+
+pub(crate) fn authorize_effective_surface(
+    surface: &golem_common::model::card::EffectiveSurface,
+    targets: &[PermissionTarget],
+) -> Result<(), AuthorizationError> {
+    for target in targets {
+        let allowed = surface.authorize(target).map_err(|error| {
+            AuthorizationError::PermissionEvaluationFailed {
+                target: Box::new(target.clone()),
+                error,
+            }
+        })?;
+        if !allowed {
+            return Err(AuthorizationError::PermissionNotAllowed(Box::new(
+                target.clone(),
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn authority_snapshot_is_current_at(
+    initialized: bool,
+    authority_open: bool,
+    processed_generation: u64,
+    published_generation: u64,
+    next_expiration: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> bool {
+    initialized
+        && authority_open
+        && processed_generation == published_generation
+        && next_expiration.is_none_or(|expiration| now < expiration)
+}
+
+fn assert_live_authorization(is_live: bool) {
+    assert!(
+        is_live,
+        "live permission authorization must not run during replay"
+    );
+}
+
+pub(crate) fn record_permission_decisions(targets: &[PermissionTarget], allowed: bool) {
+    if allowed {
+        for target in targets {
+            crate::metrics::wasm::record_agent_permission_authorization(target.class_name(), true);
+        }
+    } else {
+        // Multi-target operations are all-or-nothing. The authorization API intentionally
+        // exposes only a low-cardinality class metric, never the denied resource.
+        let permission_class = targets
+            .first()
+            .map(PermissionTarget::class_name)
+            .unwrap_or("unknown");
+        crate::metrics::wasm::record_agent_permission_authorization(permission_class, false);
+    }
 }
 
 fn clear_invocation_scope_state(
@@ -5724,12 +6066,13 @@ mod tests {
     use bytes::Bytes;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::application::ApplicationName;
-    use golem_common::model::card::owner::AgentOwnerPattern;
+    use golem_common::model::card::owner::{AgentOwnerPattern, EmptyOwnerPattern};
     use golem_common::model::card::recipient::RecipientPattern;
     use golem_common::model::card::{
         AgentCardHolder, AgentClass, AgentPermissionMonomorphizationContext, AgentResourcePattern,
-        AgentVerb, Card, ClassPermissionPattern, ClassPermissionTarget, PermissionPattern,
-        PermissionTarget, PolymorphicCard,
+        AgentVerb, Card, ClassPermissionPattern, ClassPermissionTarget, GrantSurface,
+        NetworkResourcePattern, NetworkVerb, PermissionPattern, PermissionTarget, PolymorphicCard,
+        PortPattern,
     };
     use golem_common::model::component::ComponentName;
     use golem_common::model::environment::EnvironmentName;
@@ -5739,6 +6082,280 @@ mod tests {
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
     use test_r::test;
+
+    #[test]
+    fn operator_authorized_invocation_guard_clears_mode_when_dropped() {
+        let active = Arc::new(AtomicBool::new(false));
+        let guard = OperatorAuthorizedOplogProcessorInvocationGuard::enter(&active);
+        assert!(active.load(Ordering::Acquire));
+        drop(guard);
+        assert!(!active.load(Ordering::Acquire));
+    }
+
+    fn network_permission(host: &str) -> PermissionTarget {
+        PermissionTarget::Network(ClassPermissionTarget {
+            verb: Some(NetworkVerb::Connect),
+            owner: EmptyOwnerPattern,
+            resource: NetworkResourcePattern::host_port(host.to_string(), PortPattern::single(443)),
+        })
+    }
+
+    #[test]
+    fn effective_surface_authorization_preserves_algebra_and_batch_atomicity() {
+        let first = network_permission("first.example.com");
+        let second = network_permission("second.example.com");
+        let unrelated = network_permission("unrelated.example.com");
+        let lower_or_upper_and = golem_common::model::card::EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: vec![
+                GrantSurface {
+                    positive: vec![first.clone()],
+                    negative: Vec::new(),
+                },
+                GrantSurface {
+                    positive: vec![second.clone()],
+                    negative: Vec::new(),
+                },
+            ],
+            upper: vec![
+                GrantSurface {
+                    positive: vec![first.clone(), second.clone()],
+                    negative: Vec::new(),
+                },
+                GrantSurface {
+                    positive: vec![first.clone(), second.clone(), unrelated],
+                    negative: Vec::new(),
+                },
+            ],
+        };
+
+        assert!(
+            authorize_effective_surface(&lower_or_upper_and, &[first.clone(), second.clone()])
+                .is_ok()
+        );
+
+        let mut denied = lower_or_upper_and;
+        denied.upper[1].negative.push(second.clone());
+        assert!(authorize_effective_surface(&denied, std::slice::from_ref(&first)).is_ok());
+        let error = authorize_effective_surface(&denied, &[first, second]);
+        assert!(matches!(
+            error,
+            Err(AuthorizationError::PermissionNotAllowed(_))
+        ));
+    }
+
+    #[test]
+    fn authority_fast_path_requires_an_open_current_unexpired_snapshot() {
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let later = now + chrono::Duration::nanoseconds(1);
+
+        assert!(authority_snapshot_is_current_at(
+            true,
+            true,
+            7,
+            7,
+            Some(later),
+            now,
+        ));
+        assert!(!authority_snapshot_is_current_at(
+            false,
+            true,
+            7,
+            7,
+            Some(later),
+            now,
+        ));
+        assert!(!authority_snapshot_is_current_at(
+            true,
+            false,
+            7,
+            7,
+            Some(later),
+            now,
+        ));
+        assert!(!authority_snapshot_is_current_at(
+            true,
+            true,
+            6,
+            7,
+            Some(later),
+            now,
+        ));
+        assert!(!authority_snapshot_is_current_at(
+            true,
+            true,
+            7,
+            7,
+            Some(now),
+            now,
+        ));
+    }
+
+    #[test]
+    fn generation_recheck_invalidates_in_progress_allow_and_deny() {
+        let allowed = network_permission("allowed.example.com");
+        let denied = network_permission("denied.example.com");
+        let surface = golem_common::model::card::EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: vec![GrantSurface {
+                positive: vec![allowed.clone()],
+                negative: Vec::new(),
+            }],
+            upper: Vec::new(),
+        };
+        let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+
+        assert!(authorize_effective_surface(&surface, &[allowed]).is_ok());
+        assert!(authorize_effective_surface(&surface, &[denied]).is_err());
+        assert!(authority_snapshot_is_current_at(
+            true, true, 11, 11, None, now,
+        ));
+        assert!(
+            !authority_snapshot_is_current_at(true, true, 11, 12, None, now),
+            "a newly published revocation must invalidate an in-progress allow"
+        );
+        assert!(
+            !authority_snapshot_is_current_at(true, true, 11, 12, None, now),
+            "a newly published installation must invalidate an in-progress denial"
+        );
+    }
+
+    fn authorize_boundary_for_test(
+        initialized: bool,
+        authority_open: bool,
+        processed_generation: &mut u64,
+        published_generation: u64,
+        expiration: Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+        slow_refreshes: &mut usize,
+        surface: &golem_common::model::card::EffectiveSurface,
+        target: &PermissionTarget,
+    ) -> Result<(), AuthorizationError> {
+        if authority_snapshot_is_current_at(
+            initialized,
+            authority_open,
+            *processed_generation,
+            published_generation,
+            expiration,
+            now,
+        ) {
+            return authorize_effective_surface(surface, std::slice::from_ref(target));
+        }
+        *slow_refreshes += 1;
+        if !authority_open {
+            return Err(AuthorizationError::PermissionNotAllowed(Box::new(
+                target.clone(),
+            )));
+        }
+        *processed_generation = published_generation;
+        authorize_effective_surface(surface, std::slice::from_ref(target))
+    }
+
+    fn allowing_surface(target: PermissionTarget) -> golem_common::model::card::EffectiveSurface {
+        golem_common::model::card::EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: vec![GrantSurface {
+                positive: vec![target],
+                negative: Vec::new(),
+            }],
+            upper: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn unchanged_authority_generation_uses_no_io_fast_path() {
+        let target = network_permission("fast.example.com");
+        let surface = allowing_surface(target.clone());
+        let mut processed = 9;
+        let mut slow_refreshes = 0;
+        authorize_boundary_for_test(
+            true,
+            true,
+            &mut processed,
+            9,
+            None,
+            Utc::now(),
+            &mut slow_refreshes,
+            &surface,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(slow_refreshes, 0);
+    }
+
+    #[test]
+    fn authority_event_burst_causes_exactly_one_slow_refresh() {
+        let target = network_permission("burst.example.com");
+        let surface = allowing_surface(target.clone());
+        let mut processed = 4;
+        let mut slow_refreshes = 0;
+        for _ in 0..2 {
+            authorize_boundary_for_test(
+                true,
+                true,
+                &mut processed,
+                8,
+                None,
+                Utc::now(),
+                &mut slow_refreshes,
+                &surface,
+                &target,
+            )
+            .unwrap();
+        }
+        assert_eq!(slow_refreshes, 1);
+        assert_eq!(processed, 8);
+    }
+
+    #[test]
+    fn closed_authority_cannot_allow() {
+        let target = network_permission("closed.example.com");
+        let surface = allowing_surface(target.clone());
+        let mut processed = 3;
+        let mut slow_refreshes = 0;
+        assert!(
+            authorize_boundary_for_test(
+                true,
+                false,
+                &mut processed,
+                3,
+                None,
+                Utc::now(),
+                &mut slow_refreshes,
+                &surface,
+                &target,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn expiration_is_visible_at_first_due_live_boundary() {
+        let target = network_permission("expired.example.com");
+        let surface = allowing_surface(target.clone());
+        let due = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut processed = 5;
+        let mut slow_refreshes = 0;
+        authorize_boundary_for_test(
+            true,
+            true,
+            &mut processed,
+            5,
+            Some(due),
+            due,
+            &mut slow_refreshes,
+            &surface,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(slow_refreshes, 1, "the boundary at expires_at must refresh");
+    }
+
+    #[test]
+    #[should_panic(expected = "live permission authorization must not run during replay")]
+    fn replay_cannot_invoke_authorization_helper() {
+        assert_live_authorization(false);
+    }
     use test_r::timeout;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -8302,6 +8919,11 @@ struct PrivateDurableWorkerState {
     /// the invocation entry point so it can be reported in `AgentError::ReadOnlyViolation`.
     read_only_method_name: Option<String>,
 
+    /// Oplog-processor plugin calls are admitted by the operator when the plugin is installed,
+    /// outside the per-agent permission-card model. This is set only while dispatching the
+    /// executor-created `ProcessOplogEntries` invocation and reset before invocation teardown.
+    operator_authorized_oplog_processor_invocation: Arc<AtomicBool>,
+
     component_metadata: Component,
     agent_effective_surface: golem_common::model::card::EffectiveSurface,
     agent_wallet_cards: BTreeMap<CardId, StoredCard>,
@@ -8312,6 +8934,10 @@ struct PrivateDurableWorkerState {
     wallet_generation: u64,
     card_event_boundary_scan: Option<CardEventBoundaryScan>,
     card_event_boundary_lock: Arc<tokio::sync::Mutex<()>>,
+    published_authority_generation: Arc<AtomicU64>,
+    processed_authority_generation: u64,
+    authority_initialized: bool,
+    next_authority_expiration: Option<DateTime<Utc>>,
 
     /// Running total of storage bytes acquired from the executor semaphore pool
     /// by this worker since it last started. Incremented on every successful
@@ -8548,6 +9174,7 @@ impl PrivateDurableWorkerState {
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
         card_event_boundary_lock: Arc<tokio::sync::Mutex<()>>,
+        published_authority_generation: Arc<AtomicU64>,
     ) -> Result<Self, WorkerExecutorError> {
         let deleted_regions = if let Some(snapshot_idx) = last_snapshot_index {
             let mut regions = deleted_regions;
@@ -8666,6 +9293,7 @@ impl PrivateDurableWorkerState {
             snapshotting_mode: false,
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,
+            operator_authorized_oplog_processor_invocation: Arc::new(AtomicBool::new(false)),
             component_metadata,
             agent_effective_surface,
             agent_wallet_cards,
@@ -8676,6 +9304,10 @@ impl PrivateDurableWorkerState {
             wallet_generation,
             card_event_boundary_scan: None,
             card_event_boundary_lock,
+            published_authority_generation,
+            processed_authority_generation: 0,
+            authority_initialized: false,
+            next_authority_expiration: None,
             current_filesystem_storage_usage,
             replay_state,
             invocation_context,

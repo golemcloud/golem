@@ -16,10 +16,16 @@ declare module 'golem:api/oplog@1.5.0' {
   export function enrichOplogEntries(environmentId: EnvironmentId, agentId: AgentId, entries: [OplogIndex, OplogEntry][], componentRevision: ComponentRevision): PublicOplogEntry[];
   export class GetOplog {
     constructor(agentId: AgentId, start: OplogIndex);
+    /**
+     * @throws OplogReadError
+     */
     getNext(): PublicOplogEntry[] | undefined;
   }
   export class SearchOplog {
     constructor(agentId: AgentId, text: string);
+    /**
+     * @throws OplogReadError
+     */
     getNext(): [OplogIndex, PublicOplogEntry][] | undefined;
   }
   export type Datetime = wasiClocks030SystemClock.Instant;
@@ -1347,6 +1353,14 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'completion-discarded'
     val: CompletionDiscardedParameters
+  };
+  export type OplogReadError =
+  {
+    tag: 'permission-denied'
+  } |
+  {
+    tag: 'internal-error'
+    val: string
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

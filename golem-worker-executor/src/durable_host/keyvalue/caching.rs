@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use anyhow::anyhow;
+use golem_common::model::card::KvVerb;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::{
     P3KeyvalueCacheDelete, P3KeyvalueCacheExists, P3KeyvalueCacheGet, P3KeyvalueCacheGetOrSet,
@@ -24,12 +25,16 @@ use golem_common::model::oplog::{
 };
 use wasmtime::component::{Accessor, HasSelf, Resource};
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
+use crate::durable_host::authorization::targets::kv_target;
+use crate::durable_host::concurrent::{
+    CallHandle, CallReplayOutcome, Cancellable, authorize_live_permissions_at_serialized_access,
+};
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{
     CACHE_BUCKET, CacheFillState, IncomingValueEntry, OutgoingValueEntry,
 };
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::keyvalue::{denial, environment_owner};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx, LiveAuthorizationPermit};
 use crate::preview2::wasi::keyvalue::cache::{
     Error, FutureExistsResult, FutureGetOrSetResult, FutureGetResult, FutureResult, GetOrSetEntry,
     Host, HostFutureExistsResult, HostFutureExistsResultWithStore, HostFutureGetOrSetResult,
@@ -43,12 +48,14 @@ pub struct CacheFutureGetResultEntry {
     handle: Option<CallHandle<P3KeyvalueCacheGet, Cancellable>>,
     environment_id: EnvironmentId,
     key: Key,
+    denial: Option<String>,
 }
 
 pub struct CacheFutureExistsResultEntry {
     handle: Option<CallHandle<P3KeyvalueCacheExists, Cancellable>>,
     environment_id: EnvironmentId,
     key: Key,
+    denial: Option<String>,
 }
 
 pub struct CacheFutureResultEntry {
@@ -59,12 +66,15 @@ pub struct CacheFutureGetOrSetResultEntry {
     handle: Option<CallHandle<P3KeyvalueCacheGetOrSet, Cancellable>>,
     environment_id: EnvironmentId,
     key: Key,
+    permit: Option<LiveAuthorizationPermit>,
+    denial: Option<String>,
 }
 
 pub struct CacheVacancyEntry {
     environment_id: EnvironmentId,
     key: Key,
     filled: bool,
+    permit: Option<LiveAuthorizationPermit>,
 }
 
 enum CacheFutureResultOperation {
@@ -73,16 +83,36 @@ enum CacheFutureResultOperation {
         environment_id: EnvironmentId,
         key: Key,
         value: Vec<u8>,
+        denial: Option<String>,
     },
     Delete {
         handle: Option<CallHandle<P3KeyvalueCacheDelete, Cancellable>>,
         environment_id: EnvironmentId,
         key: Key,
+        denial: Option<String>,
     },
 }
 
 fn missing_handle(function: &str) -> anyhow::Error {
     anyhow!("keyvalue::cache::{function} future result already consumed")
+}
+
+async fn authorize_cache_key<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    verb: KvVerb,
+    key: &str,
+) -> anyhow::Result<Option<String>> {
+    let target = accessor
+        .with(|mut access| kv_target(environment_owner(access.get()), verb, CACHE_BUCKET, key));
+    Ok(match target {
+        Ok(target) => {
+            authorize_live_permissions_at_serialized_access(accessor, accessor.getter(), &[target])
+                .await?
+                .err()
+                .map(denial)
+        }
+        Err(error) => Some(denial(error)),
+    })
 }
 
 fn push_error<Ctx: WorkerCtx>(
@@ -125,7 +155,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureGetResult>,
     ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
-        let (mut handle, environment_id, key, key_value_service) =
+        let (mut handle, environment_id, key, denial, key_value_service) =
             accessor.with(|mut access| {
                 let ctx = access.get();
                 let entry = ctx.table().get_mut(&self_)?;
@@ -133,6 +163,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetResultWithStore<U>
                     entry.handle.take().ok_or_else(|| missing_handle("get"))?,
                     entry.environment_id,
                     entry.key.clone(),
+                    entry.denial.take(),
                     ctx.state.key_value_service.clone(),
                 ))
             })?;
@@ -143,6 +174,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetResultWithStore<U>
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Some(error) = denial {
+                break 'resp handle
+                    .complete_access(
+                        accessor,
+                        accessor.getter(),
+                        HostResponseKVGet { result: Err(error) },
+                    )
+                    .await?;
             }
 
             let result = key_value_service
@@ -188,7 +229,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureExistsResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureExistsResult>,
     ) -> anyhow::Result<Result<bool, Resource<Error>>> {
-        let (mut handle, environment_id, key, key_value_service) =
+        let (mut handle, environment_id, key, denial, key_value_service) =
             accessor.with(|mut access| {
                 let ctx = access.get();
                 let entry = ctx.table().get_mut(&self_)?;
@@ -199,6 +240,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureExistsResultWithStore<U>
                         .ok_or_else(|| missing_handle("exists"))?,
                     entry.environment_id,
                     entry.key.clone(),
+                    entry.denial.take(),
                     ctx.state.key_value_service.clone(),
                 ))
             })?;
@@ -209,6 +251,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureExistsResultWithStore<U>
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Some(error) = denial {
+                break 'resp handle
+                    .complete_access(
+                        accessor,
+                        accessor.getter(),
+                        HostResponseKVDelete { result: Err(error) },
+                    )
+                    .await?;
             }
 
             let result = key_value_service
@@ -274,11 +326,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
                 environment_id: EnvironmentId,
                 key: Key,
                 value: Vec<u8>,
+                denial: Option<String>,
             },
             Delete {
                 handle: CallHandle<P3KeyvalueCacheDelete, Cancellable>,
                 environment_id: EnvironmentId,
                 key: Key,
+                denial: Option<String>,
             },
         }
 
@@ -291,20 +345,24 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
                     environment_id,
                     key,
                     value,
+                    denial,
                 } => Action::Set {
                     handle: handle.take().ok_or_else(|| missing_handle("set"))?,
                     environment_id: *environment_id,
                     key: key.clone(),
                     value: value.clone(),
+                    denial: denial.take(),
                 },
                 CacheFutureResultOperation::Delete {
                     handle,
                     environment_id,
                     key,
+                    denial,
                 } => Action::Delete {
                     handle: handle.take().ok_or_else(|| missing_handle("delete"))?,
                     environment_id: *environment_id,
                     key: key.clone(),
+                    denial: denial.take(),
                 },
             };
             Ok::<_, anyhow::Error>((action, ctx.state.key_value_service.clone()))
@@ -316,12 +374,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
                 environment_id,
                 key,
                 value,
+                denial,
             } => 'resp: {
                 if !handle.is_live() {
                     match handle.replay_access(accessor, accessor.getter()).await? {
                         CallReplayOutcome::Replayed(response) => break 'resp response,
                         CallReplayOutcome::Incomplete(live) => handle = live,
                     }
+                }
+
+                if let Some(error) = denial {
+                    break 'resp handle
+                        .complete_access(
+                            accessor,
+                            accessor.getter(),
+                            HostResponseKVUnit { result: Err(error) },
+                        )
+                        .await?;
                 }
 
                 let result = key_value_service
@@ -336,12 +405,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
                 mut handle,
                 environment_id,
                 key,
+                denial,
             } => 'resp: {
                 if !handle.is_live() {
                     match handle.replay_access(accessor, accessor.getter()).await? {
                         CallReplayOutcome::Replayed(response) => break 'resp response,
                         CallReplayOutcome::Incomplete(live) => handle = live,
                     }
+                }
+
+                if let Some(error) = denial {
+                    break 'resp handle
+                        .complete_access(
+                            accessor,
+                            accessor.getter(),
+                            HostResponseKVUnit { result: Err(error) },
+                        )
+                        .await?;
                 }
 
                 let result = key_value_service
@@ -387,7 +467,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetOrSetResultWithStore<U>
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureGetOrSetResult>,
     ) -> anyhow::Result<Result<GetOrSetEntry, Resource<Error>>> {
-        let (mut handle, environment_id, key, key_value_service) =
+        let (mut handle, environment_id, key, permit, denial, key_value_service) =
             accessor.with(|mut access| {
                 let ctx = access.get();
                 let entry = ctx.table().get_mut(&self_)?;
@@ -398,6 +478,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetOrSetResultWithStore<U>
                         .ok_or_else(|| missing_handle("get_or_set"))?,
                     entry.environment_id,
                     entry.key.clone(),
+                    entry.permit,
+                    entry.denial.take(),
                     ctx.state.key_value_service.clone(),
                 ))
             })?;
@@ -408,6 +490,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetOrSetResultWithStore<U>
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Some(error) = denial {
+                break 'resp handle
+                    .complete_access(
+                        accessor,
+                        accessor.getter(),
+                        HostResponseKVGet { result: Err(error) },
+                    )
+                    .await?;
             }
 
             let result = key_value_service
@@ -429,6 +521,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureGetOrSetResultWithStore<U>
                     environment_id,
                     key,
                     filled: false,
+                    permit,
                 })?;
                 Ok(Ok(GetOrSetEntry::Vacant(vacancy)))
             }
@@ -445,17 +538,26 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostVacancyWithStore<U> for HasSelf<Dura
         self_: Resource<Vacancy>,
         ttl_ms: Option<u32>,
     ) -> anyhow::Result<Resource<OutgoingValue>> {
-        let (environment_id, key) = accessor.with(|mut access| {
+        let (environment_id, key, permit, is_live) = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache::vacancy", "vacancy_fill");
-            let entry = ctx.table().get_mut(&self_)?;
+            let entry = ctx.table().get(&self_)?;
             if entry.filled {
                 return Err(anyhow!("keyvalue::cache vacancy is already filled"));
             }
-            entry.filled = true;
-            Ok::<_, anyhow::Error>((entry.environment_id, entry.key.clone()))
+            Ok::<_, anyhow::Error>((
+                entry.environment_id,
+                entry.key.clone(),
+                entry.permit,
+                ctx.state.is_live(),
+            ))
         })?;
-
+        if is_live {
+            accessor.with(|mut access| {
+                access.get().table().get_mut(&self_)?.filled = true;
+                Ok::<_, anyhow::Error>(())
+            })?;
+        }
         let handle = CallHandle::<P3KeyvalueCacheVacancyFill, Cancellable>::start_access(
             accessor,
             accessor.getter(),
@@ -466,6 +568,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostVacancyWithStore<U> for HasSelf<Dura
             DurableFunctionType::WriteRemote,
         )
         .await?;
+        if !is_live {
+            accessor.with(|mut access| {
+                access.get().table().get_mut(&self_)?.filled = true;
+                Ok::<_, anyhow::Error>(())
+            })?;
+        }
 
         accessor.with(|mut access| {
             Ok(access
@@ -475,26 +583,31 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostVacancyWithStore<U> for HasSelf<Dura
                     handle: Some(handle),
                     environment_id,
                     key,
+                    _permit: permit,
                 }))?)
         })
     }
 
     async fn drop(accessor: &Accessor<U, Self>, rep: Resource<Vacancy>) -> anyhow::Result<()> {
-        let entry = accessor.with(|mut access| {
+        let (filled, key) = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache::vacancy", "drop");
-            Ok::<_, anyhow::Error>(ctx.table().delete(rep)?)
+            let entry = ctx.table().get(&rep)?;
+            Ok::<_, anyhow::Error>((entry.filled, entry.key.clone()))
         })?;
-        if !entry.filled {
+        if !filled {
             let mut handle = CallHandle::<P3KeyvalueCacheVacancyDrop, Cancellable>::start_access(
                 accessor,
                 accessor.getter(),
-                HostRequestKVCacheKey {
-                    key: entry.key.clone(),
-                },
+                HostRequestKVCacheKey { key },
                 DurableFunctionType::WriteRemote,
             )
             .await?;
+
+            accessor.with(|mut access| {
+                access.get().table().delete(rep)?;
+                Ok::<_, anyhow::Error>(())
+            })?;
 
             if !handle.is_live() {
                 match handle.replay_access(accessor, accessor.getter()).await? {
@@ -510,6 +623,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostVacancyWithStore<U> for HasSelf<Dura
                     HostResponseKVUnit { result: Ok(()) },
                 )
                 .await?;
+        } else {
+            accessor.with(|mut access| {
+                access.get().table().delete(rep)?;
+                Ok::<_, anyhow::Error>(())
+            })?;
         }
         Ok(())
     }
@@ -522,11 +640,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         accessor: &Accessor<U, Self>,
         k: Key,
     ) -> anyhow::Result<Resource<FutureGetResult>> {
-        let environment_id = accessor.with(|mut access| {
+        let (environment_id, is_live) = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache", "get");
-            ctx.owned_agent_id.environment_id()
+            (ctx.owned_agent_id.environment_id(), ctx.state.is_live())
         });
+        let denial = if is_live {
+            authorize_cache_key(accessor, KvVerb::Read, &k).await?
+        } else {
+            None
+        };
         let handle = CallHandle::<P3KeyvalueCacheGet, Cancellable>::start_access(
             accessor,
             accessor.getter(),
@@ -539,6 +662,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
                 handle: Some(handle),
                 environment_id,
                 key: k,
+                denial,
             })?)
         })
     }
@@ -547,11 +671,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         accessor: &Accessor<U, Self>,
         k: Key,
     ) -> anyhow::Result<Resource<FutureExistsResult>> {
-        let environment_id = accessor.with(|mut access| {
+        let (environment_id, is_live) = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache", "exists");
-            ctx.owned_agent_id.environment_id()
+            (ctx.owned_agent_id.environment_id(), ctx.state.is_live())
         });
+        let denial = if is_live {
+            authorize_cache_key(accessor, KvVerb::Read, &k).await?
+        } else {
+            None
+        };
         let handle = CallHandle::<P3KeyvalueCacheExists, Cancellable>::start_access(
             accessor,
             accessor.getter(),
@@ -564,6 +693,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
                 handle: Some(handle),
                 environment_id,
                 key: k,
+                denial,
             })?)
         })
     }
@@ -574,14 +704,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         v: Resource<OutgoingValue>,
         ttl_ms: Option<u32>,
     ) -> anyhow::Result<Resource<FutureResult>> {
-        let (environment_id, value) = accessor.with(|mut access| {
+        let (environment_id, is_live) = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache", "set");
-            Ok::<_, anyhow::Error>((
-                ctx.owned_agent_id.environment_id(),
-                ctx.table().get(&v)?.body.read().unwrap().clone(),
-            ))
-        })?;
+            (ctx.owned_agent_id.environment_id(), ctx.state.is_live())
+        });
+        let denial = if is_live {
+            authorize_cache_key(accessor, KvVerb::Write, &k).await?
+        } else {
+            None
+        };
+        let value = if is_live && denial.is_none() {
+            accessor.with(|mut access| {
+                Ok::<_, anyhow::Error>(access.get().table().get(&v)?.body.read().unwrap().clone())
+            })?
+        } else {
+            Vec::new()
+        };
         let handle = CallHandle::<P3KeyvalueCacheSet, Cancellable>::start_access(
             accessor,
             accessor.getter(),
@@ -600,6 +739,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
                     environment_id,
                     key: k,
                     value,
+                    denial,
                 },
             })?)
         })
@@ -609,11 +749,35 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         accessor: &Accessor<U, Self>,
         k: Key,
     ) -> anyhow::Result<Resource<FutureGetOrSetResult>> {
-        let environment_id = accessor.with(|mut access| {
+        let (environment_id, is_live) = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache", "get_or_set");
-            ctx.owned_agent_id.environment_id()
+            (ctx.owned_agent_id.environment_id(), ctx.state.is_live())
         });
+        let (permit, denial) = if is_live {
+            let owner = accessor.with(|mut access| environment_owner(access.get()));
+            let targets = [
+                kv_target(owner.clone(), KvVerb::Read, CACHE_BUCKET, &k),
+                kv_target(owner, KvVerb::Write, CACHE_BUCKET, &k),
+            ]
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>();
+            match targets {
+                Ok(targets) => match authorize_live_permissions_at_serialized_access(
+                    accessor,
+                    accessor.getter(),
+                    &targets,
+                )
+                .await?
+                {
+                    Ok(permit) => (Some(permit), None),
+                    Err(error) => (None, Some(denial(error))),
+                },
+                Err(error) => (None, Some(denial(error))),
+            }
+        } else {
+            (None, None)
+        };
         let handle = CallHandle::<P3KeyvalueCacheGetOrSet, Cancellable>::start_access(
             accessor,
             accessor.getter(),
@@ -626,6 +790,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
                 handle: Some(handle),
                 environment_id,
                 key: k,
+                permit,
+                denial,
             })?)
         })
     }
@@ -634,11 +800,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         accessor: &Accessor<U, Self>,
         k: Key,
     ) -> anyhow::Result<Resource<FutureResult>> {
-        let environment_id = accessor.with(|mut access| {
+        let (environment_id, is_live) = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("keyvalue::cache", "delete");
-            ctx.owned_agent_id.environment_id()
+            (ctx.owned_agent_id.environment_id(), ctx.state.is_live())
         });
+        let denial = if is_live {
+            authorize_cache_key(accessor, KvVerb::Delete, &k).await?
+        } else {
+            None
+        };
         let handle = CallHandle::<P3KeyvalueCacheDelete, Cancellable>::start_access(
             accessor,
             accessor.getter(),
@@ -652,6 +823,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
                     handle: Some(handle),
                     environment_id,
                     key: k,
+                    denial,
                 },
             })?)
         })

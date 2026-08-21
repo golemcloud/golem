@@ -32,10 +32,10 @@ use crate::services::{
     HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService,
     UsesAllDeps,
 };
-use crate::worker::Worker;
 pub use crate::worker::{
     PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
 };
+use crate::worker::{Worker, resolve_revert_last_invocations};
 use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, Utc};
 use futures::Stream;
@@ -52,9 +52,11 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
     GetWorkersMetadataResponse, InvokeAgentRequest, InvokeAgentResponse,
-    ProcessOplogEntriesRequest, ProcessOplogEntriesResponse, RevertWorkerRequest,
-    RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse, deliver_card_transfer_response, process_oplog_entries_response,
+    ProcessOplogEntriesRequest, ProcessOplogEntriesResponse, ResolveRevertLastInvocationsRequest,
+    ResolveRevertLastInvocationsResponse, RevertWorkerRequest, RevertWorkerResponse,
+    SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    deliver_card_transfer_response, process_oplog_entries_response,
+    resolve_revert_last_invocations_response,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
@@ -68,7 +70,9 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
-use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAgentConfigEntry};
+use golem_common::model::worker::{
+    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, TypedAgentConfigEntry,
+};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
@@ -574,6 +578,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let principal = extract_principal(&request.principal);
 
+        let resolved_revert = request.resolved_revert.map(|resolved| ResolvedRevert {
+            last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
+            observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
+        });
+
         let target = request
             .target
             .ok_or(WorkerExecutorError::invalid_request("target not found"))?;
@@ -597,13 +606,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     principal,
                 )
                 .await?;
-                worker.revert(target).await?;
+                worker.revert(target, resolved_revert).await?;
                 Ok(())
             }
             None => Err(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             )),
         }
+    }
+
+    async fn resolve_revert_last_invocations_internal(
+        &self,
+        request: ResolveRevertLastInvocationsRequest,
+    ) -> Result<ResolvedRevert, WorkerExecutorError> {
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        Self::validate_auth_ctx(&request.auth_ctx)?;
+
+        let agent_mode = self
+            .worker_service()
+            .get_agent_mode(&owned_agent_id)
+            .await
+            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+
+        resolve_revert_last_invocations(
+            self.oplog_service().as_ref(),
+            &owned_agent_id,
+            agent_mode,
+            request.number_of_invocations,
+        )
+        .await
     }
 
     async fn cancel_invocation_internal(
@@ -2164,7 +2198,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
-        Self::validate_auth_ctx(&request.auth_ctx)?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {error}"))
+            })?;
+        auth_ctx
+            .authorize_system_only("process oplog entries")
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
 
         let component_revision: golem_common::model::component::ComponentRevision =
             request.component_revision.try_into().map_err(|e| {
@@ -3048,6 +3092,44 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             err.clone().into(),
                         ),
                     ),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn resolve_revert_last_invocations(
+        &self,
+        request: Request<ResolveRevertLastInvocationsRequest>,
+    ) -> Result<Response<ResolveRevertLastInvocationsResponse>, Status> {
+        let request = request.into_inner();
+
+        let record = recorded_grpc_api_request!(
+            "resolve_revert_last_invocations",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+
+        let result = self
+            .resolve_revert_last_invocations_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(resolved) => {
+                record.succeed(Ok(Response::new(ResolveRevertLastInvocationsResponse {
+                    result: Some(resolve_revert_last_invocations_response::Result::Success(
+                        golem::common::ResolvedRevert {
+                            last_oplog_index: resolved.last_oplog_index.as_u64(),
+                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
+                        },
+                    )),
+                })))
+            }
+            Err(mut err) => record.fail(
+                Ok(Response::new(ResolveRevertLastInvocationsResponse {
+                    result: Some(resolve_revert_last_invocations_response::Result::Failure(
+                        err.clone().into(),
+                    )),
                 })),
                 &mut err,
             ),

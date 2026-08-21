@@ -25,6 +25,7 @@ world golem-rust {
 
   import wasi:blobstore/blobstore;
   import wasi:blobstore/container;
+  import wasi:keyvalue/cache@0.1.0;
   import wasi:keyvalue/eventual-batch@0.1.0;
   import wasi:keyvalue/eventual@0.1.0;
   import wasi:logging/logging;

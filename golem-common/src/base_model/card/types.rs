@@ -100,9 +100,13 @@ declare_structs! {
     pub struct Card {
         pub card_id: CardId,
         pub parent_ids: Vec<CardId>,
+        #[serde(deserialize_with = "super::parsing::deserialize_permission_grants")]
         pub lower_positive: Vec<PermissionPattern>,
+        #[serde(deserialize_with = "super::parsing::deserialize_permission_grants")]
         pub lower_negative: Vec<PermissionPattern>,
+        #[serde(deserialize_with = "super::parsing::deserialize_permission_grants")]
         pub upper_positive: Vec<PermissionPattern>,
+        #[serde(deserialize_with = "super::parsing::deserialize_permission_grants")]
         pub upper_negative: Vec<PermissionPattern>,
         pub created_at: DateTime<Utc>,
         pub expires_at: Option<DateTime<Utc>>,
@@ -115,9 +119,13 @@ declare_structs! {
     pub struct ScopeCard {
         pub scope_card_id: CardId,
         pub root_card_ids: Vec<CardId>,
+        #[serde(deserialize_with = "super::parsing::deserialize_permission_grants")]
         pub lower_positive: Vec<PermissionPattern>,
+        #[serde(deserialize_with = "super::parsing::deserialize_permission_grants")]
         pub lower_negative: Vec<PermissionPattern>,
+        #[serde(deserialize_with = "super::parsing::deserialize_permission_grants")]
         pub upper_positive: Vec<PermissionPattern>,
+        #[serde(deserialize_with = "super::parsing::deserialize_permission_grants")]
         pub upper_negative: Vec<PermissionPattern>,
     }
 
@@ -126,9 +134,13 @@ declare_structs! {
     pub struct PolymorphicCard {
         pub card_id: CardId,
         pub parent_ids: Vec<CardId>,
+        #[serde(deserialize_with = "super::parsing::deserialize_polymorphic_permission_grants")]
         pub lower_positive: Vec<PolymorphicPermissionPattern>,
+        #[serde(deserialize_with = "super::parsing::deserialize_polymorphic_permission_grants")]
         pub lower_negative: Vec<PolymorphicPermissionPattern>,
+        #[serde(deserialize_with = "super::parsing::deserialize_polymorphic_permission_grants")]
         pub upper_positive: Vec<PolymorphicPermissionPattern>,
+        #[serde(deserialize_with = "super::parsing::deserialize_polymorphic_permission_grants")]
         pub upper_negative: Vec<PolymorphicPermissionPattern>,
         pub created_at: DateTime<Utc>,
         pub expires_at: Option<DateTime<Utc>>,

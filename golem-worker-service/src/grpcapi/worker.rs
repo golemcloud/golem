@@ -387,18 +387,33 @@ impl WorkerGrpcApi {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| bad_request_error(format!("failed converting config: {e}")))?;
 
-        let (latest_component_revision, fingerprint) = self
-            .worker_service
-            .create(
-                &agent_id,
-                request.env,
-                config,
-                request.ignore_already_existing,
-                auth,
-                request.context,
-                request.principal,
-            )
-            .await?;
+        let (latest_component_revision, fingerprint) =
+            if let Some(method_name) = request.method_name {
+                self.worker_service
+                    .create_for_invocation(
+                        &agent_id,
+                        method_name,
+                        request.env,
+                        config,
+                        request.ignore_already_existing,
+                        auth,
+                        request.context,
+                        request.principal,
+                    )
+                    .await?
+            } else {
+                self.worker_service
+                    .create(
+                        &agent_id,
+                        request.env,
+                        config,
+                        request.ignore_already_existing,
+                        auth,
+                        request.context,
+                        request.principal,
+                    )
+                    .await?
+            };
 
         Ok((agent_id, latest_component_revision, fingerprint))
     }
@@ -500,8 +515,16 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(|err| bad_request_error(format!("Invalid target {err}")))?;
 
+        let resolved_revert =
+            request
+                .resolved_revert
+                .map(|resolved| golem_common::model::worker::ResolvedRevert {
+                    last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
+                    observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
+                });
+
         self.worker_service
-            .revert_worker(&agent_id, target, auth)
+            .revert_worker_prepared(&agent_id, target, resolved_revert, auth)
             .await?;
 
         Ok(())
@@ -619,6 +642,7 @@ impl WorkerGrpcApi {
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+        auth.authorize_system_only("process oplog entries")?;
 
         let agent_id = validate_protobuf_agent_id(request.agent_id)?;
 
