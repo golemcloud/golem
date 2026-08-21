@@ -90,9 +90,16 @@ const IDLE_CONNECTION_TTL: Duration = Duration::from_secs(600);
 ///
 /// A retirement landing in that window is a sibling's failure, not this
 /// caller's, and the connection it takes out is forgotten as it goes — so going
-/// back for another gets a fresh one rather than the same verdict. Bounded
-/// rather than open-ended because each turn costs a connection nobody used, and
-/// a target being retired this fast has something else wrong with it.
+/// back for another gets a fresh one rather than the same verdict.
+///
+/// Three because what a caller sees decays geometrically with each turn and
+/// never flattens, while what it costs saturates after the second. Measured
+/// against a peer retiring one call in ten, with 16 callers sharing it: going
+/// back once takes callers failing outright from 9.5% to 1.5%, twice takes it
+/// to 0.25% and a third time to 0.03%, for 6%, 9% and 8% more connections
+/// opened. The worst case is three `connect_timeout`s inside one call, and it
+/// takes a peer whose connects are slow and succeed, over and over: one that
+/// fails leaves through the `?` below without taking another turn.
 const INSTALL_ATTEMPTS: usize = 3;
 
 /// Milliseconds since this process started.
@@ -140,8 +147,17 @@ impl LastUsed {
     /// invocations have no bound — and only ever touches the moment it is
     /// handed the connection. Judged on that alone, a connection carrying a long
     /// invocation and nothing else reads as one nobody is calling.
+    /// A request that never returns keeps its connection out of the sweep for
+    /// good, which is the honest reading of in use: nothing else ends such a
+    /// request either, since `request_timeout` is deliberately unset.
+    ///
+    /// Acquire against the release in `Riding::drop`, so a sweep that sees the
+    /// count reach zero also sees the timestamp the request left behind. Without
+    /// the pair, aarch64 may reorder either side and the sweep judges a
+    /// connection whose request has just ended by a timestamp from before it
+    /// began.
     fn in_use_within(&self, idle_ttl: Duration) -> bool {
-        self.0.riding.load(Ordering::Relaxed) > 0 || self.idle_for() < idle_ttl
+        self.0.riding.load(Ordering::Acquire) > 0 || self.idle_for() < idle_ttl
     }
 
     /// Counts a request as riding this connection until the guard is dropped.
@@ -159,7 +175,7 @@ struct Riding(LastUsed);
 impl Drop for Riding {
     fn drop(&mut self) {
         self.0.touch();
-        self.0.0.riding.fetch_sub(1, Ordering::Relaxed);
+        self.0.0.riding.fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -514,7 +530,6 @@ impl<T: Clone> GrpcClient<T> {
 
         let mut attempts_left = INSTALL_ATTEMPTS;
         loop {
-            attempts_left -= 1;
             let connected = self
                 .connections
                 .connect(self.endpoint.clone(), &self.config)
@@ -542,6 +557,7 @@ impl<T: Clone> GrpcClient<T> {
                 }
             };
 
+            attempts_left = attempts_left.saturating_sub(1);
             if attempts_left == 0 {
                 return Err(refused);
             }
@@ -714,7 +730,6 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
 
         let mut attempts_left = INSTALL_ATTEMPTS;
         loop {
-            attempts_left -= 1;
             let connected = self
                 .connections
                 .connect(endpoint.clone(), &self.config)
@@ -749,6 +764,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                 },
             };
 
+            attempts_left = attempts_left.saturating_sub(1);
             if attempts_left == 0 {
                 return Err(refused);
             }
