@@ -2789,12 +2789,14 @@ async fn every_protected_storage_config_and_secret_import_enforces_permissions(
 
     let secret_component = executor
         .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .unique()
         .without_default_host_permissions("SecretHandleAgent")
         .update_agent_provision_config("SecretHandleAgent", |config| {
-            config.initial_permissions.lower_bound.positive.extend([
-                config_permission("*"),
-                secret_permission("hold", "secretPath"),
-            ]);
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend([config_permission("*"), secret_permission("hold", "*")]);
         })
         .store()
         .await?;
@@ -3839,12 +3841,14 @@ async fn secret_reveal_authorizes_before_secret_revision_lookup(
 
     let denied_component = executor
         .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .unique()
         .without_default_host_permissions("SecretHandleAgent")
         .update_agent_provision_config("SecretHandleAgent", |config| {
-            config.initial_permissions.lower_bound.positive.extend([
-                config_permission("*"),
-                secret_permission("hold", "secretPath"),
-            ]);
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .extend([config_permission("*"), secret_permission("hold", "*")]);
         })
         .store()
         .await?;
@@ -3884,7 +3888,7 @@ async fn secret_reveal_authorizes_before_secret_revision_lookup(
         .update_agent_provision_config("SecretHandleAgent", |config| {
             config.initial_permissions.lower_bound.positive.extend([
                 config_permission("*"),
-                secret_permission("hold", "secretPath"),
+                secret_permission("hold", "*"),
                 secret_permission("reveal", "secretPath"),
             ]);
         })
@@ -3955,11 +3959,12 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
     let executor = start_with_overrides(deps, &context, make_overrides()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .unique()
         .without_default_host_permissions("SecretHandleAgent")
         .update_agent_provision_config("SecretHandleAgent", |config| {
             config.initial_permissions.lower_bound.positive.extend([
                 config_permission("*"),
-                secret_permission("hold", "secretPath"),
+                secret_permission("hold", "*"),
                 secret_permission("reveal", "secretPath"),
             ]);
         })

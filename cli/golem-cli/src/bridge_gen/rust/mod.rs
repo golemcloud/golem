@@ -1215,7 +1215,9 @@ impl RustBridgeGenerator {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                     let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                    Ok(self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters, None).metadata)
+                    self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters, None)
+                        .map(|__receipt| __receipt.metadata)
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
                 }
             });
         }
@@ -1225,8 +1227,9 @@ impl RustBridgeGenerator {
                 let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                 let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                     .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters, None);
-                Ok(())
+                self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters, None)
+                    .map(|_| ())
+                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
             }
         })
     }
@@ -1250,7 +1253,8 @@ impl RustBridgeGenerator {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                     let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                         .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                    Ok(self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters, None))
+                    self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters, None)
+                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
                 }
             });
         }
@@ -1260,7 +1264,9 @@ impl RustBridgeGenerator {
                 let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_schema_value;
                 let method_parameters = golem_rust::encode_schema_value(&method_parameters)
                     .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?;
-                Ok(self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters, None).cancellation_token)
+                self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters, None)
+                    .map(|__receipt| __receipt.cancellation_token)
+                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
             }
         })
     }

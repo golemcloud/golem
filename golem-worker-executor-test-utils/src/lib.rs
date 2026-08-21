@@ -35,6 +35,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     Card, CardId, CardManagedByRuntimeDerived, StoredCard, parse_permission_fields,
 };
@@ -79,6 +80,7 @@ use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 pub use golem_test_framework::dsl::PrecompiledComponent;
+use golem_test_framework::dsl::default_test_agent_initial_permissions;
 use golem_worker_executor::durable_host::{
     DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
     SnapshotBoundaryBlocker,
@@ -3850,6 +3852,13 @@ pub fn registry_test_card() -> StoredCard {
 
 pub struct TestCardService;
 
+fn default_test_host_permissions_card(card_id: CardId) -> StoredCard {
+    let mut card =
+        default_test_agent_initial_permissions(RecipientPattern::Any).to_polymorphic_card();
+    card.card_id = card_id;
+    StoredCard::Polymorphic(card)
+}
+
 #[async_trait]
 impl CardService for TestCardService {
     async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
@@ -3872,7 +3881,7 @@ impl CardService for TestCardService {
             let card_state = if card_id == TEST_CARD_ID {
                 CardState::Live(Box::new(registry_test_card()))
             } else {
-                CardState::Unknown
+                CardState::Live(Box::new(default_test_host_permissions_card(card_id)))
             };
             result.insert(card_id, card_state);
         }

@@ -425,15 +425,20 @@ mod tests {
                 .map(|p| p.render().unwrap())
                 .collect::<Vec<_>>(),
             vec![
-                "environment(?env) @ * : view : *",
-                "component(?component) @ * : view : *",
-                "agent(?env/*/*) @ * : view : *",
-                "agent(?env/*/*) @ * : invoke : *",
-                "env(?agent) @ * : read : GOLEM_AGENT_ID",
-                "env(?agent) @ * : read : GOLEM_AGENT_TYPE",
-                "env(?agent) @ * : read : GOLEM_WORKER_NAME",
-                "env(?agent) @ * : read : GOLEM_COMPONENT_ID",
-                "env(?agent) @ * : read : GOLEM_COMPONENT_REVISION",
+                "filesystem(?agent) @ * : * : /**",
+                "network() @ * : * : *",
+                "env(?agent) @ * : * : *",
+                "oplog(?agent) @ * : * : *",
+                "config(?agent) @ * : * : *",
+                "secret(?env) @ * : * : *",
+                "agent(?env/*/*) @ * : * : *",
+                "environment(?env) @ * : * : *",
+                "component(?component) @ * : * : *",
+                "tool(?env/*/*) @ * : * : *",
+                "kv(?env) @ * : * : *.**",
+                "blob(?env) @ * : * : *.**",
+                "rdbms(?env) @ * : * : *.*.*",
+                "card(?account) @ * : * : *",
             ]
         );
     }

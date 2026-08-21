@@ -1218,9 +1218,9 @@ fn tool_invocation_host_payload_pairs_roundtrip() {
     assert_host_payload_pair_roundtrip::<host_functions::GolemToolRpcAsyncInvokeAndAwait>(
         request.clone(),
         HostResponseGolemToolInvokeResult {
-            result: Err(SerializableToolRpcError::RemoteToolError(
+            result: Err(SerializableToolRpcError::RemoteToolError(Box::new(
                 SerializableToolError::InvalidCommandPath(vec!["missing".to_string()]),
-            )),
+            ))),
         },
     );
     assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolRpcAsyncInvokeAndAwait>(

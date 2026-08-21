@@ -210,11 +210,8 @@ fn secret_paths_for_value(value: &SchemaValue) -> Result<Vec<&[String]>, WorkerE
                     collect(value, paths)?;
                 }
             }
-            SchemaValue::Option { inner } => {
-                if let Some(value) = inner {
-                    collect(value, paths)?;
-                }
-            }
+            SchemaValue::Option { inner: Some(value) } => collect(value, paths)?,
+            SchemaValue::Option { inner: None } => {}
             SchemaValue::Result(result) => match result {
                 golem_common::schema::schema_value::ResultValuePayload::Ok { value }
                 | golem_common::schema::schema_value::ResultValuePayload::Err { value } => {

@@ -61,6 +61,7 @@ pub type HttpTrailers = HashMap<String, Vec<Vec<u8>>>;
 pub type HttpTrailersResult = Result<Option<HttpTrailers>, SerializableHttpErrorCode>;
 pub type HttpFutureTrailersPoll = Result<HttpTrailersResult, ()>;
 pub type HttpFutureTrailersGetResult = Result<Option<HttpFutureTrailersPoll>, String>;
+pub type AgentsPage = (Option<(u64, u64)>, Vec<AgentMetadataForGuests>);
 
 oplog_payload! {
     HostRequest => {
@@ -647,7 +648,7 @@ oplog_payload! {
             result: Result<(), SerializableToolRpcError>
         },
         GolemApiAgents {
-            result: Result<(Option<(u64, u64)>, Vec<AgentMetadataForGuests>), String>
+            result: Result<AgentsPage, String>
         },
         CliEnvironmentGetEnvironment {
             environment: Vec<(String, String)>

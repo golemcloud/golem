@@ -13,75 +13,106 @@
 // limitations under the License.
 
 use super::owner::{
-    PolymorphicAgentOwnerPattern, PolymorphicComponentOwnerPattern,
-    PolymorphicEnvironmentOwnerPattern,
+    EmptyOwnerPattern, PolymorphicAccountOwnerPattern, PolymorphicAgentOwnerPattern,
+    PolymorphicComponentOwnerPattern, PolymorphicEmptyOwnerPattern,
+    PolymorphicEnvironmentOwnerPattern, PolymorphicToolOwnerPattern,
 };
 use super::recipient::RecipientPattern;
 use super::{
-    AgentResourcePattern, AgentVerb, ComponentResourcePattern, ComponentVerb, EnvResourcePattern,
-    EnvVarName, EnvVerb, EnvironmentResourcePattern, EnvironmentVerb,
-    PolymorphicClassPermissionPattern, PolymorphicPermissionPattern,
+    AgentResourcePattern, BlobResourcePattern, CardResourcePattern, ComponentResourcePattern,
+    ConfigResourcePattern, EnvResourcePattern, EnvironmentResourcePattern,
+    FilesystemResourcePattern, KvResourcePattern, NetworkResourcePattern, OplogResourcePattern,
+    PolymorphicClassPermissionPattern, PolymorphicPermissionPattern, RdbmsResourcePattern,
+    SecretResourcePattern, ToolResourcePattern,
 };
 
 pub fn default_agent_initial_permission_grants(
     recipient: RecipientPattern,
 ) -> Vec<PolymorphicPermissionPattern> {
-    let mut grants = vec![
+    vec![
+        PolymorphicPermissionPattern::Filesystem(PolymorphicClassPermissionPattern {
+            owner: PolymorphicAgentOwnerPattern::Agent,
+            recipient: recipient.clone(),
+            verb: None,
+            resource: FilesystemResourcePattern::any(),
+        }),
+        PolymorphicPermissionPattern::Network(PolymorphicClassPermissionPattern {
+            owner: PolymorphicEmptyOwnerPattern::Concrete(EmptyOwnerPattern),
+            recipient: recipient.clone(),
+            verb: None,
+            resource: NetworkResourcePattern::Any,
+        }),
+        PolymorphicPermissionPattern::Env(PolymorphicClassPermissionPattern {
+            owner: PolymorphicAgentOwnerPattern::Agent,
+            recipient: recipient.clone(),
+            verb: None,
+            resource: EnvResourcePattern::Any,
+        }),
+        PolymorphicPermissionPattern::Oplog(PolymorphicClassPermissionPattern {
+            owner: PolymorphicAgentOwnerPattern::Agent,
+            recipient: recipient.clone(),
+            verb: None,
+            resource: OplogResourcePattern::Any,
+        }),
+        PolymorphicPermissionPattern::Config(PolymorphicClassPermissionPattern {
+            owner: PolymorphicAgentOwnerPattern::Agent,
+            recipient: recipient.clone(),
+            verb: None,
+            resource: ConfigResourcePattern::Any,
+        }),
+        PolymorphicPermissionPattern::Secret(PolymorphicClassPermissionPattern {
+            owner: PolymorphicEnvironmentOwnerPattern::Env,
+            recipient: recipient.clone(),
+            verb: None,
+            resource: SecretResourcePattern::Any,
+        }),
+        PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern {
+            owner: PolymorphicAgentOwnerPattern::EnvAgents,
+            recipient: recipient.clone(),
+            verb: None,
+            resource: AgentResourcePattern::Any,
+        }),
         PolymorphicPermissionPattern::Environment(PolymorphicClassPermissionPattern {
             owner: PolymorphicEnvironmentOwnerPattern::Env,
             recipient: recipient.clone(),
-            verb: Some(EnvironmentVerb::View),
+            verb: None,
             resource: EnvironmentResourcePattern::Any,
         }),
         PolymorphicPermissionPattern::Component(PolymorphicClassPermissionPattern {
             owner: PolymorphicComponentOwnerPattern::Component,
             recipient: recipient.clone(),
-            verb: Some(ComponentVerb::View),
+            verb: None,
             resource: ComponentResourcePattern::Any,
         }),
-        agent_permission(
-            AgentVerb::View,
-            AgentResourcePattern::Any,
-            recipient.clone(),
-        ),
-        agent_permission(
-            AgentVerb::Invoke,
-            AgentResourcePattern::Any,
-            recipient.clone(),
-        ),
-    ];
-    grants.extend(
-        [
-            "GOLEM_AGENT_ID",
-            "GOLEM_AGENT_TYPE",
-            "GOLEM_WORKER_NAME",
-            "GOLEM_COMPONENT_ID",
-            "GOLEM_COMPONENT_REVISION",
-        ]
-        .into_iter()
-        .map(|name| env_permission(name, recipient.clone())),
-    );
-    grants
-}
-
-fn agent_permission(
-    verb: AgentVerb,
-    resource: AgentResourcePattern,
-    recipient: RecipientPattern,
-) -> PolymorphicPermissionPattern {
-    PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern {
-        owner: PolymorphicAgentOwnerPattern::EnvAgents,
-        recipient,
-        verb: Some(verb),
-        resource,
-    })
-}
-
-fn env_permission(name: &str, recipient: RecipientPattern) -> PolymorphicPermissionPattern {
-    PolymorphicPermissionPattern::Env(PolymorphicClassPermissionPattern {
-        owner: PolymorphicAgentOwnerPattern::Agent,
-        recipient,
-        verb: Some(EnvVerb::Read),
-        resource: EnvResourcePattern::VarName(EnvVarName(name.to_string())),
-    })
+        PolymorphicPermissionPattern::Tool(PolymorphicClassPermissionPattern {
+            owner: PolymorphicToolOwnerPattern::EnvTools,
+            recipient: recipient.clone(),
+            verb: None,
+            resource: ToolResourcePattern::any(),
+        }),
+        PolymorphicPermissionPattern::Kv(PolymorphicClassPermissionPattern {
+            owner: PolymorphicEnvironmentOwnerPattern::Env,
+            recipient: recipient.clone(),
+            verb: None,
+            resource: KvResourcePattern::any(),
+        }),
+        PolymorphicPermissionPattern::Blob(PolymorphicClassPermissionPattern {
+            owner: PolymorphicEnvironmentOwnerPattern::Env,
+            recipient: recipient.clone(),
+            verb: None,
+            resource: BlobResourcePattern::any(),
+        }),
+        PolymorphicPermissionPattern::Rdbms(PolymorphicClassPermissionPattern {
+            owner: PolymorphicEnvironmentOwnerPattern::Env,
+            recipient: recipient.clone(),
+            verb: None,
+            resource: RdbmsResourcePattern::any(),
+        }),
+        PolymorphicPermissionPattern::Card(PolymorphicClassPermissionPattern {
+            owner: PolymorphicAccountOwnerPattern::Account,
+            recipient,
+            verb: None,
+            resource: CardResourcePattern::Any,
+        }),
+    ]
 }

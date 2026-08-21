@@ -94,9 +94,10 @@ where
         let ctx = access.get();
         let value = match &response {
             Ok(result) => result.result.as_ref(),
-            Err(SerializableToolRpcError::RemoteToolError(SerializableToolError::CustomError(
-                value,
-            ))) => Some(value),
+            Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
+                SerializableToolError::CustomError(value) => Some(value.as_ref()),
+                _ => None,
+            },
             _ => None,
         };
         match value {
@@ -118,7 +119,7 @@ where
 }
 
 enum FutureToolInvokeState {
-    Ready(Option<ToolInvokeResponse>),
+    Ready(Box<Option<ToolInvokeResponse>>),
     Consumed,
     Cancelled,
 }
@@ -375,7 +376,7 @@ fn project_tool_rpc_error<Ctx: WorkerCtx>(
         SerializableToolRpcError::RemoteInternalError(value) => {
             RpcError::RemoteInternalError(value)
         }
-        SerializableToolRpcError::RemoteToolError(error) => project_tool_error(error, ctx),
+        SerializableToolRpcError::RemoteToolError(error) => project_tool_error(*error, ctx),
     }
 }
 
@@ -471,7 +472,7 @@ struct PreparedToolCall {
 enum ToolCallPreparation {
     Ready(PreparedToolCall),
     Rejected {
-        request: HostRequestGolemToolInvoke,
+        request: Box<HostRequestGolemToolInvoke>,
         response: ToolInvokeResponse,
         stdin: Option<StreamReader<u8>>,
     },
@@ -511,13 +512,13 @@ where
         Ok(input) => input,
         Err(error) => {
             return Ok(ToolCallPreparation::Rejected {
-                request: invocation_request(
+                request: Box::new(invocation_request(
                     &rpc,
                     &command_path,
                     Vec::new(),
                     empty_tool_input(),
                     has_stdin,
-                ),
+                )),
                 response: Err(SerializableToolRpcError::ProtocolError(format!(
                     "invalid tool input: {error}"
                 ))),
@@ -539,7 +540,13 @@ where
         Ok(registered_tool) => registered_tool,
         Err(error) => {
             return Ok(ToolCallPreparation::Rejected {
-                request: invocation_request(&rpc, &command_path, Vec::new(), input, has_stdin),
+                request: Box::new(invocation_request(
+                    &rpc,
+                    &command_path,
+                    Vec::new(),
+                    input,
+                    has_stdin,
+                )),
                 response: Err(error),
                 stdin,
             });
@@ -558,7 +565,13 @@ where
         Ok(binding) => binding,
         Err(error) => {
             return Ok(ToolCallPreparation::Rejected {
-                request: invocation_request(&rpc, &command_path, Vec::new(), input, has_stdin),
+                request: Box::new(invocation_request(
+                    &rpc,
+                    &command_path,
+                    Vec::new(),
+                    input,
+                    has_stdin,
+                )),
                 response: Err(error),
                 stdin,
             });
@@ -566,7 +579,13 @@ where
     };
     if registered_tool.deployment_revision != binding.deployment_revision {
         return Ok(ToolCallPreparation::Rejected {
-            request: invocation_request(&rpc, &command_path, Vec::new(), input, has_stdin),
+            request: Box::new(invocation_request(
+                &rpc,
+                &command_path,
+                Vec::new(),
+                input,
+                has_stdin,
+            )),
             response: Err(SerializableToolRpcError::RemoteInternalError(format!(
                 "tool '{}' changed while resolving its binding",
                 rpc.tool_name
@@ -579,7 +598,13 @@ where
         Ok(args) => args,
         Err(error) => {
             return Ok(ToolCallPreparation::Rejected {
-                request: invocation_request(&rpc, &command_path, Vec::new(), input, has_stdin),
+                request: Box::new(invocation_request(
+                    &rpc,
+                    &command_path,
+                    Vec::new(),
+                    input,
+                    has_stdin,
+                )),
                 response: Err(SerializableToolRpcError::ProtocolError(error)),
                 stdin,
             });
@@ -597,7 +622,7 @@ where
         Ok(target) => target,
         Err(error) => {
             return Ok(ToolCallPreparation::Rejected {
-                request,
+                request: Box::new(request),
                 response: Err(SerializableToolRpcError::ProtocolError(error.to_string())),
                 stdin,
             });
@@ -613,7 +638,7 @@ where
         Ok(permit) => permit,
         Err(error) => {
             return Ok(ToolCallPreparation::Rejected {
-                request,
+                request: Box::new(request),
                 response: Err(SerializableToolRpcError::Denied(error.to_string())),
                 stdin,
             });
@@ -919,7 +944,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                 let handle = CallHandle::<GolemToolRpcInvoke, Cancellable>::start_access(
                     accessor,
                     accessor.getter(),
-                    request,
+                    *request,
                     DurableFunctionType::ReadRemote,
                 )
                 .await?;
@@ -1032,7 +1057,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                 let handle = CallHandle::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
                     accessor,
                     accessor.getter(),
-                    request,
+                    *request,
                     DurableFunctionType::ReadRemote,
                 )
                 .await?;
@@ -1104,7 +1129,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                     close_stdin(accessor, stdin).await?;
                     return accessor.with(|mut access| {
                         Ok(access.get().table().push(FutureInvokeResultEntry {
-                            state: FutureToolInvokeState::Ready(Some(response.result)),
+                            state: FutureToolInvokeState::Ready(Box::new(Some(response.result))),
                         })?)
                     });
                 }
@@ -1132,7 +1157,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                 .await?;
             return accessor.with(|mut access| {
                 Ok(access.get().table().push(FutureInvokeResultEntry {
-                    state: FutureToolInvokeState::Ready(Some(response.result)),
+                    state: FutureToolInvokeState::Ready(Box::new(Some(response.result))),
                 })?)
             });
         }
@@ -1149,7 +1174,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                     CallHandle::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
                         accessor,
                         accessor.getter(),
-                        request,
+                        *request,
                         DurableFunctionType::ReadRemote,
                     )
                     .await?;
@@ -1163,7 +1188,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                     .await?;
                 return accessor.with(|mut access| {
                     Ok(access.get().table().push(FutureInvokeResultEntry {
-                        state: FutureToolInvokeState::Ready(Some(response.result)),
+                        state: FutureToolInvokeState::Ready(Box::new(Some(response.result))),
                     })?)
                 });
             }
@@ -1192,7 +1217,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                 HostResponseGolemToolInvokeResult { result },
             )
             .await?;
-        let state = FutureToolInvokeState::Ready(Some(response.result));
+        let state = FutureToolInvokeState::Ready(Box::new(Some(response.result)));
         accessor.with(|mut access| {
             Ok(access
                 .get()

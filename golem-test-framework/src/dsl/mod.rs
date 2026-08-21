@@ -31,7 +31,6 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::application::{Application, ApplicationId};
-use golem_common::model::card::parse_polymorphic_permission;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
@@ -77,31 +76,15 @@ pub struct PrecompiledComponent {
 pub fn default_test_agent_initial_permissions_for_account(
     account_email: AccountEmail,
 ) -> AgentTypeInitialPermissions {
-    let recipient = RecipientPattern::Account {
+    default_test_agent_initial_permissions(RecipientPattern::Account {
         account: account_email,
-    };
-    let mut initial_permissions =
-        AgentTypeInitialPermissions::default_for_recipient(recipient.clone());
-    initial_permissions.lower_bound.positive.extend(
-        [
-            "filesystem(?agent) @ {recipient} : * : /**",
-            "network() @ {recipient} : connect : *",
-            "env(?agent) @ {recipient} : read : *",
-            "oplog(?agent) @ {recipient} : read : *",
-            "config(?agent) @ {recipient} : read : *",
-            "secret(?env) @ {recipient} : * : *",
-            "agent(?env/*/*) @ {recipient} : * : *",
-            "tool(?env/*/*) @ {recipient} : invoke : *",
-            "kv(?env) @ {recipient} : * : *.**",
-            "blob(?env) @ {recipient} : * : *.**",
-            "rdbms(?env) @ {recipient} : * : *.*.*",
-        ]
-        .map(|grant| {
-            parse_polymorphic_permission(&grant.replace("{recipient}", &recipient.render()))
-                .expect("test host permission must be valid")
-        }),
-    );
-    initial_permissions
+    })
+}
+
+pub fn default_test_agent_initial_permissions(
+    recipient: RecipientPattern,
+) -> AgentTypeInitialPermissions {
+    AgentTypeInitialPermissions::default_for_recipient(recipient)
 }
 
 pub(crate) fn default_agent_type_provision_config_creation_for_account(
@@ -919,15 +902,17 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
-    /// Uses production default permissions for an agent type instead of the permissive test set.
+    /// Starts an agent type without default host permissions.
     pub fn without_default_host_permissions(mut self, agent_type: &str) -> Self {
-        let recipient = RecipientPattern::Account {
-            account: self.dsl.account_email(),
-        };
         self.agent_type_provision_configs.insert(
             AgentTypeName(agent_type.to_string()),
             AgentTypeProvisionConfigCreation {
-                initial_permissions: AgentTypeInitialPermissions::default_for_recipient(recipient),
+                initial_permissions: AgentTypeInitialPermissions::from_patterns(
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ),
                 env: BTreeMap::new(),
                 config: Vec::new(),
                 plugin_installations: Vec::new(),

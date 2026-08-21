@@ -229,10 +229,13 @@ async fn oplog_entries_denied<Ctx: WorkerCtx>(
     Ok(ctx.authorize_live_permissions(&targets).await?.is_err())
 }
 
+type SerializedOplogEntries = Vec<(u64, Vec<u8>)>;
+type OplogEntryConversion = Result<Vec<(u64, OplogEntry)>, String>;
+
 fn prepare_oplog_enrichment_entries<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     entries: Vec<(u64, golem_api_1_x::oplog::OplogEntry)>,
-) -> (Vec<(u64, Vec<u8>)>, Result<Vec<(u64, OplogEntry)>, String>) {
+) -> (SerializedOplogEntries, OplogEntryConversion) {
     let indexes = entries.iter().map(|(index, _)| *index).collect::<Vec<_>>();
     let mut entries =
         crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(entries, ctx)

@@ -31,6 +31,8 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime_wasi::cli::WasiCliView as _;
 use wasmtime_wasi::p2::bindings::cli::environment::Host;
 
+type FilteredEnvironment = (Vec<(String, String)>, Vec<(PermissionTarget, bool)>);
+
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Builds the deterministic enriched worker environment: the worker metadata env merged with
     /// the agent type's default env, plus the Golem-provided variables (`GOLEM_AGENT_ID`,
@@ -69,9 +71,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(env)
     }
 
-    fn build_filtered_environment(
-        &self,
-    ) -> wasmtime::Result<(Vec<(String, String)>, Vec<(PermissionTarget, bool)>)> {
+    fn build_filtered_environment(&self) -> wasmtime::Result<FilteredEnvironment> {
         let owner = agent_owner(self);
         let environment = self
             .build_unfiltered_environment()?

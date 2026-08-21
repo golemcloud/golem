@@ -87,8 +87,12 @@ async fn permission_cards_work_across_services_and_replay(
         .store()
         .await?;
     let caller = agent_id!("ScopeCardAgent", "permissions-caller");
+    let replay_caller = agent_id!("ScopeCardAgent", "permissions-replay-caller");
     let target = agent_id!("ScopeCardAgent", "permissions-target");
-    let caller_worker = user.start_agent(&component.id, caller.clone()).await?;
+    user.start_agent(&component.id, caller.clone()).await?;
+    let replay_caller_worker = user
+        .start_agent(&component.id, replay_caller.clone())
+        .await?;
     user.start_agent(&component.id, target.clone()).await?;
 
     let initial_card_id = component
@@ -159,31 +163,36 @@ async fn permission_cards_work_across_services_and_replay(
     );
 
     let release = user
-        .invoke_and_await_agent(&component, &caller, "create_release_promise", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &replay_caller,
+            "create_release_promise",
+            data_value!(),
+        )
         .await?
         .into_typed::<PromiseId>()?;
     let replay_key = IdempotencyKey::fresh();
     let replay_params = data_value!(component_id, target.to_string(), release.clone());
     user.invoke_agent_with_key(
         &component,
-        &caller,
+        &replay_caller,
         &replay_key,
         "derive_and_install_after_promise",
         replay_params.clone(),
     )
     .await?;
     user.wait_for_status(
-        &caller_worker,
+        &replay_caller_worker,
         AgentStatus::Suspended,
         Duration::from_secs(30),
     )
     .await?;
-    user.simulated_crash(&caller_worker).await?;
+    user.simulated_crash(&replay_caller_worker).await?;
     user.complete_promise(&release, vec![1]).await?;
     let replay_card_id = user
         .invoke_and_await_agent_with_key(
             &component,
-            &caller,
+            &replay_caller,
             &replay_key,
             "derive_and_install_after_promise",
             replay_params,

@@ -2216,7 +2216,7 @@ pub enum SerializableToolError {
     InvalidInput(String),
     ConstraintViolation(String),
     InvalidResult(String),
-    CustomError(TypedSchemaValue),
+    CustomError(Box<TypedSchemaValue>),
 }
 
 #[derive(
@@ -2233,7 +2233,7 @@ pub enum SerializableToolRpcError {
     Denied(String),
     NotFound(String),
     RemoteInternalError(String),
-    RemoteToolError(SerializableToolError),
+    RemoteToolError(Box<SerializableToolError>),
 }
 
 #[derive(

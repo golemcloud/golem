@@ -642,10 +642,11 @@ mod tests {
     use crate::model::application::ApplicationName;
     use crate::model::card::recipient::RecipientPattern;
     use crate::model::card::{
-        AgentClass, AgentResourcePattern, AgentVerb, CardId, ClassPermissionTarget, ComponentClass,
-        ComponentResourcePattern, ComponentVerb, EnvironmentClass, EnvironmentResourcePattern,
-        EnvironmentVerb, PermissionTarget, PolymorphicCard, PolymorphicClassPermissionPattern,
-        PolymorphicPermissionPattern, StoredCard,
+        AgentClass, AgentResourcePattern, AgentVerb, CardClass, CardId, CardResourcePattern,
+        CardVerb, ClassPermissionTarget, ComponentClass, ComponentResourcePattern, ComponentVerb,
+        EnvironmentClass, EnvironmentResourcePattern, EnvironmentVerb, PermissionTarget,
+        PolymorphicCard, PolymorphicClassPermissionPattern, PolymorphicPermissionPattern,
+        StoredCard,
     };
     use crate::model::card::{default_agent_initial_permission_grants, parse_permission};
     use crate::model::component::ComponentName;
@@ -693,6 +694,14 @@ mod tests {
             verb: Some(verb),
             owner: AgentOwnerPattern::parse(owner).unwrap(),
             resource: AgentResourcePattern::Any,
+        })
+    }
+
+    fn card_target(owner: &str, verb: CardVerb) -> PermissionTarget {
+        PermissionTarget::Card(ClassPermissionTarget::<CardClass> {
+            verb: Some(verb),
+            owner: AccountOwnerPattern::parse(owner).unwrap(),
+            resource: CardResourcePattern::Any,
         })
     }
 
@@ -955,7 +964,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            !surface
+            surface
                 .authorize(&environment_target(
                     "owner@example.com/shop/prod",
                     EnvironmentVerb::Update
@@ -963,7 +972,7 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            !surface
+            surface
                 .authorize(&component_target(
                     "owner@example.com/shop/prod/cart-svc",
                     ComponentVerb::Update
@@ -984,6 +993,11 @@ mod tests {
                     "owner@example.com/shop/prod/inventory-svc/Inventory(bob)",
                     AgentVerb::Invoke,
                 ))
+                .unwrap()
+        );
+        assert!(
+            surface
+                .authorize(&card_target("owner@example.com", CardVerb::Derive))
                 .unwrap()
         );
         assert!(
