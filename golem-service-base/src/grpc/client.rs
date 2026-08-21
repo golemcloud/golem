@@ -1177,15 +1177,26 @@ fn requires_reconnect(e: &Status) -> bool {
         return false;
     }
 
-    if e.code() == Code::Unavailable {
-        return true;
-    }
+    worth_reconnecting(e.code(), has_transport_source(e))
+}
 
-    // A dead connection surfaces as a transport error, which tonic reports as
-    // `Unknown` or `Cancelled` rather than `Unavailable`. Matching only on
-    // `Unavailable` left such channels cached indefinitely, so every later
-    // request queued onto a connection that could never work again.
-    has_transport_source(e)
+/// Whether the cached connection is worth replacing, given what a status says
+/// and whether the transport under it failed.
+///
+/// Wider than `connection_is_gone` by one case and only one: `Unavailable`, from
+/// wherever it came. A peer that answers `Unavailable` itself is usually still
+/// reachable, so this is imprecise and known to be, at the cost of a connection
+/// that did not need replacing. Narrowing it is a change of its own.
+///
+/// Everything else has to say the transport failed. A dead connection reaches us
+/// as `Unknown` or `Cancelled` with a `tonic::transport::Error` under it, and
+/// matching only on `Unavailable` left such channels cached indefinitely, so
+/// every later request queued onto a connection that could never work again.
+/// Reading the source alone, as this once did, took every other code with it,
+/// including the ones tonic derives from an HTTP/2 reset: each of those ends one
+/// stream and leaves the connection carrying everybody else.
+fn worth_reconnecting(code: Code, transport_failed: bool) -> bool {
+    code == Code::Unavailable || (code_means_connection_gone(code) && transport_failed)
 }
 
 /// Whether the request ran out of its own time, rather than the connection
@@ -1870,6 +1881,76 @@ mod test {
             );
         }
     }
+
+    /// Replacing the connection has to be at least as willing as giving up on
+    /// it, or one this client had already written off would stay cached and go
+    /// on collecting requests. It is willing about one thing more, `Unavailable`
+    /// from anywhere, and about nothing beyond that.
+    ///
+    /// Reading the source alone, as this once did, went well past that: it
+    /// reconnected on any code at all as long as a transport error was attached,
+    /// which takes in every code tonic derives from an HTTP/2 reset.
+    #[test]
+    async fn only_unavailable_reconnects_without_the_transport_having_failed() {
+        for code in [
+            Code::Internal,
+            Code::ResourceExhausted,
+            Code::PermissionDenied,
+        ] {
+            assert!(
+                !worth_reconnecting(code, true),
+                "{code:?} ends one stream, so the connection carrying it stays"
+            );
+        }
+
+        for code in [Code::Unknown, Code::Cancelled] {
+            assert!(
+                worth_reconnecting(code, true),
+                "{code:?} over a failed transport is a connection that is gone"
+            );
+            assert!(
+                !worth_reconnecting(code, false),
+                "{code:?} on its own says nothing about the transport"
+            );
+        }
+
+        assert!(
+            worth_reconnecting(Code::Unavailable, false),
+            "Unavailable reconnects whoever sent it"
+        );
+
+        for code in ALL_CODES {
+            for transport_failed in [true, false] {
+                assert!(
+                    !(code_means_connection_gone(code) && transport_failed)
+                        || worth_reconnecting(code, transport_failed),
+                    "{code:?} is gone but would not be replaced"
+                );
+            }
+        }
+    }
+
+    /// Every code tonic can hand back, so the sweep over them below cannot go
+    /// stale as one predicate or the other changes.
+    const ALL_CODES: [Code; 17] = [
+        Code::Ok,
+        Code::Cancelled,
+        Code::Unknown,
+        Code::InvalidArgument,
+        Code::DeadlineExceeded,
+        Code::NotFound,
+        Code::AlreadyExists,
+        Code::PermissionDenied,
+        Code::ResourceExhausted,
+        Code::FailedPrecondition,
+        Code::Aborted,
+        Code::OutOfRange,
+        Code::Unimplemented,
+        Code::Internal,
+        Code::Unavailable,
+        Code::DataLoss,
+        Code::Unauthenticated,
+    ];
 
     /// `Cancelled` covers both a connection that closed under the request and a
     /// request that ran out of its own time, and only the source chain separates
