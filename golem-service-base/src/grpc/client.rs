@@ -83,6 +83,10 @@ type SharedConnect = Shared<BoxFuture<'static, Result<Connected, Status>>>;
 /// otherwise hold its `Channel` — and the `Buffer` worker task tower spawned for
 /// it — for the life of the process. Reaching a dropped target again costs one
 /// reconnect, which is why this is generous rather than tight.
+///
+/// Only [`MultiTargetGrpcClient`] sweeps. A client with one fixed target holds
+/// one connection to a service that is meant to be there, and holding on to it
+/// is the point.
 const IDLE_CONNECTION_TTL: Duration = Duration::from_secs(600);
 
 /// How many connections a caller will establish when each is retired before it
@@ -357,10 +361,9 @@ impl Connections {
     }
 
     /// Drives an attempt to completion independently of its callers, and clears
-    /// it if it failed. Called wherever an attempt is created, while the entry
-    /// holding it is still locked, so that no arm can create one and leave it
-    /// with nobody to finish it. Only spawning happens here, so holding the
-    /// entry across it costs nothing.
+    /// it if it failed. Called at every point an attempt is created, with
+    /// nothing awaited in between, so that no arm can create one and leave it
+    /// with nobody to finish it however its caller goes away.
     ///
     /// Callers go away all the time: an upstream timeout, a dropped client. An
     /// attempt driven only by its waiters would, on losing the last of them, sit
@@ -743,15 +746,14 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             return Ok(existing);
         }
 
+        let mut connected = self
+            .connections
+            .connect(endpoint.clone(), &self.config)
+            .await?;
+        self.sweep(IDLE_CONNECTION_TTL).await;
+
         let mut attempts_left = INSTALL_ATTEMPTS;
         loop {
-            let connected = self
-                .connections
-                .connect(endpoint.clone(), &self.config)
-                .await?;
-
-            self.sweep(IDLE_CONNECTION_TTL).await;
-
             let refused = match self.clients.entry_async(endpoint.clone()).await {
                 Entry::Occupied(mut entry) => {
                     if !entry.get().retirement.is_retired() {
@@ -783,16 +785,23 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             if attempts_left == 0 {
                 return Err(refused);
             }
+            connected = self
+                .connections
+                .connect(endpoint.clone(), &self.config)
+                .await?;
         }
     }
 
     /// Drops what has gone cold from both maps, in one place so that they
     /// cannot come to disagree about which connections are worth keeping.
     ///
-    /// Called from the one path that adds to them: a target already cached never
-    /// reaches it, so this is where they grow and the right place to shrink
-    /// them. A client whose set of targets has settled sweeps not at all; one
-    /// watching pods come and go sweeps each time one appears.
+    /// Called from the one path that adds to them, once per call that gets
+    /// there: a target already cached never reaches it, so this is where they
+    /// grow and the right place to shrink them. That makes it a cache miss that
+    /// sweeps, which means a target being retired as well as a new one
+    /// appearing. Both halves take every bucket's writer lock, and the read
+    /// above needs those buckets, so this is not free for the targets it leaves
+    /// alone.
     async fn sweep(&self, idle_ttl: Duration) {
         self.clients
             .retain_async(|_, cached| cached.last_used.in_use_within(idle_ttl))
@@ -2382,6 +2391,49 @@ mod test {
             connections.by_target.contains_async(&target).await,
             "a late failure took an attempt that callers were still waiting on"
         );
+    }
+
+    /// An attempt replacing one that was retired is driven like any other. Left
+    /// undriven, losing its waiters parks it mid-connect with its deadline
+    /// quietly expiring, and the next caller inherits an instant verdict about a
+    /// connection nobody ever made. The arm that starts the first attempt to a
+    /// target is not the same arm as the one that replaces it.
+    #[test]
+    async fn a_replacement_attempt_is_driven_like_the_first() {
+        let config = GrpcClientConfig::default();
+        let connections = Connections::new();
+
+        // Nothing listens here, so every attempt to it fails. Seeded rather than
+        // made, because an attempt that failed on its own would have been
+        // cleared by the very task this is about.
+        let target: Uri = "http://127.0.0.1:1/".parse().unwrap();
+        let endpoint = build_endpoint(target.clone(), &config).unwrap();
+        let failed = connect_shared(endpoint, config.connect_timeout);
+        assert!(
+            failed.clone().await.is_err(),
+            "the attempt being replaced has to be one nobody would inherit"
+        );
+        connections
+            .by_target
+            .insert_async(target.clone(), failed)
+            .await
+            .unwrap();
+
+        assert!(
+            connections.connect(target.clone(), &config).await.is_err(),
+            "the replacement this test is about has to be one that failed"
+        );
+
+        expect(
+            "a failed attempt replacing an earlier one was left in the map, so \
+             nobody was finishing it and the next caller inherits its verdict",
+            async {
+                while connections.by_target.contains_async(&target).await {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            },
+        )
+        .await;
     }
 
     /// `drive` clears an attempt that failed, and a target can have a failed
