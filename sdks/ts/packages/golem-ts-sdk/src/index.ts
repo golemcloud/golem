@@ -54,6 +54,8 @@ export { AgentClassName } from './agentClassName';
 export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 export * from './webhook';
+export { route } from './route';
+export type { RouteArgs, RouteOptions } from './route';
 export * from './host/hostapi';
 export * as oplog from './host/oplog';
 export * from './host/guard';

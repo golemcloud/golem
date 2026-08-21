@@ -232,6 +232,28 @@ pub fn MyAgent::serve_file(self : Self, path : String) -> FileData {
 </Tabs.Tab>
 </Tabs>
 
+### Generating URLs for endpoints
+
+In the TypeScript SDK, the `route` helper renders a URL for an endpoint path template, substituting named arguments into its path and query placeholders. This is useful when an agent needs to hand out links to its own endpoints — for example in emails or rendered pages:
+
+```typescript
+import { route } from '@golemcloud/golem-ts-sdk';
+
+// Fully qualified URL, including the deployment host:
+route('/assets/{assetName}', { assetName: 'logo.png' }, { baseUrl: 'mygolemhost.com' })
+// → 'https://mygolemhost.com/assets/logo.png'
+
+// Absolute path only (when no base URL is given):
+route('/assets/{assetName}', { assetName: 'logo.png' })
+// → '/assets/logo.png'
+
+// Inline query parameters are substituted and percent-encoded:
+route('/search?q={term}&page={page}', { term: 'hello world', page: 2 })
+// → '/search?q=hello%20world&page=2'
+```
+
+Every `{var}` placeholder in the template must have a corresponding entry in the arguments record, and unknown entries are rejected. Use the `scheme` option (`'http' | 'https'`, default `'https'`) to control the scheme used when `baseUrl` does not already include one.
+
 ### Response Conventions
 
 Return types control the HTTP response:
