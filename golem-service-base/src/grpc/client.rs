@@ -720,14 +720,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                 .connect(endpoint.clone(), &self.config)
                 .await?;
 
-            // A target that was already cached never reaches here, so this is the
-            // one place these maps grow and the right place to drop what has gone
-            // cold. A client whose set of targets has settled sweeps not at all;
-            // one watching pods come and go sweeps each time one appears.
-            self.clients
-                .retain_async(|_, cached| cached.last_used.in_use_within(IDLE_CONNECTION_TTL))
-                .await;
-            self.connections.prune(IDLE_CONNECTION_TTL).await;
+            self.sweep(IDLE_CONNECTION_TTL).await;
 
             let refused = match self.clients.entry_async(endpoint.clone()).await {
                 Entry::Occupied(mut entry) => {
@@ -760,6 +753,20 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
                 return Err(refused);
             }
         }
+    }
+
+    /// Drops what has gone cold from both maps, in one place so that they
+    /// cannot come to disagree about which connections are worth keeping.
+    ///
+    /// Called from the one path that adds to them: a target already cached never
+    /// reaches it, so this is where they grow and the right place to shrink
+    /// them. A client whose set of targets has settled sweeps not at all; one
+    /// watching pods come and go sweeps each time one appears.
+    async fn sweep(&self, idle_ttl: Duration) {
+        self.clients
+            .retain_async(|_, cached| cached.last_used.in_use_within(idle_ttl))
+            .await;
+        self.connections.prune(idle_ttl).await;
     }
 
     /// Builds the client for a connection about to be cached, refusing one that
@@ -1573,18 +1580,28 @@ mod test {
         assert!(futures::poll!(running.as_mut()).is_pending());
 
         // Against a zero TTL everything that is merely idle counts as cold.
-        client.connections.prune(Duration::ZERO).await;
+        client.sweep(Duration::ZERO).await;
         assert!(
             client.connections.by_target.contains_async(&target).await,
             "the sweep took a connection with a request still riding it"
         );
+        assert!(
+            client.clients.contains_async(&target).await,
+            "the sweep took the client for a connection with a request still \
+             riding it"
+        );
 
         drop(running);
-        client.connections.prune(Duration::ZERO).await;
+        client.sweep(Duration::ZERO).await;
         assert!(
             !client.connections.by_target.contains_async(&target).await,
             "the connection stayed exempt from the sweep after its request \
              had ended"
+        );
+        assert!(
+            !client.clients.contains_async(&target).await,
+            "the client stayed exempt from the sweep after its request had \
+             ended"
         );
     }
 
@@ -1596,6 +1613,14 @@ mod test {
     async fn a_caller_stops_going_back_for_another_connection() {
         let (target, _peer) = silent_peer().await;
         let (client, built) = counting_client();
+
+        // Something is retiring connections to this target as fast as they are
+        // made, the one already cached included — so the caller below has to get
+        // past that one as well, which is the way it comes to be reading an
+        // entry rather than an empty cache.
+        let cached = client.connected_client(target.clone()).await.unwrap();
+        retired_by_the_peer(&cached.retirement);
+        let built_before = built.load(Ordering::SeqCst);
 
         let (connections, config, endpoint) = (
             client.connections.clone(),
@@ -1632,8 +1657,73 @@ mod test {
         );
         assert_eq!(
             built.load(Ordering::SeqCst),
-            0,
+            built_before,
             "a retired connection was built into a client for someone to use"
+        );
+        assert!(
+            !client.clients.contains_async(&target).await,
+            "a caller that gave up left the retired connection in the cache \
+             behind it"
+        );
+    }
+
+    /// The single-target twin of
+    /// [`a_caller_stops_going_back_for_another_connection`].
+    #[test]
+    async fn the_single_target_caller_also_stops_going_back() {
+        let (target, _peer) = silent_peer().await;
+        let (client, built) = counting_single_target_client(target.clone());
+
+        // Something is retiring connections to this target as fast as they are
+        // made, the one already cached included — so the caller below has to get
+        // past that one as well, which is the way it comes to be reading an
+        // entry rather than an empty cache.
+        let cached = client.connected_client().await.unwrap();
+        retired_by_the_peer(&cached.retirement);
+        let built_before = built.load(Ordering::SeqCst);
+
+        let (connections, config, endpoint) = (
+            client.connections.clone(),
+            client.config.clone(),
+            target.clone(),
+        );
+        client.set_install_interleave(Arc::new(move || {
+            let (connections, config, endpoint) =
+                (connections.clone(), config.clone(), endpoint.clone());
+            async move {
+                let connected = connections
+                    .connect(endpoint.clone(), &config)
+                    .await
+                    .unwrap();
+                retired_by_the_peer(&connected.retirement);
+                connections.forget(&endpoint, connected.id).await;
+            }
+            .boxed()
+        }));
+
+        let mut connected = None;
+        expect(
+            "the caller never stopped going back for another connection",
+            async {
+                connected = Some(client.connected_client().await);
+            },
+        )
+        .await;
+
+        assert!(
+            connected.unwrap().is_err(),
+            "a caller was handed a connection every one of whose predecessors \
+             had been retired"
+        );
+        assert_eq!(
+            built.load(Ordering::SeqCst),
+            built_before,
+            "a retired connection was built into a client for someone to use"
+        );
+        assert!(
+            client.client.lock().await.is_none(),
+            "a caller that gave up left the retired connection in the cache \
+             behind it"
         );
     }
 
