@@ -200,6 +200,8 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             durable_execution_state,
             "test:monotonic_clock::now",
         ),
+        requires_agent_authority: false,
+        agent_auth_ctx: None,
         drop_sink: Some(sink),
         cleanup_sink: None,
         live_call_permit: None,
@@ -240,6 +242,8 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
             durable_execution_state,
             "test:monotonic_clock::now",
         ),
+        requires_agent_authority: false,
+        agent_auth_ctx: None,
         drop_sink: None,
         cleanup_sink: None,
         live_call_permit: None,
@@ -375,6 +379,7 @@ async fn live_delivery_token(
         },
         seed_oplog_dyn,
         golem_common::model::regions::DeletedRegions::default(),
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -469,6 +474,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
         },
         seed_oplog_dyn,
         golem_common::model::regions::DeletedRegions::default(),
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -708,6 +714,7 @@ async fn tail_gated_token_over_crash_tail(
         },
         oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
+        None,
     )
     .await
     .expect("failed to build replay state");
@@ -1165,6 +1172,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         },
         persist_oplog.clone(),
         golem_common::model::regions::DeletedRegions::default(),
+        None,
     )
     .await
     .expect("failed to build replay state");

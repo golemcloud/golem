@@ -193,7 +193,9 @@ fn schema_type_contains_host_managed_capability(
             visiting.remove(id);
             contains
         }
-        SchemaType::Secret { .. } | SchemaType::QuotaToken { .. } => true,
+        SchemaType::Secret { .. }
+        | SchemaType::QuotaToken { .. }
+        | SchemaType::PermissionCard { .. } => true,
         SchemaType::Record { fields, .. } => fields.iter().any(|field| {
             schema_type_contains_host_managed_capability(graph, &field.body, visiting)
         }),

@@ -456,6 +456,10 @@ impl InvocationHooks for Context {
             .await
     }
 
+    async fn on_agent_invocation_finished(&mut self) {
+        self.durable_ctx.on_agent_invocation_finished().await
+    }
+
     async fn on_invocation_failure(
         &mut self,
         full_function_name: &str,
@@ -685,9 +689,10 @@ impl HostWasmRpc for Context {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
         self.durable_ctx
-            .invoke_and_await(self_, method_name, input)
+            .invoke_and_await(self_, method_name, input, scope_card)
             .await
     }
 
@@ -696,8 +701,11 @@ impl HostWasmRpc for Context {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
-        self.durable_ctx.invoke(self_, method_name, input).await
+        self.durable_ctx
+            .invoke(self_, method_name, input, scope_card)
+            .await
     }
 
     async fn async_invoke_and_await(
@@ -705,9 +713,10 @@ impl HostWasmRpc for Context {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<AsyncInvocationWithMetadata> {
         self.durable_ctx
-            .async_invoke_and_await(self_, method_name, input)
+            .async_invoke_and_await(self_, method_name, input, scope_card)
             .await
     }
 
@@ -717,9 +726,10 @@ impl HostWasmRpc for Context {
         scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
-    ) -> anyhow::Result<ScheduledInvocationReceipt> {
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
+    ) -> anyhow::Result<Result<ScheduledInvocationReceipt, RpcError>> {
         self.durable_ctx
-            .schedule_invocation(self_, scheduled_time, method_name, input)
+            .schedule_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
     }
 
@@ -729,9 +739,10 @@ impl HostWasmRpc for Context {
         scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
-    ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
+    ) -> anyhow::Result<Result<CancelableScheduledInvocationReceipt, RpcError>> {
         self.durable_ctx
-            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
+            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
     }
 
@@ -804,7 +815,7 @@ impl AgentHost for Context {
     async fn create_webhook(
         &mut self,
         promise_id: golem_schema::schema::wit::wire::PromiseId,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<Result<String, crate::preview2::golem::agent::host::WebhookError>> {
         AgentHost::create_webhook(&mut self.durable_ctx, promise_id).await
     }
 
@@ -812,7 +823,12 @@ impl AgentHost for Context {
         &mut self,
         key: Vec<String>,
         expected: golem_schema::schema::wit::wire::SchemaGraph,
-    ) -> anyhow::Result<golem_schema::schema::wit::wire::SchemaValueTree> {
+    ) -> anyhow::Result<
+        Result<
+            golem_schema::schema::wit::wire::SchemaValueTree,
+            crate::preview2::golem::agent::host::ConfigValueError,
+        >,
+    > {
         AgentHost::get_config_value(&mut self.durable_ctx, key, expected).await
     }
 }
@@ -1123,7 +1139,7 @@ mod tests {
     //
     // A borrow only happens when needs_borrow() returns true, i.e. when the
     // gauge reaches or drops below prepaid_gauge_floor. This means at most one
-    // partial batch is outstanding at invocation end, and unused_to_return is
+    // partial batch is outstanding at invocation end, and take_unused_to_return is
     // simply the gap between the gauge and the floor:
     //   unused = current_gauge - prepaid_gauge_floor
     // -------------------------------------------------------------------------
@@ -1200,7 +1216,7 @@ mod tests {
     }
 
     #[test]
-    fn unused_to_return_gives_back_gap_between_gauge_and_floor() {
+    fn take_unused_to_return_gives_back_gap_between_gauge_and_floor() {
         // Borrow at gauge=INITIAL-5000: floor = INITIAL-5000-10000 = INITIAL-15000.
         // Invocation ends at gauge = INITIAL-11000 (above floor).
         // unused = (INITIAL-11000) - (INITIAL-15000) = 4000.
@@ -1212,7 +1228,7 @@ mod tests {
     }
 
     #[test]
-    fn unused_to_return_is_zero_when_gauge_at_or_below_floor() {
+    fn take_unused_to_return_is_zero_when_gauge_at_or_below_floor() {
         // floor = INITIAL-15000; gauge has reached or passed the floor.
         let mut ft = fuel_tracker();
         let gauge = INITIAL - 5_000;

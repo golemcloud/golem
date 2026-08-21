@@ -261,10 +261,16 @@ declare_structs! {
 
     #[derive(Default, Eq)]
     pub struct AgentTypeInitialPermissionsBound {
-        #[serde(default)]
+        #[serde(
+            default,
+            deserialize_with = "crate::base_model::card::deserialize_polymorphic_permission_grants"
+        )]
         #[cfg_attr(feature = "full", oai(default))]
         pub positive: Vec<PolymorphicPermissionPattern>,
-        #[serde(default)]
+        #[serde(
+            default,
+            deserialize_with = "crate::base_model::card::deserialize_polymorphic_permission_grants"
+        )]
         #[cfg_attr(feature = "full", oai(default))]
         pub negative: Vec<PolymorphicPermissionPattern>,
     }
@@ -419,12 +425,20 @@ mod tests {
                 .map(|p| p.render().unwrap())
                 .collect::<Vec<_>>(),
             vec![
-                "environment(?env) @ * : view : *",
-                "component(?component) @ * : view : *",
-                "agent(?env/*/*) @ * : view : *",
-                "agent(?env/*/*) @ * : invoke : *",
-                "agent(?env/*/*) @ * : resume : *",
-                "agent(?env/*/*) @ * : update-revision : *",
+                "filesystem(?agent) @ * : * : /**",
+                "network() @ * : * : *",
+                "env(?agent) @ * : * : *",
+                "oplog(?agent) @ * : * : *",
+                "config(?agent) @ * : * : *",
+                "secret(?env) @ * : * : *",
+                "agent(?env/*/*) @ * : * : *",
+                "environment(?env) @ * : * : *",
+                "component(?component) @ * : * : *",
+                "tool(?env/*/*) @ * : * : *",
+                "kv(?env) @ * : * : *.**",
+                "blob(?env) @ * : * : *.**",
+                "rdbms(?env) @ * : * : *.*.*",
+                "card(?account) @ * : * : *",
             ]
         );
     }

@@ -2470,6 +2470,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 bail!(
@@ -2621,6 +2622,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => {
                 bail!(
@@ -2791,6 +2793,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => bail!(
                 "Cannot emit MoonBit type reference for unsupported schema variant: {resolved:?}"
@@ -3138,6 +3141,10 @@ fn emit_schema_type(ty: &SchemaType) -> String {
         QuotaToken { spec, .. } => format!(
             "@model.QuotaToken(@types.QuotaTokenSpec::{{ resource_name: {} }})",
             mb_opt_str(spec.resource_name.as_deref())
+        ),
+        PermissionCard { spec, .. } => format!(
+            "@model.PermissionCard(@types.PermissionCardSpec::{{ polymorphic: {} }})",
+            spec.polymorphic
         ),
         Future { inner, .. } => format!("@model.Future({})", mb_opt_type(inner.as_deref())),
         Stream { inner, .. } => format!("@model.Stream({})", mb_opt_type(inner.as_deref())),

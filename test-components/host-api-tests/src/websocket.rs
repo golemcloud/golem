@@ -26,6 +26,7 @@ pub trait WebsocketTest {
     -> Result<String, String>;
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String>;
     async fn async_bidi_test(&self, url: String) -> Result<String, String>;
+    fn connect_result(&self, url: String) -> Result<(), String>;
 
     fn poll_for_message(&self, url: String, timeout_ms: u64) -> Result<String, String>;
     fn poll_until_message_after_timeouts(
@@ -201,6 +202,12 @@ impl WebsocketTest for WebsocketTestImpl {
         }
 
         Ok(received.join("|"))
+    }
+
+    fn connect_result(&self, url: String) -> Result<(), String> {
+        WebsocketConnection::connect(&url, None)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
     }
 
     fn poll_for_message(&self, url: String, timeout_ms: u64) -> Result<String, String> {

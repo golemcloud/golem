@@ -13,6 +13,10 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    ResolveRevertLastInvocationsRequest, RevertWorkerRequest,
+    resolve_revert_last_invocations_response, revert_worker_response,
+};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
@@ -120,6 +124,89 @@ async fn revert_successful_invocations(
     assert_eq!(result1_value, 5);
     assert_eq!(result2_value, 3);
     assert_eq!(result2_after_value, 1);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn count_based_revert_rejects_a_stale_resolution_without_writing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent_id = agent_id!("RpcCounter", "stale-revert");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "inc_by", data_value!(1u64))
+        .await?;
+
+    let resolution = executor
+        .client
+        .clone()
+        .resolve_revert_last_invocations(ResolveRevertLastInvocationsRequest {
+            agent_id: Some(worker_id.clone().into()),
+            number_of_invocations: 1,
+            environment_id: Some(context.default_environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+        })
+        .await?
+        .into_inner();
+    let resolved = match resolution.result {
+        Some(resolve_revert_last_invocations_response::Result::Success(resolved)) => resolved,
+        other => anyhow::bail!("failed to resolve count-based revert: {other:?}"),
+    };
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
+        .await?;
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+
+    let response = executor
+        .client
+        .clone()
+        .revert_worker(RevertWorkerRequest {
+            agent_id: Some(worker_id.clone().into()),
+            target: Some(
+                RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                    number_of_invocations: 1,
+                })
+                .into(),
+            ),
+            environment_id: Some(context.default_environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+            resolved_revert: Some(resolved),
+        })
+        .await?
+        .into_inner();
+    match response.result {
+        Some(revert_worker_response::Result::Failure(error)) => {
+            assert!(
+                format!("{error:?}").contains("Stale count-based revert resolution"),
+                "unexpected stale revert error: {error:?}"
+            );
+        }
+        other => anyhow::bail!("stale count-based revert unexpectedly succeeded: {other:?}"),
+    }
+
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        before.last().map(|entry| entry.oplog_index),
+        after.last().map(|entry| entry.oplog_index),
+        "stale count-based revert wrote an oplog entry"
+    );
 
     Ok(())
 }

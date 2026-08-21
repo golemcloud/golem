@@ -127,6 +127,12 @@ pub mod bindings {
             pub use crate::raw_bindings::golem::agent::host;
         }
 
+        pub mod permissions {
+            pub use crate::raw_bindings::golem::permissions::{
+                derive, inspect, kernel_introspection, revoke, types, wallet,
+            };
+        }
+
         pub mod tool {
             pub use crate::raw_bindings::golem::tool::host;
         }
@@ -384,18 +390,6 @@ fn wire_component_id_to_schema(value: schema::wit::wire::ComponentId) -> Compone
     }
 }
 
-fn schema_card_id_to_wire(value: CardId) -> schema::wit::wire::CardId {
-    schema::wit::wire::CardId {
-        uuid: schema_uuid_to_wire(value.uuid),
-    }
-}
-
-fn wire_card_id_to_schema(value: schema::wit::wire::CardId) -> CardId {
-    CardId {
-        uuid: wire_uuid_to_schema(value.uuid),
-    }
-}
-
 fn schema_agent_id_to_wire(value: AgentId) -> schema::wit::wire::AgentId {
     schema::wit::wire::AgentId {
         component_id: schema_component_id_to_wire(value.component_id),
@@ -440,54 +434,6 @@ fn host_environment_id_to_schema(value: host_api::EnvironmentId) -> EnvironmentI
 pub enum UpdateMode {
     Automatic,
     SnapshotBased,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
-pub struct Card {
-    pub card_id: CardId,
-}
-
-impl From<host_api::Card> for Card {
-    fn from(value: host_api::Card) -> Self {
-        Self {
-            card_id: wire_card_id_to_schema(value.card_id),
-        }
-    }
-}
-
-impl From<Card> for host_api::Card {
-    fn from(value: Card) -> Self {
-        Self {
-            card_id: schema_card_id_to_wire(value.card_id),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
-pub enum CardInstallError {
-    Revoked,
-    NotFound,
-    NotPermitted,
-}
-
-impl From<host_api::CardInstallError> for CardInstallError {
-    fn from(value: host_api::CardInstallError) -> Self {
-        match value {
-            host_api::CardInstallError::Revoked => Self::Revoked,
-            host_api::CardInstallError::NotFound => Self::NotFound,
-            host_api::CardInstallError::NotPermitted => Self::NotPermitted,
-        }
-    }
-}
-
-impl From<CardInstallError> for host_api::CardInstallError {
-    fn from(value: CardInstallError) -> Self {
-        match value {
-            CardInstallError::Revoked => Self::Revoked,
-            CardInstallError::NotFound => Self::NotFound,
-            CardInstallError::NotPermitted => Self::NotPermitted,
-        }
-    }
 }
 
 impl From<host_api::UpdateMode> for UpdateMode {
@@ -890,6 +836,8 @@ pub struct GetAgents {
     raw: host_api::GetAgents,
 }
 
+pub use host_api::AgentOperationError;
+
 impl GetAgents {
     pub fn new(component_id: ComponentId, filter: Option<&AgentAnyFilter>, precise: bool) -> Self {
         let raw_filter = filter.cloned().map(host_api::AgentAnyFilter::from);
@@ -902,10 +850,10 @@ impl GetAgents {
         }
     }
 
-    pub fn get_next(&self) -> Option<Vec<AgentMetadata>> {
+    pub fn get_next(&self) -> Result<Option<Vec<AgentMetadata>>, AgentOperationError> {
         self.raw
             .get_next()
-            .map(|values| values.into_iter().map(Into::into).collect())
+            .map(|values| values.map(|values| values.into_iter().map(Into::into).collect()))
     }
 }
 
@@ -975,15 +923,19 @@ pub fn oplog_commit(replicas: u8) {
     host_api::oplog_commit(replicas)
 }
 
-pub fn get_self_metadata() -> AgentMetadata {
-    Into::into(host_api::get_self_metadata())
+pub fn get_self_metadata() -> Result<AgentMetadata, AgentOperationError> {
+    host_api::get_self_metadata().map(Into::into)
 }
 
 pub fn get_agent_metadata(agent_id: &AgentId) -> Option<AgentMetadata> {
     host_api::get_agent_metadata(&schema_agent_id_to_wire(agent_id.clone())).map(Into::into)
 }
 
-pub fn update_agent(agent_id: &AgentId, target_revision: u64, mode: UpdateMode) {
+pub fn update_agent(
+    agent_id: &AgentId,
+    target_revision: u64,
+    mode: UpdateMode,
+) -> Result<(), AgentOperationError> {
     host_api::update_agent(
         &schema_agent_id_to_wire(agent_id.clone()),
         target_revision,
@@ -1003,8 +955,8 @@ pub fn resolve_agent_id_strict(component_reference: &str, agent_name: &str) -> O
     host_api::resolve_agent_id_strict(component_reference, agent_name).map(wire_agent_id_to_schema)
 }
 
-pub fn fork() -> ForkResult {
-    Into::into(host_api::fork())
+pub fn fork() -> Result<ForkResult, AgentOperationError> {
+    host_api::fork().map(Into::into)
 }
 
 /// Awaits a promise blocking the execution of the agent. The agent is going to be
@@ -1066,20 +1018,6 @@ pub async fn with_idempotence_mode_async<R, F: Future<Output = R>>(
 /// to introduce idempotence.
 pub fn generate_idempotency_key() -> uuid::Uuid {
     Into::into(host_api::generate_idempotency_key())
-}
-
-pub fn self_card() -> Option<Card> {
-    host_api::self_card().map(Into::into)
-}
-
-pub fn derive_card(card: Card) -> Result<Card, String> {
-    let card = host_api::Card::from(card);
-    host_api::derive_card(card).map(Into::into)
-}
-
-pub fn install_card(card: Card) -> Result<(), CardInstallError> {
-    let card = host_api::Card::from(card);
-    host_api::install_card(card).map_err(Into::into)
 }
 
 pub struct AtomicOperationGuard {

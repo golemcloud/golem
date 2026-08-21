@@ -63,6 +63,9 @@ fn main() -> anyhow::Result<()> {
             .unwrap();
 
         tokio::runtime::Builder::new_multi_thread()
+            // Component metadata contains recursive schema graphs whose decoding can exceed
+            // Tokio's 2 MiB default worker stack.
+            .thread_stack_size(4 * 1024 * 1024)
             .enable_all()
             .build()?
             .block_on(async_main(config, prometheus, tracer))

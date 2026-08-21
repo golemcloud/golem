@@ -25,8 +25,8 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TEST_CARD_ID, TestContext, WorkerExecutorTestDependencies,
-    start, start_with_snapshot_policy,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    start_with_snapshot_policy,
 };
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -65,7 +65,7 @@ fn total_memory_growth(entries: &[PublicOplogEntryWithIndex]) -> u64 {
         .sum()
 }
 
-async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiver<LogEvent>) {
+pub(crate) async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiver<LogEvent>) {
     tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(event) = events.recv().await {
             match AgentEvent::try_from(event) {
@@ -857,80 +857,6 @@ async fn snapshot_based_recovery(
         increment_after.into_typed::<u32>()?,
         106,
         "Counter should continue from 106 after snapshot recovery"
-    );
-
-    drop(executor);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn snapshot_based_recovery_preserves_installed_cards(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
-    )
-    .await?;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    let agent_id = agent_id!("SnapshotCardRecoveryAgent");
-    let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-
-    let (high_bits, low_bits) = TEST_CARD_ID.0.as_u64_pair();
-    let installed = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "install_card_by_id",
-            data_value!(high_bits, low_bits),
-        )
-        .await?
-        .into_typed::<bool>()?;
-    assert!(installed, "test card should install");
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let snapshot_count = oplog
-        .iter()
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
-        .count();
-    assert!(
-        snapshot_count >= 1,
-        "Expected at least one snapshot before restart, got {snapshot_count}"
-    );
-
-    drop(executor);
-    let executor = start_with_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
-    )
-    .await?;
-
-    let still_usable = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "derive_card_by_id",
-            data_value!(high_bits, low_bits),
-        )
-        .await?
-        .into_typed::<bool>()?;
-
-    assert!(
-        still_usable,
-        "installed card should remain in the agent wallet after snapshot recovery"
     );
 
     drop(executor);

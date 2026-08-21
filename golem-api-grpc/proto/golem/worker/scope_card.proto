@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package golem.worker;
+
+import "golem/common/uuid.proto";
+
+message EncodedScopeCard {
+  uint32 encoding_version = 1;
+  golem.common.UUID scope_card_id = 2;
+  repeated golem.common.UUID root_card_ids = 3;
+  bytes lower_positive = 4;
+  bytes lower_negative = 5;
+  bytes upper_positive = 6;
+  bytes upper_negative = 7;
+}

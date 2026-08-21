@@ -33,13 +33,12 @@ pub(all) struct RegisteredTool {
 } derive(Eq, Show)
 
 pub(all) struct ToolRpc(Int) derive(Eq, Show)
-pub fn ToolRpc::async_invoke_and_await(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> FutureInvokeResult
+pub async fn ToolRpc::async_invoke_and_await(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> FutureInvokeResult
 pub fn ToolRpc::drop(Self) -> Unit
-pub fn ToolRpc::invoke(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[Unit, RpcError]
+pub async fn ToolRpc::invoke(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[Unit, RpcError]
 pub async fn ToolRpc::invoke_and_await(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[@common.InvocationResult, RpcError]
 pub fn ToolRpc::tool_rpc(String) -> Self
 
 // Type aliases
 
 // Traits
-

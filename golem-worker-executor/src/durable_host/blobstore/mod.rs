@@ -23,6 +23,8 @@ use golem_common::model::oplog::{
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
 
+use crate::durable_host::LiveAuthorizationPermit;
+use crate::durable_host::authorization::targets::{blob_container_target, blob_target};
 use crate::durable_host::blobstore::types::ContainerEntry;
 use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
 use crate::durable_host::durability::HostFailureKind;
@@ -33,7 +35,46 @@ use crate::preview2::wasi::blobstore::blobstore::{
 };
 use crate::services::blob_store::BlobStoreError;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
+use golem_common::model::card::{BlobVerb, PermissionTarget};
 use golem_common::model::oplog::host_functions;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+pub(crate) fn environment_owner<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+) -> EnvironmentOwnerPattern {
+    EnvironmentOwnerPattern::Environment {
+        account: ctx.state.component_metadata.account_email.clone(),
+        application: ctx.state.component_metadata.application_name.clone(),
+        environment: ctx.state.component_metadata.environment_name.clone(),
+    }
+}
+
+pub(crate) fn object_target<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    verb: BlobVerb,
+    container: &str,
+    object: &str,
+) -> Result<PermissionTarget, String> {
+    blob_target(environment_owner(ctx), verb, container, object).map_err(|err| err.to_string())
+}
+
+pub(crate) fn container_target<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    verb: BlobVerb,
+    container: &str,
+) -> Result<PermissionTarget, String> {
+    blob_container_target(environment_owner(ctx), verb, container).map_err(|err| err.to_string())
+}
+
+pub(crate) async fn authorize_targets<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    targets: &[PermissionTarget],
+) -> Result<Result<LiveAuthorizationPermit, String>, WorkerExecutorError> {
+    ctx.authorize_live_permissions(targets)
+        .await
+        .map(|result| result.map_err(|err| err.to_string()))
+}
 
 pub(crate) fn classify_blob_store_error(err: &BlobStoreError) -> HostFailureKind {
     match err {
@@ -53,6 +94,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let environment_id = self.state.owned_agent_id.environment_id();
+        let authorization = if self.state.is_live() {
+            let target = container_target(self, BlobVerb::Write, &name);
+            Some(match target {
+                Ok(target) => authorize_targets(self, &[target]).await?,
+                Err(err) => Err(err),
+            })
+        } else {
+            None
+        };
         let mut handle =
             CallHandle::<host_functions::BlobstoreBlobstoreCreateContainer, NotCancellable>::start(
                 self,
@@ -68,6 +118,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Some(Err(err)) = authorization {
+                break 'resp handle
+                    .complete(self, HostResponseBlobStoreTimestamp { result: Err(err) })
+                    .await?;
             }
 
             let svc = self.state.blob_store_service.clone();
@@ -118,6 +174,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let environment_id = self.state.owned_agent_id.environment_id();
+        let authorization = if self.state.is_live() {
+            let target = container_target(self, BlobVerb::Read, &name);
+            Some(match target {
+                Ok(target) => authorize_targets(self, &[target]).await?,
+                Err(err) => Err(err),
+            })
+        } else {
+            None
+        };
         let mut handle =
             CallHandle::<host_functions::BlobstoreBlobstoreGetContainer, NotCancellable>::start(
                 self,
@@ -133,6 +198,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Some(Err(err)) = authorization {
+                break 'resp handle
+                    .complete(
+                        self,
+                        HostResponseBlobStoreOptionalTimestamp { result: Err(err) },
+                    )
+                    .await?;
             }
 
             let result = loop {
@@ -174,6 +248,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
         let environment_id = self.state.owned_agent_id.environment_id();
+        let authorization = if self.state.is_live() {
+            let target = container_target(self, BlobVerb::Delete, &name);
+            Some(match target {
+                Ok(target) => authorize_targets(self, &[target]).await?,
+                Err(err) => Err(err),
+            })
+        } else {
+            None
+        };
         let mut handle =
             CallHandle::<host_functions::BlobstoreBlobstoreDeleteContainer, NotCancellable>::start(
                 self,
@@ -189,6 +272,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Some(Err(err)) = authorization {
+                break 'resp handle
+                    .complete(self, HostResponseBlobStoreUnit { result: Err(err) })
+                    .await?;
             }
 
             let result = loop {
@@ -233,6 +322,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<bool, Error>> {
         let environment_id = self.state.owned_agent_id.environment_id();
+        let authorization = if self.state.is_live() {
+            let target = container_target(self, BlobVerb::Read, &name);
+            Some(match target {
+                Ok(target) => authorize_targets(self, &[target]).await?,
+                Err(err) => Err(err),
+            })
+        } else {
+            None
+        };
         let mut handle =
             CallHandle::<host_functions::BlobstoreBlobstoreContainerExists, NotCancellable>::start(
                 self,
@@ -248,6 +346,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Some(Err(err)) = authorization {
+                break 'resp handle
+                    .complete(self, HostResponseBlobStoreContains { result: Err(err) })
+                    .await?;
             }
 
             let result = loop {
@@ -283,6 +387,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         let environment_id = self.state.owned_agent_id.environment_id();
+        let authorization = if self.state.is_live() {
+            let targets = [
+                object_target(self, BlobVerb::Read, &src.container, &src.object),
+                object_target(self, BlobVerb::Write, &dest.container, &dest.object),
+            ];
+            Some(match targets.into_iter().collect::<Result<Vec<_>, _>>() {
+                Ok(targets) => authorize_targets(self, &targets).await?,
+                Err(err) => Err(err),
+            })
+        } else {
+            None
+        };
         let input = HostRequestBlobStoreCopyOrMove {
             source_container: src.container,
             source_object: src.object,
@@ -302,6 +418,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Some(Err(err)) = authorization {
+                break 'resp handle
+                    .complete(self, HostResponseBlobStoreUnit { result: Err(err) })
+                    .await?;
             }
 
             let result = loop {
@@ -343,6 +465,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         let environment_id = self.state.owned_agent_id.environment_id();
+        let authorization = if self.state.is_live() {
+            let targets = [
+                object_target(self, BlobVerb::Read, &src.container, &src.object),
+                object_target(self, BlobVerb::Delete, &src.container, &src.object),
+                object_target(self, BlobVerb::Write, &dest.container, &dest.object),
+            ];
+            Some(match targets.into_iter().collect::<Result<Vec<_>, _>>() {
+                Ok(targets) => authorize_targets(self, &targets).await?,
+                Err(err) => Err(err),
+            })
+        } else {
+            None
+        };
         let input = HostRequestBlobStoreCopyOrMove {
             source_container: src.container,
             source_object: src.object,
@@ -362,6 +497,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(response) => break 'resp response,
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
+            }
+
+            if let Some(Err(err)) = authorization {
+                break 'resp handle
+                    .complete(self, HostResponseBlobStoreUnit { result: Err(err) })
+                    .await?;
             }
 
             let result = loop {

@@ -30,9 +30,9 @@ use crate::schema::schema_value::{
 // Only the host (and feature-neutral) build inspects a quota-token's snapshot
 // fields; on a guest the value is an opaque owned handle.
 #[cfg(not(all(feature = "guest", not(feature = "host"))))]
-use crate::schema::schema_type::{QuotaTokenSpec, SecretSpec};
+use crate::schema::schema_type::{PermissionCardSpec, QuotaTokenSpec, SecretSpec};
 #[cfg(not(all(feature = "guest", not(feature = "host"))))]
-use crate::schema::schema_value::QuotaTokenValuePayload;
+use crate::schema::schema_value::{PermissionCardValuePayload, QuotaTokenValuePayload};
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write};
@@ -256,6 +256,11 @@ pub enum ValueError {
         expected: String,
         found: String,
     },
+    PermissionCardPolymorphicMismatch {
+        path: ValuePath,
+        expected: bool,
+        found: bool,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -450,6 +455,14 @@ impl Display for ValueError {
                 f,
                 "quota-token value at {path} expected resource `{expected}`, found `{found}`"
             ),
+            ValueError::PermissionCardPolymorphicMismatch {
+                path,
+                expected,
+                found,
+            } => write!(
+                f,
+                "permission-card value at {path} expected polymorphic `{expected}`, found `{found}`"
+            ),
         }
     }
 }
@@ -557,6 +570,7 @@ fn shape_name(value: &SchemaValue) -> &'static str {
         SchemaValue::Union(_) => "union",
         SchemaValue::Secret(_) => "secret",
         SchemaValue::QuotaToken(_) => "quota-token",
+        SchemaValue::PermissionCard(_) => "permission-card",
     }
 }
 
@@ -596,6 +610,7 @@ fn type_name(ty: &SchemaType) -> &'static str {
         SchemaType::Union { .. } => "union",
         SchemaType::Secret { .. } => "secret",
         SchemaType::QuotaToken { .. } => "quota-token",
+        SchemaType::PermissionCard { .. } => "permission-card",
         SchemaType::Future { .. } => "future",
         SchemaType::Stream { .. } => "stream",
     }
@@ -809,6 +824,15 @@ fn check<'a>(
             check_quota_token(spec, payload, path, errors);
             // On a guest the quota-token value is an opaque owned handle with no
             // readable fields; the resource-name constraint is enforced
+            // host-side when the handle is lifted to its trusted snapshot.
+            #[cfg(all(feature = "guest", not(feature = "host")))]
+            let _ = (spec, payload);
+        }
+        (SchemaType::PermissionCard { spec, .. }, SchemaValue::PermissionCard(payload)) => {
+            #[cfg(not(all(feature = "guest", not(feature = "host"))))]
+            check_permission_card(spec, payload, path, errors);
+            // On a guest the permission-card value is an opaque owned handle
+            // with no readable fields; the polymorphic constraint is enforced
             // host-side when the handle is lifted to its trusted snapshot.
             #[cfg(all(feature = "guest", not(feature = "host")))]
             let _ = (spec, payload);
@@ -1308,6 +1332,22 @@ fn check_quota_token(
             path: path.snapshot(),
             expected: expected.clone(),
             found: payload.resource_name.clone(),
+        });
+    }
+}
+
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
+fn check_permission_card(
+    spec: &PermissionCardSpec,
+    payload: &PermissionCardValuePayload,
+    path: &mut ValuePath,
+    errors: &mut Vec<ValueError>,
+) {
+    if spec.polymorphic != payload.polymorphic {
+        errors.push(ValueError::PermissionCardPolymorphicMismatch {
+            path: path.snapshot(),
+            expected: spec.polymorphic,
+            found: payload.polymorphic,
         });
     }
 }

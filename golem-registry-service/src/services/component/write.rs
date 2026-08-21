@@ -26,6 +26,9 @@ use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::{
     EnvironmentPluginGrantError, EnvironmentPluginGrantService,
 };
+use crate::services::registry_change_notifier::{
+    RegistryChangeNotifier, RequiresNotificationSignalExt,
+};
 use crate::services::run_cpu_bound_work;
 use anyhow::Context;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
@@ -35,7 +38,7 @@ use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::card::owner::ComponentOwnerPattern;
 use golem_common::model::card::{
     CardManagedBy, CardManagedByAgentInitial, ClassPermissionTarget, ComponentResourcePattern,
-    ComponentVerb, EffectiveSurface, PermissionTarget, PolymorphicCard,
+    ComponentVerb, DelegationSurface, PermissionTarget, PolymorphicCard,
     permission_envelopes_for_recipient_patterns,
 };
 use golem_common::model::component::{
@@ -79,6 +82,7 @@ pub struct ComponentWriteService {
     account_usage_service: Arc<AccountUsageService>,
     environment_service: Arc<EnvironmentService>,
     environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl ComponentWriteService {
@@ -90,6 +94,7 @@ impl ComponentWriteService {
         account_usage_service: Arc<AccountUsageService>,
         environment_service: Arc<EnvironmentService>,
         environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             component_repo,
@@ -99,6 +104,7 @@ impl ComponentWriteService {
             account_usage_service,
             environment_service,
             environment_plugin_grant_service,
+            registry_change_notifier,
         }
     }
 
@@ -110,28 +116,22 @@ impl ComponentWriteService {
         initial_permissions: &golem_common::model::component::AgentTypeInitialPermissions,
         auth: &AuthCtx,
     ) -> Result<(PolymorphicCard, CardRecord), ComponentError> {
-        let effective_surface =
-            auth.effective_surface_for_card_derivation("create agent initial permission card")?;
+        let delegation_surface =
+            auth.delegation_surface_for_card_derivation("create agent initial permission card")?;
         let card = prepare_agent_initial_card_for_minting(
             agent_type_name,
             initial_permissions,
-            effective_surface,
+            delegation_surface,
         )?;
         let record = CardRecord::polymorphic_creation(
-            card.card_id,
-            card.parent_ids.clone(),
-            card.lower_positive.clone(),
-            card.lower_negative.clone(),
-            card.upper_positive.clone(),
-            card.upper_negative.clone(),
-            card.expires_at,
-            card.system_card,
+            card,
             Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                 component_id,
                 component_revision,
                 agent_type: agent_type_name.clone(),
             })),
         );
+        let card = record.clone().try_into()?;
 
         Ok((card, record))
     }
@@ -649,7 +649,8 @@ impl ComponentWriteService {
             .map_err(|err| match err {
                 ComponentRepoError::ConcurrentModification => ComponentError::ConcurrentUpdate,
                 other => other.into(),
-            })?;
+            })?
+            .signal_new_events_available(self.registry_change_notifier.as_ref());
 
         Ok(())
     }
@@ -1271,10 +1272,17 @@ fn resolve_files_for_update(
 fn prepare_agent_initial_card_for_minting(
     agent_type_name: &AgentTypeName,
     initial_permissions: &golem_common::model::component::AgentTypeInitialPermissions,
-    effective_surface: &EffectiveSurface,
+    delegation_surface: &DelegationSurface,
 ) -> Result<PolymorphicCard, ComponentError> {
     let mut card = initial_permissions.to_polymorphic_card();
     let lower_positive = permission_envelopes_for_recipient_patterns(&card.lower_positive)
+        .map_err(
+            |message| ComponentError::InvalidAgentInitialPermissionCard {
+                agent_type: agent_type_name.clone(),
+                message,
+            },
+        )?;
+    let lower_negative = permission_envelopes_for_recipient_patterns(&card.lower_negative)
         .map_err(
             |message| ComponentError::InvalidAgentInitialPermissionCard {
                 agent_type: agent_type_name.clone(),
@@ -1288,8 +1296,20 @@ fn prepare_agent_initial_card_for_minting(
                 message,
             },
         )?;
-    effective_surface
-        .validates_derivation(&lower_positive, &upper_positive)
+    let upper_negative = permission_envelopes_for_recipient_patterns(&card.upper_negative)
+        .map_err(
+            |message| ComponentError::InvalidAgentInitialPermissionCard {
+                agent_type: agent_type_name.clone(),
+                message,
+            },
+        )?;
+    delegation_surface
+        .validate_attenuation(
+            &lower_positive,
+            &lower_negative,
+            &upper_positive,
+            &upper_negative,
+        )
         .map_err(|error| ComponentError::InvalidAgentInitialPermissionCard {
             agent_type: agent_type_name.clone(),
             message: format!("card derivation is not allowed by the creator's cards: {error:?}"),
@@ -1651,10 +1671,11 @@ mod tests {
         validate_component_metadata_invariants,
     };
     use crate::services::component::ComponentError;
-    use chrono::Utc;
     use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
     use golem_common::model::card::recipient::RecipientPattern;
-    use golem_common::model::card::{Card, CardId, EffectiveSurface, PermissionPattern};
+    use golem_common::model::card::{
+        CardId, DelegationCard, DelegationSurface, permission_envelopes_for_recipient_patterns,
+    };
     use golem_common::model::component::{
         AgentFileOptions, AgentFilePath, AgentFilePermissions, AgentTypeInitialPermissions,
         ArchiveFilePath, ToolDeploymentConfigCreation, ToolProvisionConfigCreation,
@@ -1665,34 +1686,20 @@ mod tests {
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
     use std::collections::{BTreeMap, HashMap};
-    use std::str::FromStr;
     use test_r::test;
 
-    fn permission(value: &str) -> PermissionPattern {
-        PermissionPattern::from_str(value).unwrap()
-    }
-
-    fn parent_surface(parent_id: CardId) -> EffectiveSurface {
-        let card = Card {
-            card_id: parent_id,
-            parent_ids: Vec::new(),
-            lower_positive: vec![
-                permission("environment(*/*/*) @ * : view : *"),
-                permission("component(*/*/*/*) @ * : view : *"),
-                permission("agent(*/*/*/*/*) @ * : view : *"),
-                permission("agent(*/*/*/*/*) @ * : invoke : *"),
-                permission("agent(*/*/*/*/*) @ * : resume : *"),
-                permission("agent(*/*/*/*/*) @ * : update-revision : *"),
-            ],
+    fn parent_surface(parent_id: CardId) -> DelegationSurface {
+        let defaults = AgentTypeInitialPermissions::default_for_recipient(RecipientPattern::Any)
+            .to_polymorphic_card();
+        let card = DelegationCard {
+            source_card_id: Some(parent_id),
+            lower_positive: permission_envelopes_for_recipient_patterns(&defaults.lower_positive)
+                .unwrap(),
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: Utc::now(),
-            expires_at: None,
-            system_card: false,
-            managed_by: None,
         };
-        EffectiveSurface::from_cards(&[card], &RecipientPattern::Any).unwrap()
+        DelegationSurface { cards: vec![card] }
     }
 
     fn tool(name: &str, version: &str) -> Tool {
@@ -1741,7 +1748,7 @@ mod tests {
     fn agent_initial_card_must_be_subsumed_by_creator_surface() {
         let initial_permission =
             AgentTypeInitialPermissions::default_for_recipient(RecipientPattern::Any);
-        let empty_surface = EffectiveSurface::default();
+        let empty_surface = DelegationSurface::default();
 
         let error = prepare_agent_initial_card_for_minting(
             &AgentTypeName("Cart".to_string()),

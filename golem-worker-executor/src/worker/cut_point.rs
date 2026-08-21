@@ -186,6 +186,11 @@ where
             | OplogEntry::CardInstallFailed { .. }
             | OplogEntry::CardRevoked { .. }
             | OplogEntry::CardExpired { .. }
+            | OplogEntry::CardDerived { .. }
+            | OplogEntry::CardTransferStarted { .. }
+            | OplogEntry::CardTransferred { .. }
+            | OplogEntry::CardRevokedCascade { .. }
+            | OplogEntry::CardTransferConfirmed { .. }
             | OplogEntry::HostStreamFrame { .. } => None,
         };
 
@@ -202,7 +207,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::Timestamp;
     use golem_common::model::TransactionId;
+    use golem_common::model::card::{AccountCardHolder, CardHolder, CardId};
     use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
     use std::collections::HashMap;
     use test_r::test;
@@ -387,6 +394,41 @@ mod tests {
             OplogEntry::begin_remote_transaction(TransactionId::new(Uuid::nil()), None),
         )]);
         assert_eq!(scan(&entries, 7, 10, &deleted(vec![])).await, None);
+    }
+
+    #[test]
+    async fn card_transfer_confirmation_after_cut_is_accepted() {
+        let transfer_id = Uuid::new_v4();
+        let source_card_id = CardId::new();
+        let installed_card_id = CardId::new();
+        let target_holder = CardHolder::Account(AccountCardHolder {
+            account_id: Uuid::new_v4(),
+        });
+        let entries = HashMap::from([
+            (
+                3,
+                OplogEntry::CardTransferStarted {
+                    timestamp: Timestamp::now_utc(),
+                    transfer_id,
+                    card_id: source_card_id,
+                    source_holder: None,
+                    target_holder: target_holder.clone(),
+                    source_wallet_generation: Some(1),
+                },
+            ),
+            (
+                5,
+                OplogEntry::CardTransferConfirmed {
+                    timestamp: Timestamp::now_utc(),
+                    transfer_id,
+                    source_card_id,
+                    installed_card_id,
+                    target_holder,
+                },
+            ),
+        ]);
+
+        assert_eq!(scan(&entries, 4, 5, &deleted(vec![])).await, None);
     }
 
     #[test]

@@ -304,6 +304,7 @@ impl From<RegisteredTool> for DeployedRegisteredTool {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub struct ToolDeploymentState {
     pub deployment_revision: DeploymentRevision,

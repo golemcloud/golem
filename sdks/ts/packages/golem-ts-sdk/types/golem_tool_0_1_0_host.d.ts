@@ -40,8 +40,8 @@ declare module 'golem:tool/host@0.1.0' {
     /**
      * @throws RpcError
      */
-    invoke(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined): void;
-    asyncInvokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined): FutureInvokeResult;
+    invoke(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined): Promise<void>;
+    asyncInvokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined): Promise<FutureInvokeResult>;
   }
   export class FutureInvokeResult {
     /**

@@ -503,8 +503,10 @@ impl OwnerExecution {
     pub(crate) async fn begin_replay_generation(
         &self,
         deleted_regions: DeletedRegions,
+        initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<ReplayState, WorkerExecutorError> {
-        self.install_replay_generation(deleted_regions).await?;
+        self.install_replay_generation(deleted_regions, initial_snapshot_skip_end)
+            .await?;
         self.replay().await
     }
 
@@ -514,9 +516,15 @@ impl OwnerExecution {
     pub async fn install_replay_generation(
         &self,
         deleted_regions: DeletedRegions,
+        initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
-        let replay =
-            ReplayState::new(self.owner_id.clone(), self.oplog.clone(), deleted_regions).await?;
+        let replay = ReplayState::new(
+            self.owner_id.clone(),
+            self.oplog.clone(),
+            deleted_regions,
+            initial_snapshot_skip_end,
+        )
+        .await?;
         *self.replay.write().await = Some(replay.clone());
         Ok(())
     }

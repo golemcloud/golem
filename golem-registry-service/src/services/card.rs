@@ -28,9 +28,9 @@ use golem_common::model::card::owner::{
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     Card, CardId, CardManagedBy, CardManagedByAgentInitial, CardManagedByEnvironmentDefault,
-    CardResourcePattern, CardVerb, ClassPermissionPattern, ClassPermissionTarget,
-    ComponentResourcePattern, EnvironmentResourcePattern, PermissionPattern, PermissionTarget,
-    PolymorphicCard, StoredCard,
+    CardManagedByRuntimeDerived, CardResourcePattern, CardVerb, ClassPermissionPattern,
+    ClassPermissionTarget, ComponentResourcePattern, EnvironmentResourcePattern, PermissionPattern,
+    PermissionTarget, PolymorphicCard, StoredCard,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::permission_share::PermissionShareId;
@@ -47,6 +47,12 @@ pub enum CardError {
     AccountNotFound(AccountId),
     #[error("Concurrent modification")]
     ConcurrentModification,
+    #[error("Card {0} already exists with different runtime card data")]
+    RuntimeCardConflict(CardId),
+    #[error("Runtime card {0} has been revoked")]
+    RuntimeCardRevoked(CardId),
+    #[error("Runtime-derived cards cannot be system cards")]
+    RuntimeCardCannotBeSystemCard,
     #[error("Cannot revoke a system card")]
     CannotRevokeSystemCard,
     #[error("Permission-share-managed cards must be revoked through the permission share")]
@@ -67,6 +73,9 @@ impl SafeDisplay for CardError {
             Self::CardNotFound(_) => self.to_string(),
             Self::AccountNotFound(_) => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
+            Self::RuntimeCardConflict(_) => self.to_string(),
+            Self::RuntimeCardRevoked(_) => self.to_string(),
+            Self::RuntimeCardCannotBeSystemCard => self.to_string(),
             Self::CannotRevokeSystemCard => self.to_string(),
             Self::CannotRevokePermissionShareCard => self.to_string(),
             Self::CannotRevokeEnvironmentDefaultCard => self.to_string(),
@@ -85,6 +94,9 @@ impl From<CardRepoError> for CardError {
             CardRepoError::CardTreeChangedDuringDelete | CardRepoError::ConcurrentModification => {
                 Self::ConcurrentModification
             }
+            CardRepoError::ParentNotFound(card_id) => Self::CardNotFound(CardId(card_id)),
+            CardRepoError::CardAlreadyExists(card_id) => Self::RuntimeCardConflict(CardId(card_id)),
+            CardRepoError::RuntimeCardRevoked(card_id) => Self::RuntimeCardRevoked(CardId(card_id)),
             other => Self::InternalError(other.into_anyhow()),
         }
     }
@@ -183,14 +195,7 @@ impl CardService {
         let card_id = card.card_id;
         self.card_repo
             .create(CardRecord::polymorphic_creation(
-                card_id,
-                card.parent_ids.clone(),
-                card.lower_positive.clone(),
-                card.lower_negative.clone(),
-                card.upper_positive.clone(),
-                card.upper_negative.clone(),
-                card.expires_at,
-                card.system_card,
+                card.clone(),
                 Some(CardManagedBy::AgentInitial(CardManagedByAgentInitial {
                     component_id,
                     component_revision,
@@ -200,6 +205,41 @@ impl CardService {
             .await?;
 
         Ok(card_id)
+    }
+
+    pub async fn create_runtime_card(
+        &self,
+        card: StoredCard,
+        provenance: CardManagedByRuntimeDerived,
+        auth: &AuthCtx,
+    ) -> Result<StoredCard, CardError> {
+        auth.authorize_system_only("create runtime permission card")?;
+
+        if card.system_card() {
+            return Err(CardError::RuntimeCardCannotBeSystemCard);
+        }
+
+        let requested = CardRecord::runtime_creation(card, provenance);
+        for parent_id in requested.data.value().parent_ids() {
+            self.materialized_card_unchecked(*parent_id).await?;
+        }
+
+        match self.card_repo.create_runtime(requested.clone()).await {
+            Ok(created) => Ok(created.try_into()?),
+            Err(CardRepoError::CardAlreadyExists(_)) => {
+                let existing = self
+                    .card_repo
+                    .get(CardId(requested.card_id))
+                    .await?
+                    .ok_or(CardError::ConcurrentModification)?;
+                if existing == requested {
+                    Ok(existing.try_into()?)
+                } else {
+                    Err(CardError::RuntimeCardConflict(CardId(requested.card_id)))
+                }
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub async fn existing(&self, card_ids: Vec<CardId>) -> Result<Vec<CardId>, CardError> {
@@ -306,10 +346,12 @@ impl CardService {
             return Err(CardError::CannotRevokeSystemCard);
         }
 
-        let owner_email = self
-            .card_owner_email(card_id, card.managed_by.as_ref())
-            .await?;
-        authorize_card_permission(auth, &owner_email, CardVerb::Revoke)?;
+        if !matches!(auth, AuthCtx::System) {
+            let owner_email = self
+                .card_owner_email(card_id, card.managed_by.as_ref())
+                .await?;
+            authorize_card_permission(auth, &owner_email, CardVerb::Revoke)?;
+        }
 
         let deleted = self
             .card_repo
@@ -356,11 +398,11 @@ impl CardService {
                         ComponentError::ComponentNotFound(_) => CardError::CardNotFound(card_id),
                         other => other.into(),
                     })?;
-                let current_agent_initial_card_ids = self
-                    .component_service
-                    .list_initial_permission_card_ids_by_account(component.account_id)
-                    .await?;
-                if !current_agent_initial_card_ids.contains(&card_id) {
+                let revision_card_id = component
+                    .metadata
+                    .agent_type_initial_permission_card(&managed_by.agent_type)
+                    .map(|card| card.card_id);
+                if revision_card_id != Some(card_id) {
                     return Err(CardError::CardNotFound(card_id));
                 }
             }
@@ -420,6 +462,12 @@ impl CardService {
                     &AuthCtx::System,
                 )
                 .await?
+                .account_email),
+            Some(CardManagedBy::RuntimeDerived(managed_by)) => Ok(self
+                .environment_service
+                .default_card_ref_by_environment(managed_by.environment_id)
+                .await?
+                .ok_or(CardError::CardNotFound(card_id))?
                 .account_email),
             None => Err(CardError::CardOwnerNotFound(card_id)),
         }

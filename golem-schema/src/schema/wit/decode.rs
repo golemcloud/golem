@@ -17,13 +17,14 @@ use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, NumericBound,
-    NumericRestrictions, PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue,
-    QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec,
-    UrlRestrictions, VariantCaseType,
+    NumericRestrictions, PathDirection, PathKind, PathSpec, PermissionCardSpec, QuantitySpec,
+    QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions,
+    UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
 };
 use crate::schema::schema_value::{
-    BinaryValuePayload, DurationValuePayload, QuotaTokenVariantValue, ResultValuePayload,
-    SchemaValue, SecretVariantValue, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    BinaryValuePayload, DurationValuePayload, PermissionCardVariantValue, QuotaTokenVariantValue,
+    ResultValuePayload, SchemaValue, SecretVariantValue, TextValuePayload, UnionValuePayload,
+    VariantValuePayload,
 };
 use chrono::{DateTime, TimeZone, Utc};
 use std::collections::HashSet;
@@ -42,6 +43,13 @@ type WireQuotaHandle = wire::QuotaToken;
 type WireSecretHandle = wasmtime::component::Resource<super::SecretHandleRep>;
 #[cfg(all(feature = "guest", not(feature = "host")))]
 type WireSecretHandle = wire::Secret;
+
+/// The owned handle type carried by
+/// `wire::SchemaValueNode::PermissionCardHandle`.
+#[cfg(all(feature = "host", not(feature = "guest")))]
+type WirePermissionCardHandle = wasmtime::component::Resource<super::PermissionCardHandleRep>;
+#[cfg(all(feature = "guest", not(feature = "host")))]
+type WirePermissionCardHandle = wire::PermissionCard;
 
 /// Errors that can occur while decoding the flat wire form into the
 /// recursive in-memory representation.
@@ -92,6 +100,21 @@ pub enum DecodeError {
     /// does not permit secret transport. The handle is dropped from the resource
     /// table before this error is returned, so nothing leaks.
     SecretNotPermitted(wire::ValueNodeIndex),
+    /// A `permission-card-handle` node was encountered while decoding through
+    /// the pure (resolver-less) path. Owned permission-card handles can only be
+    /// lifted on the host via [`decode_value_with`] and a
+    /// `PermissionCardResolver`.
+    PermissionCardRequiresResolver,
+    /// An owned `permission-card` handle was present in the value tree but
+    /// never reached from the root.
+    UnconsumedPermissionCardHandle(wire::ValueNodeIndex),
+    /// The host `PermissionCardResolver` failed to snapshot an owned handle.
+    PermissionCardResolver(String),
+    /// An owned `permission-card` handle was present in a value tree at a
+    /// boundary that does not permit permission-card transport. The handle is
+    /// dropped from the resource table before this error is returned, so
+    /// nothing leaks.
+    PermissionCardNotPermitted(wire::ValueNodeIndex),
 }
 
 impl Display for DecodeError {
@@ -141,6 +164,25 @@ impl Display for DecodeError {
             }
             DecodeError::SecretNotPermitted(i) => {
                 write!(f, "secret handle not permitted at this boundary: {i}")
+            }
+            DecodeError::PermissionCardRequiresResolver => write!(
+                f,
+                "permission-card handles can only be decoded through the host resolver-aware path"
+            ),
+            DecodeError::UnconsumedPermissionCardHandle(i) => {
+                write!(
+                    f,
+                    "permission-card handle not referenced from the root: {i}"
+                )
+            }
+            DecodeError::PermissionCardResolver(msg) => {
+                write!(f, "permission-card handle could not be resolved: {msg}")
+            }
+            DecodeError::PermissionCardNotPermitted(i) => {
+                write!(
+                    f,
+                    "permission-card handle not permitted at this boundary: {i}"
+                )
             }
         }
     }
@@ -240,6 +282,7 @@ pub fn decode_value(wire_tree: wire::SchemaValueTree) -> Result<SchemaValue, Dec
             root,
             &mut |handle| Ok(super::GuestQuotaTokenHandle::new(handle)),
             &mut |handle| Ok(super::GuestSecretHandle::new(handle)),
+            &mut |handle| Ok(super::GuestPermissionCardHandle::new(handle)),
         ),
         Err(e) => Err(e),
     };
@@ -257,6 +300,11 @@ pub fn decode_value(wire_tree: wire::SchemaValueTree) -> Result<SchemaValue, Dec
             }
             Some(wire::SchemaValueNode::SecretValue(_)) => {
                 leaked.get_or_insert(DecodeError::UnconsumedSecretHandle(
+                    i as wire::ValueNodeIndex,
+                ));
+            }
+            Some(wire::SchemaValueNode::PermissionCardHandle(_)) => {
+                leaked.get_or_insert(DecodeError::UnconsumedPermissionCardHandle(
                     i as wire::ValueNodeIndex,
                 ));
             }
@@ -550,6 +598,12 @@ impl<'a> GraphCtx<'a> {
                 },
                 metadata,
             },
+            wire::SchemaTypeBody::PermissionCardType(p) => SchemaType::PermissionCard {
+                spec: PermissionCardSpec {
+                    polymorphic: p.polymorphic,
+                },
+                metadata,
+            },
             wire::SchemaTypeBody::FutureType(inner) => {
                 let inner = match inner {
                     Some(i) => Some(Box::new(self.decode_type(*i, visiting)?)),
@@ -709,6 +763,9 @@ fn decode_value_node(
         wire::SchemaValueNode::QuotaTokenHandle(_) => {
             return Err(DecodeError::QuotaTokenRequiresResolver);
         }
+        wire::SchemaValueNode::PermissionCardHandle(_) => {
+            return Err(DecodeError::PermissionCardRequiresResolver);
+        }
     };
     Ok(out)
 }
@@ -729,7 +786,9 @@ fn decode_value_node(
 /// [`DecodeError::UnconsumedQuotaTokenHandle`]. The same cleanup runs when
 /// decoding fails partway through.
 #[cfg(all(feature = "host", not(feature = "guest")))]
-pub fn decode_value_with<R: super::QuotaTokenResolver + super::SecretResolver>(
+pub fn decode_value_with<
+    R: super::QuotaTokenResolver + super::SecretResolver + super::PermissionCardResolver,
+>(
     wire_tree: wire::SchemaValueTree,
     resolver: &mut R,
 ) -> Result<SchemaValue, DecodeError> {
@@ -757,6 +816,12 @@ pub fn decode_value_with<R: super::QuotaTokenResolver + super::SecretResolver>(
                     .snapshot_secret_handle(handle)
                     .map_err(|e| DecodeError::SecretResolver(e.to_string()))
             },
+            &mut |handle| {
+                let mut resolver = resolver.borrow_mut();
+                resolver
+                    .snapshot_permission_card_handle(handle)
+                    .map_err(|e| DecodeError::PermissionCardResolver(e.to_string()))
+            },
         ),
         Err(e) => Err(e),
     };
@@ -779,6 +844,12 @@ pub fn decode_value_with<R: super::QuotaTokenResolver + super::SecretResolver>(
                     i as wire::ValueNodeIndex,
                 ));
             }
+            Some(wire::SchemaValueNode::PermissionCardHandle(handle)) => {
+                super::PermissionCardResolver::drop_permission_card_handle(&mut **resolver, handle);
+                leaked.get_or_insert(DecodeError::UnconsumedPermissionCardHandle(
+                    i as wire::ValueNodeIndex,
+                ));
+            }
             other => *slot = other,
         }
     }
@@ -789,20 +860,22 @@ pub fn decode_value_with<R: super::QuotaTokenResolver + super::SecretResolver>(
     }
 }
 
-/// Drain every owned `quota-token` handle out of an owned value tree at a
-/// boundary that does **not** permit quota tokens.
+/// Drain every owned capability handle (quota-token, secret, permission-card)
+/// out of an owned value tree at a boundary that does **not** permit any of
+/// them.
 ///
 /// The tree is consumed because the owned handles it carries were already
 /// transferred into the host resource table at the WIT boundary; each must be
-/// deleted exactly once. Every handle node is dropped via
-/// [`super::QuotaTokenHandleDropper`], regardless of where it sits in the tree
-/// (including unreferenced nodes), so nothing leaks. If any handle was present
-/// the tree is rejected with [`DecodeError::QuotaTokenNotPermitted`]; otherwise
-/// the handle-free tree is returned unchanged so the caller can decode it with
-/// the pure path.
+/// deleted exactly once. Every handle node is dropped via the corresponding
+/// dropper, regardless of where it sits in the tree (including unreferenced
+/// nodes), so nothing leaks. If any handle was present the tree is rejected
+/// with the appropriate `*NotPermitted` error; otherwise the handle-free tree
+/// is returned unchanged so the caller can decode it with the pure path.
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub fn reject_quota_handles_in_value_tree<
-    D: super::QuotaTokenHandleDropper + super::SecretHandleDropper,
+    D: super::QuotaTokenHandleDropper
+        + super::SecretHandleDropper
+        + super::PermissionCardHandleDropper,
 >(
     mut wire_tree: wire::SchemaValueTree,
     dropper: &mut D,
@@ -811,6 +884,7 @@ pub fn reject_quota_handles_in_value_tree<
     for (i, node) in wire_tree.value_nodes.iter_mut().enumerate() {
         if matches!(node, wire::SchemaValueNode::QuotaTokenHandle(_))
             || matches!(node, wire::SchemaValueNode::SecretValue(_))
+            || matches!(node, wire::SchemaValueNode::PermissionCardHandle(_))
         {
             // Replace the handle node with a placeholder so the `Resource` can be
             // moved out and deleted from the table. The tree is rejected below,
@@ -828,6 +902,12 @@ pub fn reject_quota_handles_in_value_tree<
                     first_error
                         .get_or_insert(DecodeError::SecretNotPermitted(i as wire::ValueNodeIndex));
                 }
+                wire::SchemaValueNode::PermissionCardHandle(handle) => {
+                    dropper.drop_permission_card_handle(handle);
+                    first_error.get_or_insert(DecodeError::PermissionCardNotPermitted(
+                        i as wire::ValueNodeIndex,
+                    ));
+                }
                 _ => unreachable!(),
             }
         }
@@ -840,7 +920,21 @@ pub fn reject_quota_handles_in_value_tree<
 
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub fn reject_secret_handles_in_value_tree<
-    D: super::QuotaTokenHandleDropper + super::SecretHandleDropper,
+    D: super::QuotaTokenHandleDropper
+        + super::SecretHandleDropper
+        + super::PermissionCardHandleDropper,
+>(
+    wire_tree: wire::SchemaValueTree,
+    dropper: &mut D,
+) -> Result<wire::SchemaValueTree, DecodeError> {
+    reject_quota_handles_in_value_tree(wire_tree, dropper)
+}
+
+#[cfg(all(feature = "host", not(feature = "guest")))]
+pub fn reject_permission_card_handles_in_value_tree<
+    D: super::QuotaTokenHandleDropper
+        + super::SecretHandleDropper
+        + super::PermissionCardHandleDropper,
 >(
     wire_tree: wire::SchemaValueTree,
     dropper: &mut D,
@@ -855,7 +949,9 @@ pub fn reject_secret_handles_in_value_tree<
 /// cannot leak a handle by smuggling one into a reject-only position.
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub fn decode_value_rejecting_quota_with<
-    D: super::QuotaTokenHandleDropper + super::SecretHandleDropper,
+    D: super::QuotaTokenHandleDropper
+        + super::SecretHandleDropper
+        + super::PermissionCardHandleDropper,
 >(
     wire_tree: wire::SchemaValueTree,
     dropper: &mut D,
@@ -866,7 +962,21 @@ pub fn decode_value_rejecting_quota_with<
 
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub fn decode_value_rejecting_secret_with<
-    D: super::QuotaTokenHandleDropper + super::SecretHandleDropper,
+    D: super::QuotaTokenHandleDropper
+        + super::SecretHandleDropper
+        + super::PermissionCardHandleDropper,
+>(
+    wire_tree: wire::SchemaValueTree,
+    dropper: &mut D,
+) -> Result<SchemaValue, DecodeError> {
+    decode_value_rejecting_quota_with(wire_tree, dropper)
+}
+
+#[cfg(all(feature = "host", not(feature = "guest")))]
+pub fn decode_value_rejecting_permission_card_with<
+    D: super::QuotaTokenHandleDropper
+        + super::SecretHandleDropper
+        + super::PermissionCardHandleDropper,
 >(
     wire_tree: wire::SchemaValueTree,
     dropper: &mut D,
@@ -882,7 +992,9 @@ pub fn decode_value_rejecting_secret_with<
 /// and the decode is rejected with [`DecodeError::QuotaTokenNotPermitted`].
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub fn decode_typed_rejecting_quota_with<
-    D: super::QuotaTokenHandleDropper + super::SecretHandleDropper,
+    D: super::QuotaTokenHandleDropper
+        + super::SecretHandleDropper
+        + super::PermissionCardHandleDropper,
 >(
     wire_typed: wire::TypedSchemaValue,
     dropper: &mut D,
@@ -895,7 +1007,21 @@ pub fn decode_typed_rejecting_quota_with<
 
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub fn decode_typed_rejecting_secret_with<
-    D: super::QuotaTokenHandleDropper + super::SecretHandleDropper,
+    D: super::QuotaTokenHandleDropper
+        + super::SecretHandleDropper
+        + super::PermissionCardHandleDropper,
+>(
+    wire_typed: wire::TypedSchemaValue,
+    dropper: &mut D,
+) -> Result<TypedSchemaValue, DecodeError> {
+    decode_typed_rejecting_quota_with(wire_typed, dropper)
+}
+
+#[cfg(all(feature = "host", not(feature = "guest")))]
+pub fn decode_typed_rejecting_permission_card_with<
+    D: super::QuotaTokenHandleDropper
+        + super::SecretHandleDropper
+        + super::PermissionCardHandleDropper,
 >(
     wire_typed: wire::TypedSchemaValue,
     dropper: &mut D,
@@ -939,6 +1065,11 @@ fn preflight_owned_value_tree(
             }
             Some(wire::SchemaValueNode::QuotaTokenHandle(_)) if !reached[i] => {
                 return Err(DecodeError::UnconsumedQuotaTokenHandle(
+                    i as wire::ValueNodeIndex,
+                ));
+            }
+            Some(wire::SchemaValueNode::PermissionCardHandle(_)) if !reached[i] => {
+                return Err(DecodeError::UnconsumedPermissionCardHandle(
                     i as wire::ValueNodeIndex,
                 ));
             }
@@ -1024,6 +1155,9 @@ fn reject_handles_in_pure_value_tree(wire_tree: &wire::SchemaValueTree) -> Resul
             wire::SchemaValueNode::QuotaTokenHandle(_) => {
                 return Err(DecodeError::QuotaTokenRequiresResolver);
             }
+            wire::SchemaValueNode::PermissionCardHandle(_) => {
+                return Err(DecodeError::PermissionCardRequiresResolver);
+            }
             _ => {}
         }
     }
@@ -1044,6 +1178,9 @@ fn decode_owned_at(
     idx: wire::ValueNodeIndex,
     lift_quota: &mut dyn FnMut(WireQuotaHandle) -> Result<QuotaTokenVariantValue, DecodeError>,
     lift_secret: &mut dyn FnMut(WireSecretHandle) -> Result<SecretVariantValue, DecodeError>,
+    lift_permission_card: &mut dyn FnMut(
+        WirePermissionCardHandle,
+    ) -> Result<PermissionCardVariantValue, DecodeError>,
 ) -> Result<SchemaValue, DecodeError> {
     let pos = usize_index_v(idx)?;
     let node = slots
@@ -1068,7 +1205,13 @@ fn decode_owned_at(
         wire::SchemaValueNode::RecordValue(fields) => {
             let mut decoded = Vec::with_capacity(fields.len());
             for i in fields {
-                decoded.push(decode_owned_at(slots, i, lift_quota, lift_secret)?);
+                decoded.push(decode_owned_at(
+                    slots,
+                    i,
+                    lift_quota,
+                    lift_secret,
+                    lift_permission_card,
+                )?);
             }
             SchemaValue::Record { fields: decoded }
         }
@@ -1079,6 +1222,7 @@ fn decode_owned_at(
                     i,
                     lift_quota,
                     lift_secret,
+                    lift_permission_card,
                 )?)),
                 None => None,
             };
@@ -1092,29 +1236,54 @@ fn decode_owned_at(
         wire::SchemaValueNode::TupleValue(elements) => {
             let mut decoded = Vec::with_capacity(elements.len());
             for i in elements {
-                decoded.push(decode_owned_at(slots, i, lift_quota, lift_secret)?);
+                decoded.push(decode_owned_at(
+                    slots,
+                    i,
+                    lift_quota,
+                    lift_secret,
+                    lift_permission_card,
+                )?);
             }
             SchemaValue::Tuple { elements: decoded }
         }
         wire::SchemaValueNode::ListValue(elements) => {
             let mut decoded = Vec::with_capacity(elements.len());
             for i in elements {
-                decoded.push(decode_owned_at(slots, i, lift_quota, lift_secret)?);
+                decoded.push(decode_owned_at(
+                    slots,
+                    i,
+                    lift_quota,
+                    lift_secret,
+                    lift_permission_card,
+                )?);
             }
             SchemaValue::List { elements: decoded }
         }
         wire::SchemaValueNode::FixedListValue(elements) => {
             let mut decoded = Vec::with_capacity(elements.len());
             for i in elements {
-                decoded.push(decode_owned_at(slots, i, lift_quota, lift_secret)?);
+                decoded.push(decode_owned_at(
+                    slots,
+                    i,
+                    lift_quota,
+                    lift_secret,
+                    lift_permission_card,
+                )?);
             }
             SchemaValue::FixedList { elements: decoded }
         }
         wire::SchemaValueNode::MapValue(entries) => {
             let mut decoded = Vec::with_capacity(entries.len());
             for e in entries {
-                let key = decode_owned_at(slots, e.key, lift_quota, lift_secret)?;
-                let value = decode_owned_at(slots, e.value, lift_quota, lift_secret)?;
+                let key =
+                    decode_owned_at(slots, e.key, lift_quota, lift_secret, lift_permission_card)?;
+                let value = decode_owned_at(
+                    slots,
+                    e.value,
+                    lift_quota,
+                    lift_secret,
+                    lift_permission_card,
+                )?;
                 decoded.push((key, value));
             }
             SchemaValue::Map { entries: decoded }
@@ -1126,6 +1295,7 @@ fn decode_owned_at(
                     i,
                     lift_quota,
                     lift_secret,
+                    lift_permission_card,
                 )?)),
                 None => None,
             },
@@ -1139,6 +1309,7 @@ fn decode_owned_at(
                             i,
                             lift_quota,
                             lift_secret,
+                            lift_permission_card,
                         )?)),
                         None => None,
                     },
@@ -1150,6 +1321,7 @@ fn decode_owned_at(
                             i,
                             lift_quota,
                             lift_secret,
+                            lift_permission_card,
                         )?)),
                         None => None,
                     },
@@ -1180,11 +1352,20 @@ fn decode_owned_at(
         }),
         wire::SchemaValueNode::UnionValue(p) => SchemaValue::Union(UnionValuePayload {
             tag: p.tag,
-            body: Box::new(decode_owned_at(slots, p.body, lift_quota, lift_secret)?),
+            body: Box::new(decode_owned_at(
+                slots,
+                p.body,
+                lift_quota,
+                lift_secret,
+                lift_permission_card,
+            )?),
         }),
         wire::SchemaValueNode::SecretValue(handle) => SchemaValue::Secret(lift_secret(handle)?),
         wire::SchemaValueNode::QuotaTokenHandle(handle) => {
             SchemaValue::QuotaToken(lift_quota(handle)?)
+        }
+        wire::SchemaValueNode::PermissionCardHandle(handle) => {
+            SchemaValue::PermissionCard(lift_permission_card(handle)?)
         }
     };
     Ok(out)

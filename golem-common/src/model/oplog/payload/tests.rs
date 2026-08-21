@@ -14,9 +14,16 @@
 
 use test_r::test;
 
+use super::{HostRequestGolemApiRevertAgent, HostRequestGolemRpcInvoke};
 use crate::model::Timestamp;
-use crate::model::component::ComponentId;
+use crate::model::card::{CardId, ScopeCard};
+use crate::model::component::{ComponentId, ComponentRevision};
+use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, SpanId};
+use crate::model::oplog::host_functions::{
+    GolemPermissionsDerivePersist, GolemPermissionsInstallChildPersist,
+    GolemPermissionsInstallTransfer, HostFunctionName,
+};
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
     SerializableDateTime, SerializableFileTimes, SerializableHttpErrorCode, SerializableHttpMethod,
@@ -26,27 +33,39 @@ use crate::model::oplog::types::{
     SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
     SerializableP3HttpRequestOptions, SerializableP3HttpScheme, SerializableP3IpSocketAddress,
     SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
-    SerializableResponseHeaders, SerializableStreamError,
+    SerializableResponseHeaders, SerializableRpcError, SerializableScheduleId,
+    SerializableStreamError, SerializableToolError, SerializableToolInvocationResult,
+    SerializableToolRpcError,
 };
 use crate::model::oplog::{
-    HostPayloadPair, HostRequest, HostRequestEntityInvocation, HostRequestFileSystemPath,
-    HostRequestGolemToolGetTool, HostRequestKVCacheKey, HostRequestKVCacheKeyAndTtl,
+    HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
+    HostRequestEntityInvocation, HostRequestFileSystemPath, HostRequestGolemApiOplogEnrich,
+    HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
+    HostRequestGolemToolInvoke, HostRequestKVCacheKey, HostRequestKVCacheKeyAndTtl,
     HostRequestKVCacheKeyValueAndTtl, HostRequestMonotonicClockDuration,
     HostRequestMonotonicClockTimestamp, HostRequestNoInput,
     HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
-    HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse,
-    HostResponseEntityInvocation, HostResponseGolemToolTool, HostResponseGolemToolTools,
+    HostRequestP3SocketsConnect, HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse,
+    HostResponseCliEnvironmentGetEnvironment, HostResponseEntityInvocation,
+    HostResponseGolemApiOplogChunk, HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit,
+    HostResponseGolemRpcActivate, HostResponseGolemRpcScheduledInvocation,
+    HostResponseGolemRpcScheduledInvocationCompat, HostResponseGolemToolInvokeResult,
+    HostResponseGolemToolTool, HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
     HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
     HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
-    HostResponseP3FileSystemStat, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientRequestBodyTransmission,
-    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
-    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsTcpAcquire,
-    HostResponseP3SocketsTcpReceive, HostResponseP3SocketsTcpReceiveChunk,
-    HostResponseP3SocketsTcpSend, HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend,
-    HostResponseRandomBytes, HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock,
-    host_functions,
+    HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
+    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
+    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
+    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
+    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
+    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
+    HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
 };
+use crate::model::worker::{
+    ResolvedRevert, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
+};
+use crate::model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
 use crate::schema::tool::{CommandNode, CommandTree, DiscoveredTool, Doc, Globals, Tool};
 use crate::schema::{IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 use http::Version;
@@ -65,6 +84,116 @@ use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
 use wasmtime_wasi_http::p2::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
 };
+
+#[test]
+fn installed_child_persistence_has_a_distinct_host_function_name() {
+    let function_name = HostFunctionName::GolemPermissionsInstallChildPersist;
+    assert_eq!(
+        GolemPermissionsInstallChildPersist::FQFN,
+        "golem::permissions::wallet::persist-installed-child-card"
+    );
+    assert_ne!(
+        GolemPermissionsInstallChildPersist::FQFN,
+        GolemPermissionsDerivePersist::FQFN
+    );
+    assert_eq!(
+        HostFunctionName::from(GolemPermissionsInstallChildPersist::FQFN),
+        function_name
+    );
+    let bytes = desert_rust::serialize_to_byte_vec(&function_name).unwrap();
+    let decoded: HostFunctionName = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, function_name);
+}
+
+#[test]
+fn card_transfer_has_a_distinct_host_function_name() {
+    let function_name = HostFunctionName::GolemPermissionsInstallTransfer;
+    assert_eq!(
+        GolemPermissionsInstallTransfer::FQFN,
+        "golem::permissions::wallet::install-card-transfer"
+    );
+    assert_ne!(
+        GolemPermissionsInstallTransfer::FQFN,
+        GolemPermissionsInstallChildPersist::FQFN
+    );
+    assert_eq!(
+        HostFunctionName::from(GolemPermissionsInstallTransfer::FQFN),
+        function_name
+    );
+    let bytes = desert_rust::serialize_to_byte_vec(&function_name).unwrap();
+    let decoded: HostFunctionName = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, function_name);
+}
+
+#[test]
+fn rpc_durable_request_captures_scope_card_payload_deterministically() {
+    let scope_card = ScopeCard {
+        scope_card_id: CardId(uuid::Uuid::from_u128(1)),
+        root_card_ids: vec![CardId(uuid::Uuid::from_u128(2))],
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+    };
+    let request = HostRequestGolemRpcInvoke {
+        remote_agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "target".to_string(),
+        },
+        idempotency_key: IdempotencyKey::new("scope-card-call".to_string()),
+        method_name: "run".to_string(),
+        input: SchemaValue::Tuple {
+            elements: Vec::new(),
+        },
+        remote_agent_type: None,
+        remote_agent_parameters: None,
+        scope_card: Some(scope_card),
+    };
+
+    let first = desert_rust::serialize_to_byte_vec(&request).unwrap();
+    let second = desert_rust::serialize_to_byte_vec(&request).unwrap();
+    let decoded: HostRequestGolemRpcInvoke = desert_rust::deserialize(&first).unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn scheduled_invocation_typed_result_preserves_legacy_success_payload() {
+    let schedule_id = SerializableScheduleId {
+        id: uuid::Uuid::from_u128(0x123456789abcdef00123456789abcdef),
+    };
+    let legacy: HostResponse = HostResponseGolemRpcScheduledInvocation {
+        schedule_id: schedule_id.clone(),
+    }
+    .into();
+    let compatible: HostResponse = HostResponseGolemRpcScheduledInvocationCompat {
+        result: Ok(schedule_id.clone()),
+    }
+    .into();
+
+    assert_eq!(compatible, legacy);
+    assert_eq!(
+        HostResponseGolemRpcScheduledInvocationCompat::try_from(legacy).unwrap(),
+        HostResponseGolemRpcScheduledInvocationCompat {
+            result: Ok(schedule_id),
+        }
+    );
+
+    let denied = SerializableRpcError::Denied {
+        details: "agent:invoke is not permitted".to_string(),
+    };
+    let durable_denial: HostResponse = HostResponseGolemRpcScheduledInvocationCompat {
+        result: Err(denied.clone()),
+    }
+    .into();
+    assert_eq!(
+        HostResponseGolemRpcScheduledInvocationCompat::try_from(durable_denial).unwrap(),
+        HostResponseGolemRpcScheduledInvocationCompat {
+            result: Err(denied),
+        }
+    );
+}
 
 fn datetime_strat()
 -> impl Strategy<Value = wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> {
@@ -416,6 +545,21 @@ fn p3_random_host_payload_pairs_roundtrip() {
 
 #[test]
 fn p3_tcp_socket_host_payload_pairs_roundtrip() {
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketConnect>(
+        HostRequestP3SocketsConnect {
+            remote_address: SerializableP3IpSocketAddress {
+                address: SerializableIpAddress::IPv4 {
+                    address: [127, 0, 0, 1],
+                },
+                port: 443,
+                flow_info: None,
+                scope_id: None,
+            },
+        },
+        HostResponseP3SocketsConnect {
+            result: Err(SerializableP3SocketErrorCode::AccessDenied),
+        },
+    );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSend>(
         HostRequestNoInput {},
         HostResponseP3SocketsTcpSend { result: Ok(()) },
@@ -461,6 +605,14 @@ fn p3_udp_socket_host_payload_pairs_roundtrip() {
         scope_id: None,
     };
 
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketConnect>(
+        HostRequestP3SocketsConnect {
+            remote_address: remote_address.clone(),
+        },
+        HostResponseP3SocketsConnect {
+            result: Err(SerializableP3SocketErrorCode::AccessDenied),
+        },
+    );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesUdpSocketSend>(
         HostRequestP3SocketsUdpSend {
             data: b"outgoing udp bytes".to_vec(),
@@ -823,6 +975,18 @@ fn p3_filesystem_host_payload_pairs_roundtrip() {
             )),
         },
     );
+    assert_host_payload_pair_roundtrip::<host_functions::P3FilesystemTypesDescriptorWriteViaStream>(
+        HostRequestNoInput {},
+        HostResponseP3FileSystemWriteAdmission { result: Ok(()) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3FilesystemTypesDescriptorAppendViaStream>(
+        HostRequestNoInput {},
+        HostResponseP3FileSystemWriteAdmission {
+            result: Err(SerializableP3FileSystemError::ErrorCode(
+                SerializableP3FsErrorCode::NotPermitted,
+            )),
+        },
+    );
 }
 
 fn assert_host_payload_pair_roundtrip<Pair>(request: Pair::Req, response: Pair::Resp)
@@ -846,6 +1010,69 @@ where
     let function_name_roundtrip: host_functions::HostFunctionName =
         desert_rust::deserialize(&function_name_bytes).unwrap();
     assert_eq!(function_name_roundtrip, Pair::HOST_FUNCTION_NAME);
+}
+
+#[test]
+fn cli_environment_host_payload_pair_roundtrips() {
+    let environment = vec![
+        ("PUBLIC_URL".to_string(), "https://example.com".to_string()),
+        ("REGION".to_string(), "eu-west".to_string()),
+    ];
+    assert_host_payload_pair_roundtrip::<host_functions::WasiCliEnvironmentGetEnvironment>(
+        HostRequestCliEnvironmentGetEnvironment {
+            environment: environment.clone(),
+        },
+        HostResponseCliEnvironmentGetEnvironment { environment },
+    );
+}
+
+#[test]
+fn durable_rpc_activation_payload_pair_roundtrips() {
+    let target_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(42));
+    assert_host_payload_pair_roundtrip::<host_functions::GolemRpcWasmRpcActivate>(
+        HostRequestGolemRpcActivate {
+            remote_agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "target-agent".to_string(),
+            },
+            method_name: "run".to_string(),
+            decision: Ok(()),
+        },
+        HostResponseGolemRpcActivate {
+            result: Ok(target_fingerprint),
+        },
+    );
+}
+
+#[test]
+fn prepared_revert_payload_pair_roundtrips() {
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "target-agent".to_string(),
+    };
+    assert_host_payload_pair_roundtrip::<host_functions::GolemApiRevertWorker>(
+        HostRequestGolemApiRevertAgent {
+            agent_id: agent_id.clone(),
+            target: RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                number_of_invocations: 2,
+            }),
+            resolved_revert: Some(ResolvedRevert {
+                last_oplog_index: OplogIndex::from_u64(42),
+                observed_oplog_index: OplogIndex::from_u64(100),
+            }),
+        },
+        HostResponseGolemApiUnit { result: Ok(()) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemApiRevertWorker>(
+        HostRequestGolemApiRevertAgent {
+            agent_id,
+            target: RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: OplogIndex::from_u64(42),
+            }),
+            resolved_revert: None,
+        },
+        HostResponseGolemApiUnit { result: Ok(()) },
+    );
 }
 
 fn assert_host_payload_pair_schema_roundtrip<Pair>(request: Pair::Req, response: Pair::Resp)
@@ -959,6 +1186,109 @@ fn tool_discovery_host_payload_pairs_roundtrip() {
         },
         HostResponseGolemToolTool {
             result: Err("registry unavailable".to_string()),
+        },
+    );
+}
+
+#[test]
+fn tool_invocation_host_payload_pairs_roundtrip() {
+    let input = "needle".to_string().into_typed_schema_value().unwrap();
+    let request = HostRequestGolemToolInvoke {
+        tool_name: "grep".to_string(),
+        command_path: vec!["files".to_string(), "search".to_string()],
+        args: vec!["--ignore-case".to_string(), "needle".to_string()],
+        input: input.clone(),
+        has_stdin: true,
+    };
+    let response = HostResponseGolemToolInvokeResult {
+        result: Ok(SerializableToolInvocationResult {
+            result: Some("match".to_string().into_typed_schema_value().unwrap()),
+            stdout: Some(b"line one\nline two\n".to_vec()),
+        }),
+    };
+
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolRpcInvokeAndAwait>(
+        request.clone(),
+        response.clone(),
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolRpcInvokeAndAwait>(
+        request.clone(),
+        response,
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolRpcAsyncInvokeAndAwait>(
+        request.clone(),
+        HostResponseGolemToolInvokeResult {
+            result: Err(SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidCommandPath(vec!["missing".to_string()]),
+            ))),
+        },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolRpcAsyncInvokeAndAwait>(
+        request.clone(),
+        HostResponseGolemToolInvokeResult {
+            result: Err(SerializableToolRpcError::Denied(
+                "tool invocation denied".to_string(),
+            )),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolRpcInvoke>(
+        request.clone(),
+        HostResponseGolemToolUnitOrFailure { result: Ok(()) },
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolRpcInvoke>(
+        request,
+        HostResponseGolemToolUnitOrFailure {
+            result: Err(SerializableToolRpcError::RemoteInternalError(
+                "tool task failed".to_string(),
+            )),
+        },
+    );
+}
+
+#[test]
+fn durable_oplog_read_payload_pairs_roundtrip() {
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "Counter(main)".to_string(),
+    };
+    let revision = ComponentRevision::try_from(7_u64).unwrap();
+    assert_host_payload_pair_roundtrip::<host_functions::GolemApiGetOplogNext>(
+        HostRequestGolemApiOplogRead {
+            agent_id: agent_id.clone(),
+            next_oplog_index: OplogIndex::from_u64(41),
+            query: None,
+            page_size: 100,
+            current_component_revision: None,
+        },
+        HostResponseGolemApiOplogChunk {
+            result: Err("permission denied".to_string()),
+            next_oplog_index: OplogIndex::from_u64(41),
+            current_component_revision: revision,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemApiSearchOplogNext>(
+        HostRequestGolemApiOplogRead {
+            agent_id: agent_id.clone(),
+            next_oplog_index: OplogIndex::from_u64(42),
+            query: Some("function = 'run'".to_string()),
+            page_size: 100,
+            current_component_revision: Some(revision),
+        },
+        HostResponseGolemApiOplogChunk {
+            result: Ok(Some(vec![1, 2, 3])),
+            next_oplog_index: OplogIndex::from_u64(99),
+            current_component_revision: revision,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemApiEnrichOplogEntries>(
+        HostRequestGolemApiOplogEnrich {
+            environment_id: EnvironmentId::new(),
+            agent_id,
+            entries: vec![(3, vec![1, 2]), (8, vec![3, 4])],
+            component_revision: revision.into(),
+        },
+        HostResponseGolemApiOplogEntries {
+            result: Ok(vec![4, 5, 6]),
         },
     );
 }

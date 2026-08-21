@@ -17,9 +17,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::durable_host::TcpSocketStreamDirection;
+use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallHandle, CallReplayOutcome, Cancellable, NotCancellable,
-    resolve_current_observational_owner,
+    authorize_live_permissions_at_serialized_access, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
     CustomInvocationContext, DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
@@ -32,15 +33,15 @@ use crate::durable_host::tail_work::TailActivity;
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use golem_common::model::oplog::host_functions::{
-    P3SocketsTypesTcpSocketReceive, P3SocketsTypesTcpSocketReceiveAcquire,
-    P3SocketsTypesTcpSocketReceiveChunk, P3SocketsTypesTcpSocketSend,
-    P3SocketsTypesTcpSocketSendAcquire,
+    P3SocketsTypesTcpSocketConnect, P3SocketsTypesTcpSocketReceive,
+    P3SocketsTypesTcpSocketReceiveAcquire, P3SocketsTypesTcpSocketReceiveChunk,
+    P3SocketsTypesTcpSocketSend, P3SocketsTypesTcpSocketSendAcquire,
 };
 use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, SerializableP3TcpChunk};
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequestNoInput, HostResponseP3SocketsTcpAcquire,
-    HostResponseP3SocketsTcpReceive, HostResponseP3SocketsTcpReceiveChunk,
-    HostResponseP3SocketsTcpSend, OplogIndex,
+    DurableFunctionType, HostPayloadPair, HostRequestNoInput, HostRequestP3SocketsConnect,
+    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend, OplogIndex,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::PollSender;
@@ -51,10 +52,23 @@ use wasmtime::component::{
     StreamConsumer, StreamProducer, StreamReader, StreamResult,
 };
 use wasmtime_wasi::p3::bindings::sockets::types;
-use wasmtime_wasi::p3::sockets::SocketResult;
+use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
 use wasmtime_wasi::sockets::{TcpSocket, WasiSockets, WasiSocketsView};
 
 use super::serialize_socket_error;
+
+pub(super) fn socket_target(
+    address: &types::IpSocketAddress,
+) -> Option<golem_common::model::card::PermissionTarget> {
+    match address {
+        types::IpSocketAddress::Ipv4(address) => {
+            let (a, b, c, d) = address.address;
+            let host = std::net::Ipv4Addr::new(a, b, c, d).to_string();
+            tcp_target(&host, address.port).ok()
+        }
+        types::IpSocketAddress::Ipv6(_) => None,
+    }
+}
 
 fn serialize_tcp_stream_result(
     result: Result<(), types::ErrorCode>,
@@ -1518,9 +1532,60 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 "connect",
             )
         });
-        let store = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-        <WasiSockets as types::HostTcpSocketWithStore<U>>::connect(&store, socket, remote_address)
-            .await
+        let live = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .state
+                .is_live()
+        });
+        let denied = if live {
+            match socket_target(&remote_address) {
+                Some(target) => !matches!(
+                    authorize_live_permissions_at_serialized_access(
+                        store,
+                        durable_worker_ctx::<Ctx, U>,
+                        &[target],
+                    )
+                    .await,
+                    Ok(Ok(_))
+                ),
+                None => true,
+            }
+        } else {
+            false
+        };
+        let request_address = remote_address;
+        let response = run_read_access::<_, _, Ctx, P3SocketsTypesTcpSocketConnect, _, _>(
+            store,
+            HostRequestP3SocketsConnect {
+                remote_address: request_address.into(),
+            },
+            DurableFunctionType::WriteRemote,
+            || async {
+                if denied {
+                    return Ok(HostResponseP3SocketsConnect {
+                        result: Err(SerializableP3SocketErrorCode::AccessDenied),
+                    });
+                }
+                let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
+                let result = <WasiSockets as types::HostTcpSocketWithStore<U>>::connect(
+                    &sockets,
+                    socket,
+                    remote_address,
+                )
+                .await;
+                Ok(HostResponseP3SocketsConnect {
+                    result: match result {
+                        Ok(()) => Ok(()),
+                        Err(error) => Err(serialize_socket_error(error)?),
+                    },
+                })
+            },
+        )
+        .await
+        .map_err(SocketError::trap)?;
+        response
+            .result
+            .map_err(|error| types::ErrorCode::from(error).into())
     }
 
     fn listen(

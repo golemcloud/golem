@@ -20,13 +20,14 @@ use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, NumericBound,
-    NumericRestrictions, PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue,
-    QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec,
-    UrlRestrictions, VariantCaseType,
+    NumericRestrictions, PathDirection, PathKind, PathSpec, PermissionCardSpec, QuantitySpec,
+    QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions,
+    UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
 };
 use crate::schema::schema_value::{
-    BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-    SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    BinaryValuePayload, DurationValuePayload, PermissionCardValuePayload, QuotaTokenValuePayload,
+    ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
+    VariantValuePayload,
 };
 use chrono::{DateTime, TimeZone, Utc};
 use golem_api_grpc::proto::golem::common::Empty as ProtoEmpty;
@@ -263,6 +264,7 @@ impl From<SchemaType> for proto::SchemaType {
             SchemaType::Union { spec, .. } => Body::UnionType(spec.into()),
             SchemaType::Secret { spec, .. } => Body::SecretType(Box::new(spec.into())),
             SchemaType::QuotaToken { spec, .. } => Body::QuotaTokenType(spec.into()),
+            SchemaType::PermissionCard { spec, .. } => Body::PermissionCardType(spec.into()),
             SchemaType::Future { inner, .. } => Body::FutureType(Box::new(proto::WasiStubType {
                 element: opt_box_to_proto(inner),
             })),
@@ -422,6 +424,10 @@ impl TryFrom<proto::SchemaType> for SchemaType {
             },
             Body::QuotaTokenType(q) => SchemaType::QuotaToken {
                 spec: q.into(),
+                metadata,
+            },
+            Body::PermissionCardType(p) => SchemaType::PermissionCard {
+                spec: p.into(),
                 metadata,
             },
             Body::FutureType(w) => SchemaType::Future {
@@ -746,6 +752,22 @@ impl From<proto::QuotaTokenSpec> for QuotaTokenSpec {
     }
 }
 
+impl From<PermissionCardSpec> for proto::PermissionCardSpec {
+    fn from(value: PermissionCardSpec) -> Self {
+        Self {
+            polymorphic: value.polymorphic,
+        }
+    }
+}
+
+impl From<proto::PermissionCardSpec> for PermissionCardSpec {
+    fn from(value: proto::PermissionCardSpec) -> Self {
+        Self {
+            polymorphic: value.polymorphic,
+        }
+    }
+}
+
 // --- discriminated union -----------------------------------------------------
 
 impl From<UnionSpec> for proto::UnionSpec {
@@ -1001,6 +1023,14 @@ impl From<SchemaValue> for proto::SchemaValue {
                 last_credit: q.last_credit,
                 last_credit_at: Some(datetime_to_proto(q.last_credit_at)),
             }),
+            SchemaValue::PermissionCard(p) => {
+                ValueBody::PermissionCardValue(proto::PermissionCardValue {
+                    card_id: Some(p.card_id.into()),
+                    parent_ids: p.parent_ids.into_iter().map(Into::into).collect(),
+                    expires_at: p.expires_at.map(datetime_to_proto),
+                    polymorphic: p.polymorphic,
+                })
+            }
         };
         Self { value: Some(body) }
     }
@@ -1137,6 +1167,20 @@ impl TryFrom<proto::SchemaValue> for SchemaValue {
                     })?,
                 )?,
             }),
+            ValueBody::PermissionCardValue(p) => {
+                SchemaValue::PermissionCard(PermissionCardValuePayload {
+                    card_id: p
+                        .card_id
+                        .ok_or_else(|| "Missing field: PermissionCardValue.card_id".to_string())?
+                        .into(),
+                    parent_ids: p.parent_ids.into_iter().map(Into::into).collect(),
+                    expires_at: match p.expires_at {
+                        Some(d) => Some(datetime_from_proto(d)?),
+                        None => None,
+                    },
+                    polymorphic: p.polymorphic,
+                })
+            }
         };
         Ok(result)
     }

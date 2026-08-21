@@ -487,6 +487,30 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
         _,
         HasSelf<DurableWorkerCtx<DebugContext>>,
     >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::permissions::types::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::permissions::inspect::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::permissions::derive::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::permissions::revoke::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::permissions::wallet::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::permissions::kernel_introspection::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
     golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
         &mut linker,
         get_durable_ctx,

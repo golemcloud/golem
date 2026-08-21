@@ -200,11 +200,12 @@ object ValueValidation {
         else
           for (ext <- fileExt(x); allowed <- s.allowedExtensions if !allowed.contains(ext))
             e += PathExtensionNotAllowed(path(p), ext)
-      case (UrlType(r), UrlValue(u))                => checkUrl(r, u, p, e)
-      case (QuantityType(s), QuantityValueNode(q))  => checkQuantity(s, q, p, e)
-      case (SecretType(_), SecretValue(_))          => ()
-      case (QuotaTokenType(_), QuotaTokenHandle(_)) => ()
-      case (RecordType(fs), RecordValue(vs))        =>
+      case (UrlType(r), UrlValue(u))                        => checkUrl(r, u, p, e)
+      case (QuantityType(s), QuantityValueNode(q))          => checkQuantity(s, q, p, e)
+      case (SecretType(_), SecretValue(_))                  => ()
+      case (QuotaTokenType(_), QuotaTokenHandle(_))         => ()
+      case (PermissionCardType(_), PermissionCardHandle(_)) => ()
+      case (RecordType(fs), RecordValue(vs))                =>
         if (fs.length != vs.length) e += RecordArityMismatch(path(p), fs.length, vs.length)
         else fs.zip(vs).foreach { case (f, x) => check(g, f.body, x, p :+ ValuePathSegment.Field(f.name), e) }
       case (VariantType(cs), VariantValue(i, pay)) =>
@@ -274,17 +275,18 @@ object ValueValidation {
   }
   private def path(p: List[ValuePathSegment]) = ValuePath(p)
   private def typeName(b: SchemaTypeBody)     = b match {
-    case RefType(_)     => "ref"; case BoolType          => "bool"; case S8Type(_)           => "s8"; case S16Type(_)   => "s16";
-    case S32Type(_)     => "s32"; case S64Type(_)        => "s64"; case U8Type(_)            => "u8"; case U16Type(_)   => "u16";
-    case U32Type(_)     => "u32"; case U64Type(_)        => "u64"; case F32Type(_)           => "f32"; case F64Type(_)  => "f64";
-    case CharType       => "char"; case StringType       => "string"; case RecordType(_)     => "record";
-    case VariantType(_) => "variant"; case EnumType(_)   => "enum"; case FlagsType(_)        => "flags";
-    case TupleType(_)   => "tuple"; case ListType(_)     => "list"; case FixedListType(_, _) => "fixed-list";
-    case MapType(_, _)  => "map"; case OptionType(_)     => "option"; case ResultType(_, _)  => "result";
-    case TextType(_)    => "text"; case BinaryType(_)    => "binary"; case PathType(_)       => "path"; case UrlType(_) => "url";
-    case DatetimeType   => "datetime"; case DurationType => "duration"; case QuantityType(_) => "quantity";
-    case UnionType(_)   => "union"; case SecretType(_)   => "secret"; case QuotaTokenType(_) => "quota-token";
-    case FutureType(_)  => "future"; case StreamType(_)  => "stream"
+    case RefType(_)            => "ref"; case BoolType          => "bool"; case S8Type(_)           => "s8"; case S16Type(_)   => "s16";
+    case S32Type(_)            => "s32"; case S64Type(_)        => "s64"; case U8Type(_)            => "u8"; case U16Type(_)   => "u16";
+    case U32Type(_)            => "u32"; case U64Type(_)        => "u64"; case F32Type(_)           => "f32"; case F64Type(_)  => "f64";
+    case CharType              => "char"; case StringType       => "string"; case RecordType(_)     => "record";
+    case VariantType(_)        => "variant"; case EnumType(_)   => "enum"; case FlagsType(_)        => "flags";
+    case TupleType(_)          => "tuple"; case ListType(_)     => "list"; case FixedListType(_, _) => "fixed-list";
+    case MapType(_, _)         => "map"; case OptionType(_)     => "option"; case ResultType(_, _)  => "result";
+    case TextType(_)           => "text"; case BinaryType(_)    => "binary"; case PathType(_)       => "path"; case UrlType(_) => "url";
+    case DatetimeType          => "datetime"; case DurationType => "duration"; case QuantityType(_) => "quantity";
+    case UnionType(_)          => "union"; case SecretType(_)   => "secret"; case QuotaTokenType(_) => "quota-token";
+    case PermissionCardType(_) => "permission-card"
+    case FutureType(_)         => "future"; case StreamType(_)  => "stream"
   }
   private def shapeName(v: SchemaValue) =
     v.getClass.getSimpleName.stripSuffix("Value").replace("ValueNode", "").toLowerCase

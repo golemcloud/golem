@@ -1,5 +1,10 @@
 use golem_rust::agentic::{Config, Secret};
-use golem_rust::{ConfigSchema, FromSchema, IntoSchema, agent_definition, agent_implementation};
+use golem_rust::bindings::golem::secrets::{reveal, types};
+use golem_rust::secrets::GuestSecretHandle;
+use golem_rust::{
+    ConfigSchema, FromSchema, IntoSchema, agent_definition, agent_implementation,
+    decode_schema_value, encode_schema_graph,
+};
 use golem_rust::{PromiseId, blocking_await_promise, create_promise};
 use serde::Serialize;
 use serde_json::json;
@@ -48,13 +53,13 @@ impl ConfigAgent for ConfigAgentImpl {
     }
 
     fn echo_local_config(&self) -> String {
-        let config = self.config.get();
+        let config = self.config.get().expect("config access should be allowed");
         let result_json = json!({
             "foo": config.foo,
             "bar": config.bar,
-            "secret": config.secret.get(),
+            "secret": config.secret.get().expect("secret reveal should be allowed"),
             "nested": {
-              "nestedSecret": config.nested.nested_secret.get(),
+              "nestedSecret": config.nested.nested_secret.get().expect("secret reveal should be allowed"),
               "a": config.nested.a,
               "b": config.nested.b,
             },
@@ -99,7 +104,7 @@ impl LocalConfigAgent for LocalConfigAgentImpl {
     }
 
     fn echo_local_config(&self) -> String {
-        let config = self.config.get();
+        let config = self.config.get().expect("config access should be allowed");
         let result_json = json!({
             "foo": config.foo,
             "bar": config.bar,
@@ -147,10 +152,10 @@ impl SharedConfigAgent for SharedConfigAgentImpl {
     }
 
     fn echo_local_config(&self) -> String {
-        let config = self.config.get();
+        let config = self.config.get().expect("config access should be allowed");
         let result_json = json!({
-            "secret": config.secret.get(),
-            "complexSecret": config.complex_secret.get(),
+            "secret": config.secret.get().expect("secret reveal should be allowed"),
+            "complexSecret": config.complex_secret.get().expect("secret reveal should be allowed"),
         });
 
         serde_json::to_string(&result_json).unwrap()
@@ -161,8 +166,8 @@ impl SharedConfigAgent for SharedConfigAgentImpl {
     }
 
     fn reveal_secret_then_await_replay_gate(&self, promise_id: PromiseId) -> String {
-        let config = self.config.get();
-        let secret = config.secret.get();
+        let config = self.config.get().expect("config access should be allowed");
+        let secret = config.secret.get().expect("secret reveal should be allowed");
         blocking_await_promise(&promise_id);
         secret
     }
@@ -198,12 +203,82 @@ impl LocalCasingSharedConfigAgent for LocalCasingSharedConfigAgentImpl {
     }
 
     fn echo_local_config(&self) -> String {
-        let config = self.config.get();
+        let config = self.config.get().expect("config access should be allowed");
         let result_json = json!({
-            "secretPath": config.secret_path.get(),
+            "secretPath": config.secret_path.get().expect("secret reveal should be allowed"),
         });
 
         serde_json::to_string(&result_json).unwrap()
+    }
+}
+
+#[derive(ConfigSchema)]
+pub struct SecretHandleAgentConfig {
+    #[config_schema(secret)]
+    pub secret_path: Secret<String>,
+}
+
+#[agent_definition(snapshotting = "enabled")]
+pub trait SecretHandleAgent {
+    fn new(name: String, #[agent_config] config: Config<SecretHandleAgentConfig>) -> Self;
+
+    fn secret_id_result(&self) -> Result<String, String>;
+
+    fn secret_metadata_result(&self) -> Result<String, String>;
+
+    fn reveal_secret_result(&self) -> Result<String, String>;
+}
+
+struct SecretHandleAgentImpl {
+    secret: GuestSecretHandle,
+}
+
+#[agent_implementation]
+impl SecretHandleAgent for SecretHandleAgentImpl {
+    fn new(_name: String, #[agent_config] config: Config<SecretHandleAgentConfig>) -> Self {
+        Self {
+            secret: config
+                .get()
+                .expect("config access should be allowed")
+                .secret_path
+                .handle()
+                .expect("secret handle access should be allowed"),
+        }
+    }
+
+    fn secret_id_result(&self) -> Result<String, String> {
+        self.secret
+            .with_handle(types::id)
+            .map(|id| format!("{:02x?}", id.bytes))
+            .ok_or_else(|| "secret handle has already been transferred".to_string())
+    }
+
+    fn secret_metadata_result(&self) -> Result<String, String> {
+        self.secret
+            .with_handle(types::metadata)
+            .map(|metadata| format!("{metadata:?}"))
+            .ok_or_else(|| "secret handle has already been transferred".to_string())
+    }
+
+    fn reveal_secret_result(&self) -> Result<String, String> {
+        let inner_graph = golem_rust::schema::try_into_schema_graph::<String>()
+            .map_err(|error| error.to_string())?;
+        let expected_type = encode_schema_graph(&inner_graph).map_err(|error| error.to_string())?;
+        let value = self
+            .secret
+            .with_handle(|handle| reveal::reveal(handle, &expected_type))
+            .ok_or_else(|| "secret handle has already been transferred".to_string())?
+            .map_err(|error| format!("{error:?}"))?;
+        let value = decode_schema_value(value).map_err(|error| error.to_string())?;
+        String::from_value(&value).map_err(|error| error.to_string())
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        Ok(Vec::new())
+    }
+
+    async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -232,7 +307,7 @@ impl RpcLocalConfigAgent for RpcLocalConfigAgentImpl {
     }
 
     async fn echo_local_config(&self) -> String {
-        let config = self.config.get();
+        let config = self.config.get().expect("config access should be allowed");
         let client = LocalConfigAgentClient::get_with_config(
             self.name.clone(),
             LocalConfigAgentConfigRpc {

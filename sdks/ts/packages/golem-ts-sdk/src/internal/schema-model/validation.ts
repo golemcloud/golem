@@ -251,6 +251,7 @@ function checkType(
       case 'datetime':
       case 'duration':
       case 'quota-token':
+      case 'permission-card':
         break;
     }
   } finally {

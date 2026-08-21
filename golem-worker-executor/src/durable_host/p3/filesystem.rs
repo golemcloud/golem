@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::io::{Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -21,6 +22,11 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::task::{Context, Poll};
 
+use crate::durable_host::LiveAuthorizationPermit;
+use crate::durable_host::authorization::targets::{CanonicalGuestPath, filesystem_target};
+use crate::durable_host::concurrent::{
+    CallHandle, CallReplayOutcome, NotCancellable, authorize_live_permissions_at_serialized_access,
+};
 use crate::durable_host::filesystem::types::calculate_metadata_hash_parts;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
@@ -29,12 +35,16 @@ use crate::durable_host::p3::{
 use crate::durable_host::tail_work::TailActivity;
 use crate::workerctx::WorkerCtx;
 use cap_std::fs::FileExt;
+use golem_common::model::card::FilesystemVerb;
+use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::oplog::host_functions::{
-    P3FilesystemTypesDescriptorStat, P3FilesystemTypesDescriptorStatAt,
+    P3FilesystemTypesDescriptorAppendViaStream, P3FilesystemTypesDescriptorStat,
+    P3FilesystemTypesDescriptorStatAt, P3FilesystemTypesDescriptorWriteViaStream,
 };
 use golem_common::model::oplog::types::{SerializableFileTimes, SerializableP3FileSystemError};
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestFileSystemPath, HostResponseP3FileSystemStat, OplogEntry,
+    DurableFunctionType, HostRequestFileSystemPath, HostRequestNoInput,
+    HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission, OplogEntry,
 };
 use wasmtime::AsContextMut;
 use wasmtime::StoreContextMut;
@@ -49,6 +59,108 @@ use wasmtime_wasi::runtime::spawn_blocking;
 use wasmtime_wasi::{DirPerms, FilePerms};
 
 static FILESYSTEM_APPEND_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+static DESCRIPTOR_GUEST_PATHS: OnceLock<Mutex<HashMap<(String, u32), CanonicalGuestPath>>> =
+    OnceLock::new();
+
+fn descriptor_key<Ctx: WorkerCtx>(
+    ctx: &crate::durable_host::DurableWorkerCtx<Ctx>,
+    rep: u32,
+) -> (String, u32) {
+    (ctx.owned_agent_id().to_string(), rep)
+}
+
+fn agent_owner<Ctx: WorkerCtx>(
+    ctx: &crate::durable_host::DurableWorkerCtx<Ctx>,
+) -> AgentOwnerPattern {
+    let component = ctx.component_metadata();
+    AgentOwnerPattern::Agent {
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
+        component: component.component_name.clone(),
+        agent: AgentOwnerLeafPattern::Agent(ctx.agent_id().agent_id.clone()),
+    }
+}
+
+fn remember_descriptor_path<Ctx: WorkerCtx>(
+    ctx: &crate::durable_host::DurableWorkerCtx<Ctx>,
+    rep: u32,
+    path: CanonicalGuestPath,
+) {
+    DESCRIPTOR_GUEST_PATHS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(descriptor_key(ctx, rep), path);
+}
+
+fn forget_descriptor_path<Ctx: WorkerCtx>(
+    ctx: &crate::durable_host::DurableWorkerCtx<Ctx>,
+    rep: u32,
+) {
+    if let Some(paths) = DESCRIPTOR_GUEST_PATHS.get() {
+        paths.lock().unwrap().remove(&descriptor_key(ctx, rep));
+    }
+}
+
+fn guest_path_from_access<Ctx: WorkerCtx, U: 'static>(
+    access: &mut Access<'_, U, DurableP3<Ctx>>,
+    fd: &Resource<Descriptor>,
+) -> wasmtime::Result<CanonicalGuestPath> {
+    let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+    DESCRIPTOR_GUEST_PATHS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .get(&descriptor_key(ctx, fd.rep()))
+        .cloned()
+        .ok_or_else(|| wasmtime::Error::msg("filesystem descriptor has no guest path metadata"))
+}
+
+async fn authorize_paths<Ctx: WorkerCtx, U: 'static>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    requests: &[(FilesystemVerb, CanonicalGuestPath)],
+) -> FilesystemResult<Option<LiveAuthorizationPermit>> {
+    let live_and_targets = accessor.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        if !ctx.state.is_live() {
+            return None;
+        }
+        let owner = agent_owner(ctx);
+        Some(
+            requests
+                .iter()
+                .map(|(verb, path)| filesystem_target(owner.clone(), *verb, path))
+                .collect::<Vec<_>>(),
+        )
+    });
+    let Some(targets) = live_and_targets else {
+        return Ok(None);
+    };
+    match authorize_live_permissions_at_serialized_access(
+        accessor,
+        durable_worker_ctx::<Ctx, U>,
+        &targets,
+    )
+    .await
+    .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?
+    {
+        Ok(permit) => Ok(Some(permit)),
+        Err(_) => Err(types::ErrorCode::NotPermitted.into()),
+    }
+}
+
+fn descriptor_guest_path<Ctx: WorkerCtx, U: 'static>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+    fd: &Resource<Descriptor>,
+    relative: &str,
+) -> FilesystemResult<CanonicalGuestPath> {
+    accessor
+        .with(|mut access| guest_path_from_access::<Ctx, U>(&mut access, fd))
+        .map_err(FilesystemError::trap)?
+        .resolve(relative)
+        .map_err(|_| types::ErrorCode::NotPermitted.into())
+}
 
 struct FilesystemWriteChunk {
     contents: Vec<u8>,
@@ -150,6 +262,7 @@ struct FilesystemWriteTask<Ctx> {
     chunks_rx: tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
     result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
     activity: TailActivity,
+    _authorization: Option<LiveAuthorizationPermit>,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
@@ -160,6 +273,7 @@ impl<Ctx> FilesystemWriteTask<Ctx> {
         chunks_rx: tokio::sync::mpsc::UnboundedReceiver<FilesystemWriteChunk>,
         result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
         activity: TailActivity,
+        authorization: Option<LiveAuthorizationPermit>,
     ) -> Self {
         Self {
             file,
@@ -167,6 +281,7 @@ impl<Ctx> FilesystemWriteTask<Ctx> {
             chunks_rx,
             result_tx,
             activity,
+            _authorization: authorization,
             _phantom: PhantomData,
         }
     }
@@ -184,6 +299,7 @@ where
             mut chunks_rx,
             result_tx,
             activity,
+            _authorization,
             _phantom,
         } = self;
         let result = run_streaming_filesystem_write::<Ctx, U>(
@@ -199,47 +315,6 @@ where
         }
         Ok(())
     }
-}
-
-fn descriptor_path_from_accessor<Ctx: WorkerCtx, U>(
-    store: &Accessor<U, DurableP3<Ctx>>,
-    fd: &Resource<Descriptor>,
-) -> wasmtime::Result<PathBuf>
-where
-    U: 'static,
-{
-    store.with(|mut access| {
-        let mut filesystem = Access::<U, WasiFilesystem>::new(
-            access.as_context_mut(),
-            wasi_filesystem_view::<Ctx, U>,
-        );
-        let descriptor = filesystem.get().table.get(fd)?;
-        Ok(match descriptor {
-            Descriptor::File(file) => file.path.clone(),
-            Descriptor::Dir(dir) => dir.path.clone(),
-        })
-    })
-}
-
-fn descriptor_path_at_from_accessor<Ctx: WorkerCtx, U>(
-    store: &Accessor<U, DurableP3<Ctx>>,
-    fd: &Resource<Descriptor>,
-    path: &str,
-) -> wasmtime::Result<PathBuf>
-where
-    U: 'static,
-{
-    store.with(|mut access| {
-        let mut filesystem = Access::<U, WasiFilesystem>::new(
-            access.as_context_mut(),
-            wasi_filesystem_view::<Ctx, U>,
-        );
-        let descriptor = filesystem.get().table.get(fd)?;
-        Ok(match descriptor {
-            Descriptor::File(file) => file.path.join(path),
-            Descriptor::Dir(dir) => dir.path.join(path),
-        })
-    })
 }
 
 fn file_from_access<Ctx: WorkerCtx, U>(
@@ -368,6 +443,22 @@ fn deserialize_stat_error(error: SerializableP3FileSystemError) -> FilesystemErr
         SerializableP3FileSystemError::Generic(error) => {
             FilesystemError::trap(wasmtime::Error::msg(error))
         }
+    }
+}
+
+fn serialize_write_admission_error(error: types::ErrorCode) -> SerializableP3FileSystemError {
+    SerializableP3FileSystemError::from_result(Ok(error))
+}
+
+fn deserialize_write_admission(
+    result: Result<(), SerializableP3FileSystemError>,
+) -> wasmtime::Result<Result<(), types::ErrorCode>> {
+    match result {
+        Ok(()) => Ok(Ok(())),
+        Err(SerializableP3FileSystemError::ErrorCode(error)) => {
+            Ok(Err(types::ErrorCode::from(error)))
+        }
+        Err(SerializableP3FileSystemError::Generic(error)) => Err(wasmtime::Error::msg(error)),
     }
 }
 
@@ -813,6 +904,7 @@ impl<Ctx: WorkerCtx> types::Host for DurableP3View<'_, Ctx> {
 impl<Ctx: WorkerCtx> types::HostDescriptor for DurableP3View<'_, Ctx> {
     fn drop(&mut self, fd: Resource<Descriptor>) -> wasmtime::Result<()> {
         observe_function_call(&*self.0, "filesystem::types::descriptor", "drop");
+        forget_descriptor_path(self.0.durable_ctx(), fd.rep());
         types::HostDescriptor::drop(&mut WasiFilesystemView::filesystem(self.0), fd)
     }
 }
@@ -820,7 +912,14 @@ impl<Ctx: WorkerCtx> types::HostDescriptor for DurableP3View<'_, Ctx> {
 impl<Ctx: WorkerCtx> preopens::Host for DurableP3View<'_, Ctx> {
     fn get_directories(&mut self) -> wasmtime::Result<Vec<(Resource<Descriptor>, String)>> {
         observe_function_call(&*self.0, "filesystem::preopens", "get-directories");
-        preopens::Host::get_directories(&mut WasiFilesystemView::filesystem(self.0))
+        let directories =
+            preopens::Host::get_directories(&mut WasiFilesystemView::filesystem(self.0))?;
+        for (descriptor, guest_path) in &directories {
+            let path = CanonicalGuestPath::new(if guest_path == "." { "/" } else { guest_path })
+                .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
+            remember_descriptor_path(self.0.durable_ctx(), descriptor.rep(), path);
+        }
+        Ok(directories)
     }
 }
 
@@ -830,6 +929,21 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         offset: types::Filesize,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
+        let path = descriptor_guest_path::<Ctx, U>(accessor, &fd, "")?;
+        if let Err(error) = authorize_paths(accessor, &[(FilesystemVerb::Read, path)]).await {
+            let code = error
+                .downcast_ref()
+                .cloned()
+                .unwrap_or(types::ErrorCode::NotPermitted);
+            return accessor.with(|mut store| {
+                Ok((
+                    StreamReader::new(&mut store, Vec::<u8>::new())?,
+                    FutureReader::new(&mut store, async move {
+                        Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(Err(code))
+                    })?,
+                ))
+            });
+        }
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -851,6 +965,90 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         data: StreamReader<u8>,
         offset: types::Filesize,
     ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
+        let authorization_result = Arc::new(Mutex::new(None));
+        let authorization_for_start = Arc::clone(&authorization_result);
+        let fd_rep = fd.rep();
+        let mut handle = CallHandle::<
+            P3FilesystemTypesDescriptorWriteViaStream,
+            NotCancellable,
+        >::start_access_with(
+            accessor,
+            durable_worker_ctx::<Ctx, U>,
+            DurableFunctionType::ReadLocal,
+            async move |start| {
+                if start.is_live {
+                    let path = descriptor_guest_path::<Ctx, U>(
+                        accessor,
+                        &Resource::new_borrow(fd_rep),
+                        "",
+                    );
+                    let result = match path {
+                        Ok(path) => authorize_paths(
+                            accessor,
+                            &[(FilesystemVerb::Write, path)],
+                        )
+                        .await
+                        .map_err(|_| ()),
+                        Err(_) => Err(()),
+                    };
+                    *authorization_for_start.lock().unwrap() = Some(result);
+                }
+                Ok(HostRequestNoInput {})
+            },
+        )
+        .await
+        .map_err(wasmtime::Error::from)?;
+        let mut authorization_permit = None;
+        let response = if handle.is_live() {
+            let result = authorization_result
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or(Err(()));
+            let response = match result {
+                Ok(permit) => {
+                    authorization_permit = permit;
+                    HostResponseP3FileSystemWriteAdmission { result: Ok(()) }
+                }
+                Err(()) => HostResponseP3FileSystemWriteAdmission {
+                    result: Err(serialize_write_admission_error(
+                        types::ErrorCode::NotPermitted,
+                    )),
+                },
+            };
+            handle
+                .complete_access(accessor, durable_worker_ctx::<Ctx, U>, response)
+                .await
+                .map_err(wasmtime::Error::from)?
+        } else {
+            match handle
+                .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
+                .await
+                .map_err(wasmtime::Error::from)?
+            {
+                CallReplayOutcome::Replayed(response) => response,
+                CallReplayOutcome::Incomplete(live) => {
+                    handle = live;
+                    handle
+                        .complete_access(
+                            accessor,
+                            durable_worker_ctx::<Ctx, U>,
+                            HostResponseP3FileSystemWriteAdmission { result: Ok(()) },
+                        )
+                        .await
+                        .map_err(wasmtime::Error::from)?
+                }
+            }
+        };
+        if let Err(error) = deserialize_write_admission(response.result)? {
+            let mut data = data;
+            accessor.with(|mut store| data.close(&mut store))?;
+            return accessor.with(|mut store| {
+                FutureReader::new(&mut store, async move {
+                    Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(Err(error))
+                })
+            });
+        }
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -886,6 +1084,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 chunks_rx,
                 result_tx,
                 activity,
+                authorization_permit,
             ));
 
             FutureReader::new(&mut store, wait_filesystem_task_result(result_rx))
@@ -897,6 +1096,90 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         data: StreamReader<u8>,
     ) -> wasmtime::Result<FutureReader<Result<(), types::ErrorCode>>> {
+        let authorization_result = Arc::new(Mutex::new(None));
+        let authorization_for_start = Arc::clone(&authorization_result);
+        let fd_rep = fd.rep();
+        let mut handle = CallHandle::<
+            P3FilesystemTypesDescriptorAppendViaStream,
+            NotCancellable,
+        >::start_access_with(
+            accessor,
+            durable_worker_ctx::<Ctx, U>,
+            DurableFunctionType::ReadLocal,
+            async move |start| {
+                if start.is_live {
+                    let path = descriptor_guest_path::<Ctx, U>(
+                        accessor,
+                        &Resource::new_borrow(fd_rep),
+                        "",
+                    );
+                    let result = match path {
+                        Ok(path) => authorize_paths(
+                            accessor,
+                            &[(FilesystemVerb::Write, path)],
+                        )
+                        .await
+                        .map_err(|_| ()),
+                        Err(_) => Err(()),
+                    };
+                    *authorization_for_start.lock().unwrap() = Some(result);
+                }
+                Ok(HostRequestNoInput {})
+            },
+        )
+        .await
+        .map_err(wasmtime::Error::from)?;
+        let mut authorization_permit = None;
+        let response = if handle.is_live() {
+            let result = authorization_result
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or(Err(()));
+            let response = match result {
+                Ok(permit) => {
+                    authorization_permit = permit;
+                    HostResponseP3FileSystemWriteAdmission { result: Ok(()) }
+                }
+                Err(()) => HostResponseP3FileSystemWriteAdmission {
+                    result: Err(serialize_write_admission_error(
+                        types::ErrorCode::NotPermitted,
+                    )),
+                },
+            };
+            handle
+                .complete_access(accessor, durable_worker_ctx::<Ctx, U>, response)
+                .await
+                .map_err(wasmtime::Error::from)?
+        } else {
+            match handle
+                .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
+                .await
+                .map_err(wasmtime::Error::from)?
+            {
+                CallReplayOutcome::Replayed(response) => response,
+                CallReplayOutcome::Incomplete(live) => {
+                    handle = live;
+                    handle
+                        .complete_access(
+                            accessor,
+                            durable_worker_ctx::<Ctx, U>,
+                            HostResponseP3FileSystemWriteAdmission { result: Ok(()) },
+                        )
+                        .await
+                        .map_err(wasmtime::Error::from)?
+                }
+            }
+        };
+        if let Err(error) = deserialize_write_admission(response.result)? {
+            let mut data = data;
+            accessor.with(|mut store| data.close(&mut store))?;
+            return accessor.with(|mut store| {
+                FutureReader::new(&mut store, async move {
+                    Ok::<Result<(), types::ErrorCode>, wasmtime::Error>(Err(error))
+                })
+            });
+        }
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -932,6 +1215,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 chunks_rx,
                 result_tx,
                 activity,
+                authorization_permit,
             ));
 
             FutureReader::new(&mut store, wait_filesystem_task_result(result_rx))
@@ -963,6 +1247,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         store: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
     ) -> FilesystemResult<()> {
+        let path = descriptor_guest_path::<Ctx, U>(store, &fd, "")?;
+        authorize_paths(store, &[(FilesystemVerb::Write, path)]).await?;
         store.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1023,6 +1309,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         size: types::Filesize,
     ) -> FilesystemResult<()> {
+        let path = descriptor_guest_path::<Ctx, U>(accessor, &fd, "")?;
+        authorize_paths(accessor, &[(FilesystemVerb::Write, path)]).await?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1069,6 +1357,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         data_access_timestamp: types::NewTimestamp,
         data_modification_timestamp: types::NewTimestamp,
     ) -> FilesystemResult<()> {
+        let path = descriptor_guest_path::<Ctx, U>(accessor, &fd, "")?;
+        authorize_paths(accessor, &[(FilesystemVerb::Write, path)]).await?;
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
@@ -1094,6 +1384,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         StreamReader<types::DirectoryEntry>,
         FutureReader<Result<(), types::ErrorCode>>,
     )> {
+        let path = descriptor_guest_path::<Ctx, U>(accessor, &fd, "")?;
+        let denied = authorize_paths(accessor, &[(FilesystemVerb::List, path)])
+            .await
+            .is_err();
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1107,8 +1401,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         // order or concurrent directory mutations after this call returns. The
         // entries are not recorded in the oplog: on replay the guest re-lists
         // the reconstructed worker filesystem.
-        let dir_result =
-            accessor.with(|mut store| dir_result_from_access::<Ctx, U>(&mut store, &fd))?;
+        let dir_result = if denied {
+            Err(types::ErrorCode::NotPermitted)
+        } else {
+            accessor.with(|mut store| dir_result_from_access::<Ctx, U>(&mut store, &fd))?
+        };
         let (entries, result) = match dir_result {
             Ok(dir) => {
                 if !dir.perms.contains(DirPerms::READ) {
@@ -1146,6 +1443,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
     }
 
     async fn sync(store: &Accessor<U, Self>, fd: Resource<Descriptor>) -> FilesystemResult<()> {
+        let path = descriptor_guest_path::<Ctx, U>(store, &fd, "")?;
+        authorize_paths(store, &[(FilesystemVerb::Write, path)]).await?;
         store.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1162,6 +1461,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
+        let target = descriptor_guest_path::<Ctx, U>(store, &fd, &path)?;
+        authorize_paths(store, &[(FilesystemVerb::Write, target)]).await?;
         store.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1178,8 +1479,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         store: &Accessor<U, Self>,
         fd: Resource<Descriptor>,
     ) -> FilesystemResult<types::DescriptorStat> {
-        let path =
-            descriptor_path_from_accessor::<Ctx, U>(store, &fd).map_err(FilesystemError::trap)?;
+        let guest_path = descriptor_guest_path::<Ctx, U>(store, &fd, "")?;
+        authorize_paths(store, &[(FilesystemVerb::Stat, guest_path.clone())]).await?;
+        let path = PathBuf::from(guest_path.as_str());
         let fd_rep = fd.rep();
         let live_stat = Arc::new(Mutex::new(None));
         let live_stat_for_call = Arc::clone(&live_stat);
@@ -1215,8 +1517,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         path_flags: types::PathFlags,
         path: String,
     ) -> FilesystemResult<types::DescriptorStat> {
-        let full_path = descriptor_path_at_from_accessor::<Ctx, U>(store, &fd, &path)
-            .map_err(FilesystemError::trap)?;
+        let guest_path = descriptor_guest_path::<Ctx, U>(store, &fd, &path)?;
+        authorize_paths(store, &[(FilesystemVerb::Stat, guest_path.clone())]).await?;
+        let full_path = PathBuf::from(guest_path.as_str());
         let fd_rep = fd.rep();
         let live_stat = Arc::new(Mutex::new(None));
         let live_stat_for_call = Arc::clone(&live_stat);
@@ -1263,6 +1566,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         data_access_timestamp: types::NewTimestamp,
         data_modification_timestamp: types::NewTimestamp,
     ) -> FilesystemResult<()> {
+        let target = descriptor_guest_path::<Ctx, U>(accessor, &fd, &path)?;
+        authorize_paths(accessor, &[(FilesystemVerb::Write, target)]).await?;
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
@@ -1291,6 +1596,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> FilesystemResult<()> {
+        let source = descriptor_guest_path::<Ctx, U>(store, &fd, &old_path)?;
+        let destination = descriptor_guest_path::<Ctx, U>(store, &new_fd, &new_path)?;
+        authorize_paths(
+            store,
+            &[
+                (FilesystemVerb::Read, source),
+                (FilesystemVerb::Write, destination),
+            ],
+        )
+        .await?;
         store.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1318,6 +1633,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         open_flags: types::OpenFlags,
         flags: types::DescriptorFlags,
     ) -> FilesystemResult<Resource<Descriptor>> {
+        let target = descriptor_guest_path::<Ctx, U>(accessor, &fd, &path)?;
+        let mut requests = Vec::new();
+        if flags.contains(types::DescriptorFlags::READ) {
+            requests.push((FilesystemVerb::Read, target.clone()));
+        }
+        if flags.contains(types::DescriptorFlags::WRITE)
+            || open_flags.intersects(types::OpenFlags::CREATE | types::OpenFlags::TRUNCATE)
+        {
+            requests.push((FilesystemVerb::Write, target.clone()));
+        }
+        if open_flags.contains(types::OpenFlags::DIRECTORY) {
+            requests.push((FilesystemVerb::List, target.clone()));
+        }
+        authorize_paths(accessor, &requests).await?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1348,6 +1677,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .await
         };
 
+        if let Ok(descriptor) = &result {
+            accessor.with(|mut access| {
+                remember_descriptor_path(
+                    durable_worker_ctx::<Ctx, U>(access.data_mut()),
+                    descriptor.rep(),
+                    target,
+                )
+            });
+        }
         if result.is_ok() && truncated_size > 0 {
             release_filesystem_write_storage::<Ctx, U>(accessor, truncated_size)
                 .await
@@ -1362,6 +1700,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<String> {
+        let target = descriptor_guest_path::<Ctx, U>(store, &fd, &path)?;
+        authorize_paths(store, &[(FilesystemVerb::Stat, target)]).await?;
         store.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1378,6 +1718,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
+        let target = descriptor_guest_path::<Ctx, U>(store, &fd, &path)?;
+        authorize_paths(store, &[(FilesystemVerb::Delete, target)]).await?;
         store.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1397,6 +1739,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> FilesystemResult<()> {
+        let source = descriptor_guest_path::<Ctx, U>(accessor, &fd, &old_path)?;
+        let destination = descriptor_guest_path::<Ctx, U>(accessor, &new_fd, &new_path)?;
+        authorize_paths(
+            accessor,
+            &[
+                (FilesystemVerb::Delete, source),
+                (FilesystemVerb::Write, destination),
+            ],
+        )
+        .await?;
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &new_fd)?;
         accessor.with(|mut access| {
@@ -1419,6 +1771,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         old_path: String,
         new_path: String,
     ) -> FilesystemResult<()> {
+        let destination = descriptor_guest_path::<Ctx, U>(accessor, &fd, &new_path)?;
+        authorize_paths(accessor, &[(FilesystemVerb::Write, destination)]).await?;
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
@@ -1439,6 +1793,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
+        let target = descriptor_guest_path::<Ctx, U>(accessor, &fd, &path)?;
+        authorize_paths(accessor, &[(FilesystemVerb::Delete, target)]).await?;
         fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
         // Stat the file before unlinking so the freed bytes can be credited back
         // to the storage quota on success, matching WASI P2. The release helper
@@ -1586,6 +1942,30 @@ mod tests {
             error.downcast().unwrap(),
             types::ErrorCode::Overflow
         ));
+    }
+
+    #[test]
+    fn p3_fs_guest_paths_are_canonicalized_without_host_paths() {
+        let root = CanonicalGuestPath::new("/").unwrap();
+        assert_eq!(
+            root.resolve("data/./items/../file").unwrap().as_str(),
+            "/data/file"
+        );
+        let dot_preopen = CanonicalGuestPath::new("/").unwrap();
+        assert_eq!(
+            dot_preopen.resolve("tmp/value").unwrap().as_str(),
+            "/tmp/value"
+        );
+    }
+
+    #[test]
+    fn p3_fs_guest_path_traversal_cannot_escape_root() {
+        let root = CanonicalGuestPath::new("/").unwrap();
+        assert!(root.resolve("../host-secret").is_err());
+        let nested = CanonicalGuestPath::new("/data").unwrap();
+        assert!(nested.resolve("../host-secret").is_err());
+        assert!(nested.resolve("../../host-secret").is_err());
+        assert!(nested.resolve("/host-secret").is_err());
     }
 
     #[test]

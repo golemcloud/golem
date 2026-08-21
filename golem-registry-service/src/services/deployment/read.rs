@@ -506,7 +506,7 @@ impl DeploymentService {
                 agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent_type_name.clone()),
             },
             verb: Some(AgentVerb::View),
-            resource: AgentResourcePattern::Any,
+            resource: AgentResourcePattern::Empty,
         }))
         .map_err(|_| DeploymentError::AgentTypeNotFound(agent_type_name.0.clone()))?;
 

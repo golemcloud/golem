@@ -14,6 +14,7 @@
 
 mod invocation;
 
+use crate::durable_host::agent_monomorphization_context;
 use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
@@ -31,7 +32,10 @@ use crate::services::{
     HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService,
     UsesAllDeps,
 };
-use crate::worker::Worker;
+pub use crate::worker::{
+    PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+};
+use crate::worker::{Worker, resolve_revert_last_invocations};
 use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, Utc};
 use futures::Stream;
@@ -42,27 +46,33 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::Wo
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
     CancelInvocationResponse, ConnectWorkerRequest, DeactivatePluginRequest,
-    DeactivatePluginResponse, DeleteWorkerRequest, ForkWorkerRequest, ForkWorkerResponse,
-    GetAgentWalletRequest, GetAgentWalletResponse, GetAgentWalletSuccess, GetFileContentsRequest,
-    GetFileContentsResponse, GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest,
-    GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAgentRequest, InvokeAgentResponse,
-    ProcessOplogEntriesRequest, ProcessOplogEntriesResponse, RevertWorkerRequest,
-    RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse, process_oplog_entries_response,
+    DeactivatePluginResponse, DeleteWorkerRequest, DeliverCardTransferRequest,
+    DeliverCardTransferResponse, ForkWorkerRequest, ForkWorkerResponse, GetAgentWalletRequest,
+    GetAgentWalletResponse, GetAgentWalletSuccess, GetFileContentsRequest, GetFileContentsResponse,
+    GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse,
+    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, InvokeAgentRequest, InvokeAgentResponse,
+    ProcessOplogEntriesRequest, ProcessOplogEntriesResponse, ResolveRevertLastInvocationsRequest,
+    ResolveRevertLastInvocationsResponse, RevertWorkerRequest, RevertWorkerResponse,
+    SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    deliver_card_transfer_response, process_oplog_entries_response,
+    resolve_revert_last_invocations_response,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
 };
+use golem_common::model::card::{CardId, ScopeCard, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
-use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAgentConfigEntry};
+use golem_common::model::worker::{
+    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, TypedAgentConfigEntry,
+};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
@@ -568,6 +578,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let principal = extract_principal(&request.principal);
 
+        let resolved_revert = request.resolved_revert.map(|resolved| ResolvedRevert {
+            last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
+            observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
+        });
+
         let target = request
             .target
             .ok_or(WorkerExecutorError::invalid_request("target not found"))?;
@@ -591,13 +606,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     principal,
                 )
                 .await?;
-                worker.revert(target).await?;
+                worker.revert(target, resolved_revert).await?;
                 Ok(())
             }
             None => Err(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             )),
         }
+    }
+
+    async fn resolve_revert_last_invocations_internal(
+        &self,
+        request: ResolveRevertLastInvocationsRequest,
+    ) -> Result<ResolvedRevert, WorkerExecutorError> {
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        Self::validate_auth_ctx(&request.auth_ctx)?;
+
+        let agent_mode = self
+            .worker_service()
+            .get_agent_mode(&owned_agent_id)
+            .await
+            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+
+        resolve_revert_last_invocations(
+            self.oplog_service().as_ref(),
+            &owned_agent_id,
+            agent_mode,
+            request.number_of_invocations,
+        )
+        .await
     }
 
     async fn cancel_invocation_internal(
@@ -1911,6 +1951,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let mode = request.mode();
 
+        let scope_card: Option<ScopeCard> = request
+            .scope_card
+            .clone()
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(WorkerExecutorError::permission_denied)?;
+        if scope_card.is_some()
+            && mode != golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await
+        {
+            return Err(WorkerExecutorError::permission_denied(
+                "scope cards are supported only for invoke-and-await",
+            ));
+        }
+
         let ik = idempotency_key.unwrap_or(IdempotencyKey::fresh());
         let final_agent_id: AgentId = request
             .agent_id
@@ -2018,6 +2072,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             input: method_parameters,
             invocation_context,
             principal,
+            scope_card,
         };
 
         match mode {
@@ -2143,7 +2198,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
-        Self::validate_auth_ctx(&request.auth_ctx)?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {error}"))
+            })?;
+        auth_ctx
+            .authorize_system_only("process oplog entries")
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
 
         let component_revision: golem_common::model::component::ComponentRevision =
             request.component_revision.try_into().map_err(|e| {
@@ -2219,6 +2284,82 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
 
         Ok(())
+    }
+
+    async fn deliver_card_transfer_internal(
+        &self,
+        request: DeliverCardTransferRequest,
+    ) -> Result<(), WorkerExecutorError> {
+        let owned_agent_id = extract_owned_agent_id(
+            &request,
+            |request| &request.target_agent_id,
+            |request| &request.environment_id,
+        )?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {error}"))
+            })?;
+        auth_ctx
+            .authorize_system_only("deliver permission card transfer")
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+
+        let transfer_id: uuid::Uuid = request
+            .transfer_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "transfer_id not found",
+            ))?
+            .into();
+        let source_card_id = CardId(
+            request
+                .source_card_id
+                .ok_or(WorkerExecutorError::invalid_request(
+                    "source_card_id not found",
+                ))?
+                .into(),
+        );
+        let card: StoredCard = std::panic::catch_unwind(|| desert_rust::deserialize(&request.card))
+            .map_err(|_| WorkerExecutorError::invalid_request("invalid card: malformed payload"))?
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("invalid card: {error}"))
+            })?;
+
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        if Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
+            .await
+            .is_none()
+        {
+            let component = self
+                .component_service()
+                .get_metadata(owned_agent_id.agent_id.component_id, None)
+                .await?;
+            let parsed_agent_id =
+                ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
+                    .map_err(|error| {
+                        WorkerExecutorError::invalid_request(format!("Invalid agent id: {error}"))
+                    })?;
+            let target_context =
+                agent_monomorphization_context(&component, &owned_agent_id, &parsed_agent_id);
+            if !card_matches_agent_recipient(&card, &target_context) {
+                return Err(WorkerExecutorError::invalid_request(
+                    PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH,
+                ));
+            }
+        }
+
+        let worker = self
+            .get_or_create_pending_with_freshness(
+                &request,
+                InvocationFreshnessDisposition::MayExist,
+            )
+            .await?;
+        worker
+            .receive_card_transfer(transfer_id, source_card_id, card)
+            .await
     }
 
     fn create_proto_metadata(
@@ -2957,6 +3098,44 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    async fn resolve_revert_last_invocations(
+        &self,
+        request: Request<ResolveRevertLastInvocationsRequest>,
+    ) -> Result<Response<ResolveRevertLastInvocationsResponse>, Status> {
+        let request = request.into_inner();
+
+        let record = recorded_grpc_api_request!(
+            "resolve_revert_last_invocations",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+
+        let result = self
+            .resolve_revert_last_invocations_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(resolved) => {
+                record.succeed(Ok(Response::new(ResolveRevertLastInvocationsResponse {
+                    result: Some(resolve_revert_last_invocations_response::Result::Success(
+                        golem::common::ResolvedRevert {
+                            last_oplog_index: resolved.last_oplog_index.as_u64(),
+                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
+                        },
+                    )),
+                })))
+            }
+            Err(mut err) => record.fail(
+                Ok(Response::new(ResolveRevertLastInvocationsResponse {
+                    result: Some(resolve_revert_last_invocations_response::Result::Failure(
+                        err.clone().into(),
+                    )),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
     async fn cancel_invocation(
         &self,
         request: Request<CancelInvocationRequest>,
@@ -3276,6 +3455,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     )),
                 })),
                 &mut err,
+            ),
+        }
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        request: Request<DeliverCardTransferRequest>,
+    ) -> ResponseResult<DeliverCardTransferResponse> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "deliver_card_transfer",
+            agent_id = proto_agent_id_string(&request.target_agent_id),
+        );
+
+        let result = self
+            .deliver_card_transfer_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(()) => record.succeed(Ok(Response::new(DeliverCardTransferResponse {
+                result: Some(deliver_card_transfer_response::Result::Success(
+                    golem::common::Empty {},
+                )),
+            }))),
+            Err(mut error) => record.fail(
+                Ok(Response::new(DeliverCardTransferResponse {
+                    result: Some(deliver_card_transfer_response::Result::Failure(
+                        error.clone().into(),
+                    )),
+                })),
+                &mut error,
             ),
         }
     }

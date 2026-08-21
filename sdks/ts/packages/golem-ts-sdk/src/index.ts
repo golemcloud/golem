@@ -19,7 +19,6 @@ import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
 import {
-  deepEqual,
   schemaValueFromWit,
   t,
   typedSchemaValueFromWit,
@@ -35,7 +34,7 @@ import { encodeMultipart, decodeMultipart } from './internal/multipart';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
-import type { SchemaCodec } from './schema/codec';
+import { sourceValueIsCanonical, type SchemaCodec } from './schema/codec';
 import { awaitAbortable, throwIfAborted } from './internal/pollableUtils';
 import './schema/zod';
 import './schema/valibot';
@@ -82,7 +81,12 @@ export { method } from './method';
 export type { InputRecord, MethodSpec } from './method';
 export type { StandardSchemaV1 } from './schema/standardSchema';
 export { Bytes, KeyValue, Path, Quantity, s } from './schema/markers';
-export type { KeyValueOptions, PathOptions, QuantityOptions } from './schema/markers';
+export type {
+  KeyValueOptions,
+  PathOptions,
+  PermissionCardOptions,
+  QuantityOptions,
+} from './schema/markers';
 export { registerSchemaWalker, registeredVendors, compileSchema } from './schema/adapter';
 export type { SchemaCodec, SchemaWalker } from './schema/codec';
 export {
@@ -386,7 +390,7 @@ function encodeToolValue(codec: SchemaCodec, value: unknown, position: string): 
     if (!schemaValueConforms(codec.graph, codec.graph.root, encoded)) {
       throw new Error('does not match its declared schema');
     }
-    if (!deepEqual(codec.fromValue(encoded), value)) {
+    if (!sourceValueIsCanonical(codec, value, encoded)) {
       throw new Error('is not canonical for its declared schema');
     }
     return typedSchemaValueToWit({ graph: codec.graph, value: encoded });

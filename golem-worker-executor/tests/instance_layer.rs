@@ -221,6 +221,7 @@ async fn invoke_sleep_p3(
         input: data_value!(seconds).value().clone(),
         invocation_context: InvocationContextStack::fresh(),
         principal,
+        scope_card: None,
     };
     let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
     let result =
@@ -256,6 +257,7 @@ async fn invoke_entity_method(
         input,
         invocation_context: InvocationContextStack::fresh(),
         principal,
+        scope_card: None,
     };
     let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
     match invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await? {
@@ -1777,9 +1779,12 @@ async fn filesystem_capable_entity_stream_reconstructs_on_clean_owner_replay(
     );
     active_agent
         .execution()
-        .install_replay_generation(DeletedRegions::from_regions([
-            OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=parent_start),
-        ]))
+        .install_replay_generation(
+            DeletedRegions::from_regions([OplogRegion::from_index_range(
+                OplogIndex::INITIAL.next()..=parent_start,
+            )]),
+            None,
+        )
         .await?;
 
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;

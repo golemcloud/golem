@@ -37,6 +37,7 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
+use golem_service_base::model::auth::AuthCtx;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display};
 use std::future::Future;
@@ -1847,17 +1848,51 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
-impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
-    fn observe_function_call(&self, interface: &str, function: &str) {
-        record_host_function_call(interface, function);
-    }
-
-    async fn begin_durable_function(
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(crate) async fn begin_durable_function_with_agent_authority(
         &mut self,
         function_type: &DurableFunctionType,
         host_function: &str,
-    ) -> Result<OplogIndex, WorkerExecutorError> {
+    ) -> Result<(OplogIndex, Option<AuthCtx>), WorkerExecutorError> {
+        self.begin_durable_function_with_agent_authority_capture(
+            function_type,
+            host_function,
+            |ctx| ctx.agent_auth_ctx(),
+        )
+        .await
+    }
+
+    pub(crate) async fn begin_durable_function_with_agent_authority_capture<T>(
+        &mut self,
+        function_type: &DurableFunctionType,
+        host_function: &str,
+        mut capture: impl FnMut(&mut Self) -> T,
+    ) -> Result<(OplogIndex, Option<T>), WorkerExecutorError> {
+        self.check_durable_function_allowed(function_type, host_function)?;
+        let mut captured = self
+            .capture_live_agent_authority_at_boundary(&mut capture)
+            .await?;
+        let begin_index = self.begin_function(function_type).await?;
+        if captured.is_none() {
+            if self.state.snapshotting_mode && self.state.is_replay() {
+                // Snapshot loading executes guest code without durable host-call records while
+                // replay is positioned at the snapshot. Use the authority reconstructed from the
+                // persisted snapshot rather than consulting current card state.
+                captured = Some(capture(self));
+            } else if self.state.is_live() {
+                captured = self
+                    .capture_live_agent_authority_at_boundary(&mut capture)
+                    .await?;
+            }
+        }
+        Ok((begin_index, captured))
+    }
+
+    fn check_durable_function_allowed(
+        &self,
+        function_type: &DurableFunctionType,
+        host_function: &str,
+    ) -> Result<(), WorkerExecutorError> {
         // Generic read-only side-effect trap. For any `Write*` durable function type, refuse
         // the call up front when the worker is executing a read-only agent method. This is the
         // single, central place that enforces the read-only contract — outgoing HTTP, RPC,
@@ -1880,11 +1915,24 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             });
         }
 
-        self.process_pending_replay_events().await?;
-        self.drain_card_events_at_boundary().await?;
+        Ok(())
+    }
+}
 
-        let oplog_index = self.begin_function(function_type).await?;
-        Ok(oplog_index)
+#[async_trait]
+impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
+    fn observe_function_call(&self, interface: &str, function: &str) {
+        record_host_function_call(interface, function);
+    }
+
+    async fn begin_durable_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        host_function: &str,
+    ) -> Result<OplogIndex, WorkerExecutorError> {
+        self.check_durable_function_allowed(function_type, host_function)?;
+        self.synchronize_agent_wallet_at_boundary().await?;
+        self.begin_function(function_type).await
     }
 
     async fn end_durable_function(

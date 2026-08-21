@@ -177,6 +177,11 @@ impl OplogEntry {
             | OplogEntry::CardInstallFailed { .. }
             | OplogEntry::CardRevoked { .. }
             | OplogEntry::CardExpired { .. }
+            | OplogEntry::CardDerived { .. }
+            | OplogEntry::CardTransferStarted { .. }
+            | OplogEntry::CardTransferred { .. }
+            | OplogEntry::CardRevokedCascade { .. }
+            | OplogEntry::CardTransferConfirmed { .. }
             | OplogEntry::HostStreamFrame { .. } => true,
         }
     }
@@ -255,6 +260,11 @@ impl OplogEntry {
             | OplogEntry::CardInstallFailed { .. }
             | OplogEntry::CardRevoked { .. }
             | OplogEntry::CardExpired { .. }
+            | OplogEntry::CardDerived { .. }
+            | OplogEntry::CardTransferStarted { .. }
+            | OplogEntry::CardTransferred { .. }
+            | OplogEntry::CardRevokedCascade { .. }
+            | OplogEntry::CardTransferConfirmed { .. }
             | OplogEntry::HostStreamFrame { .. } => None,
         }
     }
@@ -405,7 +415,12 @@ impl OplogScopeProjection {
             | OplogEntry::CardInstalled { .. }
             | OplogEntry::CardInstallFailed { .. }
             | OplogEntry::CardRevoked { .. }
-            | OplogEntry::CardExpired { .. } => false,
+            | OplogEntry::CardExpired { .. }
+            | OplogEntry::CardDerived { .. }
+            | OplogEntry::CardTransferStarted { .. }
+            | OplogEntry::CardTransferred { .. }
+            | OplogEntry::CardRevokedCascade { .. }
+            | OplogEntry::CardTransferConfirmed { .. } => false,
         };
         self.previous_index = Some(index);
         self.previous_included_start = included_start.then_some(index);

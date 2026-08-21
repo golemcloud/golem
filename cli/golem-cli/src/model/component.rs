@@ -30,9 +30,11 @@ use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
-use golem_common::model::card::PolymorphicCard;
-use golem_common::model::card::PolymorphicManifestPermissionPattern;
 use golem_common::model::card::recipient::{RecipientMonomorphizationContext, RecipientPattern};
+use golem_common::model::card::{
+    PolymorphicCard, PolymorphicManifestPermissionPattern,
+    parse_polymorphic_manifest_permission_grant, parse_polymorphic_permission,
+};
 use golem_common::model::component::{
     AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision,
 };
@@ -56,7 +58,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::str::FromStr;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedInitialPermissionCard {
@@ -112,10 +113,11 @@ fn parse_manifest_grants(
     grants
         .into_iter()
         .map(|grant| {
-            PolymorphicManifestPermissionPattern::from_str(&grant)
+            parse_polymorphic_manifest_permission_grant(&grant)
                 .map_err(|err| anyhow::anyhow!("invalid grant '{}': {}", grant, err))
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map(|grants| grants.into_iter().flatten().collect())
 }
 
 pub enum ComponentRevisionSelection<'a> {
@@ -288,14 +290,39 @@ impl AgentTypeManifestProvisionConfig {
         &self,
         context: &RecipientMonomorphizationContext,
     ) -> AgentTypeInitialPermissions {
-        self.initial_card
+        let mut permissions = self
+            .initial_card
             .clone()
             .map(|card| card.resolve_recipients(context))
             .unwrap_or_else(|| {
                 AgentTypeInitialPermissions::default_for_recipient(initial_permission_recipient(
                     context,
                 ))
-            })
+            });
+        let recipient = initial_permission_recipient(context).render();
+        for file in &self.files {
+            let path = file.target_path.as_abs_str();
+            let descendants = if path == "/" {
+                "/**".to_string()
+            } else {
+                format!("{path}/**")
+            };
+            let verbs: &[&str] = match file.permissions.unwrap_or_default() {
+                AgentFilePermissions::ReadOnly => &["read", "stat", "list"],
+                AgentFilePermissions::ReadWrite => &["read", "stat", "list", "write", "delete"],
+            };
+            for verb in verbs {
+                for resource in [path, descendants.as_str()] {
+                    permissions.lower_bound.positive.push(
+                        parse_polymorphic_permission(&format!(
+                            "filesystem(?agent) @ {recipient} : {verb} : {resource}"
+                        ))
+                        .expect("canonical initial file path must form a valid permission"),
+                    );
+                }
+            }
+        }
+        permissions
     }
 }
 
@@ -508,7 +535,7 @@ pub fn agent_interface_name(component: &ComponentDto, agent_type_name: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentTypeManifestProvisionConfig, ParsedInitialPermissionCard};
+    use super::{AgentTypeManifestProvisionConfig, ParsedInitialPermissionCard, app_raw};
     use golem_common::model::account::AccountEmail;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::application::ApplicationName;
@@ -520,7 +547,7 @@ mod tests {
     use golem_common::model::card::{
         AgentMethodName, AgentResourcePattern, AgentVerb, PolymorphicManifestPermissionPattern,
     };
-    use golem_common::model::component::ComponentName;
+    use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
     use golem_common::model::environment::EnvironmentName;
     use test_r::test;
 
@@ -587,6 +614,35 @@ mod tests {
     }
 
     #[test]
+    fn initial_permission_card_expands_legacy_agent_debug_alias() {
+        let card = ParsedInitialPermissionCard::from_grant_strings(
+            vec!["agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : debug : *".to_string()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert_eq!(card.lower_positive.len(), 8);
+        assert_eq!(
+            card.lower_positive
+                .iter()
+                .map(|grant| grant.render().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "oplog(?env/payment-svc/PaymentAgent(*)) @ ?agent : read : *",
+                "agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : view : ",
+                "filesystem(?env/payment-svc/PaymentAgent(*)) @ ?agent : read : /**",
+                "env(?env/payment-svc/PaymentAgent(*)) @ ?agent : read : *",
+                "config(?env/payment-svc/PaymentAgent(*)) @ ?agent : read : *",
+                "agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : fork : ",
+                "agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : interrupt : ",
+                "agent(?env/payment-svc/PaymentAgent(*)) @ ?agent : resume : ",
+            ]
+        );
+    }
+
+    #[test]
     fn parsed_initial_permission_card_monomorphizes_recipients() {
         let context = test_context();
 
@@ -626,6 +682,46 @@ mod tests {
                 .positive
                 .iter()
                 .all(|permission| permission.recipient() == &expected)
+        );
+    }
+
+    #[test]
+    fn initial_files_add_matching_filesystem_permissions() {
+        let context = test_context();
+        let config = AgentTypeManifestProvisionConfig {
+            files: vec![app_raw::InitialComponentFile {
+                source_path: "assets".to_string(),
+                target_path: CanonicalFilePath::from_abs_str("/assets").unwrap(),
+                permissions: Some(AgentFilePermissions::ReadWrite),
+            }],
+            ..Default::default()
+        };
+
+        let permissions = config.to_initial_permission(&context);
+        assert!(permissions.upper_bound.positive.is_empty());
+
+        let rendered = permissions
+            .lower_bound
+            .positive
+            .into_iter()
+            .filter_map(|permission| permission.render().ok())
+            .filter(|permission| permission.contains(": /assets"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rendered,
+            vec![
+                "filesystem(?agent) @ account@example.com/shop/prod/cart-svc/Cart : read : /assets",
+                "filesystem(?agent) @ account@example.com/shop/prod/cart-svc/Cart : read : /assets/**",
+                "filesystem(?agent) @ account@example.com/shop/prod/cart-svc/Cart : stat : /assets",
+                "filesystem(?agent) @ account@example.com/shop/prod/cart-svc/Cart : stat : /assets/**",
+                "filesystem(?agent) @ account@example.com/shop/prod/cart-svc/Cart : list : /assets",
+                "filesystem(?agent) @ account@example.com/shop/prod/cart-svc/Cart : list : /assets/**",
+                "filesystem(?agent) @ account@example.com/shop/prod/cart-svc/Cart : write : /assets",
+                "filesystem(?agent) @ account@example.com/shop/prod/cart-svc/Cart : write : /assets/**",
+                "filesystem(?agent) @ account@example.com/shop/prod/cart-svc/Cart : delete : /assets",
+                "filesystem(?agent) @ account@example.com/shop/prod/cart-svc/Cart : delete : /assets/**",
+            ]
         );
     }
 

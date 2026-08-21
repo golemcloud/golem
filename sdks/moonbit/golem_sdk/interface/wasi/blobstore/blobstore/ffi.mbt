@@ -39,15 +39,6 @@ fn wasmImportMoveObject(
 ) = "wasi:blobstore/blobstore" "move-object"
 
 ///|
-#owned(str)
-extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
-
-///|
-extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 call $moonbit.decref)
-
-///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #|(func (param i32) (result i32) (local i32)
   #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
@@ -55,12 +46,17 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #| local.get 1)
 
 ///|
-extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
-
-///|
 extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
+#owned(str)
+extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
+  #|(func (param i32) (result i32) local.get 0)
+
+///|
+extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
 
 ///|
 extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
@@ -68,3 +64,7 @@ extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
   #| local.get 0
   #| local.get 1 call $moonbit.init_array16
   #| local.get 0)
+
+///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32) local.get 0 call $moonbit.decref)

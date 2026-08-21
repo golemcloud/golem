@@ -24,7 +24,9 @@ use golem_common::model::tool::{
     ToolProvisionConfig, ToolSource,
 };
 use golem_common::schema::SchemaGraph;
-use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+use golem_common::schema::tool::{
+    CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, Tool,
+};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
@@ -66,7 +68,17 @@ fn registered_tool(
                     },
                     globals: Globals::default(),
                     subcommands: Vec::new(),
-                    body: None,
+                    body: Some(CommandBody {
+                        positionals: Positionals::default(),
+                        options: Vec::new(),
+                        flags: Vec::new(),
+                        constraints: Vec::new(),
+                        stdin: None,
+                        stdout: None,
+                        result: None,
+                        errors: Vec::new(),
+                        annotations: None,
+                    }),
                 }],
             },
             schema: SchemaGraph::empty(),
@@ -75,10 +87,10 @@ fn registered_tool(
         source: ToolSource::Component {
             component_id,
             component_revision: ComponentRevision::try_from(1_u64).unwrap(),
-            component_name: ComponentName(format!("tools:{name}")),
+            component_name: ComponentName("tool-component".to_string()),
         },
         owner_account_id: AccountId::new(),
-        owner_account_email: AccountEmail::new("owner@example.com"),
+        owner_account_email: AccountEmail::new("test@golem"),
         metadata_version: "0.1.0".to_string(),
     }
 }
@@ -104,7 +116,7 @@ fn binding(
     }
 }
 
-fn deployment_state(
+pub(crate) fn deployment_state(
     agent_type: &AgentTypeName,
     deployment_revision: u64,
     tools: &[(&str, ComponentId, bool)],

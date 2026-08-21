@@ -1562,7 +1562,6 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let db_address = mysql.public_connection_string();
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
@@ -1570,37 +1569,16 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
         .store()
         .await?;
 
-    let workers = start_workers::<MysqlType>(&executor, &component, &db_address, "", 1).await?;
-
-    let (worker_id, agent_id) = workers[0].clone();
-
-    let create_read_user_test = RdbmsTest::new(
-        vec![
-            StatementTest::execute_test(
-                "CREATE USER 'global_reader'@'%' IDENTIFIED BY 'SomeSecurePass!';".to_string(),
-                vec![],
-                None,
-            ),
-            StatementTest::execute_test(
-                "GRANT SELECT ON *.* TO 'global_reader'@'%';".to_string(),
-                vec![],
-                None,
-            ),
-            StatementTest::execute_test("FLUSH PRIVILEGES;".to_string(), vec![], None),
-        ],
-        None,
-    );
-
-    let result1 = execute_worker_test::<MysqlType>(
-        &executor,
-        &component,
-        &agent_id,
-        &IdempotencyKey::fresh(),
-        create_read_user_test.clone(),
-    )
-    .await?;
-
-    check_test_result(&worker_id, result1.clone(), create_read_user_test.clone());
+    let admin_pool = sqlx::mysql::MySqlPoolOptions::new()
+        .max_connections(1)
+        .connect(&mysql.public_connection_string())
+        .await?;
+    sqlx::query("CREATE USER 'global_reader'@'%' IDENTIFIED BY 'SomeSecurePass!'")
+        .execute(&admin_pool)
+        .await?;
+    sqlx::query("GRANT SELECT ON *.* TO 'global_reader'@'%'")
+        .execute(&admin_pool)
+        .await?;
 
     let db_address = mysql.public_connection_string_with_user("global_reader", "SomeSecurePass!");
 

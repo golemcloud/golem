@@ -34,7 +34,7 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::tail_work::TailActivity;
-use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx, LiveAuthorizationPermit};
 use crate::preview2::wasi::keyvalue::types::{
     Error, Host, HostBucket, HostIncomingValue, HostIncomingValueWithStore, HostOutgoingValue,
     HostOutgoingValueWithStore, IncomingValue,
@@ -487,6 +487,7 @@ pub(crate) struct CacheFillState {
     pub handle: Option<CallHandle<P3KeyvalueCacheVacancyFill, Cancellable>>,
     pub environment_id: EnvironmentId,
     pub key: String,
+    pub _permit: Option<LiveAuthorizationPermit>,
 }
 
 pub struct IncomingValueEntry {

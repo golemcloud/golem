@@ -29,17 +29,18 @@ use golem_common::model::lucene::Query;
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
-    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
-    ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams,
-    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
-    SuspendParams,
+    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardExpiredParams,
+    CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams,
+    CardTransferConfirmedParams, CardTransferStartedParams, CardTransferredParams,
+    CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
+    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
+    FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
+    InterruptedParams, JumpParams, LogParams, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
+    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
@@ -448,6 +449,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 trace_id,
                 trace_states,
                 invocation_context,
+                wallet_pin,
             } => {
                 let invocation_payload: AgentInvocationPayload = oplog_service
                     .download_payload(owned_agent_id, agent_mode, payload)
@@ -475,6 +477,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     AgentInvocationStartedParams {
                         timestamp,
                         invocation: public_invocation,
+                        wallet_pin: wallet_pin.map(|pin| {
+                            golem_common::model::card::PublicInvocationWalletPin {
+                                wallet_token: pin.wallet_token,
+                                scope_card_id: pin.scope_card_id,
+                            }
+                        }),
                     },
                 ))
             }
@@ -922,17 +930,22 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 queued_event_index,
                 card_id,
+                wallet_generation,
             } => Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
                 timestamp,
                 queued_event_index,
                 card_id,
+                wallet_generation,
             })),
-            OplogEntry::CardExpired { timestamp, card_id } => {
-                Ok(PublicOplogEntry::CardExpired(CardExpiredParams {
-                    timestamp,
-                    card_id,
-                }))
-            }
+            OplogEntry::CardExpired {
+                timestamp,
+                card_id,
+                wallet_generation,
+            } => Ok(PublicOplogEntry::CardExpired(CardExpiredParams {
+                timestamp,
+                card_id,
+                wallet_generation,
+            })),
             OplogEntry::HostStreamFrame {
                 timestamp,
                 parent_start_index,
@@ -962,10 +975,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 queued_event_index,
                 card,
+                wallet_generation,
             } => Ok(PublicOplogEntry::CardInstalled(CardInstalledParams {
                 timestamp,
                 queued_event_index,
                 card_id: card.card_id(),
+                wallet_generation,
             })),
             OplogEntry::CardInstallFailed {
                 timestamp,
@@ -978,6 +993,75 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     queued_event_index,
                     card_id,
                     reason,
+                },
+            )),
+            OplogEntry::CardDerived {
+                timestamp,
+                card,
+                wallet_generation,
+            } => Ok(PublicOplogEntry::CardDerived(CardDerivedParams {
+                timestamp,
+                card_id: card.card_id(),
+                parent_ids: card.parent_ids().to_vec(),
+                wallet_generation,
+            })),
+            OplogEntry::CardTransferStarted {
+                timestamp,
+                transfer_id,
+                card_id,
+                target_holder,
+                source_wallet_generation,
+                ..
+            } => Ok(PublicOplogEntry::CardTransferStarted(
+                CardTransferStartedParams {
+                    timestamp,
+                    transfer_id,
+                    card_id,
+                    target_holder,
+                    source_wallet_generation,
+                },
+            )),
+            OplogEntry::CardTransferred {
+                timestamp,
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                target_holder,
+                target_wallet_generation,
+                ..
+            } => Ok(PublicOplogEntry::CardTransferred(CardTransferredParams {
+                timestamp,
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                target_holder,
+                target_wallet_generation,
+            })),
+            OplogEntry::CardRevokedCascade {
+                timestamp,
+                revoked_card_ids,
+                local_wallet_generation,
+                ..
+            } => Ok(PublicOplogEntry::CardRevokedCascade(
+                CardRevokedCascadeParams {
+                    timestamp,
+                    revoked_card_ids,
+                    local_wallet_generation,
+                },
+            )),
+            OplogEntry::CardTransferConfirmed {
+                timestamp,
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                target_holder,
+            } => Ok(PublicOplogEntry::CardTransferConfirmed(
+                CardTransferConfirmedParams {
+                    timestamp,
+                    transfer_id,
+                    source_card_id,
+                    installed_card_id,
+                    target_holder,
                 },
             )),
         }

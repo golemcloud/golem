@@ -42,7 +42,8 @@
 //! * The **lifecycle queue** runs notification and memory-accounting jobs. Jobs that take the
 //!   `instance` lock are fire-and-forget. Ordered oplog entries are awaitable but never take that
 //!   lock, so an instance-lock holder never waits on a lifecycle operation that needs the same
-//!   lock.
+//!   lock. A cancellation-safe status transaction may own guards acquired by its caller, but the
+//!   status task never acquires those locks itself.
 //!
 //! The status task is also the **only writer** of the worker's published status
 //! (`last_known_status`, an `ArcSwap`) and its `detached` flag; every other component reads them
@@ -64,9 +65,11 @@ use golem_common::model::{
     AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction, Timestamp,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
+use std::any::Any;
+use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use tokio::sync::{Mutex, OwnedMutexGuard, mpsc, oneshot};
 use tracing::debug;
 
 /// Handle to the worker-state actor's two job queues. Owned by [`Worker`]; dropping it aborts
@@ -102,6 +105,20 @@ enum StatusJob {
     CommitAndUpdateState {
         level: CommitLevel,
         done: oneshot::Sender<(OplogIndex, bool)>,
+    },
+    /// Appends an entry and completes its commit + fold transaction even if the caller is
+    /// cancelled. The caller-acquired guards remain owned by this job until the transaction ends.
+    AppendAndCommitAttached {
+        entry: Box<OplogEntry>,
+        _worker_keepalive: Arc<dyn Any + Send + Sync>,
+        _instance_guard: OwnedMutexGuard<WorkerInstance>,
+        _card_event_boundary_guard: OwnedMutexGuard<()>,
+        done: oneshot::Sender<()>,
+    },
+    /// Returns the published status after reattaching it when a jump or revert detached it.
+    /// Serialization on the status queue prevents observing an in-flight status transition.
+    AttachedStatus {
+        done: oneshot::Sender<Arc<AgentStatusRecord>>,
     },
     /// Returns the published status if it is currently attached to the oplog, `None` if it is
     /// detached. Runs on the status queue so it cannot observe the detached window of an
@@ -153,14 +170,18 @@ struct StatusState<Ctx: WorkerCtx> {
     detached: Arc<AtomicBool>,
     metrics_status: Arc<WorkerStatusMetric>,
     status_flusher: Arc<AgentStatusFlusher>,
+    /// Monotonically publishes committed authority changes after the matching
+    /// status fold. Live host-call authorization uses this as its lock-free
+    /// invalidation signal.
+    published_authority_generation: Arc<AtomicU64>,
 }
 
 impl<Ctx: WorkerCtx> Drop for WorkerStateActor<Ctx> {
     fn drop(&mut self) {
-        // In-flight status jobs borrow the owning `Worker`, so at this point no caller can be
-        // awaiting a reply anymore. Lifecycle jobs that need the worker hold a strong
-        // `Arc<Worker>` and therefore cannot be pending here; a dropped `NotifyStatusChanged` is
-        // harmless for a worker that is going away.
+        // Status jobs that must outlive a cancelled caller hold a strong `Arc<Worker>`, so the
+        // actor cannot be dropped while such a job is queued or running. Lifecycle jobs that need
+        // the worker likewise hold a strong `Arc<Worker>`; other lifecycle jobs are harmless to
+        // discard when the worker goes away.
         self.status_task.abort();
         self.lifecycle_task.abort();
     }
@@ -178,6 +199,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         detached: Arc<AtomicBool>,
         metrics_status: Arc<WorkerStatusMetric>,
         status_flusher: Arc<AgentStatusFlusher>,
+        published_authority_generation: Arc<AtomicU64>,
         instance: Arc<Mutex<WorkerInstance>>,
     ) -> Self {
         let state = StatusState {
@@ -190,6 +212,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             detached,
             metrics_status,
             status_flusher,
+            published_authority_generation,
         };
 
         let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob>();
@@ -197,9 +220,38 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             while let Some(job) = status_rx.recv().await {
                 match job {
                     StatusJob::CommitAndUpdateState { level, done } => {
-                        let changed = state.commit_and_update_state(level).await;
-                        let index = state.oplog.current_oplog_index().await;
-                        let _ = done.send((index, changed));
+                        complete_status_job(
+                            async {
+                                let changed = state.commit_and_update_state(level).await;
+                                let index = state.oplog.current_oplog_index().await;
+                                (index, changed)
+                            },
+                            done,
+                        )
+                        .await;
+                    }
+                    StatusJob::AppendAndCommitAttached {
+                        entry,
+                        _worker_keepalive,
+                        _instance_guard,
+                        _card_event_boundary_guard,
+                        done,
+                    } => {
+                        complete_status_job(
+                            async {
+                                state.oplog.add(*entry).await;
+                                state.commit_and_update_state(CommitLevel::Always).await;
+                                state.ensure_status_attached().await;
+                            },
+                            done,
+                        )
+                        .await;
+                    }
+                    StatusJob::AttachedStatus { done } => {
+                        if state.detached.load(Ordering::Acquire) {
+                            state.reattach().await;
+                        }
+                        let _ = done.send(state.last_known_status.load_full());
                     }
                     StatusJob::NonDetachedStatus { done } => {
                         let status = if state.detached.load(Ordering::Acquire) {
@@ -276,6 +328,31 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
         self.commit
             .run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
+            .await
+    }
+
+    pub async fn append_and_commit_attached(
+        &self,
+        entry: OplogEntry,
+        worker: Arc<Worker<Ctx>>,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        card_event_boundary_guard: OwnedMutexGuard<()>,
+    ) {
+        let worker_keepalive: Arc<dyn Any + Send + Sync> = worker;
+        self.commit
+            .run_status_job(|done| StatusJob::AppendAndCommitAttached {
+                entry: Box::new(entry),
+                _worker_keepalive: worker_keepalive,
+                _instance_guard: instance_guard,
+                _card_event_boundary_guard: card_event_boundary_guard,
+                done,
+            })
+            .await
+    }
+
+    pub async fn attached_status(&self) -> Arc<AgentStatusRecord> {
+        self.commit
+            .run_status_job(|done| StatusJob::AttachedStatus { done })
             .await
     }
 
@@ -397,6 +474,11 @@ impl OwnerCommitController {
     }
 }
 
+async fn complete_status_job<R>(transaction: impl Future<Output = R>, done: oneshot::Sender<R>) {
+    let result = transaction.await;
+    let _ = done.send(result);
+}
+
 impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// The commit + status-fold transaction. Commits the oplog, then either folds the newly
     /// committed entries into the published status or marks the status detached when it can no
@@ -404,8 +486,12 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// whether the published status (or its detachment) changed.
     async fn commit_and_update_state(&self, commit_level: CommitLevel) -> bool {
         let new_entries = self.oplog.commit(commit_level).await;
+        let authority_change_count = new_entries
+            .values()
+            .filter(|entry| is_authority_state_entry(entry))
+            .count() as u64;
 
-        if !self.detached.load(Ordering::Acquire) {
+        let changed = if !self.detached.load(Ordering::Acquire) {
             let old_status = self.last_known_status.load_full();
 
             let updated_status = update_status_with_new_entries(
@@ -439,21 +525,34 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             }
         } else {
             false
+        };
+
+        // This release-publish is deliberately owned by the cancellation-proof
+        // status actor and happens only after the committed entries were folded
+        // (or the status was marked detached). A producer cannot report success
+        // for a committed card event while authorization still considers the
+        // old generation current.
+        if authority_change_count != 0 {
+            self.published_authority_generation
+                .fetch_add(authority_change_count, Ordering::Release);
         }
+
+        changed
     }
 
     async fn reattach(&self) {
         self.commit_and_update_state(CommitLevel::Always).await;
 
-        if self.detached.load(Ordering::Relaxed) {
+        self.ensure_status_attached().await;
+    }
+
+    async fn ensure_status_attached(&self) -> bool {
+        if self.detached.load(Ordering::Acquire) {
             debug!(
                 agent_id = %self.owned_agent_id.agent_id,
                 "Worker status was detached from oplog, recomputing it"
             );
 
-            // The in-memory status is no longer foldable (a jump deleted its index, or a revert
-            // moved the oplog behind it), so we recompute. Prefer folding forward from the clean
-            // checkpoint (which predates any jump region) over a full re-read of the oplog.
             let worker_status = calculate_last_known_status_with_checkpoint(
                 &self.deps,
                 &self.owned_agent_id,
@@ -473,16 +572,19 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             // recomputed status visible before readers start trusting it again.
             self.detached.store(false, Ordering::Release);
 
-            // The status was just recomputed from scratch; persist it synchronously (a full
-            // reconcile write, since the baseline was invalidated on detach) so the cache is
-            // immediately consistent rather than waiting for the next background sweep. Best-effort:
-            // a failure is logged/metered and re-queued inside `flush`.
+            // The status was recomputed from an earlier baseline; persist it synchronously so the
+            // cache is immediately usable again. A failure remains best-effort because the oplog
+            // is authoritative and the flusher will retry it in the background.
             if let Err(err) = self.status_flusher.flush(FlushReason::Forced).await {
                 debug!(
                     agent_id = %self.owned_agent_id.agent_id,
                     "Forced status flush on reattach failed (will retry in background): {err}"
                 );
             }
+
+            true
+        } else {
+            false
         }
     }
 
@@ -533,5 +635,69 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 )
                 .await;
         }
+    }
+}
+
+fn is_authority_state_entry(entry: &OplogEntry) -> bool {
+    matches!(
+        entry,
+        OplogEntry::CardEventQueued { .. }
+            | OplogEntry::CardInstalled { .. }
+            | OplogEntry::CardInstallFailed { .. }
+            | OplogEntry::CardRevoked { .. }
+            | OplogEntry::CardExpired { .. }
+            | OplogEntry::CardDerived { .. }
+            | OplogEntry::CardTransferStarted { .. }
+            | OplogEntry::CardTransferred { .. }
+            | OplogEntry::CardRevokedCascade { .. }
+            | OplogEntry::CardTransferConfirmed { .. }
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::complete_status_job;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use test_r::test;
+    use tokio::sync::{Notify, oneshot};
+
+    #[test]
+    async fn authority_publication_survives_producer_cancellation_before_actor_reply() {
+        let generation = Arc::new(AtomicU64::new(0));
+        let committed = Arc::new(AtomicU64::new(0));
+        let before_reply = Arc::new(Notify::new());
+        let release_reply = Arc::new(Notify::new());
+        let (done, done_rx) = oneshot::channel();
+
+        let actor = tokio::spawn({
+            let generation = generation.clone();
+            let committed = committed.clone();
+            let before_reply = before_reply.clone();
+            let release_reply = release_reply.clone();
+            async move {
+                complete_status_job(
+                    async move {
+                        committed.store(1, Ordering::Release);
+                        generation.store(1, Ordering::Release);
+                        before_reply.notify_one();
+                        release_reply.notified().await;
+                    },
+                    done,
+                )
+                .await;
+            }
+        });
+        let producer = tokio::spawn(done_rx);
+
+        before_reply.notified().await;
+        producer.abort();
+        release_reply.notify_one();
+        actor
+            .await
+            .expect("status actor must finish the transaction");
+
+        assert_eq!(committed.load(Ordering::Acquire), 1);
+        assert_eq!(generation.load(Ordering::Acquire), 1);
     }
 }

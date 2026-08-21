@@ -1,0 +1,15 @@
+package golem:permissions@0.1.0;
+
+/// Revocation of a permission card and its derivation DAG subtree.
+///
+/// `revoke-card` consumes the owned handle (the receiving component's
+/// resource-table entry is deleted); the stored card is walked via the card
+/// store's DAG descendant index. Returns the cut-subtree size.
+interface revoke {
+    use golem:core/types@2.0.0.{permission-card};
+    use types.{permission-error};
+
+    /// Revoke `c` and every card transitively derived from it.
+    /// Consumes the owned handle.
+    revoke-card: func(c: permission-card) -> result<u32, permission-error>;
+}

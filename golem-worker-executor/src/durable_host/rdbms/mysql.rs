@@ -35,6 +35,9 @@ use std::str::FromStr;
 use wasmtime::component::{Resource, ResourceTable};
 
 impl RdbmsDurabilityPairs for MysqlType {
+    const ENGINE: crate::durable_host::authorization::targets::RdbmsEngine =
+        crate::durable_host::authorization::targets::RdbmsEngine::Mysql;
+    type ConnBeginTransaction = RdbmsMysqlDbConnectionBeginTransaction;
     type ConnExecute = RdbmsMysqlDbConnectionExecute;
     type ConnQuery = RdbmsMysqlDbConnectionQuery;
     type ConnQueryStream = RdbmsMysqlDbConnectionQueryStream;
