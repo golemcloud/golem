@@ -104,24 +104,62 @@ fn elapsed_millis() -> u64 {
     EPOCH.elapsed().as_millis() as u64
 }
 
-/// When a connection was last handed to a caller.
+/// When a connection was last handed to a caller, and how many requests are
+/// riding it now.
 ///
 /// Shared between the connection and every client holding it, so the sweep and
 /// the callers cannot disagree about whether it is still in use.
 #[derive(Clone)]
-struct LastUsed(Arc<AtomicU64>);
+struct LastUsed(Arc<InUse>);
+
+struct InUse {
+    at: AtomicU64,
+    riding: AtomicU64,
+}
 
 impl LastUsed {
     fn now() -> Self {
-        Self(Arc::new(AtomicU64::new(elapsed_millis())))
+        Self(Arc::new(InUse {
+            at: AtomicU64::new(elapsed_millis()),
+            riding: AtomicU64::new(0),
+        }))
     }
 
     fn touch(&self) {
-        self.0.store(elapsed_millis(), Ordering::Relaxed);
+        self.0.at.store(elapsed_millis(), Ordering::Relaxed);
     }
 
     fn idle_for(&self) -> Duration {
-        Duration::from_millis(elapsed_millis().saturating_sub(self.0.load(Ordering::Relaxed)))
+        Duration::from_millis(elapsed_millis().saturating_sub(self.0.at.load(Ordering::Relaxed)))
+    }
+
+    /// Whether anyone is still using this connection: a request on it now, or a
+    /// caller handed it within `idle_ttl`.
+    ///
+    /// A request can run for far longer than the sweep's idea of cold — agent
+    /// invocations have no bound — and only ever touches the moment it is
+    /// handed the connection. Judged on that alone, a connection carrying a long
+    /// invocation and nothing else reads as one nobody is calling.
+    fn in_use_within(&self, idle_ttl: Duration) -> bool {
+        self.0.riding.load(Ordering::Relaxed) > 0 || self.idle_for() < idle_ttl
+    }
+
+    /// Counts a request as riding this connection until the guard is dropped.
+    #[must_use]
+    fn riding(&self) -> Riding {
+        self.0.riding.fetch_add(1, Ordering::Relaxed);
+        Riding(self.clone())
+    }
+}
+
+/// A request riding a connection. Dropping it also touches, so the sweep starts
+/// counting from when the request ended rather than from when it began.
+struct Riding(LastUsed);
+
+impl Drop for Riding {
+    fn drop(&mut self) {
+        self.0.touch();
+        self.0.0.riding.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -335,7 +373,7 @@ impl Connections {
     async fn prune(&self, idle_ttl: Duration) {
         self.by_target
             .retain_async(|_, attempt| match attempt.peek() {
-                Some(Ok(connected)) => connected.last_used.idle_for() < idle_ttl,
+                Some(Ok(connected)) => connected.last_used.in_use_within(idle_ttl),
                 _ => true,
             })
             .await;
@@ -687,7 +725,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             // cold. A client whose set of targets has settled sweeps not at all;
             // one watching pods come and go sweeps each time one appears.
             self.clients
-                .retain_async(|_, cached| cached.last_used.idle_for() < IDLE_CONNECTION_TTL)
+                .retain_async(|_, cached| cached.last_used.in_use_within(IDLE_CONNECTION_TTL))
                 .await;
             self.connections.prune(IDLE_CONNECTION_TTL).await;
 
@@ -997,6 +1035,7 @@ where
     T: Clone,
     F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>> + Send,
 {
+    let _riding = connection.last_used.riding();
     tokio::select! {
         // A result that is already there wins over a retirement landing in the
         // same tick.
@@ -1508,6 +1547,44 @@ mod test {
         assert_ne!(
             replacement.id, first.id,
             "the sweep kept a connection nobody had called"
+        );
+    }
+
+    /// A request can run for far longer than the sweep's idea of cold, and only
+    /// touches the moment it is handed the connection. Judged on that alone a
+    /// connection carrying a long invocation and nothing else reads as one
+    /// nobody is calling, and the next caller pays a reconnect for it.
+    #[test]
+    async fn a_connection_carrying_a_request_is_not_swept() {
+        fn never(_: &mut ()) -> Pin<Box<dyn Future<Output = Result<(), Status>> + Send + '_>> {
+            Box::pin(std::future::pending())
+        }
+
+        let (target, _peer) = silent_peer().await;
+        let (client, _built) = counting_client();
+        let mut connection = client.connected_client(target.clone()).await.unwrap();
+
+        let config = RetryConfig::default();
+        let attempts = CallAttempts::new(&config, "test", "test", tracing::Span::none());
+        // Boxed rather than `pin!`ed because this test has to drop the request
+        // itself, and dropping a `Pin<&mut _>` drops the borrow rather than what
+        // it points at.
+        let mut running = Box::pin(attempt(&mut connection, &never, &attempts));
+        assert!(futures::poll!(running.as_mut()).is_pending());
+
+        // Against a zero TTL everything that is merely idle counts as cold.
+        client.connections.prune(Duration::ZERO).await;
+        assert!(
+            client.connections.by_target.contains_async(&target).await,
+            "the sweep took a connection with a request still riding it"
+        );
+
+        drop(running);
+        client.connections.prune(Duration::ZERO).await;
+        assert!(
+            !client.connections.by_target.contains_async(&target).await,
+            "the connection stayed exempt from the sweep after its request \
+             had ended"
         );
     }
 
