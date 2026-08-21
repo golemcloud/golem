@@ -20,37 +20,6 @@ use golem_common::model::component::AgentFilePermissions;
 use golem_common::model::environment::EnvironmentId;
 
 impl AgentFilesystemRuntime {
-    pub(crate) fn is_read_only(&self, path: &Path) -> bool {
-        self.is_read_only_path(path, true)
-    }
-
-    pub(crate) fn is_read_only_path(&self, path: &Path, follow_final_symlink: bool) -> bool {
-        let path = resolve_policy_path(path, follow_final_symlink);
-        self.inner
-            .initial_files
-            .read()
-            .expect("initial-files policy lock poisoned")
-            .iter()
-            .any(|(initial_path, file)| {
-                file.permissions == AgentFilePermissions::ReadOnly
-                    && resolve_policy_path(initial_path, true) == path
-            })
-    }
-
-    pub(crate) fn contains_read_only_path(&self, path: &Path, follow_final_symlink: bool) -> bool {
-        let path = resolve_policy_path(path, follow_final_symlink);
-        self.inner
-            .initial_files
-            .read()
-            .expect("initial-files policy lock poisoned")
-            .iter()
-            .any(|(initial_path, file)| {
-                let initial_path = resolve_policy_path(initial_path, true);
-                file.permissions == AgentFilePermissions::ReadOnly
-                    && (initial_path == path || initial_path.starts_with(&path))
-            })
-    }
-
     pub(crate) async fn replace_initial_files(
         &self,
         file_loader: &FileLoader,
@@ -60,14 +29,18 @@ impl AgentFilesystemRuntime {
         let effect = self.begin_update_effect().await.map_err(|error| {
             FilesystemStorageError::io(
                 "admit initial-file materialization",
-                self.inner.backend.root(),
+                self.runtime_state.backend.root(),
                 std::io::Error::other(error),
             )
         })?;
         let mut materialized = HashMap::new();
         let mut sources: HashMap<AgentFileContentHash, InitialFileSource> = HashMap::new();
         for file in files {
-            let target = self.inner.backend.root().join(file.path.to_rel_string());
+            let target = self
+                .runtime_state
+                .backend
+                .root()
+                .join(file.path.to_rel_string());
             let source = match sources.get(&file.content_hash) {
                 Some(source) if source.size() == file.size => source,
                 Some(_) => {
@@ -90,10 +63,10 @@ impl AgentFilesystemRuntime {
                     sources.entry(file.content_hash).or_insert(source)
                 }
             };
-            self.inner
+            self.runtime_state
                 .backend
                 .materialize_initial_file(InitialFileMaterialization {
-                    materialization_root: self.inner.backend.root().to_path_buf(),
+                    materialization_root: self.runtime_state.backend.root().to_path_buf(),
                     source: source.clone(),
                     target: target.clone(),
                     read_only: file.permissions == AgentFilePermissions::ReadOnly,
@@ -109,7 +82,7 @@ impl AgentFilesystemRuntime {
             }
         }
         *self
-            .inner
+            .runtime_state
             .initial_files
             .write()
             .expect("initial-files policy lock poisoned") = materialized;
@@ -125,12 +98,12 @@ impl AgentFilesystemRuntime {
         let effect = self.begin_update_effect().await.map_err(|error| {
             FilesystemStorageError::io(
                 "admit initial-file update",
-                self.inner.backend.root(),
+                self.runtime_state.backend.root(),
                 std::io::Error::other(error),
             )
         })?;
         let current = self
-            .inner
+            .runtime_state
             .initial_files
             .read()
             .expect("initial-files policy lock poisoned")
@@ -138,7 +111,11 @@ impl AgentFilesystemRuntime {
         let update_result = async {
             let mut desired = HashMap::new();
             for file in files {
-                let target = self.inner.backend.root().join(file.path.to_rel_string());
+                let target = self
+                    .runtime_state
+                    .backend
+                    .root()
+                    .join(file.path.to_rel_string());
                 if desired.insert(target.clone(), file.clone()).is_some() {
                     return Err(FilesystemStorageError::verification(
                         "materialize unique initial-file update target",
@@ -159,13 +136,15 @@ impl AgentFilesystemRuntime {
                 }
             }
 
-            let staging = Arc::new(self.inner.backend.create_staging_dir().map_err(|error| {
-                FilesystemStorageError::io(
-                    "create initial-file update staging directory",
-                    self.inner.backend.root(),
-                    error,
-                )
-            })?);
+            let staging = Arc::new(self.runtime_state.backend.create_staging_dir().map_err(
+                |error| {
+                    FilesystemStorageError::io(
+                        "create initial-file update staging directory",
+                        self.runtime_state.backend.root(),
+                        error,
+                    )
+                },
+            )?);
             let mut sources: HashMap<AgentFileContentHash, InitialFileSource> = HashMap::new();
             let mut staged = Vec::new();
             for (path, file) in &desired {
@@ -204,7 +183,7 @@ impl AgentFilesystemRuntime {
                             }
                         };
                         let staged_path = staging.path().join(staged.len().to_string());
-                        self.inner
+                        self.runtime_state
                             .backend
                             .materialize_initial_file(InitialFileMaterialization {
                                 materialization_root: staging.path().to_path_buf(),
@@ -245,7 +224,7 @@ impl AgentFilesystemRuntime {
             let mut transaction = InitialFileUpdateTransaction::new(backup_root);
             for path in &replacements {
                 if let Err(error) = transaction
-                    .create_parent(self.inner.backend.root(), path)
+                    .create_parent(self.runtime_state.backend.root(), path)
                     .and_then(|_| validate_replaceable_target(path))
                 {
                     return Err(transaction.fail(
@@ -286,7 +265,7 @@ impl AgentFilesystemRuntime {
 
             transaction.commit();
             *self
-                .inner
+                .runtime_state
                 .initial_files
                 .write()
                 .expect("initial-files policy lock poisoned") = desired;
@@ -462,7 +441,7 @@ impl Drop for InitialFileUpdateTransaction {
     }
 }
 
-fn resolve_policy_path(path: &Path, follow_final_symlink: bool) -> PathBuf {
+pub(super) fn resolve_policy_path(path: &Path, follow_final_symlink: bool) -> PathBuf {
     if !follow_final_symlink && let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
         return resolve_policy_path(parent, true).join(name);
     }

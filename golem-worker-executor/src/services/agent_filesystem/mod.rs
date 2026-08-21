@@ -64,13 +64,11 @@ pub(crate) use failure::{
 pub(crate) use mutation::{
     AdmittedFilesystemWrite, AgentFilesystemEffectAdmission, AgentFilesystemEffectLease,
     AgentFilesystemMutationError, AgentFilesystemMutationResult, AgentFilesystemMutations,
-    AgentFilesystemUpdateEffectLease, AgentFilesystemWriteCompletion, AgentFilesystemWriteMode,
-    AgentFilesystemWriter, ClassifiedFileOutputStream, FilesystemStreamMode, NativeFilesystemError,
+    AgentFilesystemOperationResult, AgentFilesystemUpdateEffectLease,
+    AgentFilesystemWriteCompletion, AgentFilesystemWriteMode, AgentFilesystemWriter,
+    ClassifiedFileOutputStream, FilesystemStreamMode, NativeFilesystemError,
     NativeMutationGuestError, NativeOpenOptions, NativeOpenResult,
-    classified_filesystem_stream_error_code, create_directory, hard_link, open, remove_directory,
-    rename, resize_file, run_blocking_filesystem_mutation, set_descriptor_times, set_path_times,
-    symlink, sync_descriptor, unlink_file, validate_descriptor_times, validate_directory_mutation,
-    validate_open, validate_resize, validate_two_directory_mutation,
+    classified_filesystem_stream_error_code,
 };
 #[allow(
     unused_imports,
@@ -320,7 +318,7 @@ impl AgentFilesystem {
     }
 
     pub(crate) fn path(&self) -> &Path {
-        self.runtime.inner.backend.root()
+        self.runtime.runtime_state.backend.root()
     }
 
     pub(crate) fn runtime(&self) -> AgentFilesystemRuntime {
@@ -383,7 +381,7 @@ impl Drop for AgentFilesystem {
 /// Cloneable handle to the synchronization and backend state shared by filesystem
 /// adapters, completion tasks, quota enforcement, and usage sampling.
 pub struct AgentFilesystemRuntime {
-    inner: Arc<AgentFilesystemRuntimeInner>,
+    runtime_state: Arc<AgentFilesystemRuntimeState>,
 }
 
 impl std::fmt::Debug for AgentFilesystemRuntime {
@@ -394,8 +392,8 @@ impl std::fmt::Debug for AgentFilesystemRuntime {
     }
 }
 
-struct AgentFilesystemRuntimeInner {
-    state: AtomicUsize,
+struct AgentFilesystemRuntimeState {
+    lifecycle: AtomicUsize,
     usage_sampling: AtomicBool,
     usage_effect_epoch: std::sync::atomic::AtomicU64,
     last_effect_completion_millis: std::sync::atomic::AtomicU64,
@@ -434,8 +432,8 @@ struct AgentFilesystemRuntimeInner {
 impl AgentFilesystemRuntime {
     fn new(backend: Arc<dyn AgentFilesystemBackend>, pressure: FilesystemPressureConfig) -> Self {
         Self {
-            inner: Arc::new(AgentFilesystemRuntimeInner {
-                state: AtomicUsize::new(0),
+            runtime_state: Arc::new(AgentFilesystemRuntimeState {
+                lifecycle: AtomicUsize::new(0),
                 usage_sampling: AtomicBool::new(false),
                 usage_effect_epoch: std::sync::atomic::AtomicU64::new(0),
                 last_effect_completion_millis: std::sync::atomic::AtomicU64::new(0),
@@ -495,12 +493,12 @@ impl AgentFilesystemRuntime {
             },
         );
         *runtime
-            .inner
+            .runtime_state
             .applied_limits
             .write()
             .expect("agent filesystem applied-limit lock poisoned") = limits;
         *runtime
-            .inner
+            .runtime_state
             .failure_observations
             .write()
             .expect("agent filesystem test observation lock poisoned") = Some((usage, capacity));
@@ -511,7 +509,7 @@ impl AgentFilesystemRuntime {
     pub(crate) fn new_for_test_with_failed_observations() -> Self {
         let runtime = Self::new_for_test_with_capacity_observation_failure();
         runtime
-            .inner
+            .runtime_state
             .usage_observation_fails
             .store(true, Ordering::Release);
         runtime

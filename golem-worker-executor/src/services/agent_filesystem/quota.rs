@@ -201,7 +201,7 @@ impl AgentFilesystem {
         let _effect = self.runtime.begin_update_effect().await.map_err(|error| {
             FilesystemStorageError::io(
                 "settle reconstructed agent filesystem",
-                self.runtime.inner.backend.root(),
+                self.runtime.runtime_state.backend.root(),
                 std::io::Error::other(error),
             )
         })?;
@@ -214,13 +214,17 @@ impl AgentFilesystemRuntime {
         &self,
     ) -> Result<Option<AgentFilesystemUsage>, FilesystemStorageError> {
         #[cfg(test)]
-        if self.inner.usage_observation_fails.load(Ordering::Acquire) {
+        if self
+            .runtime_state
+            .usage_observation_fails
+            .load(Ordering::Acquire)
+        {
             return Err(FilesystemStorageError::verification(
                 "observe test agent filesystem usage",
-                self.inner.backend.root(),
+                self.runtime_state.backend.root(),
             ));
         }
-        match self.inner.backend.quota() {
+        match self.runtime_state.backend.quota() {
             Some(quota) => quota.usage().await.map(Some),
             None => Ok(None),
         }
@@ -231,17 +235,17 @@ impl AgentFilesystemRuntime {
         observer: Option<Arc<dyn crate::services::agent_resource_billing::FilesystemUsageObserver>>,
     ) {
         *self
-            .inner
+            .runtime_state
             .usage_observer
             .lock()
             .expect("agent filesystem usage-observer lock poisoned") = observer;
         if self.has_active_effects() {
-            self.inner.schedule_usage_sampling();
+            self.runtime_state.schedule_usage_sampling();
         }
     }
 
     pub(super) fn usage_observer_is_active(&self) -> bool {
-        self.inner
+        self.runtime_state
             .usage_observer
             .lock()
             .expect("agent filesystem usage-observer lock poisoned")
@@ -251,7 +255,7 @@ impl AgentFilesystemRuntime {
 
     pub(super) async fn observe_usage_for_billing(&self) -> Result<(), FilesystemStorageError> {
         let observer = self
-            .inner
+            .runtime_state
             .usage_observer
             .lock()
             .expect("agent filesystem usage-observer lock poisoned")
@@ -282,7 +286,7 @@ impl AgentFilesystemRuntime {
     pub(crate) async fn observe_capacity(
         &self,
     ) -> Result<FilesystemCapacity, FilesystemStorageError> {
-        self.inner.backend.observe_capacity().await
+        self.runtime_state.backend.observe_capacity().await
     }
 
     #[allow(
@@ -300,7 +304,7 @@ impl AgentFilesystemRuntime {
         FilesystemStorageError,
     > {
         let observer = self
-            .inner
+            .runtime_state
             .usage_observer
             .lock()
             .expect("agent filesystem usage-observer lock poisoned")
@@ -311,13 +315,13 @@ impl AgentFilesystemRuntime {
 
         #[cfg(test)]
         if let Some((usage, capacity)) = *self
-            .inner
+            .runtime_state
             .failure_observations
             .read()
             .expect("agent filesystem test observation lock poisoned")
         {
             let limits = *self
-                .inner
+                .runtime_state
                 .applied_limits
                 .read()
                 .expect("agent filesystem applied-limit lock poisoned");
@@ -328,12 +332,12 @@ impl AgentFilesystemRuntime {
         }
 
         let installed_limits = *self
-            .inner
+            .runtime_state
             .applied_limits
             .read()
             .expect("agent filesystem applied-limit lock poisoned");
         let observations = async {
-            match self.inner.backend.quota() {
+            match self.runtime_state.backend.quota() {
                 Some(quota) => quota
                     .failure_observations(installed_limits)
                     .await
@@ -363,14 +367,14 @@ impl AgentFilesystemRuntime {
         callback: Option<FilesystemLimitExceededCallback>,
     ) {
         *self
-            .inner
+            .runtime_state
             .limit_exceeded
             .lock()
             .expect("agent filesystem limit callback lock poisoned") = callback;
     }
 
     pub(crate) fn is_same_runtime(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        Arc::ptr_eq(&self.runtime_state, &other.runtime_state)
     }
 
     pub(crate) async fn set_allocated_byte_limit(
@@ -380,16 +384,16 @@ impl AgentFilesystemRuntime {
         let effect = self.begin_update_effect().await.map_err(|error| {
             FilesystemStorageError::io(
                 "admit agent filesystem limit update",
-                self.inner.backend.root(),
+                self.runtime_state.backend.root(),
                 std::io::Error::other(error),
             )
         })?;
-        let Some(quota) = self.inner.backend.quota() else {
+        let Some(quota) = self.runtime_state.backend.quota() else {
             return Ok(());
         };
         let installed = quota.install_limit(limit, effect.clone()).await?;
         *self
-            .inner
+            .runtime_state
             .applied_limits
             .write()
             .expect("agent filesystem applied-limit lock poisoned") = Some(installed.limits);
@@ -402,7 +406,7 @@ impl AgentFilesystemRuntime {
 
     pub(super) async fn notify_limit_state(&self, exceeded: bool) {
         let callback = self
-            .inner
+            .runtime_state
             .limit_exceeded
             .lock()
             .expect("agent filesystem limit callback lock poisoned")

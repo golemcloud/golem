@@ -811,54 +811,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn descriptor_path(
-        &mut self,
-        fd: &Resource<Descriptor>,
-    ) -> Result<PathBuf, ResourceTableError> {
-        let table = Arc::get_mut(&mut self.table)
-            .expect("ResourceTable is shared and cannot be borrowed mutably")
-            .get_mut()
-            .expect("ResourceTable mutex must never fail");
-        Ok(match table.get(fd)? {
-            Descriptor::File(file) => file.path.clone(),
-            Descriptor::Dir(directory) => directory.path.clone(),
-        })
-    }
-
-    fn fail_if_read_only_path(
-        &mut self,
-        fd: &Resource<Descriptor>,
-        path: &str,
-        follow_final_symlink: bool,
-    ) -> FsResult<()> {
-        let target = self.descriptor_path(fd)?.join(path);
-        if self
-            .filesystem_runtime
-            .is_read_only_path(&target, follow_final_symlink)
-        {
-            Err(wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode::NotPermitted.into())
-        } else {
-            Ok(())
-        }
-    }
-
-    fn fail_if_contains_read_only_path(
-        &mut self,
-        fd: &Resource<Descriptor>,
-        path: &str,
-        follow_final_symlink: bool,
-    ) -> FsResult<()> {
-        let target = self.descriptor_path(fd)?.join(path);
-        if self
-            .filesystem_runtime
-            .contains_read_only_path(&target, follow_final_symlink)
-        {
-            Err(wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode::NotPermitted.into())
-        } else {
-            Ok(())
-        }
-    }
-
     fn fail_if_read_only(&mut self, fd: &Resource<Descriptor>) -> FsResult<()> {
         if self.check_if_file_is_readonly(fd)? {
             Err(wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode::NotPermitted.into())

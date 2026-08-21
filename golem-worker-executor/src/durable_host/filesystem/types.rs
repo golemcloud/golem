@@ -13,9 +13,8 @@
 // limitations under the License.
 
 use std::hash::Hasher;
-use std::sync::Arc;
+use std::time::Duration;
 use std::time::SystemTime;
-use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use fs_set_times::{SystemTimeSpec, set_symlink_times};
@@ -36,31 +35,8 @@ use wasmtime_wasi::runtime::spawn_blocking;
 use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, FilesystemOutputStreamState};
 use crate::services::agent_filesystem::{
-    AgentFilesystemMutationError, AgentFilesystemRuntime, ClassifiedFileOutputStream,
-    FILESYSTEM_MUTATION_MAX_ATTEMPTS, FILESYSTEM_MUTATION_RETRY_TIMEOUT, FilesystemStreamMode,
-    MutationDecision, MutationEffect, MutationFailure, MutationOperation,
-    MutationPostcondition as P2MutationPostcondition, NativeMutationGuestError, NativeOpenOptions,
-    NativeOpenResult, PathObjectType as P2PathObjectType, RequestedTime,
-    create_directory as native_create_directory,
-    create_directory_postcondition as p2_create_directory_postcondition,
-    descriptor_state as p2_descriptor_state, descriptor_times as p2_descriptor_times,
-    hard_link as native_hard_link, link_postcondition as p2_link_postcondition,
-    open as native_open, open_postcondition as p2_open_postcondition, path_state as p2_path_state,
-    path_state_with_follow as p2_path_state_with_follow, path_times as p2_path_times,
-    remove_directory as native_remove_directory, remove_postcondition as p2_remove_postcondition,
-    rename as native_rename, rename_postcondition as p2_rename_postcondition,
-    resize_file as native_resize_file, resize_postcondition as p2_resize_postcondition,
-    run_blocking_filesystem_mutation, set_descriptor_times as native_set_descriptor_times,
-    set_path_times as native_set_path_times, symlink as native_symlink,
-    symlink_postcondition as p2_symlink_postcondition, symlink_state as p2_symlink_state,
-    sync_descriptor as native_sync_descriptor, times_postcondition,
-    unlink_file as native_unlink_file, validate_descriptor_times, validate_directory_mutation,
-    validate_open, validate_resize, validate_two_directory_mutation,
-};
-#[cfg(test)]
-use crate::services::agent_filesystem::{
-    ObjectIdentity as P2ObjectIdentity, PathState as P2PathState, same_object as p2_same_object,
-    same_optional_object as p2_same_optional_object,
+    AgentFilesystemMutationError, ClassifiedFileOutputStream, FilesystemStreamMode,
+    NativeMutationGuestError, NativeOpenOptions, NativeOpenResult, RequestedTime,
 };
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
@@ -73,249 +49,6 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequestFileSystemPath, HostResponseFileSystemStat,
 };
 
-enum P2MutationAction {
-    Retry,
-    Success,
-    Error(FsError),
-    Trap,
-}
-
-struct P2MutationAdapter {
-    runtime: AgentFilesystemRuntime,
-    operation: MutationOperation,
-    started: Instant,
-    attempts: usize,
-}
-
-impl P2MutationAdapter {
-    fn new(runtime: AgentFilesystemRuntime) -> Self {
-        Self::for_operation(runtime, MutationOperation::Metadata)
-    }
-
-    fn for_operation(runtime: AgentFilesystemRuntime, operation: MutationOperation) -> Self {
-        Self {
-            runtime,
-            operation,
-            started: Instant::now(),
-            attempts: 0,
-        }
-    }
-
-    fn begin_attempt(&mut self) {
-        self.attempts += 1;
-    }
-
-    #[cfg(test)]
-    async fn failure(
-        &self,
-        error: FsError,
-        postcondition: P2MutationPostcondition,
-        retry_safe: bool,
-    ) -> P2MutationAction {
-        let Some(guest) = error.downcast_ref().copied() else {
-            let _ = self
-                .runtime
-                .classify_mutation_failure::<ErrorCode>(
-                    MutationFailure::Infrastructure(std::io::Error::other(error.to_string())),
-                    MutationEffect::Unknown,
-                )
-                .await;
-            return P2MutationAction::Trap;
-        };
-        let effect = match (postcondition, guest) {
-            (P2MutationPostcondition::Satisfied, _) => {
-                MutationEffect::DesiredPostconditionSatisfied
-            }
-            (P2MutationPostcondition::NoEffect, _) => MutationEffect::ProvenNoEffect,
-            (P2MutationPostcondition::Unknown, _) => MutationEffect::Unknown,
-        };
-        let failure = match guest {
-            ErrorCode::Quota => MutationFailure::StorageExhaustion {
-                guest,
-                quota_hint: true,
-            },
-            ErrorCode::InsufficientSpace => MutationFailure::StorageExhaustion {
-                guest,
-                quota_hint: false,
-            },
-            ErrorCode::Busy
-            | ErrorCode::Interrupted
-            | ErrorCode::InProgress
-            | ErrorCode::Already => MutationFailure::TransientGuest(guest),
-            ErrorCode::Access | ErrorCode::NotPermitted => MutationFailure::AccessGuest(guest),
-            ErrorCode::Io => MutationFailure::UnclassifiedGuest(guest),
-            _ => MutationFailure::Guest(guest),
-        };
-        match self
-            .runtime
-            .classify_mutation_failure_for(self.operation, failure, effect)
-            .await
-        {
-            MutationDecision::PreserveGuest(error) => P2MutationAction::Error(error.into()),
-            MutationDecision::Quota => P2MutationAction::Error(ErrorCode::Quota.into()),
-            MutationDecision::InsufficientSpace => {
-                P2MutationAction::Error(ErrorCode::InsufficientSpace.into())
-            }
-            MutationDecision::PhysicalPressure
-                if retry_safe
-                    && postcondition == P2MutationPostcondition::NoEffect
-                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
-            {
-                if self
-                    .runtime
-                    .recover_physical_pressure(
-                        self.operation,
-                        self.started + FILESYSTEM_MUTATION_RETRY_TIMEOUT,
-                    )
-                    .await
-                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT
-                {
-                    P2MutationAction::Retry
-                } else {
-                    P2MutationAction::Error(ErrorCode::InsufficientSpace.into())
-                }
-            }
-            MutationDecision::PhysicalPressure => {
-                P2MutationAction::Error(ErrorCode::InsufficientSpace.into())
-            }
-            MutationDecision::BoundedRetry
-                if retry_safe
-                    && postcondition == P2MutationPostcondition::NoEffect
-                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
-            {
-                P2MutationAction::Retry
-            }
-            MutationDecision::BoundedRetry => P2MutationAction::Error(guest.into()),
-            MutationDecision::PreserveRaw => P2MutationAction::Error(guest.into()),
-            MutationDecision::Success => P2MutationAction::Success,
-            MutationDecision::Invalidate => P2MutationAction::Trap,
-        }
-    }
-
-    async fn io_failure(
-        &self,
-        error: std::io::Error,
-        postcondition: P2MutationPostcondition,
-        retry_safe: bool,
-    ) -> P2MutationAction {
-        let raw_os_error = error.raw_os_error();
-        let error_kind = error.kind();
-        let error_message = error.to_string();
-        let effect = match postcondition {
-            P2MutationPostcondition::Satisfied => MutationEffect::DesiredPostconditionSatisfied,
-            P2MutationPostcondition::NoEffect => MutationEffect::ProvenNoEffect,
-            P2MutationPostcondition::Unknown => MutationEffect::Unknown,
-        };
-        match self
-            .runtime
-            .classify_mutation_failure_for::<ErrorCode>(
-                self.operation,
-                MutationFailure::Io(error),
-                effect,
-            )
-            .await
-        {
-            MutationDecision::PreserveGuest(error) => P2MutationAction::Error(error.into()),
-            MutationDecision::Quota => P2MutationAction::Error(ErrorCode::Quota.into()),
-            MutationDecision::InsufficientSpace => {
-                P2MutationAction::Error(ErrorCode::InsufficientSpace.into())
-            }
-            MutationDecision::PhysicalPressure
-                if retry_safe
-                    && postcondition == P2MutationPostcondition::NoEffect
-                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
-            {
-                if self
-                    .runtime
-                    .recover_physical_pressure(
-                        self.operation,
-                        self.started + FILESYSTEM_MUTATION_RETRY_TIMEOUT,
-                    )
-                    .await
-                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT
-                {
-                    P2MutationAction::Retry
-                } else {
-                    P2MutationAction::Error(ErrorCode::InsufficientSpace.into())
-                }
-            }
-            MutationDecision::PhysicalPressure => {
-                P2MutationAction::Error(ErrorCode::InsufficientSpace.into())
-            }
-            MutationDecision::BoundedRetry
-                if retry_safe
-                    && postcondition == P2MutationPostcondition::NoEffect
-                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
-            {
-                P2MutationAction::Retry
-            }
-            MutationDecision::BoundedRetry | MutationDecision::PreserveRaw => {
-                let error = raw_os_error.map_or_else(
-                    || std::io::Error::new(error_kind, error_message),
-                    std::io::Error::from_raw_os_error,
-                );
-                P2MutationAction::Error(error.into())
-            }
-            MutationDecision::Success => P2MutationAction::Success,
-            MutationDecision::Invalidate => P2MutationAction::Trap,
-        }
-    }
-}
-
-fn p2_mutation_action_result(action: P2MutationAction) -> Result<(), FsError> {
-    match action {
-        P2MutationAction::Success => Ok(()),
-        P2MutationAction::Error(error) => Err(error),
-        P2MutationAction::Trap => Err(FsError::trap(wasmtime::Error::msg(
-            "agent filesystem mutation invalidated the runtime",
-        ))),
-        P2MutationAction::Retry => unreachable!("retry must be handled by the operation loop"),
-    }
-}
-
-async fn p2_initial_probe<T>(
-    runtime: &AgentFilesystemRuntime,
-    result: Result<T, std::io::Error>,
-) -> Result<T, FsError> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(error) => {
-            let raw_os_error = error.raw_os_error();
-            let error_kind = error.kind();
-            let message = error.to_string();
-            match runtime
-                .classify_mutation_failure_for::<ErrorCode>(
-                    MutationOperation::Metadata,
-                    MutationFailure::Io(error),
-                    MutationEffect::ProvenNoEffect,
-                )
-                .await
-            {
-                MutationDecision::Quota => Err(ErrorCode::Quota.into()),
-                MutationDecision::InsufficientSpace | MutationDecision::PhysicalPressure => {
-                    Err(ErrorCode::InsufficientSpace.into())
-                }
-                MutationDecision::BoundedRetry | MutationDecision::PreserveRaw => {
-                    let error = raw_os_error.map_or_else(
-                        || std::io::Error::new(error_kind, message),
-                        std::io::Error::from_raw_os_error,
-                    );
-                    Err(error.into())
-                }
-                MutationDecision::PreserveGuest(error) => Err(error.into()),
-                MutationDecision::Success => unreachable!("failed probe cannot be satisfied"),
-                MutationDecision::Invalidate => Err(FsError::trap(wasmtime::Error::msg(
-                    "agent filesystem mutation precondition probe invalidated the runtime",
-                ))),
-            }
-        }
-    }
-}
-
 fn p2_directory(descriptor: &Descriptor) -> Result<wasmtime_wasi::filesystem::Dir, FsError> {
     match descriptor {
         Descriptor::Dir(directory) => Ok(directory.clone()),
@@ -323,22 +56,9 @@ fn p2_directory(descriptor: &Descriptor) -> Result<wasmtime_wasi::filesystem::Di
     }
 }
 
-async fn p2_finish_native_mutation(
-    adapter: &P2MutationAdapter,
-    error: std::io::Error,
-    postcondition: P2MutationPostcondition,
-    retry_safe: bool,
-) -> Result<bool, FsError> {
-    match adapter.io_failure(error, postcondition, retry_safe).await {
-        P2MutationAction::Retry => Ok(true),
-        action => p2_mutation_action_result(action).map(|()| false),
-    }
-}
-
 fn p2_native_guest(error: NativeMutationGuestError) -> FsError {
     match error {
         NativeMutationGuestError::Invalid => ErrorCode::Invalid.into(),
-        NativeMutationGuestError::NotDirectory => ErrorCode::NotDirectory.into(),
         NativeMutationGuestError::NotPermitted => ErrorCode::NotPermitted.into(),
         NativeMutationGuestError::Unsupported => ErrorCode::Unsupported.into(),
     }
@@ -366,25 +86,10 @@ fn p2_native_time(requested: NewTimestamp) -> Result<Option<SystemTime>, FsError
     }
 }
 
-fn p2_times_postcondition(
-    current: Result<crate::services::agent_filesystem::TimesState, std::io::Error>,
-    before: crate::services::agent_filesystem::TimesState,
-    accessed: NewTimestamp,
-    modified: NewTimestamp,
-    identity_required: bool,
-) -> P2MutationPostcondition {
-    times_postcondition(
-        current,
-        before,
-        p2_requested_time(accessed),
-        p2_requested_time(modified),
-        identity_required,
-    )
-}
-
 fn p2_write_result(result: Result<u64, AgentFilesystemMutationError>) -> Result<Filesize, FsError> {
     match result {
         Ok(written) => Ok(written),
+        Err(AgentFilesystemMutationError::Guest(error)) => Err(p2_native_guest(error)),
         Err(AgentFilesystemMutationError::Native { error, .. }) => {
             Err(error.into_io_error().into())
         }
@@ -393,6 +98,26 @@ fn p2_write_result(result: Result<u64, AgentFilesystemMutationError>) -> Result<
             Err(ErrorCode::InsufficientSpace.into())
         }
         Err(AgentFilesystemMutationError::Cancelled { completed }) => Ok(completed),
+        Err(AgentFilesystemMutationError::RuntimeInvalidated { .. }) => Err(FsError::trap(
+            wasmtime::Error::msg("agent filesystem mutation invalidated the runtime"),
+        )),
+    }
+}
+
+fn p2_mutation_result<T>(result: Result<T, AgentFilesystemMutationError>) -> Result<T, FsError> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(AgentFilesystemMutationError::Guest(error)) => Err(p2_native_guest(error)),
+        Err(AgentFilesystemMutationError::Native { error, .. }) => {
+            Err(error.into_io_error().into())
+        }
+        Err(AgentFilesystemMutationError::QuotaExhausted { .. }) => Err(ErrorCode::Quota.into()),
+        Err(AgentFilesystemMutationError::InsufficientSpace { .. }) => {
+            Err(ErrorCode::InsufficientSpace.into())
+        }
+        Err(AgentFilesystemMutationError::Cancelled { .. }) => {
+            unreachable!("non-stream mutation is not cancellable")
+        }
         Err(AgentFilesystemMutationError::RuntimeInvalidated { .. }) => Err(FsError::trap(
             wasmtime::Error::msg("agent filesystem mutation invalidated the runtime"),
         )),
@@ -477,27 +202,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn sync_data(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "sync_data");
-        let effect = Arc::new(
-            self.filesystem_runtime()
-                .begin_effect()
-                .await
-                .map_err(FsError::trap)?,
-        );
+        let mutations = self.filesystem_runtime().mutations();
+        let admitted = p2_mutation_result(mutations.admit_sync().await)?;
         let descriptor = self.table().get(&self_)?.clone();
-        let mut adapter = P2MutationAdapter::new(self.filesystem_runtime());
-        adapter.begin_attempt();
-        match run_blocking_filesystem_mutation(effect, move || {
-            native_sync_descriptor(&descriptor, true)
-        })
-        .await
-        {
-            Ok(()) => Ok(()),
-            Err(error) => p2_mutation_action_result(
-                adapter
-                    .io_failure(error, P2MutationPostcondition::Unknown, false)
-                    .await,
-            ),
-        }
+        p2_mutation_result(mutations.sync(admitted, descriptor, true).await)
     }
 
     async fn get_flags(&mut self, fd: Resource<Descriptor>) -> Result<DescriptorFlags, FsError> {
@@ -521,46 +229,18 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
-        let effect = Arc::new(
-            self.filesystem_runtime()
-                .begin_update_effect()
-                .await
-                .map_err(FsError::trap)?,
-        );
-        self.fail_if_read_only(&fd)?;
-
+        let mutations = self.filesystem_runtime().mutations();
+        let admitted = p2_mutation_result(mutations.admit_resize().await)?;
         let descriptor = self.table().get(&fd)?.clone();
+        let checked =
+            p2_mutation_result(mutations.check_resize_policy(admitted, descriptor.clone(), size))?;
         let file = match &descriptor {
             Descriptor::File(file) => file.clone(),
             Descriptor::Dir(_) => return Err(ErrorCode::BadDescriptor.into()),
         };
-        validate_resize(&file).map_err(p2_native_guest)?;
-        let runtime = self.filesystem_runtime();
-        let before = p2_initial_probe(&runtime, p2_descriptor_state(&descriptor).await).await?;
-
+        let prepared = p2_mutation_result(mutations.prepare_resize(checked, file).await)?;
         self.observe_function_call("filesystem::types::descriptor", "set_size");
-        let mut adapter = P2MutationAdapter::for_operation(runtime, MutationOperation::Resize);
-        loop {
-            adapter.begin_attempt();
-            let file = file.clone();
-            let effect = Arc::clone(&effect);
-            let result =
-                run_blocking_filesystem_mutation(effect, move || native_resize_file(&file, size))
-                    .await;
-            match result {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition = p2_resize_postcondition(
-                        before,
-                        p2_descriptor_state(&descriptor).await,
-                        size,
-                    );
-                    if !p2_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        p2_mutation_result(mutations.resize(prepared).await.map(|_| ()))
     }
 
     async fn set_times(
@@ -569,46 +249,26 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         data_access_timestamp: NewTimestamp,
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
-        let effect = Arc::new(
-            self.filesystem_runtime()
-                .begin_update_effect()
-                .await
-                .map_err(FsError::trap)?,
-        );
-        self.fail_if_read_only(&fd)?;
-
+        let mutations = self.filesystem_runtime().mutations();
+        let admitted = p2_mutation_result(mutations.admit_descriptor_times().await)?;
+        let policy_descriptor = self.table().get(&fd)?.clone();
+        let checked = p2_mutation_result(
+            mutations.check_descriptor_times_policy(admitted, policy_descriptor),
+        )?;
         self.observe_function_call("filesystem::types::descriptor", "set_times");
         let descriptor = self.table().get(&fd)?.clone();
-        validate_descriptor_times(&descriptor).map_err(p2_native_guest)?;
+        let validated =
+            p2_mutation_result(mutations.prepare_descriptor_times(checked, descriptor))?;
         let accessed = p2_native_time(data_access_timestamp)?;
         let modified = p2_native_time(data_modification_timestamp)?;
-        let runtime = self.filesystem_runtime();
-        let before = p2_initial_probe(&runtime, p2_descriptor_times(&descriptor).await).await?;
-        let mut adapter = P2MutationAdapter::new(runtime);
-        loop {
-            adapter.begin_attempt();
-            let descriptor_for_attempt = descriptor.clone();
-            let effect = Arc::clone(&effect);
-            let result = run_blocking_filesystem_mutation(effect, move || {
-                native_set_descriptor_times(&descriptor_for_attempt, accessed, modified)
-            })
-            .await;
-            match result {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition = p2_times_postcondition(
-                        p2_descriptor_times(&descriptor).await,
-                        before,
-                        data_access_timestamp,
-                        data_modification_timestamp,
-                        false,
-                    );
-                    if !p2_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = mutations.bind_descriptor_times(
+            validated,
+            accessed,
+            modified,
+            p2_requested_time(data_access_timestamp),
+            p2_requested_time(data_modification_timestamp),
+        );
+        p2_mutation_result(mutations.set_descriptor_times(prepared).await)
     }
 
     async fn read(
@@ -669,27 +329,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn sync(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "sync");
-        let effect = Arc::new(
-            self.filesystem_runtime()
-                .begin_effect()
-                .await
-                .map_err(FsError::trap)?,
-        );
+        let mutations = self.filesystem_runtime().mutations();
+        let admitted = p2_mutation_result(mutations.admit_sync().await)?;
         let descriptor = self.table().get(&self_)?.clone();
-        let mut adapter = P2MutationAdapter::new(self.filesystem_runtime());
-        adapter.begin_attempt();
-        match run_blocking_filesystem_mutation(effect, move || {
-            native_sync_descriptor(&descriptor, false)
-        })
-        .await
-        {
-            Ok(()) => Ok(()),
-            Err(error) => p2_mutation_action_result(
-                adapter
-                    .io_failure(error, P2MutationPostcondition::Unknown, false)
-                    .await,
-            ),
-        }
+        p2_mutation_result(mutations.sync(admitted, descriptor, false).await)
     }
 
     async fn create_directory_at(
@@ -698,40 +341,15 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "create_directory_at");
-        let effect = Arc::new(
-            self.filesystem_runtime()
-                .begin_path_effect()
-                .await
-                .map_err(FsError::trap)?,
-        );
-        self.fail_if_read_only_path(&self_, &path, false)?;
+        let mutations = self.filesystem_runtime().mutations();
+        let admitted = p2_mutation_result(mutations.admit_create_directory().await)?;
+        let descriptor = self.table().get(&self_)?.clone();
+        let checked = p2_mutation_result(
+            mutations.check_create_directory_policy(admitted, descriptor, path),
+        )?;
         let directory = p2_directory(self.table().get(&self_)?)?;
-        validate_directory_mutation(&directory).map_err(p2_native_guest)?;
-        let runtime = self.filesystem_runtime();
-        let before = p2_initial_probe(&runtime, p2_path_state(&directory, &path).await).await?;
-        let mut adapter = P2MutationAdapter::for_operation(runtime, MutationOperation::Create);
-        loop {
-            adapter.begin_attempt();
-            let directory_for_attempt = directory.clone();
-            let path_for_attempt = path.clone();
-            let effect = Arc::clone(&effect);
-            let result = run_blocking_filesystem_mutation(effect, move || {
-                native_create_directory(&directory_for_attempt, &path_for_attempt)
-            })
-            .await;
-            match result {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition = p2_create_directory_postcondition(
-                        before,
-                        p2_path_state(&directory, &path).await,
-                    );
-                    if !p2_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = p2_mutation_result(mutations.prepare_create_directory(checked, directory))?;
+        p2_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
 
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
@@ -909,56 +527,29 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         data_access_timestamp: NewTimestamp,
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
-        let effect = Arc::new(
-            self.filesystem_runtime()
-                .begin_update_effect()
-                .await
-                .map_err(FsError::trap)?,
-        );
-        self.fail_if_read_only(&fd)?;
-        self.fail_if_read_only_path(&fd, &path, path_flags.contains(PathFlags::SYMLINK_FOLLOW))?;
-
+        let mutations = self.filesystem_runtime().mutations();
+        let admitted = p2_mutation_result(mutations.admit_path_times().await)?;
+        let follow = path_flags.contains(PathFlags::SYMLINK_FOLLOW);
+        let policy_descriptor = self.table().get(&fd)?.clone();
+        let checked = p2_mutation_result(mutations.check_path_times_policy(
+            admitted,
+            policy_descriptor,
+            path,
+            follow,
+        ))?;
         self.observe_function_call("filesystem::types::descriptor", "set_times_at");
         let directory = p2_directory(self.table().get(&fd)?)?;
-        validate_directory_mutation(&directory).map_err(p2_native_guest)?;
-        let follow = path_flags.contains(PathFlags::SYMLINK_FOLLOW);
+        let validated = p2_mutation_result(mutations.prepare_path_times(checked, directory))?;
         let accessed = p2_native_time(data_access_timestamp)?;
         let modified = p2_native_time(data_modification_timestamp)?;
-        let runtime = self.filesystem_runtime();
-        let before =
-            p2_initial_probe(&runtime, p2_path_times(&directory, &path, follow).await).await?;
-        let mut adapter = P2MutationAdapter::new(runtime);
-        loop {
-            adapter.begin_attempt();
-            let directory_for_attempt = directory.clone();
-            let path_for_attempt = path.clone();
-            let effect = Arc::clone(&effect);
-            let result = run_blocking_filesystem_mutation(effect, move || {
-                native_set_path_times(
-                    &directory_for_attempt,
-                    &path_for_attempt,
-                    follow,
-                    accessed,
-                    modified,
-                )
-            })
-            .await;
-            match result {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition = p2_times_postcondition(
-                        p2_path_times(&directory, &path, follow).await,
-                        before,
-                        data_access_timestamp,
-                        data_modification_timestamp,
-                        true,
-                    );
-                    if !p2_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = mutations.bind_path_times(
+            validated,
+            accessed,
+            modified,
+            p2_requested_time(data_access_timestamp),
+            p2_requested_time(data_modification_timestamp),
+        );
+        p2_mutation_result(mutations.set_path_times(prepared).await)
     }
 
     async fn link_at(
@@ -970,67 +561,34 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_path: String,
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "link_at");
-        let effect = Arc::new(
-            self.filesystem_runtime()
-                .begin_path_effect()
-                .await
-                .map_err(FsError::trap)?,
-        );
-        self.fail_if_read_only(&self_)?;
-        self.fail_if_read_only(&new_descriptor)?;
-        self.fail_if_read_only_path(
-            &self_,
-            &old_path,
-            old_path_flags.contains(PathFlags::SYMLINK_FOLLOW),
-        )?;
-        self.fail_if_read_only_path(&new_descriptor, &new_path, false)?;
+        let mutations = self.filesystem_runtime().mutations();
+        let admitted = p2_mutation_result(mutations.admit_hard_link().await)?;
+        let source_descriptor = self.table().get(&self_)?.clone();
+        let source_follow = old_path_flags.contains(PathFlags::SYMLINK_FOLLOW);
+        let source_checked =
+            p2_mutation_result(mutations.check_hard_link_source_descriptor_policy(
+                admitted,
+                source_descriptor,
+                old_path,
+                source_follow,
+            ))?;
+        let destination_descriptor = self.table().get(&new_descriptor)?.clone();
+        let destination_checked =
+            p2_mutation_result(mutations.check_hard_link_destination_descriptor_policy(
+                source_checked,
+                destination_descriptor,
+                new_path,
+            ))?;
+        let checked =
+            p2_mutation_result(mutations.check_hard_link_path_policy(destination_checked))?;
         let source_directory = p2_directory(self.table().get(&self_)?)?;
         let destination_directory = p2_directory(self.table().get(&new_descriptor)?)?;
-        validate_two_directory_mutation(&source_directory, &destination_directory)
-            .map_err(p2_native_guest)?;
-        if old_path_flags.contains(PathFlags::SYMLINK_FOLLOW) {
-            return Err(ErrorCode::Invalid.into());
-        }
-        let runtime = self.filesystem_runtime();
-        let source_before =
-            p2_initial_probe(&runtime, p2_path_state(&source_directory, &old_path).await).await?;
-        let destination_before = p2_initial_probe(
-            &runtime,
-            p2_path_state(&destination_directory, &new_path).await,
-        )
-        .await?;
-        let mut adapter = P2MutationAdapter::new(runtime);
-        loop {
-            adapter.begin_attempt();
-            let source_directory_for_attempt = source_directory.clone();
-            let destination_directory_for_attempt = destination_directory.clone();
-            let old_path_for_attempt = old_path.clone();
-            let new_path_for_attempt = new_path.clone();
-            let effect = Arc::clone(&effect);
-            let result = run_blocking_filesystem_mutation(effect, move || {
-                native_hard_link(
-                    &source_directory_for_attempt,
-                    &old_path_for_attempt,
-                    &destination_directory_for_attempt,
-                    &new_path_for_attempt,
-                )
-            })
-            .await;
-            match result {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition = p2_link_postcondition(
-                        source_before,
-                        destination_before,
-                        p2_path_state(&source_directory, &old_path).await,
-                        p2_path_state(&destination_directory, &new_path).await,
-                    );
-                    if !p2_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = p2_mutation_result(mutations.prepare_hard_link(
+            checked,
+            source_directory,
+            destination_directory,
+        ))?;
+        p2_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
 
     async fn open_at(
@@ -1042,23 +600,39 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
         let mutating = open_flags.intersects(OpenFlags::CREATE | OpenFlags::TRUNCATE);
-        let effect = if mutating {
-            Some(Arc::new(
-                self.filesystem_runtime()
-                    .begin_update_effect()
-                    .await
-                    .map_err(FsError::trap)?,
-            ))
+        let mutations = self.filesystem_runtime().mutations();
+        let admitted = if mutating {
+            Some(p2_mutation_result(mutations.admit_mutating_open().await)?)
         } else {
             None
         };
-        if open_flags.contains(OpenFlags::TRUNCATE) || flags.contains(DescriptorFlags::WRITE) {
-            self.fail_if_read_only_path(
-                &self_,
-                &path,
-                path_flags.contains(PathFlags::SYMLINK_FOLLOW),
-            )?;
-        }
+        let follow = path_flags.contains(PathFlags::SYMLINK_FOLLOW);
+        let writable =
+            open_flags.contains(OpenFlags::TRUNCATE) || flags.contains(DescriptorFlags::WRITE);
+        let checked = match (admitted, writable) {
+            (Some(admitted), true) => {
+                let descriptor = self.table().get(&self_)?.clone();
+                Some(p2_mutation_result(mutations.check_mutating_open_policy(
+                    admitted,
+                    descriptor,
+                    path.clone(),
+                    follow,
+                ))?)
+            }
+            (Some(admitted), false) => {
+                Some(mutations.bind_nonwritable_mutating_open(admitted, path.clone(), follow))
+            }
+            (None, true) => {
+                let descriptor = self.table().get(&self_)?.clone();
+                p2_mutation_result(mutations.check_writable_open_policy(
+                    &descriptor,
+                    &path,
+                    follow,
+                ))?;
+                None
+            }
+            (None, false) => None,
+        };
         self.observe_function_call("filesystem::types::descriptor", "open_at");
         if !mutating {
             let mut view = self.as_wasi_view();
@@ -1074,7 +648,6 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         }
 
         let directory = p2_directory(self.table().get(&self_)?)?;
-        let follow = path_flags.contains(PathFlags::SYMLINK_FOLLOW);
         let native_options = NativeOpenOptions {
             create: open_flags.contains(OpenFlags::CREATE),
             directory: open_flags.contains(OpenFlags::DIRECTORY),
@@ -1084,85 +657,22 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             read: flags.contains(DescriptorFlags::READ),
             write: flags.contains(DescriptorFlags::WRITE),
         };
-        validate_open(
-            &directory,
+        let unsupported_sync_flags = flags.intersects(
+            DescriptorFlags::FILE_INTEGRITY_SYNC
+                | DescriptorFlags::DATA_INTEGRITY_SYNC
+                | DescriptorFlags::REQUESTED_WRITE_SYNC,
+        );
+        let prepared = p2_mutation_result(mutations.prepare_mutating_open(
+            checked.expect("mutating open has checked admission"),
+            directory,
             native_options,
-            flags.intersects(
-                DescriptorFlags::FILE_INTEGRITY_SYNC
-                    | DescriptorFlags::DATA_INTEGRITY_SYNC
-                    | DescriptorFlags::REQUESTED_WRITE_SYNC,
-            ),
-        )
-        .map_err(p2_native_guest)?;
-        let runtime = self.filesystem_runtime();
-        let before = p2_initial_probe(
-            &runtime,
-            p2_path_state_with_follow(&directory, &path, follow).await,
-        )
-        .await?;
-        let requested_type = if open_flags.contains(OpenFlags::DIRECTORY) {
-            P2PathObjectType::Directory
-        } else {
-            P2PathObjectType::RegularFile
-        };
-        let operation = if open_flags.contains(OpenFlags::CREATE) {
-            MutationOperation::Create
-        } else {
-            MutationOperation::Resize
-        };
-        let mut adapter = P2MutationAdapter::for_operation(runtime, operation);
-        loop {
-            adapter.begin_attempt();
-            let directory_for_attempt = directory.clone();
-            let path_for_attempt = path.clone();
-            let effect = Arc::clone(effect.as_ref().expect("mutating open has an effect lease"));
-            let result = run_blocking_filesystem_mutation(effect, move || {
-                native_open(&directory_for_attempt, &path_for_attempt, native_options)
-            })
-            .await;
-            match result {
-                Ok(NativeOpenResult::Descriptor(descriptor)) => {
-                    return Ok(self.table().push(descriptor)?);
-                }
-                #[cfg(windows)]
-                Ok(NativeOpenResult::IsDirectory) => {
-                    return Err(ErrorCode::IsDirectory.into());
-                }
-                Ok(NativeOpenResult::NotDirectory) => {
-                    return Err(p2_native_guest(NativeMutationGuestError::NotDirectory));
-                }
-                Err(error) => {
-                    let postcondition = p2_open_postcondition(
-                        before,
-                        p2_path_state_with_follow(&directory, &path, follow).await,
-                        requested_type,
-                        open_flags.contains(OpenFlags::TRUNCATE),
-                        open_flags.contains(OpenFlags::EXCLUSIVE),
-                    );
-                    match adapter.io_failure(error, postcondition, true).await {
-                        P2MutationAction::Retry => {}
-                        P2MutationAction::Success => {
-                            let safe_flags = open_flags & OpenFlags::DIRECTORY;
-                            let mut view = self.as_wasi_view();
-                            return HostDescriptor::open_at(
-                                &mut view.filesystem(),
-                                Resource::new_borrow(self_.rep()),
-                                path_flags,
-                                path.clone(),
-                                safe_flags,
-                                flags,
-                            )
-                            .await;
-                        }
-                        P2MutationAction::Error(error) => return Err(error),
-                        P2MutationAction::Trap => {
-                            return Err(FsError::trap(wasmtime::Error::msg(
-                                "agent filesystem mutation invalidated the runtime",
-                            )));
-                        }
-                    }
-                }
-            }
+            unsupported_sync_flags,
+        ))?;
+        match p2_mutation_result(mutations.open_mutating(prepared).await)? {
+            NativeOpenResult::Descriptor(descriptor) => Ok(self.table().push(descriptor)?),
+            #[cfg(windows)]
+            NativeOpenResult::IsDirectory => Err(ErrorCode::IsDirectory.into()),
+            NativeOpenResult::NotDirectory => Err(ErrorCode::NotDirectory.into()),
         }
     }
 
@@ -1182,38 +692,15 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path: String,
     ) -> Result<(), FsError> {
         self.observe_function_call("filesystem::types::descriptor", "remove_directory_at");
-        let effect = Arc::new(
-            self.filesystem_runtime()
-                .begin_path_effect()
-                .await
-                .map_err(FsError::trap)?,
-        );
-        self.fail_if_contains_read_only_path(&self_, &path, false)?;
+        let mutations = self.filesystem_runtime().mutations();
+        let admitted = p2_mutation_result(mutations.admit_remove_directory().await)?;
+        let descriptor = self.table().get(&self_)?.clone();
+        let checked = p2_mutation_result(
+            mutations.check_remove_directory_policy(admitted, descriptor, path),
+        )?;
         let directory = p2_directory(self.table().get(&self_)?)?;
-        validate_directory_mutation(&directory).map_err(p2_native_guest)?;
-        let runtime = self.filesystem_runtime();
-        let before = p2_initial_probe(&runtime, p2_path_state(&directory, &path).await).await?;
-        let mut adapter = P2MutationAdapter::new(runtime);
-        loop {
-            adapter.begin_attempt();
-            let directory_for_attempt = directory.clone();
-            let path_for_attempt = path.clone();
-            let effect = Arc::clone(&effect);
-            let result = run_blocking_filesystem_mutation(effect, move || {
-                native_remove_directory(&directory_for_attempt, &path_for_attempt)
-            })
-            .await;
-            match result {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition =
-                        p2_remove_postcondition(before, p2_path_state(&directory, &path).await);
-                    if !p2_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = p2_mutation_result(mutations.prepare_remove_directory(checked, directory))?;
+        p2_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
 
     async fn rename_at(
@@ -1223,62 +710,31 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> Result<(), FsError> {
-        let effect = Arc::new(
-            self.filesystem_runtime()
-                .begin_path_effect()
-                .await
-                .map_err(FsError::trap)?,
-        );
-        self.fail_if_read_only(&old_fd)?;
-        self.fail_if_read_only(&new_fd)?;
-        self.fail_if_contains_read_only_path(&old_fd, &old_path, false)?;
-        self.fail_if_contains_read_only_path(&new_fd, &new_path, false)?;
-
+        let mutations = self.filesystem_runtime().mutations();
+        let admitted = p2_mutation_result(mutations.admit_rename().await)?;
+        let source_descriptor = self.table().get(&old_fd)?.clone();
+        let source_checked = p2_mutation_result(mutations.check_rename_source_descriptor_policy(
+            admitted,
+            source_descriptor,
+            old_path,
+        ))?;
+        let destination_descriptor = self.table().get(&new_fd)?.clone();
+        let destination_checked =
+            p2_mutation_result(mutations.check_rename_destination_descriptor_policy(
+                source_checked,
+                destination_descriptor,
+                new_path,
+            ))?;
+        let checked = p2_mutation_result(mutations.check_rename_path_policy(destination_checked))?;
         self.observe_function_call("filesystem::types::descriptor", "rename_at");
         let source_directory = p2_directory(self.table().get(&old_fd)?)?;
         let destination_directory = p2_directory(self.table().get(&new_fd)?)?;
-        validate_two_directory_mutation(&source_directory, &destination_directory)
-            .map_err(p2_native_guest)?;
-        let runtime = self.filesystem_runtime();
-        let source_before =
-            p2_initial_probe(&runtime, p2_path_state(&source_directory, &old_path).await).await?;
-        let destination_before = p2_initial_probe(
-            &runtime,
-            p2_path_state(&destination_directory, &new_path).await,
-        )
-        .await?;
-        let mut adapter = P2MutationAdapter::new(runtime);
-        loop {
-            adapter.begin_attempt();
-            let source_directory_for_attempt = source_directory.clone();
-            let destination_directory_for_attempt = destination_directory.clone();
-            let old_path_for_attempt = old_path.clone();
-            let new_path_for_attempt = new_path.clone();
-            let effect = Arc::clone(&effect);
-            let result = run_blocking_filesystem_mutation(effect, move || {
-                native_rename(
-                    &source_directory_for_attempt,
-                    &old_path_for_attempt,
-                    &destination_directory_for_attempt,
-                    &new_path_for_attempt,
-                )
-            })
-            .await;
-            match result {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition = p2_rename_postcondition(
-                        source_before,
-                        destination_before,
-                        p2_path_state(&source_directory, &old_path).await,
-                        p2_path_state(&destination_directory, &new_path).await,
-                    );
-                    if !p2_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = p2_mutation_result(mutations.prepare_rename(
+            checked,
+            source_directory,
+            destination_directory,
+        ))?;
+        p2_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
 
     async fn symlink_at(
@@ -1287,50 +743,16 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         old_path: String,
         new_path: String,
     ) -> Result<(), FsError> {
-        let effect = Arc::new(
-            self.filesystem_runtime()
-                .begin_path_effect()
-                .await
-                .map_err(FsError::trap)?,
-        );
-        self.fail_if_read_only(&fd)?;
-        self.fail_if_read_only_path(&fd, &new_path, false)?;
-
+        let mutations = self.filesystem_runtime().mutations();
+        let admitted = p2_mutation_result(mutations.admit_symlink().await)?;
+        let descriptor = self.table().get(&fd)?.clone();
+        let checked = p2_mutation_result(
+            mutations.check_symlink_policy(admitted, descriptor, old_path, new_path),
+        )?;
         self.observe_function_call("filesystem::types::descriptor", "symlink_at");
         let directory = p2_directory(self.table().get(&fd)?)?;
-        validate_directory_mutation(&directory).map_err(p2_native_guest)?;
-        let runtime = self.filesystem_runtime();
-        let before =
-            p2_initial_probe(&runtime, p2_symlink_state(&directory, &new_path).await).await?;
-        let mut adapter = P2MutationAdapter::for_operation(runtime, MutationOperation::Create);
-        loop {
-            adapter.begin_attempt();
-            let directory_for_attempt = directory.clone();
-            let old_path_for_attempt = old_path.clone();
-            let new_path_for_attempt = new_path.clone();
-            let effect = Arc::clone(&effect);
-            let result = run_blocking_filesystem_mutation(effect, move || {
-                native_symlink(
-                    &directory_for_attempt,
-                    &old_path_for_attempt,
-                    &new_path_for_attempt,
-                )
-            })
-            .await;
-            match result {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition = p2_symlink_postcondition(
-                        &before,
-                        p2_symlink_state(&directory, &new_path).await,
-                        &old_path,
-                    );
-                    if !p2_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = p2_mutation_result(mutations.prepare_symlink(checked, directory))?;
+        p2_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
 
     async fn unlink_file_at(
@@ -1338,41 +760,15 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         fd: Resource<Descriptor>,
         path: String,
     ) -> Result<(), FsError> {
-        let effect = Arc::new(
-            self.filesystem_runtime()
-                .begin_path_effect()
-                .await
-                .map_err(FsError::trap)?,
-        );
-        self.fail_if_read_only(&fd)?;
-        self.fail_if_read_only_path(&fd, &path, false)?;
-
+        let mutations = self.filesystem_runtime().mutations();
+        let admitted = p2_mutation_result(mutations.admit_unlink_file().await)?;
+        let descriptor = self.table().get(&fd)?.clone();
+        let checked =
+            p2_mutation_result(mutations.check_unlink_file_policy(admitted, descriptor, path))?;
         self.observe_function_call("filesystem::types::descriptor", "unlink_file_at");
         let directory = p2_directory(self.table().get(&fd)?)?;
-        validate_directory_mutation(&directory).map_err(p2_native_guest)?;
-        let runtime = self.filesystem_runtime();
-        let before = p2_initial_probe(&runtime, p2_path_state(&directory, &path).await).await?;
-        let mut adapter = P2MutationAdapter::new(runtime);
-        loop {
-            adapter.begin_attempt();
-            let directory_for_attempt = directory.clone();
-            let path_for_attempt = path.clone();
-            let effect = Arc::clone(&effect);
-            let result = run_blocking_filesystem_mutation(effect, move || {
-                native_unlink_file(&directory_for_attempt, &path_for_attempt)
-            })
-            .await;
-            match result {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition =
-                        p2_remove_postcondition(before, p2_path_state(&directory, &path).await);
-                    if !p2_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = p2_mutation_result(mutations.prepare_unlink_file(checked, directory))?;
+        p2_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
 
     async fn is_same_object(
@@ -1477,248 +873,4 @@ pub(crate) fn calculate_metadata_hash_parts(modified: Option<(u64, u32)>, size: 
     hasher.write_u64(size);
 
     hasher.finish128()
-}
-
-#[cfg(test)]
-mod p2_mutation_tests {
-    use super::*;
-    use crate::services::agent_filesystem::{
-        AgentFilesystemUsage, FilesystemCapacity, ResolvedAgentFilesystemLimits,
-    };
-    use test_r::test;
-
-    fn healthy_capacity() -> FilesystemCapacity {
-        FilesystemCapacity {
-            total_bytes: 100,
-            available_bytes: 50,
-            total_filesystem_objects: 100,
-            available_filesystem_objects: 50,
-        }
-    }
-
-    fn path_state(identity: Option<P2ObjectIdentity>) -> P2PathState {
-        P2PathState {
-            identity,
-            type_: P2PathObjectType::RegularFile,
-            size: 17,
-        }
-    }
-
-    #[test]
-    fn p2_object_comparison_requires_authoritative_identity() {
-        assert!(!p2_same_object(path_state(None), path_state(None)));
-        assert!(!p2_same_optional_object(
-            Some(path_state(None)),
-            Some(path_state(None)),
-        ));
-        assert!(p2_same_optional_object(None, None));
-
-        let identity = P2ObjectIdentity {
-            device: 3,
-            inode: 5,
-        };
-        assert!(p2_same_object(
-            path_state(Some(identity)),
-            path_state(Some(identity)),
-        ));
-    }
-
-    #[test]
-    async fn p2_adapter_retries_only_proven_no_effect_and_at_most_once() {
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
-        let mut adapter = P2MutationAdapter::new(runtime);
-
-        adapter.begin_attempt();
-        assert!(matches!(
-            adapter
-                .failure(
-                    ErrorCode::Busy.into(),
-                    P2MutationPostcondition::NoEffect,
-                    true
-                )
-                .await,
-            P2MutationAction::Retry
-        ));
-        adapter.begin_attempt();
-        assert!(matches!(
-            adapter
-                .failure(ErrorCode::Busy.into(), P2MutationPostcondition::NoEffect, true)
-                .await,
-            P2MutationAction::Error(error)
-                if error.downcast_ref() == Some(&ErrorCode::Busy)
-        ));
-    }
-
-    #[test_r::test]
-    async fn p2_adapter_accepts_satisfied_postcondition_without_retry() {
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
-        let mut adapter = P2MutationAdapter::new(runtime);
-        adapter.begin_attempt();
-
-        assert!(matches!(
-            adapter
-                .failure(
-                    ErrorCode::Interrupted.into(),
-                    P2MutationPostcondition::Satisfied,
-                    true,
-                )
-                .await,
-            P2MutationAction::Success
-        ));
-
-        let mut adapter = P2MutationAdapter::new(
-            crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test(),
-        );
-        adapter.begin_attempt();
-        assert!(matches!(
-            adapter
-                .failure(
-                    ErrorCode::NoEntry.into(),
-                    P2MutationPostcondition::Satisfied,
-                    true,
-                )
-                .await,
-            P2MutationAction::Success
-        ));
-    }
-
-    #[test_r::test]
-    async fn p2_adapter_invalidates_changed_or_unknown_effect() {
-        let runtime = crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test();
-        let mut adapter = P2MutationAdapter::new(runtime.clone());
-        adapter.begin_attempt();
-
-        assert!(matches!(
-            adapter
-                .failure(
-                    ErrorCode::Busy.into(),
-                    P2MutationPostcondition::Unknown,
-                    true
-                )
-                .await,
-            P2MutationAction::Trap
-        ));
-        assert!(runtime.begin_effect().await.is_err());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test_r::test]
-    async fn p2_native_eio_reaches_terminal_classifier() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let mut adapter = P2MutationAdapter::new(runtime.clone());
-        adapter.begin_attempt();
-
-        assert!(matches!(
-            adapter
-                .io_failure(
-                    std::io::Error::from_raw_os_error(libc::EIO),
-                    P2MutationPostcondition::NoEffect,
-                    true,
-                )
-                .await,
-            P2MutationAction::Trap
-        ));
-        assert!(runtime.begin_effect().await.is_err());
-    }
-
-    #[test_r::test]
-    async fn p2_adapter_distinguishes_quota_from_physical_exhaustion() {
-        let exhausted = FilesystemCapacity {
-            available_bytes: 0,
-            available_filesystem_objects: 0,
-            ..healthy_capacity()
-        };
-        let quota_runtime =
-            crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test_with_observations(
-                Some(AgentFilesystemUsage {
-                    allocated_bytes: 50,
-                    filesystem_objects: 10,
-                }),
-                Some(ResolvedAgentFilesystemLimits {
-                    allocated_bytes: 50,
-                    filesystem_objects: 10,
-                    filesystem_object_limit_policy_version: 2,
-                }),
-                exhausted,
-            );
-        let mut quota = P2MutationAdapter::new(quota_runtime);
-        quota.begin_attempt();
-        assert!(matches!(
-            quota
-                .failure(
-                    ErrorCode::InsufficientSpace.into(),
-                    P2MutationPostcondition::NoEffect,
-                    true,
-                )
-                .await,
-            P2MutationAction::Error(error)
-                if error.downcast_ref() == Some(&ErrorCode::Quota)
-        ));
-
-        let physical_runtime =
-            crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test_with_observations(
-                None, None, exhausted,
-            );
-        let recovery_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        physical_runtime.set_pressure_recovery_callback(Some({
-            let recovery_attempts = Arc::clone(&recovery_attempts);
-            Arc::new(move |operation, _deadline| {
-                let recovery_attempts = Arc::clone(&recovery_attempts);
-                Box::pin(async move {
-                    assert_eq!(operation, MutationOperation::Metadata);
-                    recovery_attempts.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                    true
-                })
-            })
-        }));
-        let mut physical = P2MutationAdapter::new(physical_runtime);
-        physical.begin_attempt();
-        assert!(matches!(
-            physical
-                .failure(
-                    ErrorCode::InsufficientSpace.into(),
-                    P2MutationPostcondition::NoEffect,
-                    true,
-                )
-                .await,
-            P2MutationAction::Retry
-        ));
-        physical.begin_attempt();
-        assert!(matches!(
-            physical
-                .failure(
-                    ErrorCode::InsufficientSpace.into(),
-                    P2MutationPostcondition::NoEffect,
-                    true,
-                )
-                .await,
-            P2MutationAction::Error(error)
-                if error.downcast_ref() == Some(&ErrorCode::InsufficientSpace)
-        ));
-        assert_eq!(
-            recovery_attempts.load(std::sync::atomic::Ordering::Acquire),
-            1
-        );
-    }
-
-    #[test_r::test]
-    async fn p2_adapter_preserves_access_error_when_backend_is_healthy() {
-        let runtime =
-            crate::services::agent_filesystem::AgentFilesystemRuntime::new_for_test_with_observations(
-                None,
-                None,
-                healthy_capacity(),
-            );
-        let mut adapter = P2MutationAdapter::new(runtime.clone());
-        adapter.begin_attempt();
-
-        assert!(matches!(
-            adapter
-                .failure(ErrorCode::Access.into(), P2MutationPostcondition::NoEffect, true)
-                .await,
-            P2MutationAction::Error(error)
-                if error.downcast_ref() == Some(&ErrorCode::Access)
-        ));
-        assert!(runtime.begin_effect().await.is_ok());
-    }
 }

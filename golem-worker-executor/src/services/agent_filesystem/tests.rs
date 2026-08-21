@@ -763,14 +763,20 @@ async fn short_effect_final_sample_is_debounced_from_drain() {
     let observer = Arc::new(CountingUsageObserver::default());
     runtime.set_usage_observer(Some(observer.clone()));
     // Start the sampler after the drain so scheduler load cannot race the debounce assertion.
-    runtime.inner.usage_sampling.store(true, Ordering::Release);
+    runtime
+        .runtime_state
+        .usage_sampling
+        .store(true, Ordering::Release);
     let effect = runtime.begin_effect().await.unwrap();
 
     let drained_at = Instant::now();
     drop(effect);
     runtime.drain().await;
-    runtime.inner.usage_sampling.store(false, Ordering::Release);
-    runtime.inner.schedule_usage_sampling();
+    runtime
+        .runtime_state
+        .usage_sampling
+        .store(false, Ordering::Release);
+    runtime.runtime_state.schedule_usage_sampling();
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         while observer.completed.load(Ordering::Acquire) == 0 {
             tokio::task::yield_now().await;
@@ -820,10 +826,13 @@ async fn sampler_exit_hands_off_to_an_effect_admitted_during_teardown() {
     let runtime = AgentFilesystemRuntime::new_for_test();
     let observer = Arc::new(CountingUsageObserver::default());
     runtime.set_usage_observer(Some(observer.clone()));
-    runtime.inner.usage_sampling.store(true, Ordering::Release);
+    runtime
+        .runtime_state
+        .usage_sampling
+        .store(true, Ordering::Release);
     let effect = runtime.begin_effect().await.unwrap();
 
-    runtime.inner.finish_usage_sampling(0);
+    runtime.runtime_state.finish_usage_sampling(0);
 
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         while observer.completed.load(Ordering::Acquire) == 0 {
@@ -841,12 +850,15 @@ async fn sampler_exit_does_not_restart_an_inactive_window() {
     let observer = Arc::new(CountingUsageObserver::default());
     observer.active.store(false, Ordering::Release);
     runtime.set_usage_observer(Some(observer.clone()));
-    runtime.inner.usage_sampling.store(true, Ordering::Release);
+    runtime
+        .runtime_state
+        .usage_sampling
+        .store(true, Ordering::Release);
     let effect = runtime.begin_effect().await.unwrap();
 
-    runtime.inner.finish_usage_sampling(0);
+    runtime.runtime_state.finish_usage_sampling(0);
 
-    assert!(!runtime.inner.usage_sampling.load(Ordering::Acquire));
+    assert!(!runtime.runtime_state.usage_sampling.load(Ordering::Acquire));
     assert_eq!(observer.begun.load(Ordering::Acquire), 0);
     drop(effect);
 }
@@ -856,11 +868,14 @@ fn sampler_exit_does_not_restart_without_pending_effects() {
     let runtime = AgentFilesystemRuntime::new_for_test();
     let observer = Arc::new(CountingUsageObserver::default());
     runtime.set_usage_observer(Some(observer.clone()));
-    runtime.inner.usage_sampling.store(true, Ordering::Release);
+    runtime
+        .runtime_state
+        .usage_sampling
+        .store(true, Ordering::Release);
 
-    runtime.inner.finish_usage_sampling(0);
+    runtime.runtime_state.finish_usage_sampling(0);
 
-    assert!(!runtime.inner.usage_sampling.load(Ordering::Acquire));
+    assert!(!runtime.runtime_state.usage_sampling.load(Ordering::Acquire));
     assert_eq!(observer.begun.load(Ordering::Acquire), 0);
 }
 
@@ -1293,7 +1308,7 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
         .await
         .unwrap();
     let path = filesystem.path().to_path_buf();
-    let project_id = xfs::project_id_for_test(filesystem.runtime.inner.backend.as_ref());
+    let project_id = xfs::project_id_for_test(filesystem.runtime.runtime_state.backend.as_ref());
     let materialized_usage = filesystem.usage().await.unwrap().unwrap();
     assert!(materialized_usage.allocated_bytes >= 3 * 8192);
     assert!(materialized_usage.filesystem_objects >= 4);
@@ -1457,7 +1472,7 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
     filesystem.close_and_delete().await.unwrap();
     assert!(!path.exists());
     assert!(
-        !retained_runtime.inner.backend.root().exists(),
+        !retained_runtime.runtime_state.backend.root().exists(),
         "a retained runtime must not keep the per-agent root descriptor open"
     );
     assert_eq!(
@@ -1519,7 +1534,8 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
 
     let object_limited = filesystems.create_owned_empty(&agent_id()).await.unwrap();
     let object_backend = backend.clone();
-    let object_project = xfs::project_id_for_test(object_limited.runtime.inner.backend.as_ref());
+    let object_project =
+        xfs::project_id_for_test(object_limited.runtime.runtime_state.backend.as_ref());
     object_backend
         .install_project_limits(
             object_project,
@@ -1572,7 +1588,8 @@ async fn managed_xfs_owns_observes_and_cleans_project_filesystem() {
     );
 
     let deferred = filesystems.create_owned_empty(&agent_id()).await.unwrap();
-    let deferred_project = xfs::project_id_for_test(deferred.runtime.inner.backend.as_ref());
+    let deferred_project =
+        xfs::project_id_for_test(deferred.runtime.runtime_state.backend.as_ref());
     let retained_root = File::open(deferred.path()).unwrap();
     drop(deferred);
     drop(retained_root);

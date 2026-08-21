@@ -18,6 +18,7 @@ use bytes::Bytes;
 use cap_fs_ext::{DirExt as _, FollowSymlinks, OpenOptionsFollowExt, OpenOptionsMaybeDirExt};
 use cap_std::fs::FileExt;
 use fs_set_times::{SetTimes as _, SystemTimeSpec};
+use golem_common::model::component::AgentFilePermissions;
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::Ordering;
 #[cfg(test)]
@@ -43,12 +44,12 @@ mod protocol;
 )]
 pub(crate) use protocol::{
     AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemMutationResult,
-    AgentFilesystemMutations, AgentFilesystemWriteCompletion, AgentFilesystemWriteMode,
-    AgentFilesystemWriter, NativeFilesystemError,
+    AgentFilesystemMutations, AgentFilesystemOperationResult, AgentFilesystemWriteCompletion,
+    AgentFilesystemWriteMode, AgentFilesystemWriter, NativeFilesystemError,
 };
 
 // Terminal flag: once set, this runtime never admits another filesystem effect.
-pub(super) const FILESYSTEM_RUNTIME_SEALED: usize = 1 << (usize::BITS - 1);
+const FILESYSTEM_RUNTIME_SEALED: usize = 1 << (usize::BITS - 1);
 // Temporary flag: reject new effects while an existing set drains for a consistent observation.
 const FILESYSTEM_RUNTIME_ADMISSION_PAUSED: usize = 1 << (usize::BITS - 2);
 // All remaining low bits form the active-effect reference count.
@@ -70,6 +71,39 @@ where
         operation()
     })
     .await
+}
+
+impl AgentFilesystemRuntime {
+    pub(crate) fn is_read_only(&self, path: &Path) -> bool {
+        self.is_read_only_path(path, true)
+    }
+
+    pub(crate) fn is_read_only_path(&self, path: &Path, follow_final_symlink: bool) -> bool {
+        let path = initial_files::resolve_policy_path(path, follow_final_symlink);
+        self.runtime_state
+            .initial_files
+            .read()
+            .expect("initial-files policy lock poisoned")
+            .iter()
+            .any(|(initial_path, file)| {
+                file.permissions == AgentFilePermissions::ReadOnly
+                    && initial_files::resolve_policy_path(initial_path, true) == path
+            })
+    }
+
+    pub(crate) fn contains_read_only_path(&self, path: &Path, follow_final_symlink: bool) -> bool {
+        let path = initial_files::resolve_policy_path(path, follow_final_symlink);
+        self.runtime_state
+            .initial_files
+            .read()
+            .expect("initial-files policy lock poisoned")
+            .iter()
+            .any(|(initial_path, file)| {
+                let initial_path = initial_files::resolve_policy_path(initial_path, true);
+                file.permissions == AgentFilePermissions::ReadOnly
+                    && (initial_path == path || initial_path.starts_with(&path))
+            })
+    }
 }
 
 pub(crate) fn sync_descriptor(descriptor: &Descriptor, data_only: bool) -> std::io::Result<()> {
@@ -176,10 +210,9 @@ pub(crate) fn symlink(directory: &Dir, source: &str, destination: &str) -> std::
     directory.dir.symlink(source, destination)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NativeMutationGuestError {
     Invalid,
-    NotDirectory,
     NotPermitted,
     Unsupported,
 }
@@ -363,24 +396,25 @@ impl AgentFilesystemRuntime {
         &self,
     ) -> Result<AgentFilesystemUpdateEffectLease, wasmtime::Error> {
         let admission = loop {
-            let mut admission_resumed = Box::pin(self.inner.admission_resumed.notified());
+            let mut admission_resumed = Box::pin(self.runtime_state.admission_resumed.notified());
             admission_resumed.as_mut().enable();
             match self.admit_effect() {
                 Ok(admission) => break admission,
                 Err(error) => {
-                    let state = self.inner.state.load(Ordering::Acquire);
-                    if state & FILESYSTEM_RUNTIME_SEALED != 0 {
+                    if self.runtime_state.is_sealed() {
                         return Err(error);
                     }
-                    if state & FILESYSTEM_RUNTIME_ADMISSION_PAUSED != 0 {
+                    if self.runtime_state.effect_admission_is_paused() {
                         admission_resumed.await;
                     }
                 }
             }
         };
-        let operation_guard = Arc::clone(&self.inner.operations).write_owned().await;
+        let operation_guard = Arc::clone(&self.runtime_state.operations)
+            .write_owned()
+            .await;
         Ok(AgentFilesystemUpdateEffectLease {
-            _inner: Arc::new(AgentFilesystemUpdateEffectLeaseInner {
+            _lease_state: Arc::new(AgentFilesystemUpdateEffectLeaseState {
                 _admission: admission,
                 _operation_guard: operation_guard,
             }),
@@ -388,76 +422,43 @@ impl AgentFilesystemRuntime {
     }
 
     pub(crate) fn admit_effect(&self) -> Result<AgentFilesystemEffectAdmission, wasmtime::Error> {
-        let mut state = self.inner.state.load(Ordering::Acquire);
-        loop {
-            if state & FILESYSTEM_RUNTIME_SEALED != 0 {
-                return Err(wasmtime::Error::msg("agent filesystem is closing"));
-            }
-            if state & FILESYSTEM_RUNTIME_ADMISSION_PAUSED != 0 {
-                return Err(wasmtime::Error::msg(
-                    "agent filesystem resource window is transitioning",
-                ));
-            }
-            let active_effects = state & FILESYSTEM_RUNTIME_ACTIVE_EFFECTS;
-            let next = active_effects
-                .checked_add(1)
-                .filter(|next| next & !FILESYSTEM_RUNTIME_ACTIVE_EFFECTS == 0)
-                .expect("agent filesystem effect count overflowed");
-            match self.inner.state.compare_exchange_weak(
-                state,
-                next,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(observed) => state = observed,
-            }
-        }
-        self.inner
+        self.runtime_state
+            .try_admit_effect()
+            .map_err(|error| match error {
+                AgentFilesystemEffectAdmissionError::Sealed => {
+                    wasmtime::Error::msg("agent filesystem is closing")
+                }
+                AgentFilesystemEffectAdmissionError::Paused => {
+                    wasmtime::Error::msg("agent filesystem resource window is transitioning")
+                }
+            })?;
+        self.runtime_state
             .usage_effect_epoch
             .fetch_add(1, Ordering::Release);
-        self.inner.schedule_usage_sampling();
+        self.runtime_state.schedule_usage_sampling();
         Ok(AgentFilesystemEffectAdmission {
-            inner: Arc::clone(&self.inner),
+            runtime_state: Arc::clone(&self.runtime_state),
         })
     }
 
     pub(crate) fn seal(&self) {
-        self.inner
-            .state
-            .fetch_or(FILESYSTEM_RUNTIME_SEALED, Ordering::AcqRel);
+        self.runtime_state.seal();
     }
 
     pub(crate) fn pause_effect_admission(&self) -> AgentFilesystemEffectAdmissionPause {
-        let previous = self
-            .inner
-            .state
-            .fetch_or(FILESYSTEM_RUNTIME_ADMISSION_PAUSED, Ordering::AcqRel);
-        assert_eq!(
-            previous & FILESYSTEM_RUNTIME_ADMISSION_PAUSED,
-            0,
-            "agent filesystem effect admission is already paused"
-        );
+        self.runtime_state.pause_effect_admission();
         AgentFilesystemEffectAdmissionPause {
-            inner: Arc::clone(&self.inner),
+            runtime_state: Arc::clone(&self.runtime_state),
         }
     }
 
     pub(crate) fn seal_if_no_active_effects(&self) -> bool {
-        self.inner
-            .state
-            .compare_exchange(
-                0,
-                FILESYSTEM_RUNTIME_SEALED,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
+        self.runtime_state.seal_if_no_active_effects()
     }
 
     pub(crate) async fn drain(&self) {
         while self.has_active_effects() {
-            let mut drained = Box::pin(self.inner.drained.notified());
+            let mut drained = Box::pin(self.runtime_state.drained.notified());
             drained.as_mut().enable();
             if !self.has_active_effects() {
                 break;
@@ -472,25 +473,102 @@ impl AgentFilesystemRuntime {
     }
 
     pub(crate) fn has_active_effects(&self) -> bool {
-        self.inner.state.load(Ordering::Acquire) & FILESYSTEM_RUNTIME_ACTIVE_EFFECTS != 0
+        self.runtime_state.has_active_effects()
     }
 
     #[cfg(test)]
     pub(crate) fn effect_admission_is_paused(&self) -> bool {
-        self.inner.state.load(Ordering::Acquire) & FILESYSTEM_RUNTIME_ADMISSION_PAUSED != 0
+        self.runtime_state.effect_admission_is_paused()
     }
 
     pub(crate) fn last_effect_completion_millis(&self) -> u64 {
-        self.inner
+        self.runtime_state
             .last_effect_completion_millis
             .load(Ordering::Acquire)
     }
 }
 
-impl AgentFilesystemRuntimeInner {
+enum AgentFilesystemEffectAdmissionError {
+    Sealed,
+    Paused,
+}
+
+impl AgentFilesystemRuntimeState {
+    pub(super) fn is_sealed(&self) -> bool {
+        self.lifecycle.load(Ordering::Acquire) & FILESYSTEM_RUNTIME_SEALED != 0
+    }
+
+    fn effect_admission_is_paused(&self) -> bool {
+        self.lifecycle.load(Ordering::Acquire) & FILESYSTEM_RUNTIME_ADMISSION_PAUSED != 0
+    }
+
+    fn has_active_effects(&self) -> bool {
+        self.lifecycle.load(Ordering::Acquire) & FILESYSTEM_RUNTIME_ACTIVE_EFFECTS != 0
+    }
+
+    fn try_admit_effect(&self) -> Result<(), AgentFilesystemEffectAdmissionError> {
+        let mut lifecycle = self.lifecycle.load(Ordering::Acquire);
+        loop {
+            if lifecycle & FILESYSTEM_RUNTIME_SEALED != 0 {
+                return Err(AgentFilesystemEffectAdmissionError::Sealed);
+            }
+            if lifecycle & FILESYSTEM_RUNTIME_ADMISSION_PAUSED != 0 {
+                return Err(AgentFilesystemEffectAdmissionError::Paused);
+            }
+            let active_effects = lifecycle & FILESYSTEM_RUNTIME_ACTIVE_EFFECTS;
+            let next = active_effects
+                .checked_add(1)
+                .filter(|next| next & !FILESYSTEM_RUNTIME_ACTIVE_EFFECTS == 0)
+                .expect("agent filesystem effect count overflowed");
+            match self.lifecycle.compare_exchange_weak(
+                lifecycle,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(observed) => lifecycle = observed,
+            }
+        }
+    }
+
+    fn seal(&self) {
+        self.lifecycle
+            .fetch_or(FILESYSTEM_RUNTIME_SEALED, Ordering::AcqRel);
+    }
+
+    fn pause_effect_admission(&self) {
+        let previous = self
+            .lifecycle
+            .fetch_or(FILESYSTEM_RUNTIME_ADMISSION_PAUSED, Ordering::AcqRel);
+        assert_eq!(
+            previous & FILESYSTEM_RUNTIME_ADMISSION_PAUSED,
+            0,
+            "agent filesystem effect admission is already paused"
+        );
+    }
+
+    fn resume_effect_admission(&self) {
+        let previous = self
+            .lifecycle
+            .fetch_and(!FILESYSTEM_RUNTIME_ADMISSION_PAUSED, Ordering::AcqRel);
+        debug_assert_ne!(previous & FILESYSTEM_RUNTIME_ADMISSION_PAUSED, 0);
+    }
+
+    fn seal_if_no_active_effects(&self) -> bool {
+        self.lifecycle
+            .compare_exchange(
+                0,
+                FILESYSTEM_RUNTIME_SEALED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
     fn finish_effect(self: &Arc<Self>) {
         self.usage_effect_epoch.fetch_add(1, Ordering::Release);
-        let previous = self.state.fetch_sub(1, Ordering::AcqRel);
+        let previous = self.lifecycle.fetch_sub(1, Ordering::AcqRel);
         let previous_active = previous & FILESYSTEM_RUNTIME_ACTIVE_EFFECTS;
         debug_assert!(previous_active > 0);
         if previous_active == 1 {
@@ -522,7 +600,7 @@ impl AgentFilesystemRuntimeInner {
         }
 
         let runtime = AgentFilesystemRuntime {
-            inner: Arc::clone(self),
+            runtime_state: Arc::clone(self),
         };
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             self.usage_sampling.store(false, Ordering::Release);
@@ -530,7 +608,7 @@ impl AgentFilesystemRuntimeInner {
         };
         handle.spawn(async move {
             let mut sampled_effect_epoch = 0;
-            let mut drained = Box::pin(runtime.inner.drained.notified());
+            let mut drained = Box::pin(runtime.runtime_state.drained.notified());
             drained.as_mut().enable();
             if runtime.has_active_effects() {
                 tokio::select! {
@@ -546,7 +624,10 @@ impl AgentFilesystemRuntimeInner {
                 if !runtime.usage_observer_is_active() {
                     break;
                 }
-                let effect_epoch = runtime.inner.usage_effect_epoch.load(Ordering::Acquire);
+                let effect_epoch = runtime
+                    .runtime_state
+                    .usage_effect_epoch
+                    .load(Ordering::Acquire);
                 if let Err(error) = runtime.observe_usage_for_billing().await {
                     tracing::error!(error = %error, "Failed to observe filesystem usage during an active resource window");
                     runtime.invalidate_runtime().await;
@@ -554,13 +635,16 @@ impl AgentFilesystemRuntimeInner {
                 }
                 sampled_effect_epoch = effect_epoch;
                 if !runtime.has_active_effects()
-                    && runtime.inner.usage_effect_epoch.load(Ordering::Acquire)
+                    && runtime
+                        .runtime_state
+                        .usage_effect_epoch
+                        .load(Ordering::Acquire)
                         == sampled_effect_epoch
                 {
                     break;
                 }
 
-                let mut drained = Box::pin(runtime.inner.drained.notified());
+                let mut drained = Box::pin(runtime.runtime_state.drained.notified());
                 drained.as_mut().enable();
                 if runtime.has_active_effects() {
                     tokio::select! {
@@ -575,7 +659,7 @@ impl AgentFilesystemRuntimeInner {
             }
 
             runtime
-                .inner
+                .runtime_state
                 .finish_usage_sampling(sampled_effect_epoch);
         });
     }
@@ -589,7 +673,7 @@ impl AgentFilesystemRuntimeInner {
             .as_ref()
             .is_some_and(|observer| observer.is_active());
         if observer_active
-            && (self.state.load(Ordering::Acquire) & FILESYSTEM_RUNTIME_ACTIVE_EFFECTS != 0
+            && (self.has_active_effects()
                 || self.usage_effect_epoch.load(Ordering::Acquire) != sampled_effect_epoch)
         {
             self.schedule_usage_sampling();
@@ -607,43 +691,41 @@ pub(crate) struct AgentFilesystemEffectLease {
 
 #[derive(Clone)]
 pub(crate) struct AgentFilesystemUpdateEffectLease {
-    _inner: Arc<AgentFilesystemUpdateEffectLeaseInner>,
+    _lease_state: Arc<AgentFilesystemUpdateEffectLeaseState>,
 }
 
-struct AgentFilesystemUpdateEffectLeaseInner {
+struct AgentFilesystemUpdateEffectLeaseState {
     _admission: AgentFilesystemEffectAdmission,
     _operation_guard: tokio::sync::OwnedRwLockWriteGuard<()>,
 }
 
 pub(crate) struct AgentFilesystemEffectAdmission {
-    inner: Arc<AgentFilesystemRuntimeInner>,
+    runtime_state: Arc<AgentFilesystemRuntimeState>,
 }
 
 #[must_use = "effect admission resumes when the pause is dropped"]
 pub(crate) struct AgentFilesystemEffectAdmissionPause {
-    inner: Arc<AgentFilesystemRuntimeInner>,
+    runtime_state: Arc<AgentFilesystemRuntimeState>,
 }
 
 impl Drop for AgentFilesystemEffectAdmissionPause {
     fn drop(&mut self) {
-        let previous = self
-            .inner
-            .state
-            .fetch_and(!FILESYSTEM_RUNTIME_ADMISSION_PAUSED, Ordering::AcqRel);
-        debug_assert_ne!(previous & FILESYSTEM_RUNTIME_ADMISSION_PAUSED, 0);
-        self.inner.admission_resumed.notify_waiters();
+        self.runtime_state.resume_effect_admission();
+        self.runtime_state.admission_resumed.notify_waiters();
     }
 }
 
 impl Drop for AgentFilesystemEffectAdmission {
     fn drop(&mut self) {
-        self.inner.finish_effect();
+        self.runtime_state.finish_effect();
     }
 }
 
 impl AgentFilesystemEffectAdmission {
     pub(crate) async fn begin(self) -> Result<AgentFilesystemEffectLease, wasmtime::Error> {
-        let operation_guard = Arc::clone(&self.inner.operations).read_owned().await;
+        let operation_guard = Arc::clone(&self.runtime_state.operations)
+            .read_owned()
+            .await;
         self.ensure_open()?;
         Ok(AgentFilesystemEffectLease {
             _admission: self,
@@ -654,8 +736,10 @@ impl AgentFilesystemEffectAdmission {
     }
 
     pub(crate) async fn begin_append(self) -> Result<AgentFilesystemEffectLease, wasmtime::Error> {
-        let guard = Arc::clone(&self.inner.append).lock_owned().await;
-        let operation_guard = Arc::clone(&self.inner.operations).read_owned().await;
+        let guard = Arc::clone(&self.runtime_state.append).lock_owned().await;
+        let operation_guard = Arc::clone(&self.runtime_state.operations)
+            .read_owned()
+            .await;
         self.ensure_open()?;
         Ok(AgentFilesystemEffectLease {
             _admission: self,
@@ -666,8 +750,10 @@ impl AgentFilesystemEffectAdmission {
     }
 
     pub(crate) async fn begin_path(self) -> Result<AgentFilesystemEffectLease, wasmtime::Error> {
-        let operation_guard = Arc::clone(&self.inner.operations).read_owned().await;
-        let namespace_guard = Arc::clone(&self.inner.namespace).lock_owned().await;
+        let operation_guard = Arc::clone(&self.runtime_state.operations)
+            .read_owned()
+            .await;
+        let namespace_guard = Arc::clone(&self.runtime_state.namespace).lock_owned().await;
         self.ensure_open()?;
         Ok(AgentFilesystemEffectLease {
             _admission: self,
@@ -678,7 +764,7 @@ impl AgentFilesystemEffectAdmission {
     }
 
     fn ensure_open(&self) -> Result<(), wasmtime::Error> {
-        if self.inner.state.load(Ordering::Acquire) & FILESYSTEM_RUNTIME_SEALED != 0 {
+        if self.runtime_state.is_sealed() {
             Err(wasmtime::Error::msg("agent filesystem is closing"))
         } else {
             Ok(())
@@ -770,6 +856,9 @@ impl ClassifiedFileOutputStream {
         };
 
         self.state = match completion.await {
+            Err(AgentFilesystemMutationError::Guest(_)) => FilesystemOutputState::Error(
+                ClassifiedFilesystemStreamFailure::Guest(ErrorCode::NotPermitted),
+            ),
             Ok(_) | Err(AgentFilesystemMutationError::Cancelled { .. }) => {
                 FilesystemOutputState::Ready
             }

@@ -51,6 +51,7 @@ impl NativeFilesystemError {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AgentFilesystemMutationError {
+    Guest(NativeMutationGuestError),
     Native {
         error: NativeFilesystemError,
         completed: u64,
@@ -73,6 +74,7 @@ pub(crate) enum AgentFilesystemMutationError {
 }
 
 pub(crate) type AgentFilesystemMutationResult = Result<u64, AgentFilesystemMutationError>;
+pub(crate) type AgentFilesystemOperationResult<T = ()> = Result<T, AgentFilesystemMutationError>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AgentFilesystemWriteMode {
@@ -83,6 +85,170 @@ pub(crate) enum AgentFilesystemWriteMode {
 #[derive(Clone)]
 pub(crate) struct AgentFilesystemMutations {
     runtime: AgentFilesystemRuntime,
+}
+
+macro_rules! update_admission {
+    ($($name:ident),+ $(,)?) => {
+        $(pub(crate) struct $name {
+            effect: Arc<AgentFilesystemUpdateEffectLease>,
+        })+
+    };
+}
+
+macro_rules! effect_admission {
+    ($($name:ident),+ $(,)?) => {
+        $(pub(crate) struct $name {
+            effect: Arc<AgentFilesystemEffectLease>,
+        })+
+    };
+}
+
+update_admission!(
+    AdmittedFilesystemResize,
+    AdmittedFilesystemDescriptorTimes,
+    AdmittedFilesystemPathTimes,
+    AdmittedFilesystemMutatingOpen,
+);
+
+effect_admission!(
+    AdmittedFilesystemSync,
+    AdmittedFilesystemCreateDirectory,
+    AdmittedFilesystemHardLink,
+    AdmittedFilesystemRename,
+    AdmittedFilesystemRemoveDirectory,
+    AdmittedFilesystemSymlink,
+    AdmittedFilesystemUnlinkFile,
+);
+
+pub(crate) struct PreparedFilesystemResize {
+    native: Arc<dyn FilesystemResize>,
+    effect: Arc<AgentFilesystemUpdateEffectLease>,
+    before: PathState,
+    size: u64,
+}
+
+pub(crate) struct PolicyCheckedFilesystemResize {
+    effect: Arc<AgentFilesystemUpdateEffectLease>,
+    descriptor: Descriptor,
+    size: u64,
+}
+
+pub(crate) struct PolicyCheckedFilesystemDescriptorTimes {
+    effect: Arc<AgentFilesystemUpdateEffectLease>,
+    descriptor: Descriptor,
+}
+
+pub(crate) struct ValidatedFilesystemDescriptorTimes {
+    effect: Arc<AgentFilesystemUpdateEffectLease>,
+    descriptor: Descriptor,
+}
+
+pub(crate) struct PreparedFilesystemDescriptorTimes {
+    validated: ValidatedFilesystemDescriptorTimes,
+    accessed: Option<std::time::SystemTime>,
+    modified: Option<std::time::SystemTime>,
+    requested_accessed: RequestedTime,
+    requested_modified: RequestedTime,
+}
+
+pub(crate) struct PolicyCheckedFilesystemPathTimes {
+    effect: Arc<AgentFilesystemUpdateEffectLease>,
+    descriptor: Descriptor,
+    path: String,
+    follow: bool,
+}
+
+pub(crate) struct ValidatedFilesystemPathTimes {
+    effect: Arc<AgentFilesystemUpdateEffectLease>,
+    directory: Dir,
+    path: String,
+    follow: bool,
+}
+
+pub(crate) struct PreparedFilesystemPathTimes {
+    validated: ValidatedFilesystemPathTimes,
+    accessed: Option<std::time::SystemTime>,
+    modified: Option<std::time::SystemTime>,
+    requested_accessed: RequestedTime,
+    requested_modified: RequestedTime,
+}
+
+pub(crate) struct PreparedFilesystemNamespaceMutation {
+    effect: Arc<AgentFilesystemEffectLease>,
+    mutation: NamespaceMutation,
+}
+
+pub(crate) struct PreparedFilesystemMutatingOpen {
+    effect: Arc<AgentFilesystemUpdateEffectLease>,
+    directory: Dir,
+    path: String,
+    options: NativeOpenOptions,
+    unsupported_sync_flags: bool,
+}
+
+pub(crate) struct PolicyCheckedFilesystemMutatingOpen {
+    effect: Arc<AgentFilesystemUpdateEffectLease>,
+    descriptor: Option<Descriptor>,
+    path: String,
+    follow: bool,
+}
+
+pub(crate) struct PolicyCheckedFilesystemCreateDirectory {
+    effect: Arc<AgentFilesystemEffectLease>,
+    descriptor: Descriptor,
+    path: String,
+}
+
+pub(crate) struct PolicyCheckedFilesystemRemoveDirectory {
+    effect: Arc<AgentFilesystemEffectLease>,
+    descriptor: Descriptor,
+    path: String,
+}
+
+pub(crate) struct PolicyCheckedFilesystemSymlink {
+    effect: Arc<AgentFilesystemEffectLease>,
+    descriptor: Descriptor,
+    target: String,
+    path: String,
+}
+
+pub(crate) struct PolicyCheckedFilesystemUnlinkFile {
+    effect: Arc<AgentFilesystemEffectLease>,
+    descriptor: Descriptor,
+    path: String,
+}
+
+pub(crate) struct SourceCheckedFilesystemHardLink {
+    effect: Arc<AgentFilesystemEffectLease>,
+    source: Descriptor,
+    source_path: String,
+    source_follow: bool,
+}
+
+pub(crate) struct DestinationCheckedFilesystemHardLink {
+    source_checked: SourceCheckedFilesystemHardLink,
+    destination: Descriptor,
+    destination_path: String,
+}
+
+pub(crate) struct PathsCheckedFilesystemHardLink {
+    destination_checked: DestinationCheckedFilesystemHardLink,
+}
+
+pub(crate) struct SourceCheckedFilesystemRename {
+    effect: Arc<AgentFilesystemEffectLease>,
+    source: Descriptor,
+    source_path: String,
+}
+
+pub(crate) struct DestinationCheckedFilesystemRename {
+    source_checked: SourceCheckedFilesystemRename,
+    destination: Descriptor,
+    destination_path: String,
+}
+
+pub(crate) struct PathsCheckedFilesystemRename {
+    destination_checked: DestinationCheckedFilesystemRename,
 }
 
 impl AgentFilesystemMutations {
@@ -132,9 +298,1095 @@ impl AgentFilesystemMutations {
         .map(|write| write.execute(tokio_util::sync::CancellationToken::new()))
     }
 
-    pub(crate) async fn resize(&self, file: File, size: u64) -> AgentFilesystemMutationResult {
-        self.resize_with_native(Arc::new(NativeFilesystemResize { file }), size)
+    pub(crate) async fn admit_sync(
+        &self,
+    ) -> AgentFilesystemOperationResult<AdmittedFilesystemSync> {
+        self.begin_effect()
             .await
+            .map(|effect| AdmittedFilesystemSync { effect })
+    }
+
+    pub(crate) async fn admit_resize(
+        &self,
+    ) -> AgentFilesystemOperationResult<AdmittedFilesystemResize> {
+        self.begin_update_effect()
+            .await
+            .map(|effect| AdmittedFilesystemResize { effect })
+    }
+
+    pub(crate) async fn admit_descriptor_times(
+        &self,
+    ) -> AgentFilesystemOperationResult<AdmittedFilesystemDescriptorTimes> {
+        self.begin_update_effect()
+            .await
+            .map(|effect| AdmittedFilesystemDescriptorTimes { effect })
+    }
+
+    pub(crate) async fn admit_path_times(
+        &self,
+    ) -> AgentFilesystemOperationResult<AdmittedFilesystemPathTimes> {
+        self.begin_update_effect()
+            .await
+            .map(|effect| AdmittedFilesystemPathTimes { effect })
+    }
+
+    pub(crate) async fn admit_mutating_open(
+        &self,
+    ) -> AgentFilesystemOperationResult<AdmittedFilesystemMutatingOpen> {
+        self.begin_update_effect()
+            .await
+            .map(|effect| AdmittedFilesystemMutatingOpen { effect })
+    }
+
+    pub(crate) async fn admit_create_directory(
+        &self,
+    ) -> AgentFilesystemOperationResult<AdmittedFilesystemCreateDirectory> {
+        self.begin_namespace_effect()
+            .await
+            .map(|effect| AdmittedFilesystemCreateDirectory { effect })
+    }
+
+    pub(crate) async fn admit_hard_link(
+        &self,
+    ) -> AgentFilesystemOperationResult<AdmittedFilesystemHardLink> {
+        self.begin_namespace_effect()
+            .await
+            .map(|effect| AdmittedFilesystemHardLink { effect })
+    }
+
+    pub(crate) async fn admit_rename(
+        &self,
+    ) -> AgentFilesystemOperationResult<AdmittedFilesystemRename> {
+        self.begin_namespace_effect()
+            .await
+            .map(|effect| AdmittedFilesystemRename { effect })
+    }
+
+    pub(crate) async fn admit_remove_directory(
+        &self,
+    ) -> AgentFilesystemOperationResult<AdmittedFilesystemRemoveDirectory> {
+        self.begin_namespace_effect()
+            .await
+            .map(|effect| AdmittedFilesystemRemoveDirectory { effect })
+    }
+
+    pub(crate) async fn admit_symlink(
+        &self,
+    ) -> AgentFilesystemOperationResult<AdmittedFilesystemSymlink> {
+        self.begin_namespace_effect()
+            .await
+            .map(|effect| AdmittedFilesystemSymlink { effect })
+    }
+
+    pub(crate) async fn admit_unlink_file(
+        &self,
+    ) -> AgentFilesystemOperationResult<AdmittedFilesystemUnlinkFile> {
+        self.begin_namespace_effect()
+            .await
+            .map(|effect| AdmittedFilesystemUnlinkFile { effect })
+    }
+
+    pub(crate) fn check_resize_policy(
+        &self,
+        admitted: AdmittedFilesystemResize,
+        descriptor: Descriptor,
+        size: u64,
+    ) -> AgentFilesystemOperationResult<PolicyCheckedFilesystemResize> {
+        self.ensure_descriptor_writable(&descriptor)?;
+        Ok(PolicyCheckedFilesystemResize {
+            effect: admitted.effect,
+            descriptor,
+            size,
+        })
+    }
+
+    pub(crate) async fn prepare_resize(
+        &self,
+        checked: PolicyCheckedFilesystemResize,
+        file: File,
+    ) -> AgentFilesystemOperationResult<PreparedFilesystemResize> {
+        self.ensure_file_matches_descriptor(&checked.descriptor, &file)?;
+        validate_resize(&file).map_err(AgentFilesystemMutationError::Guest)?;
+        self.prepare_resize_with_native(
+            Arc::new(NativeFilesystemResize { file }),
+            checked.effect,
+            checked.size,
+        )
+        .await
+    }
+
+    pub(crate) async fn resize(
+        &self,
+        prepared: PreparedFilesystemResize,
+    ) -> AgentFilesystemMutationResult {
+        self.resize_with_prepared_native(prepared).await
+    }
+
+    pub(crate) async fn sync(
+        &self,
+        admitted: AdmittedFilesystemSync,
+        descriptor: Descriptor,
+        data_only: bool,
+    ) -> AgentFilesystemOperationResult {
+        match run_blocking_filesystem_mutation(admitted.effect, move || {
+            sync_descriptor(&descriptor, data_only)
+        })
+        .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) => match self
+                .resolve_non_prefix_failure(
+                    MutationOperation::Metadata,
+                    error,
+                    MutationPostcondition::Unknown,
+                    FILESYSTEM_MUTATION_MAX_ATTEMPTS,
+                    Instant::now(),
+                )
+                .await
+            {
+                NonPrefixResolution::Error(error) => Err(error),
+                NonPrefixResolution::Retry | NonPrefixResolution::Success => {
+                    unreachable!("sync failure has an unknown effect")
+                }
+            },
+        }
+    }
+
+    pub(crate) fn check_descriptor_times_policy(
+        &self,
+        admitted: AdmittedFilesystemDescriptorTimes,
+        descriptor: Descriptor,
+    ) -> AgentFilesystemOperationResult<PolicyCheckedFilesystemDescriptorTimes> {
+        self.ensure_descriptor_writable(&descriptor)?;
+        Ok(PolicyCheckedFilesystemDescriptorTimes {
+            effect: admitted.effect,
+            descriptor,
+        })
+    }
+
+    pub(crate) fn prepare_descriptor_times(
+        &self,
+        checked: PolicyCheckedFilesystemDescriptorTimes,
+        descriptor: Descriptor,
+    ) -> AgentFilesystemOperationResult<ValidatedFilesystemDescriptorTimes> {
+        self.ensure_descriptor_matches(&checked.descriptor, &descriptor)?;
+        validate_descriptor_times(&descriptor).map_err(AgentFilesystemMutationError::Guest)?;
+        Ok(ValidatedFilesystemDescriptorTimes {
+            effect: checked.effect,
+            descriptor,
+        })
+    }
+
+    pub(crate) fn bind_descriptor_times(
+        &self,
+        validated: ValidatedFilesystemDescriptorTimes,
+        accessed: Option<std::time::SystemTime>,
+        modified: Option<std::time::SystemTime>,
+        requested_accessed: RequestedTime,
+        requested_modified: RequestedTime,
+    ) -> PreparedFilesystemDescriptorTimes {
+        PreparedFilesystemDescriptorTimes {
+            validated,
+            accessed,
+            modified,
+            requested_accessed,
+            requested_modified,
+        }
+    }
+
+    pub(crate) async fn set_descriptor_times(
+        &self,
+        prepared: PreparedFilesystemDescriptorTimes,
+    ) -> AgentFilesystemOperationResult {
+        let PreparedFilesystemDescriptorTimes {
+            validated,
+            accessed,
+            modified,
+            requested_accessed,
+            requested_modified,
+        } = prepared;
+        let ValidatedFilesystemDescriptorTimes { effect, descriptor } = validated;
+        let before = self
+            .initial_probe(
+                MutationOperation::Metadata,
+                descriptor_times(&descriptor).await,
+            )
+            .await?;
+        let started = Instant::now();
+        let mut failures = 0;
+        loop {
+            let descriptor_for_attempt = descriptor.clone();
+            let effect = Arc::clone(&effect);
+            match run_blocking_filesystem_mutation(effect, move || {
+                super::set_descriptor_times(&descriptor_for_attempt, accessed, modified)
+            })
+            .await
+            {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    failures += 1;
+                    let postcondition = times_postcondition(
+                        descriptor_times(&descriptor).await,
+                        before,
+                        requested_accessed,
+                        requested_modified,
+                        false,
+                    );
+                    match self
+                        .resolve_non_prefix_failure(
+                            MutationOperation::Metadata,
+                            error,
+                            postcondition,
+                            failures,
+                            started,
+                        )
+                        .await
+                    {
+                        NonPrefixResolution::Retry => {}
+                        NonPrefixResolution::Success => return Ok(()),
+                        NonPrefixResolution::Error(error) => return Err(error),
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn check_path_times_policy(
+        &self,
+        admitted: AdmittedFilesystemPathTimes,
+        descriptor: Descriptor,
+        path: String,
+        follow: bool,
+    ) -> AgentFilesystemOperationResult<PolicyCheckedFilesystemPathTimes> {
+        self.ensure_descriptor_writable(&descriptor)?;
+        self.ensure_descriptor_path_writable(&descriptor, &path, follow, false)?;
+        Ok(PolicyCheckedFilesystemPathTimes {
+            effect: admitted.effect,
+            descriptor,
+            path,
+            follow,
+        })
+    }
+
+    pub(crate) fn prepare_path_times(
+        &self,
+        checked: PolicyCheckedFilesystemPathTimes,
+        directory: Dir,
+    ) -> AgentFilesystemOperationResult<ValidatedFilesystemPathTimes> {
+        self.ensure_dir_matches_descriptor(&checked.descriptor, &directory)?;
+        validate_directory_mutation(&directory).map_err(AgentFilesystemMutationError::Guest)?;
+        Ok(ValidatedFilesystemPathTimes {
+            effect: checked.effect,
+            directory,
+            path: checked.path,
+            follow: checked.follow,
+        })
+    }
+
+    pub(crate) fn bind_path_times(
+        &self,
+        validated: ValidatedFilesystemPathTimes,
+        accessed: Option<std::time::SystemTime>,
+        modified: Option<std::time::SystemTime>,
+        requested_accessed: RequestedTime,
+        requested_modified: RequestedTime,
+    ) -> PreparedFilesystemPathTimes {
+        PreparedFilesystemPathTimes {
+            validated,
+            accessed,
+            modified,
+            requested_accessed,
+            requested_modified,
+        }
+    }
+
+    pub(crate) async fn set_path_times(
+        &self,
+        prepared: PreparedFilesystemPathTimes,
+    ) -> AgentFilesystemOperationResult {
+        let PreparedFilesystemPathTimes {
+            validated,
+            accessed,
+            modified,
+            requested_accessed,
+            requested_modified,
+        } = prepared;
+        let ValidatedFilesystemPathTimes {
+            effect,
+            directory,
+            path,
+            follow,
+        } = validated;
+        let before = self
+            .initial_probe(
+                MutationOperation::Metadata,
+                path_times(&directory, &path, follow).await,
+            )
+            .await?;
+        let started = Instant::now();
+        let mut failures = 0;
+        loop {
+            let directory_for_attempt = directory.clone();
+            let path_for_attempt = path.clone();
+            let effect = Arc::clone(&effect);
+            match run_blocking_filesystem_mutation(effect, move || {
+                super::set_path_times(
+                    &directory_for_attempt,
+                    &path_for_attempt,
+                    follow,
+                    accessed,
+                    modified,
+                )
+            })
+            .await
+            {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    failures += 1;
+                    let postcondition = times_postcondition(
+                        path_times(&directory, &path, follow).await,
+                        before,
+                        requested_accessed,
+                        requested_modified,
+                        true,
+                    );
+                    match self
+                        .resolve_non_prefix_failure(
+                            MutationOperation::Metadata,
+                            error,
+                            postcondition,
+                            failures,
+                            started,
+                        )
+                        .await
+                    {
+                        NonPrefixResolution::Retry => {}
+                        NonPrefixResolution::Success => return Ok(()),
+                        NonPrefixResolution::Error(error) => return Err(error),
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn check_create_directory_policy(
+        &self,
+        admitted: AdmittedFilesystemCreateDirectory,
+        descriptor: Descriptor,
+        path: String,
+    ) -> AgentFilesystemOperationResult<PolicyCheckedFilesystemCreateDirectory> {
+        self.ensure_descriptor_path_writable(&descriptor, &path, false, false)?;
+        Ok(PolicyCheckedFilesystemCreateDirectory {
+            effect: admitted.effect,
+            descriptor,
+            path,
+        })
+    }
+
+    pub(crate) fn prepare_create_directory(
+        &self,
+        checked: PolicyCheckedFilesystemCreateDirectory,
+        directory: Dir,
+    ) -> AgentFilesystemOperationResult<PreparedFilesystemNamespaceMutation> {
+        self.ensure_dir_matches_descriptor(&checked.descriptor, &directory)?;
+        validate_directory_mutation(&directory).map_err(AgentFilesystemMutationError::Guest)?;
+        Ok(PreparedFilesystemNamespaceMutation {
+            effect: checked.effect,
+            mutation: NamespaceMutation::CreateDirectory {
+                directory,
+                path: checked.path,
+            },
+        })
+    }
+
+    pub(crate) fn check_hard_link_source_descriptor_policy(
+        &self,
+        admitted: AdmittedFilesystemHardLink,
+        source: Descriptor,
+        source_path: String,
+        source_follow: bool,
+    ) -> AgentFilesystemOperationResult<SourceCheckedFilesystemHardLink> {
+        self.ensure_descriptor_writable(&source)?;
+        Ok(SourceCheckedFilesystemHardLink {
+            effect: admitted.effect,
+            source,
+            source_path,
+            source_follow,
+        })
+    }
+
+    pub(crate) fn check_hard_link_destination_descriptor_policy(
+        &self,
+        source_checked: SourceCheckedFilesystemHardLink,
+        destination: Descriptor,
+        destination_path: String,
+    ) -> AgentFilesystemOperationResult<DestinationCheckedFilesystemHardLink> {
+        self.ensure_descriptor_writable(&destination)?;
+        Ok(DestinationCheckedFilesystemHardLink {
+            source_checked,
+            destination,
+            destination_path,
+        })
+    }
+
+    pub(crate) fn check_hard_link_path_policy(
+        &self,
+        destination_checked: DestinationCheckedFilesystemHardLink,
+    ) -> AgentFilesystemOperationResult<PathsCheckedFilesystemHardLink> {
+        let source = &destination_checked.source_checked;
+        self.ensure_descriptor_path_writable(
+            &source.source,
+            &source.source_path,
+            source.source_follow,
+            false,
+        )?;
+        self.ensure_descriptor_path_writable(
+            &destination_checked.destination,
+            &destination_checked.destination_path,
+            false,
+            false,
+        )?;
+        Ok(PathsCheckedFilesystemHardLink {
+            destination_checked,
+        })
+    }
+
+    pub(crate) fn prepare_hard_link(
+        &self,
+        checked: PathsCheckedFilesystemHardLink,
+        source: Dir,
+        destination: Dir,
+    ) -> AgentFilesystemOperationResult<PreparedFilesystemNamespaceMutation> {
+        let DestinationCheckedFilesystemHardLink {
+            source_checked,
+            destination: checked_destination,
+            destination_path,
+        } = checked.destination_checked;
+        self.ensure_dir_matches_descriptor(&source_checked.source, &source)?;
+        self.ensure_dir_matches_descriptor(&checked_destination, &destination)?;
+        validate_two_directory_mutation(&source, &destination)
+            .map_err(AgentFilesystemMutationError::Guest)?;
+        if source_checked.source_follow {
+            return Err(AgentFilesystemMutationError::Guest(
+                NativeMutationGuestError::Invalid,
+            ));
+        }
+        Ok(PreparedFilesystemNamespaceMutation {
+            effect: source_checked.effect,
+            mutation: NamespaceMutation::HardLink {
+                source,
+                source_path: source_checked.source_path,
+                source_follow: source_checked.source_follow,
+                destination,
+                destination_path,
+            },
+        })
+    }
+
+    pub(crate) fn check_rename_source_descriptor_policy(
+        &self,
+        admitted: AdmittedFilesystemRename,
+        source: Descriptor,
+        source_path: String,
+    ) -> AgentFilesystemOperationResult<SourceCheckedFilesystemRename> {
+        self.ensure_descriptor_writable(&source)?;
+        Ok(SourceCheckedFilesystemRename {
+            effect: admitted.effect,
+            source,
+            source_path,
+        })
+    }
+
+    pub(crate) fn check_rename_destination_descriptor_policy(
+        &self,
+        source_checked: SourceCheckedFilesystemRename,
+        destination: Descriptor,
+        destination_path: String,
+    ) -> AgentFilesystemOperationResult<DestinationCheckedFilesystemRename> {
+        self.ensure_descriptor_writable(&destination)?;
+        Ok(DestinationCheckedFilesystemRename {
+            source_checked,
+            destination,
+            destination_path,
+        })
+    }
+
+    pub(crate) fn check_rename_path_policy(
+        &self,
+        destination_checked: DestinationCheckedFilesystemRename,
+    ) -> AgentFilesystemOperationResult<PathsCheckedFilesystemRename> {
+        self.ensure_descriptor_path_writable(
+            &destination_checked.source_checked.source,
+            &destination_checked.source_checked.source_path,
+            false,
+            true,
+        )?;
+        self.ensure_descriptor_path_writable(
+            &destination_checked.destination,
+            &destination_checked.destination_path,
+            false,
+            true,
+        )?;
+        Ok(PathsCheckedFilesystemRename {
+            destination_checked,
+        })
+    }
+
+    pub(crate) fn prepare_rename(
+        &self,
+        checked: PathsCheckedFilesystemRename,
+        source: Dir,
+        destination: Dir,
+    ) -> AgentFilesystemOperationResult<PreparedFilesystemNamespaceMutation> {
+        let DestinationCheckedFilesystemRename {
+            source_checked,
+            destination: checked_destination,
+            destination_path,
+        } = checked.destination_checked;
+        self.ensure_dir_matches_descriptor(&source_checked.source, &source)?;
+        self.ensure_dir_matches_descriptor(&checked_destination, &destination)?;
+        validate_two_directory_mutation(&source, &destination)
+            .map_err(AgentFilesystemMutationError::Guest)?;
+        Ok(PreparedFilesystemNamespaceMutation {
+            effect: source_checked.effect,
+            mutation: NamespaceMutation::Rename {
+                source,
+                source_path: source_checked.source_path,
+                destination,
+                destination_path,
+            },
+        })
+    }
+
+    pub(crate) fn check_remove_directory_policy(
+        &self,
+        admitted: AdmittedFilesystemRemoveDirectory,
+        descriptor: Descriptor,
+        path: String,
+    ) -> AgentFilesystemOperationResult<PolicyCheckedFilesystemRemoveDirectory> {
+        self.ensure_descriptor_path_writable(&descriptor, &path, false, true)?;
+        Ok(PolicyCheckedFilesystemRemoveDirectory {
+            effect: admitted.effect,
+            descriptor,
+            path,
+        })
+    }
+
+    pub(crate) fn prepare_remove_directory(
+        &self,
+        checked: PolicyCheckedFilesystemRemoveDirectory,
+        directory: Dir,
+    ) -> AgentFilesystemOperationResult<PreparedFilesystemNamespaceMutation> {
+        self.ensure_dir_matches_descriptor(&checked.descriptor, &directory)?;
+        validate_directory_mutation(&directory).map_err(AgentFilesystemMutationError::Guest)?;
+        Ok(PreparedFilesystemNamespaceMutation {
+            effect: checked.effect,
+            mutation: NamespaceMutation::RemoveDirectory {
+                directory,
+                path: checked.path,
+            },
+        })
+    }
+
+    pub(crate) fn check_symlink_policy(
+        &self,
+        admitted: AdmittedFilesystemSymlink,
+        descriptor: Descriptor,
+        target: String,
+        path: String,
+    ) -> AgentFilesystemOperationResult<PolicyCheckedFilesystemSymlink> {
+        self.ensure_descriptor_writable(&descriptor)?;
+        self.ensure_descriptor_path_writable(&descriptor, &path, false, false)?;
+        Ok(PolicyCheckedFilesystemSymlink {
+            effect: admitted.effect,
+            descriptor,
+            target,
+            path,
+        })
+    }
+
+    pub(crate) fn prepare_symlink(
+        &self,
+        checked: PolicyCheckedFilesystemSymlink,
+        directory: Dir,
+    ) -> AgentFilesystemOperationResult<PreparedFilesystemNamespaceMutation> {
+        self.ensure_dir_matches_descriptor(&checked.descriptor, &directory)?;
+        validate_directory_mutation(&directory).map_err(AgentFilesystemMutationError::Guest)?;
+        Ok(PreparedFilesystemNamespaceMutation {
+            effect: checked.effect,
+            mutation: NamespaceMutation::Symlink {
+                directory,
+                target: checked.target,
+                path: checked.path,
+            },
+        })
+    }
+
+    pub(crate) fn check_unlink_file_policy(
+        &self,
+        admitted: AdmittedFilesystemUnlinkFile,
+        descriptor: Descriptor,
+        path: String,
+    ) -> AgentFilesystemOperationResult<PolicyCheckedFilesystemUnlinkFile> {
+        self.ensure_descriptor_writable(&descriptor)?;
+        self.ensure_descriptor_path_writable(&descriptor, &path, false, false)?;
+        Ok(PolicyCheckedFilesystemUnlinkFile {
+            effect: admitted.effect,
+            descriptor,
+            path,
+        })
+    }
+
+    pub(crate) fn prepare_unlink_file(
+        &self,
+        checked: PolicyCheckedFilesystemUnlinkFile,
+        directory: Dir,
+    ) -> AgentFilesystemOperationResult<PreparedFilesystemNamespaceMutation> {
+        self.ensure_dir_matches_descriptor(&checked.descriptor, &directory)?;
+        validate_directory_mutation(&directory).map_err(AgentFilesystemMutationError::Guest)?;
+        Ok(PreparedFilesystemNamespaceMutation {
+            effect: checked.effect,
+            mutation: NamespaceMutation::UnlinkFile {
+                directory,
+                path: checked.path,
+            },
+        })
+    }
+
+    pub(crate) async fn run_namespace_mutation(
+        &self,
+        prepared: PreparedFilesystemNamespaceMutation,
+    ) -> AgentFilesystemOperationResult {
+        self.run_namespace(prepared.effect, prepared.mutation).await
+    }
+
+    pub(crate) fn check_writable_open_policy(
+        &self,
+        descriptor: &Descriptor,
+        path: &str,
+        follow: bool,
+    ) -> AgentFilesystemOperationResult {
+        self.ensure_descriptor_path_writable(descriptor, path, follow, false)
+    }
+
+    pub(crate) fn check_mutating_open_policy(
+        &self,
+        admitted: AdmittedFilesystemMutatingOpen,
+        descriptor: Descriptor,
+        path: String,
+        follow: bool,
+    ) -> AgentFilesystemOperationResult<PolicyCheckedFilesystemMutatingOpen> {
+        self.ensure_descriptor_path_writable(&descriptor, &path, follow, false)?;
+        Ok(PolicyCheckedFilesystemMutatingOpen {
+            effect: admitted.effect,
+            descriptor: Some(descriptor),
+            path,
+            follow,
+        })
+    }
+
+    pub(crate) fn bind_nonwritable_mutating_open(
+        &self,
+        admitted: AdmittedFilesystemMutatingOpen,
+        path: String,
+        follow: bool,
+    ) -> PolicyCheckedFilesystemMutatingOpen {
+        PolicyCheckedFilesystemMutatingOpen {
+            effect: admitted.effect,
+            descriptor: None,
+            path,
+            follow,
+        }
+    }
+
+    pub(crate) fn prepare_mutating_open(
+        &self,
+        checked: PolicyCheckedFilesystemMutatingOpen,
+        directory: Dir,
+        options: NativeOpenOptions,
+        unsupported_sync_flags: bool,
+    ) -> AgentFilesystemOperationResult<PreparedFilesystemMutatingOpen> {
+        self.ensure_matching_follow(checked.follow, options.follow)?;
+        match &checked.descriptor {
+            Some(descriptor) => self.ensure_dir_matches_descriptor(descriptor, &directory)?,
+            None if options.truncate || options.write => {
+                return Err(Self::invalid_prepared_input());
+            }
+            None => {}
+        }
+        validate_open(&directory, options, unsupported_sync_flags)
+            .map_err(AgentFilesystemMutationError::Guest)?;
+        Ok(PreparedFilesystemMutatingOpen {
+            effect: checked.effect,
+            directory,
+            path: checked.path,
+            options,
+            unsupported_sync_flags,
+        })
+    }
+
+    pub(crate) async fn open_mutating(
+        &self,
+        prepared: PreparedFilesystemMutatingOpen,
+    ) -> AgentFilesystemOperationResult<NativeOpenResult> {
+        let PreparedFilesystemMutatingOpen {
+            effect,
+            directory,
+            path,
+            options,
+            unsupported_sync_flags: _,
+        } = prepared;
+        let before = self
+            .initial_probe(
+                MutationOperation::Metadata,
+                path_state_with_follow(&directory, &path, options.follow).await,
+            )
+            .await?;
+        let requested_type = if options.directory {
+            PathObjectType::Directory
+        } else {
+            PathObjectType::RegularFile
+        };
+        let operation = if options.create {
+            MutationOperation::Create
+        } else {
+            MutationOperation::Resize
+        };
+        let started = Instant::now();
+        let mut failures = 0;
+        loop {
+            let attempt_directory = directory.clone();
+            let attempt_path = path.clone();
+            let attempt_effect = Arc::clone(&effect);
+            match run_blocking_filesystem_mutation(attempt_effect, move || {
+                super::open(&attempt_directory, &attempt_path, options)
+            })
+            .await
+            {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    failures += 1;
+                    let postcondition = open_postcondition(
+                        before,
+                        path_state_with_follow(&directory, &path, options.follow).await,
+                        requested_type,
+                        options.truncate,
+                        options.exclusive,
+                    );
+                    match self
+                        .resolve_non_prefix_failure(
+                            operation,
+                            error,
+                            postcondition,
+                            failures,
+                            started,
+                        )
+                        .await
+                    {
+                        NonPrefixResolution::Retry => {}
+                        NonPrefixResolution::Error(error) => return Err(error),
+                        NonPrefixResolution::Success => {
+                            let safe = NativeOpenOptions {
+                                create: false,
+                                truncate: false,
+                                exclusive: false,
+                                ..options
+                            };
+                            return self
+                                .safe_reopen(
+                                    Arc::new(NativeFilesystemSafeReopen {
+                                        directory: directory.clone(),
+                                        path: path.clone(),
+                                        options: safe,
+                                    }),
+                                    effect,
+                                    operation,
+                                    failures,
+                                    started,
+                                )
+                                .await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn safe_reopen(
+        &self,
+        native: Arc<dyn FilesystemSafeReopen>,
+        effect: Arc<AgentFilesystemUpdateEffectLease>,
+        operation: MutationOperation,
+        mut failures: usize,
+        started: Instant,
+    ) -> AgentFilesystemOperationResult<NativeOpenResult> {
+        loop {
+            match native.reopen(Arc::clone(&effect)).await {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    failures += 1;
+                    match self
+                        .resolve_non_prefix_failure(
+                            operation,
+                            error,
+                            MutationPostcondition::NoEffect,
+                            failures,
+                            started,
+                        )
+                        .await
+                    {
+                        NonPrefixResolution::Retry => {}
+                        NonPrefixResolution::Error(error) => return Err(error),
+                        NonPrefixResolution::Success => {
+                            unreachable!("failed nonmutating reopen cannot satisfy the open")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn run_namespace(
+        &self,
+        effect: Arc<AgentFilesystemEffectLease>,
+        mutation: NamespaceMutation,
+    ) -> AgentFilesystemOperationResult {
+        let operation = mutation.operation();
+        let before = mutation.before(self).await?;
+        let started = Instant::now();
+        let mut failures = 0;
+        loop {
+            match mutation.execute(Arc::clone(&effect)).await {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    failures += 1;
+                    let postcondition = mutation.postcondition(&before).await;
+                    match self
+                        .resolve_non_prefix_failure(
+                            operation,
+                            error,
+                            postcondition,
+                            failures,
+                            started,
+                        )
+                        .await
+                    {
+                        NonPrefixResolution::Retry => {}
+                        NonPrefixResolution::Success => return Ok(()),
+                        NonPrefixResolution::Error(error) => return Err(error),
+                    }
+                }
+            }
+        }
+    }
+
+    async fn begin_effect(
+        &self,
+    ) -> AgentFilesystemOperationResult<Arc<AgentFilesystemEffectLease>> {
+        self.runtime
+            .begin_effect()
+            .await
+            .map(Arc::new)
+            .map_err(|_| AgentFilesystemMutationError::RuntimeInvalidated {
+                error: None,
+                completed: None,
+            })
+    }
+
+    async fn begin_update_effect(
+        &self,
+    ) -> AgentFilesystemOperationResult<Arc<AgentFilesystemUpdateEffectLease>> {
+        self.runtime
+            .begin_update_effect()
+            .await
+            .map(Arc::new)
+            .map_err(|_| AgentFilesystemMutationError::RuntimeInvalidated {
+                error: None,
+                completed: None,
+            })
+    }
+
+    async fn begin_namespace_effect(
+        &self,
+    ) -> AgentFilesystemOperationResult<Arc<AgentFilesystemEffectLease>> {
+        self.runtime
+            .begin_path_effect()
+            .await
+            .map(Arc::new)
+            .map_err(|_| AgentFilesystemMutationError::RuntimeInvalidated {
+                error: None,
+                completed: None,
+            })
+    }
+
+    fn ensure_descriptor_path_writable(
+        &self,
+        descriptor: &Descriptor,
+        path: &str,
+        follow: bool,
+        include_descendants: bool,
+    ) -> AgentFilesystemOperationResult {
+        let base = match descriptor {
+            Descriptor::File(file) => &file.path,
+            Descriptor::Dir(directory) => &directory.path,
+        };
+        self.ensure_writable(&base.join(path), follow, include_descendants)
+    }
+
+    fn ensure_descriptor_writable(
+        &self,
+        descriptor: &Descriptor,
+    ) -> AgentFilesystemOperationResult {
+        match descriptor {
+            Descriptor::File(file) => self.ensure_writable(&file.path, true, false),
+            Descriptor::Dir(_) => Ok(()),
+        }
+    }
+
+    fn ensure_file_matches_descriptor(
+        &self,
+        descriptor: &Descriptor,
+        file: &File,
+    ) -> AgentFilesystemOperationResult {
+        match descriptor {
+            Descriptor::File(checked)
+                if checked.path == file.path && Arc::ptr_eq(&checked.file, &file.file) =>
+            {
+                Ok(())
+            }
+            Descriptor::File(_) | Descriptor::Dir(_) => Err(Self::invalid_prepared_input()),
+        }
+    }
+
+    fn ensure_dir_matches_descriptor(
+        &self,
+        descriptor: &Descriptor,
+        directory: &Dir,
+    ) -> AgentFilesystemOperationResult {
+        match descriptor {
+            Descriptor::Dir(checked)
+                if checked.path == directory.path && Arc::ptr_eq(&checked.dir, &directory.dir) =>
+            {
+                Ok(())
+            }
+            Descriptor::File(_) | Descriptor::Dir(_) => Err(Self::invalid_prepared_input()),
+        }
+    }
+
+    fn ensure_descriptor_matches(
+        &self,
+        checked: &Descriptor,
+        descriptor: &Descriptor,
+    ) -> AgentFilesystemOperationResult {
+        match (checked, descriptor) {
+            (Descriptor::File(checked), Descriptor::File(descriptor))
+                if checked.path == descriptor.path
+                    && Arc::ptr_eq(&checked.file, &descriptor.file) =>
+            {
+                Ok(())
+            }
+            (Descriptor::Dir(checked), Descriptor::Dir(descriptor))
+                if checked.path == descriptor.path
+                    && Arc::ptr_eq(&checked.dir, &descriptor.dir) =>
+            {
+                Ok(())
+            }
+            _ => Err(Self::invalid_prepared_input()),
+        }
+    }
+
+    fn ensure_matching_follow(
+        &self,
+        checked: bool,
+        supplied: bool,
+    ) -> AgentFilesystemOperationResult {
+        if checked == supplied {
+            Ok(())
+        } else {
+            Err(Self::invalid_prepared_input())
+        }
+    }
+
+    fn invalid_prepared_input() -> AgentFilesystemMutationError {
+        AgentFilesystemMutationError::RuntimeInvalidated {
+            error: None,
+            completed: None,
+        }
+    }
+
+    fn ensure_writable(
+        &self,
+        path: &Path,
+        follow: bool,
+        include_descendants: bool,
+    ) -> AgentFilesystemOperationResult {
+        let read_only = if include_descendants {
+            self.runtime.contains_read_only_path(path, follow)
+        } else {
+            self.runtime.is_read_only_path(path, follow)
+        };
+        if read_only {
+            Err(AgentFilesystemMutationError::Guest(
+                NativeMutationGuestError::NotPermitted,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn initial_probe<T>(
+        &self,
+        operation: MutationOperation,
+        result: std::io::Result<T>,
+    ) -> AgentFilesystemOperationResult<T> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => Err(self
+                .classify_probe_failure(operation, error)
+                .await
+                .unwrap_err()),
+        }
+    }
+
+    async fn resolve_non_prefix_failure(
+        &self,
+        operation: MutationOperation,
+        error: std::io::Error,
+        postcondition: MutationPostcondition,
+        failures: usize,
+        started: Instant,
+    ) -> NonPrefixResolution {
+        let native_error = NativeFilesystemError::capture(&error);
+        let effect = match postcondition {
+            MutationPostcondition::Satisfied => MutationEffect::DesiredPostconditionSatisfied,
+            MutationPostcondition::NoEffect => MutationEffect::ProvenNoEffect,
+            MutationPostcondition::Unknown => MutationEffect::Unknown,
+        };
+        let decision = self
+            .runtime
+            .classify_mutation_failure_for::<()>(operation, MutationFailure::Io(error), effect)
+            .await;
+        let failures = if postcondition == MutationPostcondition::NoEffect {
+            failures
+        } else {
+            FILESYSTEM_MUTATION_MAX_ATTEMPTS
+        };
+        match resolve_decision(
+            &self.runtime,
+            decision,
+            native_error,
+            0,
+            failures,
+            started,
+            false,
+            operation,
+        )
+        .await
+        {
+            DecisionResolution::Retry => NonPrefixResolution::Retry,
+            DecisionResolution::Complete(Ok(_)) => NonPrefixResolution::Success,
+            DecisionResolution::Complete(Err(error)) => NonPrefixResolution::Error(error),
+        }
     }
 
     async fn resize_with_native(
@@ -142,21 +1394,46 @@ impl AgentFilesystemMutations {
         native: Arc<dyn FilesystemResize>,
         size: u64,
     ) -> AgentFilesystemMutationResult {
-        let effect = self.runtime.begin_update_effect().await.map_err(|_| {
-            AgentFilesystemMutationError::RuntimeInvalidated {
-                error: None,
-                completed: None,
-            }
-        })?;
+        let effect = self.begin_update_effect().await?;
+        let prepared = self
+            .prepare_resize_with_native(native, effect, size)
+            .await?;
+        self.resize_with_prepared_native(prepared).await
+    }
+
+    async fn prepare_resize_with_native(
+        &self,
+        native: Arc<dyn FilesystemResize>,
+        effect: Arc<AgentFilesystemUpdateEffectLease>,
+        size: u64,
+    ) -> AgentFilesystemOperationResult<PreparedFilesystemResize> {
         let before = match native.state().await {
             Ok(before) => before,
             Err(error) => {
                 return self
                     .classify_probe_failure(MutationOperation::Resize, error)
-                    .await;
+                    .await
+                    .map(|_| unreachable!("probe failure cannot produce resize progress"));
             }
         };
-        let effect = Arc::new(effect);
+        Ok(PreparedFilesystemResize {
+            native,
+            effect,
+            before,
+            size,
+        })
+    }
+
+    async fn resize_with_prepared_native(
+        &self,
+        prepared: PreparedFilesystemResize,
+    ) -> AgentFilesystemMutationResult {
+        let PreparedFilesystemResize {
+            native,
+            effect,
+            before,
+            size,
+        } = prepared;
         let started = Instant::now();
         let mut failures = 0;
 
@@ -254,6 +1531,234 @@ impl AgentFilesystemMutations {
         size: u64,
     ) -> AgentFilesystemMutationResult {
         self.resize_with_native(native, size).await
+    }
+}
+
+enum NamespaceMutation {
+    CreateDirectory {
+        directory: Dir,
+        path: String,
+    },
+    HardLink {
+        source: Dir,
+        source_path: String,
+        source_follow: bool,
+        destination: Dir,
+        destination_path: String,
+    },
+    Rename {
+        source: Dir,
+        source_path: String,
+        destination: Dir,
+        destination_path: String,
+    },
+    RemoveDirectory {
+        directory: Dir,
+        path: String,
+    },
+    Symlink {
+        directory: Dir,
+        target: String,
+        path: String,
+    },
+    UnlinkFile {
+        directory: Dir,
+        path: String,
+    },
+}
+
+enum NamespaceBefore {
+    SinglePathState(Option<PathState>),
+    SourceAndDestinationStates(Option<PathState>, Option<PathState>),
+    SymlinkState(SymlinkState),
+}
+
+impl NamespaceMutation {
+    fn operation(&self) -> MutationOperation {
+        match self {
+            Self::CreateDirectory { .. } | Self::Symlink { .. } => MutationOperation::Create,
+            _ => MutationOperation::Metadata,
+        }
+    }
+
+    async fn before(
+        &self,
+        mutations: &AgentFilesystemMutations,
+    ) -> AgentFilesystemOperationResult<NamespaceBefore> {
+        match self {
+            Self::CreateDirectory { directory, path }
+            | Self::RemoveDirectory { directory, path }
+            | Self::UnlinkFile { directory, path } => mutations
+                .initial_probe(
+                    MutationOperation::Metadata,
+                    path_state(directory, path).await,
+                )
+                .await
+                .map(NamespaceBefore::SinglePathState),
+            Self::HardLink {
+                source,
+                source_path,
+                source_follow: _,
+                destination,
+                destination_path,
+            }
+            | Self::Rename {
+                source,
+                source_path,
+                destination,
+                destination_path,
+            } => {
+                let source = mutations
+                    .initial_probe(
+                        MutationOperation::Metadata,
+                        path_state(source, source_path).await,
+                    )
+                    .await?;
+                let destination = mutations
+                    .initial_probe(
+                        MutationOperation::Metadata,
+                        path_state(destination, destination_path).await,
+                    )
+                    .await?;
+                Ok(NamespaceBefore::SourceAndDestinationStates(
+                    source,
+                    destination,
+                ))
+            }
+            Self::Symlink {
+                directory, path, ..
+            } => mutations
+                .initial_probe(
+                    MutationOperation::Metadata,
+                    symlink_state(directory, path).await,
+                )
+                .await
+                .map(NamespaceBefore::SymlinkState),
+        }
+    }
+
+    async fn execute(&self, effect: Arc<AgentFilesystemEffectLease>) -> std::io::Result<()> {
+        match self {
+            Self::CreateDirectory { directory, path } => {
+                let directory = directory.clone();
+                let path = path.clone();
+                run_blocking_filesystem_mutation(effect, move || {
+                    super::create_directory(&directory, &path)
+                })
+                .await
+            }
+            Self::HardLink {
+                source,
+                source_path,
+                source_follow: _,
+                destination,
+                destination_path,
+            } => {
+                let source = source.clone();
+                let source_path = source_path.clone();
+                let destination = destination.clone();
+                let destination_path = destination_path.clone();
+                run_blocking_filesystem_mutation(effect, move || {
+                    super::hard_link(&source, &source_path, &destination, &destination_path)
+                })
+                .await
+            }
+            Self::Rename {
+                source,
+                source_path,
+                destination,
+                destination_path,
+            } => {
+                let source = source.clone();
+                let source_path = source_path.clone();
+                let destination = destination.clone();
+                let destination_path = destination_path.clone();
+                run_blocking_filesystem_mutation(effect, move || {
+                    super::rename(&source, &source_path, &destination, &destination_path)
+                })
+                .await
+            }
+            Self::RemoveDirectory { directory, path } => {
+                let directory = directory.clone();
+                let path = path.clone();
+                run_blocking_filesystem_mutation(effect, move || {
+                    super::remove_directory(&directory, &path)
+                })
+                .await
+            }
+            Self::Symlink {
+                directory,
+                target,
+                path,
+            } => {
+                let directory = directory.clone();
+                let target = target.clone();
+                let path = path.clone();
+                run_blocking_filesystem_mutation(effect, move || {
+                    super::symlink(&directory, &target, &path)
+                })
+                .await
+            }
+            Self::UnlinkFile { directory, path } => {
+                let directory = directory.clone();
+                let path = path.clone();
+                run_blocking_filesystem_mutation(effect, move || {
+                    super::unlink_file(&directory, &path)
+                })
+                .await
+            }
+        }
+    }
+
+    async fn postcondition(&self, before: &NamespaceBefore) -> MutationPostcondition {
+        match (self, before) {
+            (
+                Self::CreateDirectory { directory, path },
+                NamespaceBefore::SinglePathState(before),
+            ) => create_directory_postcondition(*before, path_state(directory, path).await),
+            (
+                Self::RemoveDirectory { directory, path } | Self::UnlinkFile { directory, path },
+                NamespaceBefore::SinglePathState(before),
+            ) => remove_postcondition(*before, path_state(directory, path).await),
+            (
+                Self::HardLink {
+                    source,
+                    source_path,
+                    source_follow: _,
+                    destination,
+                    destination_path,
+                },
+                NamespaceBefore::SourceAndDestinationStates(source_before, destination_before),
+            ) => link_postcondition(
+                *source_before,
+                *destination_before,
+                path_state(source, source_path).await,
+                path_state(destination, destination_path).await,
+            ),
+            (
+                Self::Rename {
+                    source,
+                    source_path,
+                    destination,
+                    destination_path,
+                },
+                NamespaceBefore::SourceAndDestinationStates(source_before, destination_before),
+            ) => rename_postcondition(
+                *source_before,
+                *destination_before,
+                path_state(source, source_path).await,
+                path_state(destination, destination_path).await,
+            ),
+            (
+                Self::Symlink {
+                    directory,
+                    target,
+                    path,
+                },
+                NamespaceBefore::SymlinkState(before),
+            ) => symlink_postcondition(before, symlink_state(directory, path).await, target),
+            _ => unreachable!("namespace mutation precondition type mismatch"),
+        }
     }
 }
 
@@ -611,6 +2116,14 @@ trait FilesystemResize: Send + Sync {
     ) -> std::io::Result<()>;
 }
 
+#[async_trait]
+trait FilesystemSafeReopen: Send + Sync {
+    async fn reopen(
+        &self,
+        effect: Arc<AgentFilesystemUpdateEffectLease>,
+    ) -> std::io::Result<NativeOpenResult>;
+}
+
 struct NativeFilesystemResize {
     file: File,
 }
@@ -628,6 +2141,26 @@ impl FilesystemResize for NativeFilesystemResize {
     ) -> std::io::Result<()> {
         let file = self.file.clone();
         run_blocking_filesystem_mutation(effect, move || resize_file(&file, size)).await
+    }
+}
+
+struct NativeFilesystemSafeReopen {
+    directory: Dir,
+    path: String,
+    options: NativeOpenOptions,
+}
+
+#[async_trait]
+impl FilesystemSafeReopen for NativeFilesystemSafeReopen {
+    async fn reopen(
+        &self,
+        effect: Arc<AgentFilesystemUpdateEffectLease>,
+    ) -> std::io::Result<NativeOpenResult> {
+        let directory = self.directory.clone();
+        let path = self.path.clone();
+        let options = self.options;
+        run_blocking_filesystem_mutation(effect, move || super::open(&directory, &path, options))
+            .await
     }
 }
 
@@ -674,6 +2207,12 @@ impl FilesystemWriter for NativeFilesystemWriter {
 enum DecisionResolution {
     Retry,
     Complete(AgentFilesystemMutationResult),
+}
+
+enum NonPrefixResolution {
+    Retry,
+    Success,
+    Error(AgentFilesystemMutationError),
 }
 
 async fn resolve_decision(
@@ -803,6 +2342,9 @@ async fn advance_position_or_invalidate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::agent::AgentFileContentHash;
+    use golem_common::model::component::{AgentFilePath, AgentFilePermissions};
+    use golem_common::model::diff::Hash;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
@@ -817,6 +2359,10 @@ mod tests {
     struct ScriptedFilesystemResize {
         states: std::sync::Mutex<VecDeque<Result<PathState, i32>>>,
         attempts: std::sync::Mutex<VecDeque<Option<i32>>>,
+    }
+
+    struct ScriptedFilesystemSafeReopen {
+        attempts: std::sync::Mutex<VecDeque<i32>>,
     }
 
     #[async_trait]
@@ -839,6 +2385,18 @@ mod tests {
                 Some(errno) => Err(std::io::Error::from_raw_os_error(errno)),
                 None => Ok(()),
             }
+        }
+    }
+
+    #[async_trait]
+    impl FilesystemSafeReopen for ScriptedFilesystemSafeReopen {
+        async fn reopen(
+            &self,
+            _effect: Arc<AgentFilesystemUpdateEffectLease>,
+        ) -> std::io::Result<NativeOpenResult> {
+            Err(std::io::Error::from_raw_os_error(
+                self.attempts.lock().unwrap().pop_front().unwrap(),
+            ))
         }
     }
 
@@ -954,6 +2512,140 @@ mod tests {
         }
     }
 
+    fn writable_directory(path: &std::path::Path) -> Dir {
+        Dir::new(
+            cap_std::fs::Dir::open_ambient_dir(path, cap_std::ambient_authority()).unwrap(),
+            DirPerms::all(),
+            FilePerms::all(),
+            OpenMode::READ | OpenMode::WRITE,
+            false,
+            path.to_path_buf(),
+        )
+    }
+
+    fn writable_file(path: &std::path::Path) -> File {
+        File::new(
+            cap_std::fs::File::from_std(
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(path)
+                    .unwrap(),
+            ),
+            FilePerms::all(),
+            OpenMode::READ | OpenMode::WRITE,
+            false,
+            path.to_path_buf(),
+        )
+    }
+
+    fn mark_read_only(runtime: &AgentFilesystemRuntime, path: &std::path::Path) {
+        runtime.runtime_state.initial_files.write().unwrap().insert(
+            path.to_path_buf(),
+            InitialAgentFile {
+                content_hash: AgentFileContentHash(Hash::empty()),
+                path: AgentFilePath::from_abs_str("/read-only").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+                size: 0,
+            },
+        );
+    }
+
+    #[test]
+    async fn descriptor_policy_allows_directories_and_rejects_read_only_files() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let root = tempfile::TempDir::new().unwrap();
+        let file_path = root.path().join("read-only-file");
+        std::fs::write(&file_path, b"contents").unwrap();
+        mark_read_only(&runtime, root.path());
+        mark_read_only(&runtime, &file_path);
+        let mutations = runtime.mutations();
+
+        let directory = Descriptor::Dir(writable_directory(root.path()));
+        let admitted = mutations.admit_descriptor_times().await.unwrap();
+        let checked = mutations
+            .check_descriptor_times_policy(admitted, directory)
+            .unwrap();
+        drop(checked);
+
+        let file = Descriptor::File(writable_file(&file_path));
+        let admitted = mutations.admit_descriptor_times().await.unwrap();
+        assert!(matches!(
+            mutations.check_descriptor_times_policy(admitted, file),
+            Err(AgentFilesystemMutationError::Guest(
+                NativeMutationGuestError::NotPermitted
+            ))
+        ));
+    }
+
+    #[test]
+    async fn path_policy_rejects_read_only_target_beneath_directory_descriptor() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let root = tempfile::TempDir::new().unwrap();
+        let target = root.path().join("target");
+        std::fs::write(&target, b"contents").unwrap();
+        mark_read_only(&runtime, &target);
+        let descriptor = Descriptor::Dir(writable_directory(root.path()));
+        let mutations = runtime.mutations();
+        let admitted = mutations.admit_path_times().await.unwrap();
+
+        assert!(matches!(
+            mutations.check_path_times_policy(admitted, descriptor, "target".to_string(), true,),
+            Err(AgentFilesystemMutationError::Guest(
+                NativeMutationGuestError::NotPermitted
+            ))
+        ));
+    }
+
+    #[test]
+    async fn resize_preparation_rejects_substituted_file() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let root = tempfile::TempDir::new().unwrap();
+        let checked_path = root.path().join("checked");
+        let substituted_path = root.path().join("substituted");
+        std::fs::write(&checked_path, b"checked").unwrap();
+        std::fs::write(&substituted_path, b"substituted").unwrap();
+        let checked_file = writable_file(&checked_path);
+        let mutations = runtime.mutations();
+        let admitted = mutations.admit_resize().await.unwrap();
+        let checked = mutations
+            .check_resize_policy(admitted, Descriptor::File(checked_file), 2)
+            .unwrap();
+
+        assert!(matches!(
+            mutations
+                .prepare_resize(checked, writable_file(&substituted_path))
+                .await,
+            Err(AgentFilesystemMutationError::RuntimeInvalidated { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_nonmutating_open_checks_read_only_alias_without_admission() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let root = tempfile::TempDir::new().unwrap();
+        let target = root.path().join("target");
+        std::fs::write(&target, b"read only").unwrap();
+        std::os::unix::fs::symlink(&target, root.path().join("alias")).unwrap();
+        mark_read_only(&runtime, &target);
+        let descriptor = Descriptor::Dir(writable_directory(root.path()));
+        let mutations = runtime.mutations();
+
+        assert!(!runtime.has_active_effects());
+        assert_eq!(
+            mutations.check_writable_open_policy(&descriptor, "alias", true),
+            Err(AgentFilesystemMutationError::Guest(
+                NativeMutationGuestError::NotPermitted,
+            ))
+        );
+        assert_eq!(
+            mutations.check_writable_open_policy(&descriptor, "alias", false),
+            Ok(())
+        );
+        assert!(!runtime.has_active_effects());
+    }
+
     #[test]
     async fn successful_write_reports_completed_prefix() {
         let runtime = AgentFilesystemRuntime::new_for_test();
@@ -1040,10 +2732,179 @@ mod tests {
             path.clone(),
         );
 
-        let result = runtime.mutations().resize(file, 2).await;
+        let mutations = runtime.mutations();
+        let admitted = mutations.admit_resize().await.unwrap();
+        let checked = mutations
+            .check_resize_policy(admitted, Descriptor::File(file.clone()), 2)
+            .unwrap();
+        let prepared = mutations.prepare_resize(checked, file).await.unwrap();
+        let result = mutations.resize(prepared).await;
 
         assert_eq!(result, Ok(0));
         assert_eq!(std::fs::read(path).unwrap(), b"he");
+    }
+
+    #[test]
+    async fn semantic_namespace_mutations_execute_behind_mutation_seam() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let root = tempfile::TempDir::new().unwrap();
+        let directory = writable_directory(root.path());
+        let descriptor = Descriptor::Dir(directory.clone());
+        let mutations = runtime.mutations();
+
+        let checked = mutations
+            .check_create_directory_policy(
+                mutations.admit_create_directory().await.unwrap(),
+                descriptor.clone(),
+                "created".to_string(),
+            )
+            .unwrap();
+        let prepared = mutations
+            .prepare_create_directory(checked, directory.clone())
+            .unwrap();
+        mutations.run_namespace_mutation(prepared).await.unwrap();
+        let checked = mutations
+            .check_symlink_policy(
+                mutations.admit_symlink().await.unwrap(),
+                descriptor.clone(),
+                "created".to_string(),
+                "alias".to_string(),
+            )
+            .unwrap();
+        let prepared = mutations
+            .prepare_symlink(checked, directory.clone())
+            .unwrap();
+        mutations.run_namespace_mutation(prepared).await.unwrap();
+        let checked = mutations
+            .check_unlink_file_policy(
+                mutations.admit_unlink_file().await.unwrap(),
+                descriptor.clone(),
+                "alias".to_string(),
+            )
+            .unwrap();
+        let prepared = mutations
+            .prepare_unlink_file(checked, directory.clone())
+            .unwrap();
+        mutations.run_namespace_mutation(prepared).await.unwrap();
+        let source_checked = mutations
+            .check_rename_source_descriptor_policy(
+                mutations.admit_rename().await.unwrap(),
+                descriptor.clone(),
+                "created".to_string(),
+            )
+            .unwrap();
+        let destination_checked = mutations
+            .check_rename_destination_descriptor_policy(
+                source_checked,
+                descriptor.clone(),
+                "renamed".to_string(),
+            )
+            .unwrap();
+        let checked = mutations
+            .check_rename_path_policy(destination_checked)
+            .unwrap();
+        let prepared = mutations
+            .prepare_rename(checked, directory.clone(), directory.clone())
+            .unwrap();
+        mutations.run_namespace_mutation(prepared).await.unwrap();
+        let checked = mutations
+            .check_remove_directory_policy(
+                mutations.admit_remove_directory().await.unwrap(),
+                descriptor,
+                "renamed".to_string(),
+            )
+            .unwrap();
+        let prepared = mutations
+            .prepare_remove_directory(checked, directory)
+            .unwrap();
+        mutations.run_namespace_mutation(prepared).await.unwrap();
+
+        assert!(std::fs::read_dir(root.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    async fn semantic_mutating_open_returns_descriptor() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let root = tempfile::TempDir::new().unwrap();
+        let directory = writable_directory(root.path());
+        let options = NativeOpenOptions {
+            create: true,
+            directory: false,
+            exclusive: false,
+            truncate: true,
+            follow: true,
+            read: true,
+            write: true,
+        };
+
+        let mutations = runtime.mutations();
+        let descriptor = Descriptor::Dir(directory.clone());
+        let checked = mutations
+            .check_mutating_open_policy(
+                mutations.admit_mutating_open().await.unwrap(),
+                descriptor,
+                "opened".to_string(),
+                options.follow,
+            )
+            .unwrap();
+        let prepared = mutations
+            .prepare_mutating_open(checked, directory, options, false)
+            .unwrap();
+        let result = mutations.open_mutating(prepared).await.unwrap();
+
+        assert!(matches!(
+            result,
+            NativeOpenResult::Descriptor(Descriptor::File(_))
+        ));
+        assert!(root.path().join("opened").is_file());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    async fn terminal_safe_reopen_failure_invalidates_runtime() {
+        for errno in [libc::EIO, libc::ESTALE, libc::ENODEV] {
+            let runtime = AgentFilesystemRuntime::new_for_test();
+            let mutations = runtime.mutations();
+            let effect = Arc::new(runtime.begin_update_effect().await.unwrap());
+            let native = Arc::new(ScriptedFilesystemSafeReopen {
+                attempts: std::sync::Mutex::new([errno].into_iter().collect()),
+            });
+
+            let result = mutations
+                .safe_reopen(native, effect, MutationOperation::Create, 0, Instant::now())
+                .await;
+
+            assert!(matches!(
+                result,
+                Err(AgentFilesystemMutationError::RuntimeInvalidated {
+                    error: Some(_),
+                    completed: Some(0),
+                })
+            ));
+            assert!(runtime.begin_effect().await.is_err());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    async fn ordinary_safe_reopen_failure_preserves_raw_errno() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let mutations = runtime.mutations();
+        let effect = Arc::new(runtime.begin_update_effect().await.unwrap());
+        let native = Arc::new(ScriptedFilesystemSafeReopen {
+            attempts: std::sync::Mutex::new([libc::ENOENT].into_iter().collect()),
+        });
+
+        let result = mutations
+            .safe_reopen(native, effect, MutationOperation::Create, 0, Instant::now())
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(AgentFilesystemMutationError::Native { error, completed: 0 })
+                if error.raw_os_error == Some(libc::ENOENT)
+        ));
+        assert!(runtime.begin_effect().await.is_ok());
     }
 
     #[test]

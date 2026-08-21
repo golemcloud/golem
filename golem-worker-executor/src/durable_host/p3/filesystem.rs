@@ -18,7 +18,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::durable_host::filesystem::types::calculate_metadata_hash_parts;
 use crate::durable_host::p3::{
@@ -30,20 +30,8 @@ use crate::durable_host::tail_work::TailActivity;
 use crate::services::agent_filesystem::state_postcondition;
 use crate::services::agent_filesystem::{
     AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemRuntime,
-    AgentFilesystemWriteMode, AgentFilesystemWriter, FILESYSTEM_MUTATION_MAX_ATTEMPTS,
-    FILESYSTEM_MUTATION_RETRY_TIMEOUT, MutationDecision, MutationEffect, MutationFailure,
-    MutationOperation, MutationPostcondition, NativeMutationGuestError, NativeOpenOptions,
-    NativeOpenResult, PathObjectType, RequestedTime, create_directory as native_create_directory,
-    create_directory_postcondition, descriptor_state, descriptor_times,
-    hard_link as native_hard_link, link_postcondition, open as native_open, open_postcondition,
-    path_state, path_state_with_follow, path_times, remove_directory as native_remove_directory,
-    remove_postcondition, rename as native_rename, rename_postcondition,
-    resize_file as native_resize_file, resize_postcondition, run_blocking_filesystem_mutation,
-    set_descriptor_times as native_set_descriptor_times, set_path_times as native_set_path_times,
-    symlink as native_symlink, symlink_postcondition, symlink_state,
-    sync_descriptor as native_sync_descriptor, times_postcondition,
-    unlink_file as native_unlink_file, validate_descriptor_times, validate_directory_mutation,
-    validate_open, validate_resize, validate_two_directory_mutation,
+    AgentFilesystemWriteMode, AgentFilesystemWriter, NativeMutationGuestError, NativeOpenOptions,
+    NativeOpenResult, RequestedTime,
 };
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
@@ -64,7 +52,7 @@ use wasmtime_wasi::filesystem::{Descriptor, Dir, File, WasiFilesystem, WasiFiles
 use wasmtime_wasi::p3::bindings::filesystem::{preopens, types};
 use wasmtime_wasi::p3::filesystem::{FilesystemError, FilesystemResult};
 use wasmtime_wasi::runtime::spawn_blocking;
-use wasmtime_wasi::{DirPerms, FilePerms, ResourceTableError};
+use wasmtime_wasi::{DirPerms, FilePerms};
 
 struct FilesystemWriteChunk {
     result_tx: tokio::sync::oneshot::Sender<(usize, FilesystemWriteResult)>,
@@ -79,211 +67,6 @@ enum FilesystemWriteFailure {
 }
 
 type FilesystemWriteResult = Result<(), FilesystemWriteFailure>;
-
-enum P3MutationAction {
-    Retry,
-    Success,
-    Error(FilesystemError),
-    Trap,
-}
-
-struct P3MutationAdapter {
-    runtime: AgentFilesystemRuntime,
-    operation: MutationOperation,
-    started: Instant,
-    attempts: usize,
-}
-
-impl P3MutationAdapter {
-    fn new(runtime: AgentFilesystemRuntime) -> Self {
-        Self::for_operation(runtime, MutationOperation::Metadata)
-    }
-
-    fn for_operation(runtime: AgentFilesystemRuntime, operation: MutationOperation) -> Self {
-        Self {
-            runtime,
-            operation,
-            started: Instant::now(),
-            attempts: 0,
-        }
-    }
-
-    fn begin_attempt(&mut self) {
-        self.attempts += 1;
-    }
-
-    #[cfg(test)]
-    async fn failure(
-        &self,
-        error: FilesystemError,
-        postcondition: MutationPostcondition,
-        retry_safe: bool,
-    ) -> P3MutationAction {
-        let Some(guest) = error.downcast_ref().cloned() else {
-            let _ = self
-                .runtime
-                .classify_mutation_failure::<types::ErrorCode>(
-                    MutationFailure::Infrastructure(std::io::Error::other(error.to_string())),
-                    MutationEffect::Unknown,
-                )
-                .await;
-            return P3MutationAction::Trap;
-        };
-        let effect = match (postcondition, &guest) {
-            (MutationPostcondition::Satisfied, _) => MutationEffect::DesiredPostconditionSatisfied,
-            (MutationPostcondition::NoEffect, _) => MutationEffect::ProvenNoEffect,
-            (MutationPostcondition::Unknown, _) => MutationEffect::Unknown,
-        };
-        let failure = match guest.clone() {
-            types::ErrorCode::Quota => MutationFailure::StorageExhaustion {
-                guest: guest.clone(),
-                quota_hint: true,
-            },
-            types::ErrorCode::InsufficientSpace => MutationFailure::StorageExhaustion {
-                guest: guest.clone(),
-                quota_hint: false,
-            },
-            types::ErrorCode::Busy
-            | types::ErrorCode::Interrupted
-            | types::ErrorCode::InProgress
-            | types::ErrorCode::Already => MutationFailure::TransientGuest(guest.clone()),
-            types::ErrorCode::Access | types::ErrorCode::NotPermitted => {
-                MutationFailure::AccessGuest(guest.clone())
-            }
-            types::ErrorCode::Io => MutationFailure::UnclassifiedGuest(guest.clone()),
-            _ => MutationFailure::Guest(guest.clone()),
-        };
-        match self
-            .runtime
-            .classify_mutation_failure_for(self.operation, failure, effect)
-            .await
-        {
-            MutationDecision::PreserveGuest(error) => P3MutationAction::Error(error.into()),
-            MutationDecision::Quota => P3MutationAction::Error(types::ErrorCode::Quota.into()),
-            MutationDecision::InsufficientSpace => {
-                P3MutationAction::Error(types::ErrorCode::InsufficientSpace.into())
-            }
-            MutationDecision::PhysicalPressure
-                if retry_safe
-                    && postcondition == MutationPostcondition::NoEffect
-                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
-            {
-                if self
-                    .runtime
-                    .recover_physical_pressure(
-                        self.operation,
-                        self.started + FILESYSTEM_MUTATION_RETRY_TIMEOUT,
-                    )
-                    .await
-                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT
-                {
-                    P3MutationAction::Retry
-                } else {
-                    P3MutationAction::Error(types::ErrorCode::InsufficientSpace.into())
-                }
-            }
-            MutationDecision::PhysicalPressure => {
-                P3MutationAction::Error(types::ErrorCode::InsufficientSpace.into())
-            }
-            MutationDecision::BoundedRetry
-                if retry_safe
-                    && postcondition == MutationPostcondition::NoEffect
-                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
-            {
-                P3MutationAction::Retry
-            }
-            MutationDecision::BoundedRetry | MutationDecision::PreserveRaw => {
-                P3MutationAction::Error(guest.into())
-            }
-            MutationDecision::Success => P3MutationAction::Success,
-            MutationDecision::Invalidate => P3MutationAction::Trap,
-        }
-    }
-
-    async fn io_failure(
-        &self,
-        error: std::io::Error,
-        postcondition: MutationPostcondition,
-        retry_safe: bool,
-    ) -> P3MutationAction {
-        let raw_os_error = error.raw_os_error();
-        let error_kind = error.kind();
-        let error_message = error.to_string();
-        let effect = match postcondition {
-            MutationPostcondition::Satisfied => MutationEffect::DesiredPostconditionSatisfied,
-            MutationPostcondition::NoEffect => MutationEffect::ProvenNoEffect,
-            MutationPostcondition::Unknown => MutationEffect::Unknown,
-        };
-        match self
-            .runtime
-            .classify_mutation_failure_for::<types::ErrorCode>(
-                self.operation,
-                MutationFailure::Io(error),
-                effect,
-            )
-            .await
-        {
-            MutationDecision::PreserveGuest(error) => P3MutationAction::Error(error.into()),
-            MutationDecision::Quota => P3MutationAction::Error(types::ErrorCode::Quota.into()),
-            MutationDecision::InsufficientSpace => {
-                P3MutationAction::Error(types::ErrorCode::InsufficientSpace.into())
-            }
-            MutationDecision::PhysicalPressure
-                if retry_safe
-                    && postcondition == MutationPostcondition::NoEffect
-                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
-            {
-                if self
-                    .runtime
-                    .recover_physical_pressure(
-                        self.operation,
-                        self.started + FILESYSTEM_MUTATION_RETRY_TIMEOUT,
-                    )
-                    .await
-                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT
-                {
-                    P3MutationAction::Retry
-                } else {
-                    P3MutationAction::Error(types::ErrorCode::InsufficientSpace.into())
-                }
-            }
-            MutationDecision::PhysicalPressure => {
-                P3MutationAction::Error(types::ErrorCode::InsufficientSpace.into())
-            }
-            MutationDecision::BoundedRetry
-                if retry_safe
-                    && postcondition == MutationPostcondition::NoEffect
-                    && self.attempts < FILESYSTEM_MUTATION_MAX_ATTEMPTS
-                    && self.started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT =>
-            {
-                P3MutationAction::Retry
-            }
-            MutationDecision::BoundedRetry | MutationDecision::PreserveRaw => {
-                let error = raw_os_error.map_or_else(
-                    || std::io::Error::new(error_kind, error_message),
-                    std::io::Error::from_raw_os_error,
-                );
-                P3MutationAction::Error(types::ErrorCode::from(&error).into())
-            }
-            MutationDecision::Success => P3MutationAction::Success,
-            MutationDecision::Invalidate => P3MutationAction::Trap,
-        }
-    }
-}
-
-fn p3_mutation_action_result(action: P3MutationAction) -> FilesystemResult<()> {
-    match action {
-        P3MutationAction::Success => Ok(()),
-        P3MutationAction::Error(error) => Err(error),
-        P3MutationAction::Trap => Err(FilesystemError::trap(wasmtime::Error::msg(
-            "agent filesystem mutation invalidated the runtime",
-        ))),
-        P3MutationAction::Retry => unreachable!("retry must be handled by the operation loop"),
-    }
-}
 
 struct FilesystemWriteConsumer {
     chunks_tx: Option<tokio::sync::mpsc::UnboundedSender<FilesystemWriteChunk>>,
@@ -597,149 +380,9 @@ where
     })
 }
 
-/// Fails with `not-permitted` when the descriptor refers to a file marked
-/// read-only in the worker's initial file system, matching the WASI P2
-/// `fail_if_read_only` enforcement. Directories always pass.
-fn fail_if_read_only_from_accessor<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    fd: &Resource<Descriptor>,
-) -> FilesystemResult<()>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let read_only = accessor
-        .with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).check_if_file_is_readonly(fd)
-        })
-        .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
-    if read_only {
-        Err(types::ErrorCode::NotPermitted.into())
-    } else {
-        Ok(())
-    }
-}
-
-fn fail_if_read_only_path_from_accessor<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-    fd: &Resource<Descriptor>,
-    path: &str,
-    include_descendants: bool,
-    follow_final_symlink: bool,
-) -> FilesystemResult<()>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let read_only = accessor
-        .with(|mut access| {
-            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-            let target = ctx.descriptor_path(fd)?.join(path);
-            Ok::<_, ResourceTableError>(if include_descendants {
-                ctx.filesystem_runtime
-                    .contains_read_only_path(&target, follow_final_symlink)
-            } else {
-                ctx.filesystem_runtime
-                    .is_read_only_path(&target, follow_final_symlink)
-            })
-        })
-        .map_err(|error| FilesystemError::trap(wasmtime::Error::from(error)))?;
-    if read_only {
-        Err(types::ErrorCode::NotPermitted.into())
-    } else {
-        Ok(())
-    }
-}
-
-async fn begin_filesystem_effect<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-) -> FilesystemResult<crate::services::agent_filesystem::AgentFilesystemEffectLease>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let runtime = accessor
-        .with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime());
-    runtime.begin_effect().await.map_err(FilesystemError::trap)
-}
-
-async fn begin_filesystem_path_effect<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-) -> FilesystemResult<crate::services::agent_filesystem::AgentFilesystemEffectLease>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let runtime = accessor
-        .with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime());
-    runtime
-        .begin_path_effect()
-        .await
-        .map_err(FilesystemError::trap)
-}
-
-async fn begin_filesystem_update_effect<Ctx, U>(
-    accessor: &Accessor<U, DurableP3<Ctx>>,
-) -> FilesystemResult<crate::services::agent_filesystem::AgentFilesystemUpdateEffectLease>
-where
-    Ctx: WorkerCtx,
-    U: 'static,
-{
-    let runtime = accessor
-        .with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime());
-    runtime
-        .begin_update_effect()
-        .await
-        .map_err(FilesystemError::trap)
-}
-
-async fn p3_initial_probe<T>(
-    runtime: &AgentFilesystemRuntime,
-    result: Result<T, std::io::Error>,
-) -> FilesystemResult<T> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(error) => {
-            let guest = types::ErrorCode::from(&error);
-            match runtime
-                .classify_mutation_failure_for(
-                    MutationOperation::Metadata,
-                    MutationFailure::<types::ErrorCode>::Io(error),
-                    MutationEffect::ProvenNoEffect,
-                )
-                .await
-            {
-                MutationDecision::Quota => Err(types::ErrorCode::Quota.into()),
-                MutationDecision::InsufficientSpace | MutationDecision::PhysicalPressure => {
-                    Err(types::ErrorCode::InsufficientSpace.into())
-                }
-                MutationDecision::BoundedRetry | MutationDecision::PreserveRaw => Err(guest.into()),
-                MutationDecision::PreserveGuest(error) => Err(error.into()),
-                MutationDecision::Success => unreachable!("failed probe cannot be satisfied"),
-                MutationDecision::Invalidate => Err(FilesystemError::trap(wasmtime::Error::msg(
-                    "agent filesystem mutation precondition probe invalidated the runtime",
-                ))),
-            }
-        }
-    }
-}
-
-async fn p3_finish_native_mutation(
-    adapter: &P3MutationAdapter,
-    error: std::io::Error,
-    postcondition: MutationPostcondition,
-    retry_safe: bool,
-) -> FilesystemResult<bool> {
-    match adapter.io_failure(error, postcondition, retry_safe).await {
-        P3MutationAction::Retry => Ok(true),
-        action => p3_mutation_action_result(action).map(|()| false),
-    }
-}
-
 fn p3_native_guest(error: NativeMutationGuestError) -> FilesystemError {
     match error {
         NativeMutationGuestError::Invalid => types::ErrorCode::Invalid.into(),
-        NativeMutationGuestError::NotDirectory => types::ErrorCode::NotDirectory.into(),
         NativeMutationGuestError::NotPermitted => types::ErrorCode::NotPermitted.into(),
         NativeMutationGuestError::Unsupported => types::ErrorCode::Unsupported.into(),
     }
@@ -1008,6 +651,14 @@ fn p3_write_result(
     result: Result<u64, AgentFilesystemMutationError>,
 ) -> (usize, FilesystemWriteResult) {
     match result {
+        Err(AgentFilesystemMutationError::Guest(error)) => (
+            0,
+            Err(FilesystemWriteFailure::Guest(match error {
+                NativeMutationGuestError::Invalid => types::ErrorCode::Invalid,
+                NativeMutationGuestError::NotPermitted => types::ErrorCode::NotPermitted,
+                NativeMutationGuestError::Unsupported => types::ErrorCode::Unsupported,
+            })),
+        ),
         Ok(completed) | Err(AgentFilesystemMutationError::Cancelled { completed }) => (
             usize::try_from(completed).expect("completed write length must fit usize"),
             Ok(()),
@@ -1036,6 +687,28 @@ fn p3_write_result(
                 "agent filesystem mutation invalidated the runtime".to_string(),
             )),
         ),
+    }
+}
+
+fn p3_mutation_result<T>(result: Result<T, AgentFilesystemMutationError>) -> FilesystemResult<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(AgentFilesystemMutationError::Guest(error)) => Err(p3_native_guest(error)),
+        Err(AgentFilesystemMutationError::Native { error, .. }) => {
+            Err(types::ErrorCode::from(&error.into_io_error()).into())
+        }
+        Err(AgentFilesystemMutationError::QuotaExhausted { .. }) => {
+            Err(types::ErrorCode::Quota.into())
+        }
+        Err(AgentFilesystemMutationError::InsufficientSpace { .. }) => {
+            Err(types::ErrorCode::InsufficientSpace.into())
+        }
+        Err(AgentFilesystemMutationError::Cancelled { .. }) => {
+            unreachable!("non-stream mutation is not cancellable")
+        }
+        Err(AgentFilesystemMutationError::RuntimeInvalidated { .. }) => Err(FilesystemError::trap(
+            wasmtime::Error::msg("agent filesystem mutation invalidated the runtime"),
+        )),
     }
 }
 
@@ -1250,26 +923,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "sync-data",
             )
         });
-        let effect = Arc::new(begin_filesystem_effect::<Ctx, U>(store).await?);
+        let runtime = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
+        });
+        let admitted = p3_mutation_result(runtime.mutations().admit_sync().await)?;
         let descriptor = store
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
-        let mut adapter = P3MutationAdapter::new(store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
-        }));
-        adapter.begin_attempt();
-        match run_blocking_filesystem_mutation(effect, move || {
-            native_sync_descriptor(&descriptor, true)
-        })
-        .await
-        {
-            Ok(()) => Ok(()),
-            Err(error) => p3_mutation_action_result(
-                adapter
-                    .io_failure(error, MutationPostcondition::Unknown, false)
-                    .await,
-            ),
-        }
+        p3_mutation_result(runtime.mutations().sync(admitted, descriptor, true).await)
     }
 
     async fn get_flags(
@@ -1328,38 +989,22 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "set-size",
             )
         });
-        let effect = Arc::new(begin_filesystem_update_effect::<Ctx, U>(accessor).await?);
-        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
-        let descriptor = accessor
-            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
-            .map_err(FilesystemError::trap)?;
-        let file = match &descriptor {
-            Descriptor::File(file) => file.clone(),
-            Descriptor::Dir(_) => return Err(types::ErrorCode::BadDescriptor.into()),
-        };
-        validate_resize(&file).map_err(p3_native_guest)?;
         let runtime = accessor.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
-        let before = p3_initial_probe(&runtime, descriptor_state(&descriptor).await).await?;
-        let mut adapter = P3MutationAdapter::for_operation(runtime, MutationOperation::Resize);
-        loop {
-            adapter.begin_attempt();
-            let file = file.clone();
-            let effect = Arc::clone(&effect);
-            match run_blocking_filesystem_mutation(effect, move || native_resize_file(&file, size))
-                .await
-            {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition =
-                        resize_postcondition(before, descriptor_state(&descriptor).await, size);
-                    if !p3_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let mutations = runtime.mutations();
+        let admitted = p3_mutation_result(mutations.admit_resize().await)?;
+        let descriptor = accessor
+            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
+            .map_err(FilesystemError::trap)?;
+        let checked =
+            p3_mutation_result(mutations.check_resize_policy(admitted, descriptor.clone(), size))?;
+        let file = match descriptor {
+            Descriptor::File(file) => file,
+            Descriptor::Dir(_) => return Err(types::ErrorCode::BadDescriptor.into()),
+        };
+        let prepared = p3_mutation_result(mutations.prepare_resize(checked, file).await)?;
+        p3_mutation_result(mutations.resize(prepared).await.map(|_| ()))
     }
 
     async fn set_times(
@@ -1368,8 +1013,17 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         data_access_timestamp: types::NewTimestamp,
         data_modification_timestamp: types::NewTimestamp,
     ) -> FilesystemResult<()> {
-        let effect = Arc::new(begin_filesystem_update_effect::<Ctx, U>(accessor).await?);
-        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
+        let runtime = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
+        });
+        let mutations = runtime.mutations();
+        let admitted = p3_mutation_result(mutations.admit_descriptor_times().await)?;
+        let policy_descriptor = accessor
+            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
+            .map_err(FilesystemError::trap)?;
+        let checked = p3_mutation_result(
+            mutations.check_descriptor_times_policy(admitted, policy_descriptor),
+        )?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1380,38 +1034,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let descriptor = accessor
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
-        validate_descriptor_times(&descriptor).map_err(p3_native_guest)?;
+        let validated =
+            p3_mutation_result(mutations.prepare_descriptor_times(checked, descriptor))?;
         let accessed = p3_native_time(data_access_timestamp)?;
         let modified = p3_native_time(data_modification_timestamp)?;
-        let runtime = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
-        });
-        let before = p3_initial_probe(&runtime, descriptor_times(&descriptor).await).await?;
-        let mut adapter = P3MutationAdapter::new(runtime);
-        loop {
-            adapter.begin_attempt();
-            let descriptor_for_attempt = descriptor.clone();
-            let effect = Arc::clone(&effect);
-            match run_blocking_filesystem_mutation(effect, move || {
-                native_set_descriptor_times(&descriptor_for_attempt, accessed, modified)
-            })
-            .await
-            {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition = times_postcondition(
-                        descriptor_times(&descriptor).await,
-                        before,
-                        p3_requested_time(data_access_timestamp),
-                        p3_requested_time(data_modification_timestamp),
-                        false,
-                    );
-                    if !p3_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = mutations.bind_descriptor_times(
+            validated,
+            accessed,
+            modified,
+            p3_requested_time(data_access_timestamp),
+            p3_requested_time(data_modification_timestamp),
+        );
+        p3_mutation_result(mutations.set_descriptor_times(prepared).await)
     }
 
     async fn read_directory(
@@ -1480,26 +1114,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "sync",
             )
         });
-        let effect = Arc::new(begin_filesystem_effect::<Ctx, U>(store).await?);
+        let runtime = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
+        });
+        let admitted = p3_mutation_result(runtime.mutations().admit_sync().await)?;
         let descriptor = store
             .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
-        let mut adapter = P3MutationAdapter::new(store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
-        }));
-        adapter.begin_attempt();
-        match run_blocking_filesystem_mutation(effect, move || {
-            native_sync_descriptor(&descriptor, false)
-        })
-        .await
-        {
-            Ok(()) => Ok(()),
-            Err(error) => p3_mutation_action_result(
-                adapter
-                    .io_failure(error, MutationPostcondition::Unknown, false)
-                    .await,
-            ),
-        }
+        p3_mutation_result(runtime.mutations().sync(admitted, descriptor, false).await)
     }
 
     async fn create_directory_at(
@@ -1514,36 +1136,21 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "create-directory-at",
             )
         });
-        let effect = Arc::new(begin_filesystem_path_effect::<Ctx, U>(store).await?);
-        fail_if_read_only_path_from_accessor::<Ctx, U>(store, &fd, &path, false, false)?;
-        let directory =
-            store.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
-        validate_directory_mutation(&directory).map_err(p3_native_guest)?;
         let runtime = store.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
-        let before = p3_initial_probe(&runtime, path_state(&directory, &path).await).await?;
-        let mut adapter = P3MutationAdapter::for_operation(runtime, MutationOperation::Create);
-        loop {
-            adapter.begin_attempt();
-            let directory_for_attempt = directory.clone();
-            let path_for_attempt = path.clone();
-            let effect = Arc::clone(&effect);
-            match run_blocking_filesystem_mutation(effect, move || {
-                native_create_directory(&directory_for_attempt, &path_for_attempt)
-            })
-            .await
-            {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition =
-                        create_directory_postcondition(before, path_state(&directory, &path).await);
-                    if !p3_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let mutations = runtime.mutations();
+        let admitted = p3_mutation_result(mutations.admit_create_directory().await)?;
+        let descriptor = store
+            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
+            .map_err(FilesystemError::trap)?;
+        let checked = p3_mutation_result(
+            mutations.check_create_directory_policy(admitted, descriptor, path),
+        )?;
+        let directory =
+            store.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
+        let prepared = p3_mutation_result(mutations.prepare_create_directory(checked, directory))?;
+        p3_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
 
     async fn stat(
@@ -1635,15 +1242,21 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         data_access_timestamp: types::NewTimestamp,
         data_modification_timestamp: types::NewTimestamp,
     ) -> FilesystemResult<()> {
-        let effect = Arc::new(begin_filesystem_update_effect::<Ctx, U>(accessor).await?);
-        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
-        fail_if_read_only_path_from_accessor::<Ctx, U>(
-            accessor,
-            &fd,
-            &path,
-            false,
-            path_flags.contains(types::PathFlags::SYMLINK_FOLLOW),
-        )?;
+        let runtime = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
+        });
+        let mutations = runtime.mutations();
+        let admitted = p3_mutation_result(mutations.admit_path_times().await)?;
+        let follow = path_flags.contains(types::PathFlags::SYMLINK_FOLLOW);
+        let policy_descriptor = accessor
+            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
+            .map_err(FilesystemError::trap)?;
+        let checked = p3_mutation_result(mutations.check_path_times_policy(
+            admitted,
+            policy_descriptor,
+            path,
+            follow,
+        ))?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -1653,47 +1266,17 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         });
         let directory =
             accessor.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
-        validate_directory_mutation(&directory).map_err(p3_native_guest)?;
-        let follow = path_flags.contains(types::PathFlags::SYMLINK_FOLLOW);
+        let validated = p3_mutation_result(mutations.prepare_path_times(checked, directory))?;
         let accessed = p3_native_time(data_access_timestamp)?;
         let modified = p3_native_time(data_modification_timestamp)?;
-        let runtime = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
-        });
-        let before =
-            p3_initial_probe(&runtime, path_times(&directory, &path, follow).await).await?;
-        let mut adapter = P3MutationAdapter::new(runtime);
-        loop {
-            adapter.begin_attempt();
-            let directory_for_attempt = directory.clone();
-            let path_for_attempt = path.clone();
-            let effect = Arc::clone(&effect);
-            match run_blocking_filesystem_mutation(effect, move || {
-                native_set_path_times(
-                    &directory_for_attempt,
-                    &path_for_attempt,
-                    follow,
-                    accessed,
-                    modified,
-                )
-            })
-            .await
-            {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition = times_postcondition(
-                        path_times(&directory, &path, follow).await,
-                        before,
-                        p3_requested_time(data_access_timestamp),
-                        p3_requested_time(data_modification_timestamp),
-                        true,
-                    );
-                    if !p3_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = mutations.bind_path_times(
+            validated,
+            accessed,
+            modified,
+            p3_requested_time(data_access_timestamp),
+            p3_requested_time(data_modification_timestamp),
+        );
+        p3_mutation_result(mutations.set_path_times(prepared).await)
     }
 
     async fn link_at(
@@ -1711,68 +1294,43 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "link-at",
             )
         });
-        let effect = Arc::new(begin_filesystem_path_effect::<Ctx, U>(store).await?);
-        fail_if_read_only_from_accessor::<Ctx, U>(store, &fd)?;
-        fail_if_read_only_from_accessor::<Ctx, U>(store, &new_fd)?;
-        fail_if_read_only_path_from_accessor::<Ctx, U>(
-            store,
-            &fd,
-            &old_path,
-            false,
-            old_path_flags.contains(types::PathFlags::SYMLINK_FOLLOW),
-        )?;
-        fail_if_read_only_path_from_accessor::<Ctx, U>(store, &new_fd, &new_path, false, false)?;
+        let runtime = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
+        });
+        let mutations = runtime.mutations();
+        let admitted = p3_mutation_result(mutations.admit_hard_link().await)?;
+        let source_descriptor = store
+            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
+            .map_err(FilesystemError::trap)?;
+        let source_follow = old_path_flags.contains(types::PathFlags::SYMLINK_FOLLOW);
+        let source_checked =
+            p3_mutation_result(mutations.check_hard_link_source_descriptor_policy(
+                admitted,
+                source_descriptor,
+                old_path,
+                source_follow,
+            ))?;
+        let destination_descriptor = store
+            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &new_fd))
+            .map_err(FilesystemError::trap)?;
+        let destination_checked =
+            p3_mutation_result(mutations.check_hard_link_destination_descriptor_policy(
+                source_checked,
+                destination_descriptor,
+                new_path,
+            ))?;
+        let checked =
+            p3_mutation_result(mutations.check_hard_link_path_policy(destination_checked))?;
         let source_directory =
             store.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
         let destination_directory =
             store.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &new_fd))?;
-        validate_two_directory_mutation(&source_directory, &destination_directory)
-            .map_err(p3_native_guest)?;
-        if old_path_flags.contains(types::PathFlags::SYMLINK_FOLLOW) {
-            return Err(types::ErrorCode::Invalid.into());
-        }
-        let runtime = store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
-        });
-        let source_before =
-            p3_initial_probe(&runtime, path_state(&source_directory, &old_path).await).await?;
-        let destination_before = p3_initial_probe(
-            &runtime,
-            path_state(&destination_directory, &new_path).await,
-        )
-        .await?;
-        let mut adapter = P3MutationAdapter::new(runtime);
-        loop {
-            adapter.begin_attempt();
-            let source_directory_for_attempt = source_directory.clone();
-            let destination_directory_for_attempt = destination_directory.clone();
-            let old_path_for_attempt = old_path.clone();
-            let new_path_for_attempt = new_path.clone();
-            let effect = Arc::clone(&effect);
-            match run_blocking_filesystem_mutation(effect, move || {
-                native_hard_link(
-                    &source_directory_for_attempt,
-                    &old_path_for_attempt,
-                    &destination_directory_for_attempt,
-                    &new_path_for_attempt,
-                )
-            })
-            .await
-            {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition = link_postcondition(
-                        source_before,
-                        destination_before,
-                        path_state(&source_directory, &old_path).await,
-                        path_state(&destination_directory, &new_path).await,
-                    );
-                    if !p3_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = p3_mutation_result(mutations.prepare_hard_link(
+            checked,
+            source_directory,
+            destination_directory,
+        ))?;
+        p3_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
 
     async fn open_at(
@@ -1791,24 +1349,46 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let mutating = open_flags.intersects(types::OpenFlags::CREATE | types::OpenFlags::TRUNCATE);
-        let effect = if mutating {
-            Some(Arc::new(
-                begin_filesystem_update_effect::<Ctx, U>(accessor).await?,
-            ))
+        let runtime = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
+        });
+        let mutations = runtime.mutations();
+        let admitted = if mutating {
+            Some(p3_mutation_result(mutations.admit_mutating_open().await)?)
         } else {
             None
         };
-        if open_flags.contains(types::OpenFlags::TRUNCATE)
-            || flags.contains(types::DescriptorFlags::WRITE)
-        {
-            fail_if_read_only_path_from_accessor::<Ctx, U>(
-                accessor,
-                &fd,
-                &path,
-                false,
-                path_flags.contains(types::PathFlags::SYMLINK_FOLLOW),
-            )?;
-        }
+        let follow = path_flags.contains(types::PathFlags::SYMLINK_FOLLOW);
+        let writable = open_flags.contains(types::OpenFlags::TRUNCATE)
+            || flags.contains(types::DescriptorFlags::WRITE);
+        let checked = match (admitted, writable) {
+            (Some(admitted), true) => {
+                let descriptor = accessor
+                    .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
+                    .map_err(FilesystemError::trap)?;
+                Some(p3_mutation_result(mutations.check_mutating_open_policy(
+                    admitted,
+                    descriptor,
+                    path.clone(),
+                    follow,
+                ))?)
+            }
+            (Some(admitted), false) => {
+                Some(mutations.bind_nonwritable_mutating_open(admitted, path.clone(), follow))
+            }
+            (None, true) => {
+                let descriptor = accessor
+                    .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
+                    .map_err(FilesystemError::trap)?;
+                p3_mutation_result(mutations.check_writable_open_policy(
+                    &descriptor,
+                    &path,
+                    follow,
+                ))?;
+                None
+            }
+            (None, false) => None,
+        };
         if !mutating {
             let filesystem = accessor.with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
             return <WasiFilesystem as types::HostDescriptorWithStore<U>>::open_at(
@@ -1823,7 +1403,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         }
         let directory =
             accessor.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
-        let follow = path_flags.contains(types::PathFlags::SYMLINK_FOLLOW);
         let native_options = NativeOpenOptions {
             create: open_flags.contains(types::OpenFlags::CREATE),
             directory: open_flags.contains(types::OpenFlags::DIRECTORY),
@@ -1833,88 +1412,22 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             read: flags.contains(types::DescriptorFlags::READ),
             write: flags.contains(types::DescriptorFlags::WRITE),
         };
-        validate_open(
-            &directory,
+        let unsupported_sync_flags = flags.intersects(
+            types::DescriptorFlags::FILE_INTEGRITY_SYNC
+                | types::DescriptorFlags::DATA_INTEGRITY_SYNC
+                | types::DescriptorFlags::REQUESTED_WRITE_SYNC,
+        );
+        let prepared = p3_mutation_result(mutations.prepare_mutating_open(
+            checked.expect("mutating open has checked admission"),
+            directory,
             native_options,
-            flags.intersects(
-                types::DescriptorFlags::FILE_INTEGRITY_SYNC
-                    | types::DescriptorFlags::DATA_INTEGRITY_SYNC
-                    | types::DescriptorFlags::REQUESTED_WRITE_SYNC,
-            ),
-        )
-        .map_err(p3_native_guest)?;
-        let runtime = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
-        });
-        let before = p3_initial_probe(
-            &runtime,
-            path_state_with_follow(&directory, &path, follow).await,
-        )
-        .await?;
-        let requested_type = if open_flags.contains(types::OpenFlags::DIRECTORY) {
-            PathObjectType::Directory
-        } else {
-            PathObjectType::RegularFile
-        };
-        let operation = if open_flags.contains(types::OpenFlags::CREATE) {
-            MutationOperation::Create
-        } else {
-            MutationOperation::Resize
-        };
-        let mut adapter = P3MutationAdapter::for_operation(runtime, operation);
-        loop {
-            adapter.begin_attempt();
-            let directory_for_attempt = directory.clone();
-            let path_for_attempt = path.clone();
-            let effect = Arc::clone(effect.as_ref().expect("mutating open has an effect lease"));
-            match run_blocking_filesystem_mutation(effect, move || {
-                native_open(&directory_for_attempt, &path_for_attempt, native_options)
-            })
-            .await
-            {
-                Ok(NativeOpenResult::Descriptor(descriptor)) => {
-                    return push_descriptor(accessor, descriptor);
-                }
-                #[cfg(windows)]
-                Ok(NativeOpenResult::IsDirectory) => {
-                    return Err(types::ErrorCode::IsDirectory.into());
-                }
-                Ok(NativeOpenResult::NotDirectory) => {
-                    return Err(p3_native_guest(NativeMutationGuestError::NotDirectory));
-                }
-                Err(error) => {
-                    let postcondition = open_postcondition(
-                        before,
-                        path_state_with_follow(&directory, &path, follow).await,
-                        requested_type,
-                        open_flags.contains(types::OpenFlags::TRUNCATE),
-                        open_flags.contains(types::OpenFlags::EXCLUSIVE),
-                    );
-                    match adapter.io_failure(error, postcondition, true).await {
-                        P3MutationAction::Retry => {}
-                        P3MutationAction::Success => {
-                            let safe_flags = open_flags & types::OpenFlags::DIRECTORY;
-                            let filesystem = accessor
-                                .with_getter::<WasiFilesystem>(wasi_filesystem_view::<Ctx, U>);
-                            return <WasiFilesystem as types::HostDescriptorWithStore<U>>::open_at(
-                                &filesystem,
-                                Resource::new_borrow(fd.rep()),
-                                path_flags,
-                                path.clone(),
-                                safe_flags,
-                                flags,
-                            )
-                            .await;
-                        }
-                        P3MutationAction::Error(error) => return Err(error),
-                        P3MutationAction::Trap => {
-                            return Err(FilesystemError::trap(wasmtime::Error::msg(
-                                "agent filesystem mutation invalidated the runtime",
-                            )));
-                        }
-                    }
-                }
-            }
+            unsupported_sync_flags,
+        ))?;
+        match p3_mutation_result(mutations.open_mutating(prepared).await)? {
+            NativeOpenResult::Descriptor(descriptor) => push_descriptor(accessor, descriptor),
+            #[cfg(windows)]
+            NativeOpenResult::IsDirectory => Err(types::ErrorCode::IsDirectory.into()),
+            NativeOpenResult::NotDirectory => Err(types::ErrorCode::NotDirectory.into()),
         }
     }
 
@@ -1946,36 +1459,21 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 "remove-directory-at",
             )
         });
-        let effect = Arc::new(begin_filesystem_path_effect::<Ctx, U>(store).await?);
-        fail_if_read_only_path_from_accessor::<Ctx, U>(store, &fd, &path, true, false)?;
-        let directory =
-            store.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
-        validate_directory_mutation(&directory).map_err(p3_native_guest)?;
         let runtime = store.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
         });
-        let before = p3_initial_probe(&runtime, path_state(&directory, &path).await).await?;
-        let mut adapter = P3MutationAdapter::new(runtime);
-        loop {
-            adapter.begin_attempt();
-            let directory_for_attempt = directory.clone();
-            let path_for_attempt = path.clone();
-            let effect = Arc::clone(&effect);
-            match run_blocking_filesystem_mutation(effect, move || {
-                native_remove_directory(&directory_for_attempt, &path_for_attempt)
-            })
-            .await
-            {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition =
-                        remove_postcondition(before, path_state(&directory, &path).await);
-                    if !p3_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let mutations = runtime.mutations();
+        let admitted = p3_mutation_result(mutations.admit_remove_directory().await)?;
+        let descriptor = store
+            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
+            .map_err(FilesystemError::trap)?;
+        let checked = p3_mutation_result(
+            mutations.check_remove_directory_policy(admitted, descriptor, path),
+        )?;
+        let directory =
+            store.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
+        let prepared = p3_mutation_result(mutations.prepare_remove_directory(checked, directory))?;
+        p3_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
 
     async fn rename_at(
@@ -1985,11 +1483,29 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> FilesystemResult<()> {
-        let effect = Arc::new(begin_filesystem_path_effect::<Ctx, U>(accessor).await?);
-        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
-        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &new_fd)?;
-        fail_if_read_only_path_from_accessor::<Ctx, U>(accessor, &fd, &old_path, true, false)?;
-        fail_if_read_only_path_from_accessor::<Ctx, U>(accessor, &new_fd, &new_path, true, false)?;
+        let runtime = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
+        });
+        let mutations = runtime.mutations();
+        let admitted = p3_mutation_result(mutations.admit_rename().await)?;
+        let source_descriptor = accessor
+            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
+            .map_err(FilesystemError::trap)?;
+        let source_checked = p3_mutation_result(mutations.check_rename_source_descriptor_policy(
+            admitted,
+            source_descriptor,
+            old_path,
+        ))?;
+        let destination_descriptor = accessor
+            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &new_fd))
+            .map_err(FilesystemError::trap)?;
+        let destination_checked =
+            p3_mutation_result(mutations.check_rename_destination_descriptor_policy(
+                source_checked,
+                destination_descriptor,
+                new_path,
+            ))?;
+        let checked = p3_mutation_result(mutations.check_rename_path_policy(destination_checked))?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -2001,50 +1517,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             accessor.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
         let destination_directory =
             accessor.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &new_fd))?;
-        validate_two_directory_mutation(&source_directory, &destination_directory)
-            .map_err(p3_native_guest)?;
-        let runtime = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
-        });
-        let source_before =
-            p3_initial_probe(&runtime, path_state(&source_directory, &old_path).await).await?;
-        let destination_before = p3_initial_probe(
-            &runtime,
-            path_state(&destination_directory, &new_path).await,
-        )
-        .await?;
-        let mut adapter = P3MutationAdapter::new(runtime);
-        loop {
-            adapter.begin_attempt();
-            let source_directory_for_attempt = source_directory.clone();
-            let destination_directory_for_attempt = destination_directory.clone();
-            let old_path_for_attempt = old_path.clone();
-            let new_path_for_attempt = new_path.clone();
-            let effect = Arc::clone(&effect);
-            match run_blocking_filesystem_mutation(effect, move || {
-                native_rename(
-                    &source_directory_for_attempt,
-                    &old_path_for_attempt,
-                    &destination_directory_for_attempt,
-                    &new_path_for_attempt,
-                )
-            })
-            .await
-            {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition = rename_postcondition(
-                        source_before,
-                        destination_before,
-                        path_state(&source_directory, &old_path).await,
-                        path_state(&destination_directory, &new_path).await,
-                    );
-                    if !p3_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = p3_mutation_result(mutations.prepare_rename(
+            checked,
+            source_directory,
+            destination_directory,
+        ))?;
+        p3_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
 
     async fn symlink_at(
@@ -2053,9 +1531,17 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         old_path: String,
         new_path: String,
     ) -> FilesystemResult<()> {
-        let effect = Arc::new(begin_filesystem_path_effect::<Ctx, U>(accessor).await?);
-        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
-        fail_if_read_only_path_from_accessor::<Ctx, U>(accessor, &fd, &new_path, false, false)?;
+        let runtime = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
+        });
+        let mutations = runtime.mutations();
+        let admitted = p3_mutation_result(mutations.admit_symlink().await)?;
+        let descriptor = accessor
+            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
+            .map_err(FilesystemError::trap)?;
+        let checked = p3_mutation_result(
+            mutations.check_symlink_policy(admitted, descriptor, old_path, new_path),
+        )?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -2065,40 +1551,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         });
         let directory =
             accessor.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
-        validate_directory_mutation(&directory).map_err(p3_native_guest)?;
-        let runtime = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
-        });
-        let before = p3_initial_probe(&runtime, symlink_state(&directory, &new_path).await).await?;
-        let mut adapter = P3MutationAdapter::for_operation(runtime, MutationOperation::Create);
-        loop {
-            adapter.begin_attempt();
-            let directory_for_attempt = directory.clone();
-            let old_path_for_attempt = old_path.clone();
-            let new_path_for_attempt = new_path.clone();
-            let effect = Arc::clone(&effect);
-            match run_blocking_filesystem_mutation(effect, move || {
-                native_symlink(
-                    &directory_for_attempt,
-                    &old_path_for_attempt,
-                    &new_path_for_attempt,
-                )
-            })
-            .await
-            {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition = symlink_postcondition(
-                        &before,
-                        symlink_state(&directory, &new_path).await,
-                        &old_path,
-                    );
-                    if !p3_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = p3_mutation_result(mutations.prepare_symlink(checked, directory))?;
+        p3_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
 
     async fn unlink_file_at(
@@ -2106,9 +1560,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
         path: String,
     ) -> FilesystemResult<()> {
-        let effect = Arc::new(begin_filesystem_path_effect::<Ctx, U>(accessor).await?);
-        fail_if_read_only_from_accessor::<Ctx, U>(accessor, &fd)?;
-        fail_if_read_only_path_from_accessor::<Ctx, U>(accessor, &fd, &path, false, false)?;
+        let runtime = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
+        });
+        let mutations = runtime.mutations();
+        let admitted = p3_mutation_result(mutations.admit_unlink_file().await)?;
+        let descriptor = accessor
+            .with(|mut access| descriptor_from_access::<Ctx, U>(&mut access, &fd))
+            .map_err(FilesystemError::trap)?;
+        let checked =
+            p3_mutation_result(mutations.check_unlink_file_policy(admitted, descriptor, path))?;
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
                 access.data_mut(),
@@ -2118,32 +1579,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         });
         let directory =
             accessor.with(|mut access| directory_from_access::<Ctx, U>(&mut access, &fd))?;
-        validate_directory_mutation(&directory).map_err(p3_native_guest)?;
-        let runtime = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_runtime()
-        });
-        let before = p3_initial_probe(&runtime, path_state(&directory, &path).await).await?;
-        let mut adapter = P3MutationAdapter::new(runtime);
-        loop {
-            adapter.begin_attempt();
-            let directory_for_attempt = directory.clone();
-            let path_for_attempt = path.clone();
-            let effect = Arc::clone(&effect);
-            match run_blocking_filesystem_mutation(effect, move || {
-                native_unlink_file(&directory_for_attempt, &path_for_attempt)
-            })
-            .await
-            {
-                Ok(()) => return Ok(()),
-                Err(error) => {
-                    let postcondition =
-                        remove_postcondition(before, path_state(&directory, &path).await);
-                    if !p3_finish_native_mutation(&adapter, error, postcondition, true).await? {
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let prepared = p3_mutation_result(mutations.prepare_unlink_file(checked, directory))?;
+        p3_mutation_result(mutations.run_namespace_mutation(prepared).await)
     }
 
     async fn is_same_object(
@@ -2203,7 +1640,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::agent_filesystem::{FilesystemCapacity, ObjectIdentity, PathState};
+    use crate::services::agent_filesystem::{
+        MutationPostcondition, ObjectIdentity, PathObjectType, PathState,
+        create_directory_postcondition, link_postcondition, open_postcondition, path_state,
+        remove_postcondition, rename_postcondition, symlink_postcondition,
+    };
     use fs_set_times::{SystemTimeSpec, set_symlink_times, set_times};
     use golem_common::model::oplog::types::SerializableDateTime;
     use std::time::{Duration, SystemTime};
@@ -2217,249 +1658,6 @@ mod tests {
             false,
             path,
         )
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn p3_mutation_adapter_retries_only_proven_no_effect_once() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let mut adapter = P3MutationAdapter::new(runtime.clone());
-
-        adapter.begin_attempt();
-        assert!(matches!(
-            adapter
-                .failure(
-                    types::ErrorCode::Busy.into(),
-                    MutationPostcondition::NoEffect,
-                    true,
-                )
-                .await,
-            P3MutationAction::Retry
-        ));
-        adapter.begin_attempt();
-        assert!(matches!(
-            adapter
-                .failure(
-                    types::ErrorCode::Busy.into(),
-                    MutationPostcondition::NoEffect,
-                    true,
-                )
-                .await,
-            P3MutationAction::Error(error)
-                if matches!(error.downcast_ref(), Some(types::ErrorCode::Busy))
-        ));
-        assert!(runtime.begin_effect().await.is_ok());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn p3_mutation_adapter_accepts_satisfied_postcondition() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let mut adapter = P3MutationAdapter::new(runtime.clone());
-        adapter.begin_attempt();
-
-        assert!(matches!(
-            adapter
-                .failure(
-                    types::ErrorCode::Interrupted.into(),
-                    MutationPostcondition::Satisfied,
-                    true,
-                )
-                .await,
-            P3MutationAction::Success
-        ));
-        assert!(runtime.begin_effect().await.is_ok());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn p3_mutation_adapter_seals_unknown_effect() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let mut adapter = P3MutationAdapter::new(runtime.clone());
-        adapter.begin_attempt();
-
-        assert!(matches!(
-            adapter
-                .failure(
-                    types::ErrorCode::Busy.into(),
-                    MutationPostcondition::Unknown,
-                    true,
-                )
-                .await,
-            P3MutationAction::Trap
-        ));
-        assert!(runtime.begin_effect().await.is_err());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn p3_native_eio_reaches_terminal_classifier() {
-        let runtime = AgentFilesystemRuntime::new_for_test();
-        let mut adapter = P3MutationAdapter::new(runtime.clone());
-        adapter.begin_attempt();
-
-        assert!(matches!(
-            adapter
-                .io_failure(
-                    std::io::Error::from_raw_os_error(libc::EIO),
-                    MutationPostcondition::NoEffect,
-                    true,
-                )
-                .await,
-            P3MutationAction::Trap
-        ));
-        assert!(runtime.begin_effect().await.is_err());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn p3_physical_pressure_runs_one_safe_recovery_cycle() {
-        let runtime = AgentFilesystemRuntime::new_for_test_with_observations(
-            None,
-            None,
-            FilesystemCapacity {
-                total_bytes: 100,
-                available_bytes: 0,
-                total_filesystem_objects: 100,
-                available_filesystem_objects: 100,
-            },
-        );
-        let recovery_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        runtime.set_pressure_recovery_callback(Some({
-            let recovery_attempts = Arc::clone(&recovery_attempts);
-            Arc::new(move |operation, _deadline| {
-                let recovery_attempts = Arc::clone(&recovery_attempts);
-                Box::pin(async move {
-                    assert_eq!(operation, MutationOperation::Metadata);
-                    recovery_attempts.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                    true
-                })
-            })
-        }));
-        let mut adapter = P3MutationAdapter::new(runtime);
-        adapter.begin_attempt();
-        assert!(matches!(
-            adapter
-                .failure(
-                    types::ErrorCode::InsufficientSpace.into(),
-                    MutationPostcondition::NoEffect,
-                    true,
-                )
-                .await,
-            P3MutationAction::Retry
-        ));
-        adapter.begin_attempt();
-        assert!(matches!(
-            adapter
-                .failure(
-                    types::ErrorCode::InsufficientSpace.into(),
-                    MutationPostcondition::NoEffect,
-                    true,
-                )
-                .await,
-            P3MutationAction::Error(error)
-                if matches!(error.downcast_ref(), Some(types::ErrorCode::InsufficientSpace))
-        ));
-        assert_eq!(
-            recovery_attempts.load(std::sync::atomic::Ordering::Acquire),
-            1
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn p3_physical_pressure_respects_effect_and_time_bounds() {
-        fn pressure_runtime() -> AgentFilesystemRuntime {
-            AgentFilesystemRuntime::new_for_test_with_observations(
-                None,
-                None,
-                FilesystemCapacity {
-                    total_bytes: 100,
-                    available_bytes: 0,
-                    total_filesystem_objects: 100,
-                    available_filesystem_objects: 100,
-                },
-            )
-        }
-
-        let completed_recoveries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let completed = pressure_runtime();
-        completed.set_pressure_recovery_callback(Some({
-            let completed_recoveries = Arc::clone(&completed_recoveries);
-            Arc::new(move |_, _deadline| {
-                let completed_recoveries = Arc::clone(&completed_recoveries);
-                Box::pin(async move {
-                    completed_recoveries.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                    true
-                })
-            })
-        }));
-        let mut completed_adapter = P3MutationAdapter::new(completed);
-        completed_adapter.begin_attempt();
-        assert!(matches!(
-            completed_adapter
-                .failure(
-                    types::ErrorCode::InsufficientSpace.into(),
-                    MutationPostcondition::Satisfied,
-                    true,
-                )
-                .await,
-            P3MutationAction::Success
-        ));
-        assert_eq!(
-            completed_recoveries.load(std::sync::atomic::Ordering::Acquire),
-            0
-        );
-
-        let unknown_recoveries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let unknown = pressure_runtime();
-        unknown.set_pressure_recovery_callback(Some({
-            let unknown_recoveries = Arc::clone(&unknown_recoveries);
-            Arc::new(move |_, _deadline| {
-                let unknown_recoveries = Arc::clone(&unknown_recoveries);
-                Box::pin(async move {
-                    unknown_recoveries.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                    true
-                })
-            })
-        }));
-        let mut unknown_adapter = P3MutationAdapter::new(unknown);
-        unknown_adapter.begin_attempt();
-        assert!(matches!(
-            unknown_adapter
-                .failure(
-                    types::ErrorCode::InsufficientSpace.into(),
-                    MutationPostcondition::Unknown,
-                    true,
-                )
-                .await,
-            P3MutationAction::Trap
-        ));
-        assert_eq!(
-            unknown_recoveries.load(std::sync::atomic::Ordering::Acquire),
-            0
-        );
-
-        let timed_out = pressure_runtime();
-        timed_out.set_pressure_recovery_callback(Some(Arc::new(move |_, _deadline| {
-            Box::pin(async move {
-                tokio::time::sleep(Duration::from_millis(260)).await;
-                true
-            })
-        })));
-        let mut timed_out_adapter = P3MutationAdapter::new(timed_out);
-        timed_out_adapter.begin_attempt();
-        assert!(matches!(
-            timed_out_adapter
-                .failure(
-                    types::ErrorCode::InsufficientSpace.into(),
-                    MutationPostcondition::NoEffect,
-                    true,
-                )
-                .await,
-            P3MutationAction::Error(error)
-                if matches!(error.downcast_ref(), Some(types::ErrorCode::InsufficientSpace))
-        ));
     }
 
     #[cfg(target_os = "linux")]

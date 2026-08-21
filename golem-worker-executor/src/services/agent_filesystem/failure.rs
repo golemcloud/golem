@@ -135,8 +135,11 @@ impl AgentFilesystemRuntime {
                         let quota_exhausted = usage.zip(limits).is_some_and(|(usage, limits)| {
                             quota_exhausted(operation, usage, limits)
                         });
-                        let physical_exhausted =
-                            self.inner.pressure.pressure(operation, capacity).is_some();
+                        let physical_exhausted = self
+                            .runtime_state
+                            .pressure
+                            .pressure(operation, capacity)
+                            .is_some();
                         if quota_hint || quota_exhausted {
                             MutationDecision::Quota
                         } else if physical_exhausted {
@@ -182,8 +185,11 @@ impl AgentFilesystemRuntime {
                         let quota_exhausted = usage.zip(limits).is_some_and(|(usage, limits)| {
                             quota_exhausted(operation, usage, limits)
                         });
-                        let physical_exhausted =
-                            self.inner.pressure.pressure(operation, capacity).is_some();
+                        let physical_exhausted = self
+                            .runtime_state
+                            .pressure
+                            .pressure(operation, capacity)
+                            .is_some();
                         if is_quota_error(&error) || quota_exhausted {
                             MutationDecision::Quota
                         } else if physical_exhausted {
@@ -233,7 +239,7 @@ impl AgentFilesystemRuntime {
         callback: Option<AgentFilesystemInvalidationCallback>,
     ) {
         *self
-            .inner
+            .runtime_state
             .invalidated
             .lock()
             .expect("agent filesystem invalidation callback lock poisoned") = callback;
@@ -241,7 +247,7 @@ impl AgentFilesystemRuntime {
 
     pub(crate) fn set_retry_callback(&self, callback: Option<AgentFilesystemRetryCallback>) {
         *self
-            .inner
+            .runtime_state
             .retry_permitted
             .lock()
             .expect("agent filesystem retry callback lock poisoned") = callback;
@@ -252,7 +258,7 @@ impl AgentFilesystemRuntime {
         callback: Option<AgentFilesystemPressureRecoveryCallback>,
     ) {
         *self
-            .inner
+            .runtime_state
             .pressure_recovery
             .lock()
             .expect("agent filesystem pressure callback lock poisoned") = callback;
@@ -270,7 +276,7 @@ impl AgentFilesystemRuntime {
             return false;
         }
         let callback = self
-            .inner
+            .runtime_state
             .pressure_recovery
             .lock()
             .expect("agent filesystem pressure callback lock poisoned")
@@ -287,13 +293,11 @@ impl AgentFilesystemRuntime {
     }
 
     async fn retry_permitted(&self) -> bool {
-        if self.inner.state.load(Ordering::Acquire) & super::mutation::FILESYSTEM_RUNTIME_SEALED
-            != 0
-        {
+        if self.runtime_state.is_sealed() {
             return false;
         }
         let callback = self
-            .inner
+            .runtime_state
             .retry_permitted
             .lock()
             .expect("agent filesystem retry callback lock poisoned")
@@ -307,12 +311,12 @@ impl AgentFilesystemRuntime {
     async fn invalidate<G>(&self) -> MutationDecision<G> {
         self.seal();
         if !self
-            .inner
+            .runtime_state
             .invalidation_notified
             .swap(true, Ordering::AcqRel)
         {
             let callback = self
-                .inner
+                .runtime_state
                 .invalidated
                 .lock()
                 .expect("agent filesystem invalidation callback lock poisoned")
