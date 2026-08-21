@@ -952,8 +952,7 @@ pub fn resolve_agent_id(component_reference: &str, agent_name: &str) -> Option<A
 }
 
 pub fn resolve_agent_id_strict(component_reference: &str, agent_name: &str) -> Option<AgentId> {
-    host_api::resolve_agent_id_strict(component_reference, agent_name)
-        .map(wire_agent_id_to_schema)
+    host_api::resolve_agent_id_strict(component_reference, agent_name).map(wire_agent_id_to_schema)
 }
 
 pub fn fork() -> Result<ForkResult, AgentOperationError> {
