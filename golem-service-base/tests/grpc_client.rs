@@ -1456,7 +1456,11 @@ async fn a_reset_stream_does_not_tear_down_the_connection_carrying_it() {
     let first = ping(&client, uri.clone())
         .await
         .expect_err("the peer resets every stream it is sent");
-    eprintln!("[RESET] first call: {:?} - {}", first.code(), first.message());
+    eprintln!(
+        "[RESET] first call: {:?} - {}",
+        first.code(),
+        first.message()
+    );
     assert_eq!(
         first.code(),
         tonic::Code::ResourceExhausted,

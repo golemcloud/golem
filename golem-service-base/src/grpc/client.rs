@@ -27,7 +27,6 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
@@ -75,7 +74,14 @@ fn build_endpoint(
 /// one ahead of it to burn a full `connect_timeout`. Sharing the attempt means an
 /// unreachable peer costs the whole cohort one `connect_timeout` between them,
 /// after which they all fail and the caller can re-resolve.
-type SharedConnect = Shared<BoxFuture<'static, Result<Connected, Status>>>;
+///
+/// What it resolves to is the client, not the channel underneath it. There is
+/// one cache, so nothing can hold a second opinion about which connection to a
+/// target is the current one.
+type SharedConnect<T> = Shared<BoxFuture<'static, Result<GrpcClientConnection<T>, Status>>>;
+
+/// Builds the client a connection is used through.
+type ClientFactory<T> = Arc<dyn Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync>;
 
 /// How long a connection to a target nobody is calling is kept.
 ///
@@ -84,13 +90,22 @@ type SharedConnect = Shared<BoxFuture<'static, Result<Connected, Status>>>;
 /// it — for the life of the process. Reaching a dropped target again costs one
 /// reconnect, which is why this is generous rather than tight.
 ///
-/// Only [`MultiTargetGrpcClient`] sweeps. A client with one fixed target holds
-/// one connection to a service that is meant to be there, and holding on to it
-/// is the point.
+/// A client with one fixed target uses `Duration::MAX` instead: it holds one
+/// connection to a service that is meant to be there, and holding on to it is
+/// the point.
 const IDLE_CONNECTION_TTL: Duration = Duration::from_secs(600);
 
+/// How often connections to targets nobody is calling are dropped.
+///
+/// Every call checks whether this much time has passed, and the first to find
+/// that it has does the work. Hanging the sweep off a cache miss instead, as
+/// this once did, meant it stopped running altogether once every target in a
+/// stable cluster was connected — which is precisely when there is something to
+/// drop, because a target that goes quiet produces no misses to sweep on.
+const PRUNE_INTERVAL: Duration = Duration::from_secs(60);
+
 /// How many connections a caller will establish when each is retired before it
-/// can install it.
+/// can be handed over.
 ///
 /// A retirement landing in that window is a sibling's failure, not this
 /// caller's, and the connection it takes out is forgotten as it goes — so going
@@ -104,7 +119,7 @@ const IDLE_CONNECTION_TTL: Duration = Duration::from_secs(600);
 /// opened. The worst case is three `connect_timeout`s inside one call, and it
 /// takes a peer whose connects are slow and succeed, over and over: one that
 /// fails leaves through the `?` below without taking another turn.
-const INSTALL_ATTEMPTS: usize = 3;
+const CONNECT_ATTEMPTS: usize = 3;
 
 /// Milliseconds since this process started.
 ///
@@ -236,11 +251,11 @@ impl Retirement {
     }
 }
 
-/// An established connection, and what tells it apart from the one that replaces
-/// it.
+/// An established connection, the client built on it, and what tells it apart
+/// from the connection that replaces it.
 #[derive(Clone)]
-struct Connected {
-    channel: Channel,
+pub struct GrpcClientConnection<T: Clone> {
+    client: T,
     /// Distinguishes this connection from its successor, so a call that fails
     /// late cannot evict a replacement it never used.
     id: u64,
@@ -248,14 +263,31 @@ struct Connected {
     last_used: LastUsed,
 }
 
-fn connect_shared(endpoint: Endpoint, connect_timeout: Duration) -> SharedConnect {
+fn connect_shared<T>(
+    endpoint: Endpoint,
+    config: &GrpcClientConfig,
+    build_client: ClientFactory<T>,
+) -> SharedConnect<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let connect_timeout = config.connect_timeout;
+    let max_message_size = config.max_message_size;
 
     async move {
         match tokio::time::timeout(connect_timeout, endpoint.connect()).await {
-            Ok(Ok(channel)) => Ok(Connected {
-                channel,
+            // The client is built here rather than when the connection is handed
+            // over, so there is no moment in which the connection exists and the
+            // client on it does not. That moment was where a sibling's
+            // retirement used to slip through: it cleared the caches, and the
+            // caller still partway through building put its connection back.
+            Ok(Ok(channel)) => Ok(GrpcClientConnection {
+                client: build_client(
+                    ServiceBuilder::new().layer(OtelGrpcLayer).service(channel),
+                    max_message_size,
+                ),
                 id,
                 retirement: Retirement::new(),
                 last_used: LastUsed::now(),
@@ -276,20 +308,101 @@ fn connect_shared(endpoint: Endpoint, connect_timeout: Duration) -> SharedConnec
 /// costs the whole cohort one `connect_timeout` between them rather than one
 /// each. A successful attempt is then kept rather than cleared, because it is
 /// what every later caller reuses.
+///
+/// One map, holding the client rather than the channel it was built on. The
+/// second map this used to keep alongside it is where a connection one caller
+/// had just retired could reappear: the two were held in step by the order their
+/// writes were made in, and every rule about that order was a rule somebody had
+/// to go on keeping.
 #[derive(Clone)]
-struct Connections {
-    by_target: Arc<scc::HashMap<Uri, SharedConnect>>,
+struct Connections<T: Clone> {
+    by_target: Arc<scc::HashMap<Uri, SharedConnect<T>>>,
+    /// When the idle connections were last dropped, as [`elapsed_millis`].
+    last_pruned: Arc<AtomicU64>,
+    idle_ttl: Duration,
+    prune_interval: Duration,
+    /// Test-only seam: awaited between a connection being established and the
+    /// retirement check below it, so a test can retire one in that window
+    /// rather than race to. Same pattern as `Cache::evict_interleave` in
+    /// `golem-common/src/cache.rs`.
+    #[cfg(test)]
+    interleave: Arc<std::sync::Mutex<Option<ConnectInterleaveHook>>>,
 }
 
-impl Connections {
-    fn new() -> Self {
+#[cfg(test)]
+type ConnectInterleaveHook = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
+
+impl<T> Connections<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    fn new(idle_ttl: Duration, prune_interval: Duration) -> Self {
         Self {
             by_target: Arc::new(scc::HashMap::new()),
+            last_pruned: Arc::new(AtomicU64::new(elapsed_millis())),
+            idle_ttl,
+            prune_interval,
+            #[cfg(test)]
+            interleave: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
-    /// Connects to `target`, joining an attempt already under way if there is one.
-    async fn connect(&self, target: Uri, config: &GrpcClientConfig) -> Result<Connected, Status> {
+    #[cfg(test)]
+    fn set_interleave(&self, hook: ConnectInterleaveHook) {
+        *self.interleave.lock().unwrap() = Some(hook);
+    }
+
+    #[cfg(test)]
+    async fn interleave(&self) {
+        let hook = self.interleave.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook().await;
+        }
+    }
+
+    /// Returns a connected client for `target`, establishing the connection if
+    /// there is not one yet and joining an attempt already under way if there
+    /// is.
+    async fn connect(
+        &self,
+        target: Uri,
+        config: &GrpcClientConfig,
+        build_client: &ClientFactory<T>,
+    ) -> Result<GrpcClientConnection<T>, Status> {
+        self.prune_if_due().await;
+
+        let mut attempts_left = CONNECT_ATTEMPTS;
+        loop {
+            let connected = self.connect_once(&target, config, build_client).await?;
+
+            #[cfg(test)]
+            self.interleave().await;
+
+            if !connected.retirement.is_retired() {
+                return Ok(connected);
+            }
+
+            // A caller that joined an attempt already under way can be handed a
+            // connection an earlier one has since used and given up on. Retiring
+            // it also forgot it, so going back gets a fresh connection rather
+            // than the same verdict.
+            attempts_left = attempts_left.saturating_sub(1);
+            if attempts_left == 0 {
+                return Err(Status::unavailable(
+                    "connection retired before it could be used",
+                ));
+            }
+        }
+    }
+
+    /// One turn of [`Self::connect`]: the cached connection, the attempt someone
+    /// else is making, or a new attempt of this caller's own.
+    async fn connect_once(
+        &self,
+        target: &Uri,
+        config: &GrpcClientConfig,
+        build_client: &ClientFactory<T>,
+    ) -> Result<GrpcClientConnection<T>, Status> {
         // A shared read first, before anything is built. Every caller but the one
         // that starts an attempt gets its answer here, and `build_endpoint` is
         // not free: with TLS enabled it parses the CA, client certificate and key
@@ -299,7 +412,7 @@ impl Connections {
         // them is already making.
         if let Some(existing) = self
             .by_target
-            .read_async(&target, |_, attempt| attempt.clone())
+            .read_async(target, |_, attempt| attempt.clone())
             .await
         {
             match existing.peek() {
@@ -308,12 +421,8 @@ impl Connections {
                     connected.last_used.touch();
                     return Ok(connected.clone());
                 }
-                // Someone else is connecting; wait on theirs. What that
-                // resolves to is deliberately not weighed against its
-                // retirement: a waiter joining late can be handed a connection
-                // an earlier one has already used and retired, and `install` is
-                // where that is caught, under the lock that makes catching it
-                // worth anything.
+                // Someone else is connecting; wait on theirs. What it resolves
+                // to may since have been retired, which the caller above checks.
                 None => return existing.await,
                 // A failed attempt is not worth inheriting, and neither is a
                 // retired one: `retire` marks before it forgets, so between
@@ -343,14 +452,14 @@ impl Connections {
                 // up on, so the caller gets its own rather than inheriting
                 // either verdict.
                 Some(_) => {
-                    let attempt = connect_shared(endpoint, config.connect_timeout);
+                    let attempt = connect_shared(endpoint, config, build_client.clone());
                     *entry.get_mut() = attempt.clone();
                     self.drive(target.clone(), attempt.clone());
                     attempt
                 }
             },
             Entry::Vacant(entry) => {
-                let attempt = connect_shared(endpoint, config.connect_timeout);
+                let attempt = connect_shared(endpoint, config, build_client.clone());
                 entry.insert_entry(attempt.clone());
                 self.drive(target.clone(), attempt.clone());
                 attempt
@@ -374,7 +483,7 @@ impl Connections {
     /// window, however brief, in which the connection is nowhere to be found: a
     /// caller looking just after it was cleared starts a second one. Under load
     /// that window is wide enough to hit.
-    fn drive(&self, target: Uri, attempt: SharedConnect) -> JoinHandle<()> {
+    fn drive(&self, target: Uri, attempt: SharedConnect<T>) -> JoinHandle<()> {
         let by_target = self.by_target.clone();
         tokio::spawn(async move {
             if attempt.clone().await.is_err() {
@@ -383,6 +492,34 @@ impl Connections {
                     .await;
             }
         })
+    }
+
+    /// Drops the connections to targets nobody has called lately, at most once
+    /// every `prune_interval` however many callers arrive.
+    ///
+    /// Run by every caller rather than only by one that missed the cache. A miss
+    /// means a target nobody has reached before, and a cluster whose targets are
+    /// all connected stops producing them, so hanging this off a miss meant it
+    /// stopped running in exactly the steady state it was written for.
+    ///
+    /// Whoever moves the timestamp does the work and the rest carry on. A caller
+    /// that loses the exchange has nothing to wait for, since the sweep it lost
+    /// to covers the same connections its own would have.
+    async fn prune_if_due(&self) {
+        let now = elapsed_millis();
+        let last = self.last_pruned.load(Ordering::Relaxed);
+        if Duration::from_millis(now.saturating_sub(last)) < self.prune_interval {
+            return;
+        }
+        if self
+            .last_pruned
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+
+        self.prune(self.idle_ttl).await;
     }
 
     /// Drops connections to targets nobody has called for `idle_ttl`.
@@ -416,38 +553,22 @@ impl Connections {
     }
 }
 
-/// Test-only seam: a hook awaited inside `connected_client` between a connection
-/// being established and being installed, so a test can deterministically retire
-/// it in that window. Same pattern as `Cache::evict_interleave` in
-/// `golem-common/src/cache.rs`.
-#[cfg(test)]
-type InstallInterleaveHook = Arc<dyn Fn(Installing) -> BoxFuture<'static, ()> + Send + Sync>;
-
-/// Where in `install` the hook above is awaited.
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Installing {
-    /// Before the retirement is read, which is the window that read exists to
-    /// close.
-    BeforeReading,
-    /// After it is read and before the connection is cached, which is the
-    /// window only the lock closes.
-    AfterReading,
-}
-
+/// A client for one fixed target.
+///
+/// A [`MultiTargetGrpcClient`] that never names more than one target. The two
+/// were written out separately once, and drifted apart as such pairs do: the
+/// single-target call loop ended up with no test reaching it at all, and the
+/// stall this file exists to fix lived in that half.
 #[derive(Clone)]
 pub struct GrpcClient<T: Clone> {
     endpoint: Uri,
-    config: GrpcClientConfig,
-    client: Arc<Mutex<Option<GrpcClientConnection<T>>>>,
-    connections: Connections,
-    client_factory: Arc<dyn Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync + 'static>,
-    target_name: String,
-    #[cfg(test)]
-    install_interleave: Arc<std::sync::Mutex<Option<InstallInterleaveHook>>>,
+    inner: MultiTargetGrpcClient<T>,
 }
 
-impl<T: Clone> GrpcClient<T> {
+impl<T> GrpcClient<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
     pub fn new(
         target_name: impl AsRef<str>,
         client_factory: impl Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync + 'static,
@@ -455,14 +576,15 @@ impl<T: Clone> GrpcClient<T> {
         config: GrpcClientConfig,
     ) -> Self {
         Self {
-            target_name: target_name.as_ref().to_string(),
             endpoint,
-            config,
-            client: Arc::new(Mutex::new(None)),
-            connections: Connections::new(),
-            client_factory: Arc::new(client_factory),
-            #[cfg(test)]
-            install_interleave: Arc::new(std::sync::Mutex::new(None)),
+            // Never dropped for being idle. See [`IDLE_CONNECTION_TTL`].
+            inner: MultiTargetGrpcClient::with_sweep(
+                target_name,
+                client_factory,
+                config,
+                Duration::MAX,
+                PRUNE_INTERVAL,
+            ),
         }
     }
 
@@ -471,189 +593,48 @@ impl<T: Clone> GrpcClient<T> {
         F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
             + Send,
     {
-        let description = description.as_ref();
-        let mut attempts = CallAttempts::new(
-            &self.config.retries_on_unavailable,
-            &self.target_name,
-            description,
-            debug_span!(
-                "gRPC call",
-                target_name = self.target_name,
-                description = description
-            ),
-        );
-        // Timed from before the first attempt, because that is the whole of what
-        // the caller waits for: a call that failed to connect, backed off and
-        // succeeded on its third attempt cost them all three. Establishment used
-        // to happen inside the RPC, so timing from any point below here drops a
-        // whole `connect_timeout` out of `internal_grpc_success_seconds` on
-        // exactly the reconnecting calls this is about.
-        let started = Instant::now();
-        loop {
-            attempts.start();
-            // A failed connection attempt goes through the same retry path as a
-            // failed call, so `retries_on_unavailable` still governs it.
-            let mut entry = match self.connected_client().await {
-                Ok(entry) => entry,
-                Err(e) => match attempts.failed("gRPC connect", &e).await {
-                    NextAttempt::Retry => continue,
-                    NextAttempt::GiveUp => break Err(e),
-                },
-            };
-
-            match attempt(&mut entry, &f, &attempts).await {
-                Ok(result) => {
-                    attempts.succeeded(started.elapsed());
-                    break Ok(result);
-                }
-                Err(e) if requires_reconnect(&e) => {
-                    self.retire(&entry, &e).await;
-                    match attempts.failed("gRPC call", &e).await {
-                        NextAttempt::Retry => continue,
-                        NextAttempt::GiveUp => break Err(e),
-                    }
-                }
-                Err(e) => {
-                    attempts.gave_up(&e);
-                    break Err(e);
-                }
-            }
-        }
-    }
-
-    /// Returns a connected client, establishing the connection if there is not
-    /// one yet. This performs I/O — bounded by `connect_timeout` — in the same
-    /// spirit as `RedisLabelledApi::ensure_connected`: nothing connects at
-    /// construction, and the first user to need a connection makes it while
-    /// everyone else waits on that same attempt.
-    async fn connected_client(&self) -> Result<GrpcClientConnection<T>, Status> {
-        // A connection already retired is skipped rather than handed back.
-        // `retire` marks it before it clears the cache, and for a connection
-        // that is gone the marking is also what wakes every request parked on
-        // it, so those callers arrive back here inside the window `retire` has
-        // not finished closing.
-        if let Some(connection) = self
-            .client
-            .lock()
-            .await
-            .clone()
-            .filter(|connection| !connection.retirement.is_retired())
-        {
-            connection.last_used.touch();
-            return Ok(connection);
-        }
-
-        let mut attempts_left = INSTALL_ATTEMPTS;
-        loop {
-            let connected = self
-                .connections
-                .connect(self.endpoint.clone(), &self.config)
-                .await?;
-
-            let refused = {
-                let mut entry = self.client.lock().await;
-                if let Some(connection) = entry
-                    .as_ref()
-                    .filter(|connection| !connection.retirement.is_retired())
-                {
-                    return Ok(connection.clone());
-                }
-                match self.install(&connected).await {
-                    Ok(connection) => {
-                        *entry = Some(connection.clone());
-                        return Ok(connection);
-                    }
-                    // Whatever was there was retired, and now it is not even
-                    // the connection the next caller would be given.
-                    Err(refused) => {
-                        *entry = None;
-                        refused
-                    }
-                }
-            };
-
-            attempts_left = attempts_left.saturating_sub(1);
-            if attempts_left == 0 {
-                return Err(refused);
-            }
-        }
-    }
-
-    /// See [`MultiTargetGrpcClient::install`].
-    async fn install(&self, connected: &Connected) -> Result<GrpcClientConnection<T>, Status> {
-        #[cfg(test)]
-        self.install_interleave(Installing::BeforeReading).await;
-
-        if connected.retirement.is_retired() {
-            return Err(Status::unavailable("connection retired before it was used"));
-        }
-
-        #[cfg(test)]
-        self.install_interleave(Installing::AfterReading).await;
-        let channel = ServiceBuilder::new()
-            .layer(OtelGrpcLayer)
-            .service(connected.channel.clone());
-        Ok(GrpcClientConnection {
-            client: (self.client_factory)(channel, self.config.max_message_size),
-            id: connected.id,
-            retirement: connected.retirement.clone(),
-            last_used: connected.last_used.clone(),
-        })
-    }
-
-    /// Test-only: installs the hook awaited between a connection being
-    /// established and being installed.
-    #[cfg(test)]
-    fn set_install_interleave(&self, hook: InstallInterleaveHook) {
-        *self.install_interleave.lock().unwrap() = Some(hook);
-    }
-
-    #[cfg(test)]
-    async fn install_interleave(&self, at: Installing) {
-        let hook = self.install_interleave.lock().unwrap().clone();
-        if let Some(hook) = hook {
-            hook(at).await;
-        }
-    }
-
-    /// See [`MultiTargetGrpcClient::retire`].
-    async fn retire(&self, connection: &GrpcClientConnection<T>, cause: &Status) {
-        connection.retirement.retire(connection_is_gone(cause));
-        {
-            let mut cached = self.client.lock().await;
-            if cached.as_ref().is_some_and(|held| held.id == connection.id) {
-                *cached = None;
-            }
-        }
-        self.connections.forget(&self.endpoint, connection.id).await;
+        self.inner.call(description, self.endpoint.clone(), f).await
     }
 }
 
 #[derive(Clone)]
 pub struct MultiTargetGrpcClient<T: Clone> {
     config: GrpcClientConfig,
-    clients: Arc<scc::HashMap<Uri, GrpcClientConnection<T>>>,
-    connections: Connections,
-    client_factory: Arc<dyn Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync>,
+    connections: Connections<T>,
+    client_factory: ClientFactory<T>,
     target_name: String,
-    #[cfg(test)]
-    install_interleave: Arc<std::sync::Mutex<Option<InstallInterleaveHook>>>,
 }
 
-impl<T: Clone> MultiTargetGrpcClient<T> {
+impl<T> MultiTargetGrpcClient<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
     pub fn new(
         target_name: impl AsRef<str>,
         client_factory: impl Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync + 'static,
         config: GrpcClientConfig,
     ) -> Self {
+        Self::with_sweep(
+            target_name,
+            client_factory,
+            config,
+            IDLE_CONNECTION_TTL,
+            PRUNE_INTERVAL,
+        )
+    }
+
+    fn with_sweep(
+        target_name: impl AsRef<str>,
+        client_factory: impl Fn(OtelGrpcService<Channel>, usize) -> T + Send + Sync + 'static,
+        config: GrpcClientConfig,
+        idle_ttl: Duration,
+        prune_interval: Duration,
+    ) -> Self {
         Self {
             config,
-            clients: Arc::new(scc::HashMap::new()),
-            connections: Connections::new(),
+            connections: Connections::new(idle_ttl, prune_interval),
             client_factory: Arc::new(client_factory),
             target_name: target_name.as_ref().to_string(),
-            #[cfg(test)]
-            install_interleave: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -690,7 +671,11 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             attempts.start();
             // A failed connection attempt goes through the same retry path as a
             // failed call, so `retries_on_unavailable` still governs it.
-            let mut entry = match self.connected_client(endpoint.clone()).await {
+            let mut entry = match self
+                .connections
+                .connect(endpoint.clone(), &self.config, &self.client_factory)
+                .await
+            {
                 Ok(entry) => entry,
                 Err(e) => match attempts.failed("gRPC connect", &e).await {
                     NextAttempt::Retry => continue,
@@ -722,140 +707,8 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         self.config.tls_enabled()
     }
 
-    /// Returns a connected client for `endpoint`, establishing the connection if
-    /// there is not one yet. This performs I/O — bounded by `connect_timeout` —
-    /// in the same spirit as `RedisLabelledApi::ensure_connected`: nothing
-    /// connects at construction, and the first caller to need a connection to a
-    /// given target makes it while everyone else waits on that same attempt.
-    async fn connected_client(&self, endpoint: Uri) -> Result<GrpcClientConnection<T>, Status> {
-        // A shared read rather than `get_async`, which takes the bucket's writer
-        // lock. This is the hot path: every call to an already-connected target
-        // runs it, and the entry is only ever read here.
-        if let Some(existing) = self
-            .clients
-            .read_async(&endpoint, |_, client| client.clone())
-            .await
-            // A connection already retired is skipped rather than handed
-            // back. `retire` marks it before it clears the cache, and for a
-            // connection that is gone the marking is also what wakes every
-            // request parked on it, so that whole cohort arrives back here
-            // inside the window `retire` has not finished closing.
-            .filter(|existing| !existing.retirement.is_retired())
-        {
-            existing.last_used.touch();
-            return Ok(existing);
-        }
-
-        let mut connected = self
-            .connections
-            .connect(endpoint.clone(), &self.config)
-            .await?;
-        self.sweep(IDLE_CONNECTION_TTL).await;
-
-        let mut attempts_left = INSTALL_ATTEMPTS;
-        loop {
-            let refused = match self.clients.entry_async(endpoint.clone()).await {
-                Entry::Occupied(mut entry) => {
-                    if !entry.get().retirement.is_retired() {
-                        return Ok(entry.get().clone());
-                    }
-                    match self.install(&connected).await {
-                        Ok(connection) => {
-                            *entry.get_mut() = connection.clone();
-                            return Ok(connection);
-                        }
-                        // Whatever was there was retired, and now it is not even
-                        // the connection the next caller would be given.
-                        Err(refused) => {
-                            let _ = entry.remove_entry();
-                            refused
-                        }
-                    }
-                }
-                Entry::Vacant(entry) => match self.install(&connected).await {
-                    Ok(connection) => {
-                        entry.insert_entry(connection.clone());
-                        return Ok(connection);
-                    }
-                    Err(refused) => refused,
-                },
-            };
-
-            attempts_left = attempts_left.saturating_sub(1);
-            if attempts_left == 0 {
-                return Err(refused);
-            }
-            connected = self
-                .connections
-                .connect(endpoint.clone(), &self.config)
-                .await?;
-        }
-    }
-
-    /// Drops what has gone cold from both maps, in one place so that they
-    /// cannot come to disagree about which connections are worth keeping.
-    ///
-    /// Called from the one path that adds to them, once per call that gets
-    /// there: a target already cached never reaches it, so this is where they
-    /// grow and the right place to shrink them. That makes it a cache miss that
-    /// sweeps, which means a target being retired as well as a new one
-    /// appearing. Both halves take every bucket's writer lock, and the read
-    /// above needs those buckets, so this is not free for the targets it leaves
-    /// alone.
-    async fn sweep(&self, idle_ttl: Duration) {
-        self.clients
-            .retain_async(|_, cached| cached.last_used.in_use_within(idle_ttl))
-            .await;
-        self.connections.prune(idle_ttl).await;
-    }
-
-    /// Builds the client for a connection about to be cached, refusing one that
-    /// has been retired since it was established. Caching that would hand every
-    /// later caller a connection its owner has already given up on, until one of
-    /// them gives up on it again.
-    ///
-    /// Both callers run this while holding the lock `retire` needs to clear the
-    /// cache, which is what makes reading the retirement here worth anything.
-    /// See [`Retirement::retire`].
-    async fn install(&self, connected: &Connected) -> Result<GrpcClientConnection<T>, Status> {
-        #[cfg(test)]
-        self.install_interleave(Installing::BeforeReading).await;
-
-        if connected.retirement.is_retired() {
-            return Err(Status::unavailable("connection retired before it was used"));
-        }
-
-        #[cfg(test)]
-        self.install_interleave(Installing::AfterReading).await;
-        let channel = ServiceBuilder::new()
-            .layer(OtelGrpcLayer)
-            .service(connected.channel.clone());
-        Ok(GrpcClientConnection {
-            client: (self.client_factory)(channel, self.config.max_message_size),
-            id: connected.id,
-            retirement: connected.retirement.clone(),
-            last_used: connected.last_used.clone(),
-        })
-    }
-
-    /// Test-only: installs the hook awaited between a connection being
-    /// established and being installed.
-    #[cfg(test)]
-    fn set_install_interleave(&self, hook: InstallInterleaveHook) {
-        *self.install_interleave.lock().unwrap() = Some(hook);
-    }
-
-    #[cfg(test)]
-    async fn install_interleave(&self, at: Installing) {
-        let hook = self.install_interleave.lock().unwrap().clone();
-        if let Some(hook) = hook {
-            hook(at).await;
-        }
-    }
-
     /// Retires the connection a failed call was riding: marks it so nothing
-    /// hands it out or installs it again, and clears it from the caches so the
-    /// next call builds a new one.
+    /// hands it out again, and forgets it so the next call builds a new one.
     ///
     /// Keyed on the connection's identity rather than on the target alone. Two
     /// callers can fail on the same connection at different moments, and without
@@ -866,19 +719,8 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
     /// still riding it; see [`Retirement`].
     async fn retire(&self, endpoint: &Uri, connection: &GrpcClientConnection<T>, cause: &Status) {
         connection.retirement.retire(connection_is_gone(cause));
-        self.clients
-            .remove_if_async(endpoint, |cached| cached.id == connection.id)
-            .await;
         self.connections.forget(endpoint, connection.id).await;
     }
-}
-
-#[derive(Clone)]
-pub struct GrpcClientConnection<T: Clone> {
-    client: T,
-    id: u64,
-    retirement: Retirement,
-    last_used: LastUsed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1267,7 +1109,6 @@ fn has_transport_source(e: &Status) -> bool {
 mod test {
     use super::*;
     use test_r::test;
-    use tokio::sync::Notify;
 
     /// A peer that completes the TCP handshake and then holds the socket open.
     ///
@@ -1286,6 +1127,42 @@ mod test {
         (format!("http://{addr}").parse().unwrap(), held)
     }
 
+    /// A bare cache and the factory that goes with it, for tests that drive
+    /// [`Connections`] rather than a client. Swept only when a test asks: the
+    /// interval keeps [`Connections::prune_if_due`] out of the way of tests that
+    /// are about something else.
+    fn cache() -> (Connections<()>, ClientFactory<()>) {
+        (
+            Connections::new(IDLE_CONNECTION_TTL, PRUNE_INTERVAL),
+            Arc::new(|_, _| ()),
+        )
+    }
+
+    /// An attempt a test can put into the cache itself, with a connect timeout
+    /// of its own.
+    fn attempt_bounded_by(endpoint: Endpoint, connect_timeout: Duration) -> SharedConnect<()> {
+        connect_shared(
+            endpoint,
+            &GrpcClientConfig {
+                connect_timeout,
+                ..GrpcClientConfig::default()
+            },
+            Arc::new(|_, _| ()),
+        )
+    }
+
+    /// The connection a caller would be given for `target`, which is what
+    /// [`MultiTargetGrpcClient::call`] asks for on every attempt.
+    async fn connect(
+        client: &MultiTargetGrpcClient<()>,
+        target: Uri,
+    ) -> Result<GrpcClientConnection<()>, Status> {
+        client
+            .connections
+            .connect(target, &client.config, &client.client_factory)
+            .await
+    }
+
     /// Two callers can fail on the same connection at different moments. The
     /// later failure must not discard the replacement the earlier one's retry has
     /// already established, which is what keying eviction on the target alone
@@ -1294,14 +1171,20 @@ mod test {
     async fn forget_only_removes_the_connection_it_names() {
         let (target, _peer) = silent_peer().await;
         let config = GrpcClientConfig::default();
-        let connections = Connections::new();
+        let (connections, build) = cache();
 
-        let first = connections.connect(target.clone(), &config).await.unwrap();
+        let first = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
 
         // A failure arriving late, naming a connection that has already been
         // replaced.
         connections.forget(&target, first.id + 1).await;
-        let reused = connections.connect(target.clone(), &config).await.unwrap();
+        let reused = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
         assert_eq!(
             reused.id, first.id,
             "forget discarded a connection whose identity it was not given"
@@ -1309,7 +1192,10 @@ mod test {
 
         // The connection that actually failed does go.
         connections.forget(&target, first.id).await;
-        let replacement = connections.connect(target.clone(), &config).await.unwrap();
+        let replacement = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
         assert_ne!(
             replacement.id, first.id,
             "forget left in place the very connection it was given"
@@ -1343,20 +1229,6 @@ mod test {
         (client, built)
     }
 
-    fn counting_single_target_client(endpoint: Uri) -> (GrpcClient<()>, Arc<AtomicU64>) {
-        let built = Arc::new(AtomicU64::new(0));
-        let counter = built.clone();
-        let client = GrpcClient::new(
-            "test",
-            move |_, _| {
-                counter.fetch_add(1, Ordering::SeqCst);
-            },
-            endpoint,
-            GrpcClientConfig::default(),
-        );
-        (client, built)
-    }
-
     /// A `Status` that `connection_is_gone` accepts, built from a connect that
     /// really failed because `tonic::transport::Error` has no way to construct
     /// one directly.
@@ -1370,47 +1242,6 @@ mod test {
         )
         .unwrap();
         Status::from_error(Box::new(endpoint.connect().await.unwrap_err()))
-    }
-
-    /// Builds a hook that parks `connected_client` between establishing a
-    /// connection and installing it. Returns it with the notify it signals on
-    /// arrival and the notify that lets it go on again.
-    ///
-    /// Only the first caller through parks. One let go on again establishes
-    /// another connection and installs that, and parking it a second time would
-    /// leave the test waiting on a caller nobody is going to release.
-    ///
-    /// Anything a test does while a caller is parked here runs with that
-    /// caller holding the lock over the client cache, so reaching for that
-    /// cache from the test will wait for the caller rather than fail.
-    fn park_at_install(at: Installing) -> (InstallInterleaveHook, Arc<Notify>, Arc<Notify>) {
-        let at_seam = Arc::new(Notify::new());
-        let resume = Arc::new(Notify::new());
-        let (arrived, go) = (at_seam.clone(), resume.clone());
-        let parked = Arc::new(AtomicU64::new(0));
-        let hook: InstallInterleaveHook = Arc::new(move |reached| {
-            let (arrived, go) = (arrived.clone(), go.clone());
-            let first = reached == at && parked.fetch_add(1, Ordering::SeqCst) == 0;
-            async move {
-                if first {
-                    arrived.notify_one();
-                    go.notified().await;
-                }
-            }
-            .boxed()
-        });
-        (hook, at_seam, resume)
-    }
-
-    /// A `GrpcClientConnection` for a connection a test is holding, which is
-    /// what `retire` takes and only `install` otherwise builds.
-    fn held(connected: &Connected) -> GrpcClientConnection<()> {
-        GrpcClientConnection {
-            client: (),
-            id: connected.id,
-            retirement: connected.retirement.clone(),
-            last_used: connected.last_used.clone(),
-        }
     }
 
     /// Retires a connection the way a status the peer sent back does: marked,
@@ -1445,10 +1276,10 @@ mod test {
         let (client, built) = counting_client();
         let cause = Status::unavailable("peer went away");
 
-        let first = client.connected_client(target.clone()).await.unwrap();
+        let first = connect(&client, target.clone()).await.unwrap();
         client.retire(&target, &first, &cause).await;
 
-        let replacement = client.connected_client(target.clone()).await.unwrap();
+        let replacement = connect(&client, target.clone()).await.unwrap();
         assert_ne!(
             replacement.id, first.id,
             "the first failure evicted nothing"
@@ -1456,7 +1287,7 @@ mod test {
 
         // A second caller, still holding the original, fails late.
         client.retire(&target, &first, &cause).await;
-        let handed_out = client.connected_client(target.clone()).await.unwrap();
+        let handed_out = connect(&client, target.clone()).await.unwrap();
 
         assert_eq!(
             handed_out.id, replacement.id,
@@ -1470,113 +1301,6 @@ mod test {
         );
     }
 
-    /// A connection can also be retired while a caller is partway through
-    /// installing it. Reading the retirement before taking the lock `retire`
-    /// takes let the caller install a connection it had already been told to
-    /// stop using, and every later caller was handed it in turn.
-    #[test]
-    async fn a_connection_retired_while_it_is_being_installed_is_not_cached() {
-        let (target, _peer) = silent_peer().await;
-        let (client, _built) = counting_client();
-        let (hook, at_seam, resume) = park_at_install(Installing::BeforeReading);
-        client.set_install_interleave(hook);
-
-        let installing = tokio::spawn({
-            let client = client.clone();
-            let target = target.clone();
-            async move { client.connected_client(target).await }
-        });
-        expect(
-            "the call never reached the seam between establishing a connection \
-             and installing it",
-            at_seam.notified(),
-        )
-        .await;
-
-        // Stand in for a sibling caller failing on this very connection while
-        // the one above is still installing it.
-        let connected = client
-            .connections
-            .connect(target.clone(), &client.config)
-            .await
-            .unwrap();
-        retired_by_the_peer(&connected.retirement);
-        client.connections.forget(&target, connected.id).await;
-
-        resume.notify_one();
-        let mut installed = None;
-        expect("the call never came back after being let go", async {
-            installed = Some(installing.await.unwrap());
-        })
-        .await;
-        let installed = installed.unwrap().expect(
-            "the caller was left with a sibling's failure rather than going \
-             back for a connection of its own",
-        );
-
-        assert_ne!(
-            installed.id, connected.id,
-            "a connection retired mid-install was handed to the caller \
-             installing it"
-        );
-        assert_eq!(
-            client.clients.read_async(&target, |_, c| c.id).await,
-            Some(installed.id),
-            "a retired connection was left in the cache for every later caller"
-        );
-    }
-
-    /// The single-target client keeps its own connection and its own copy of
-    /// that window, so it needs its own proof.
-    #[test]
-    async fn the_single_target_client_does_not_cache_a_connection_retired_mid_install() {
-        let (target, _peer) = silent_peer().await;
-        let (client, _built) = counting_single_target_client(target.clone());
-        let (hook, at_seam, resume) = park_at_install(Installing::BeforeReading);
-        client.set_install_interleave(hook);
-
-        let installing = tokio::spawn({
-            let client = client.clone();
-            async move { client.connected_client().await }
-        });
-        expect(
-            "the call never reached the seam between establishing a connection \
-             and installing it",
-            at_seam.notified(),
-        )
-        .await;
-
-        let connected = client
-            .connections
-            .connect(target.clone(), &client.config)
-            .await
-            .unwrap();
-        retired_by_the_peer(&connected.retirement);
-        client.connections.forget(&target, connected.id).await;
-
-        resume.notify_one();
-        let mut installed = None;
-        expect("the call never came back after being let go", async {
-            installed = Some(installing.await.unwrap());
-        })
-        .await;
-        let installed = installed.unwrap().expect(
-            "the caller was left with a sibling's failure rather than going \
-             back for a connection of its own",
-        );
-
-        assert_ne!(
-            installed.id, connected.id,
-            "a connection retired mid-install was handed to the caller \
-             installing it"
-        );
-        assert_eq!(
-            client.client.lock().await.as_ref().map(|c| c.id),
-            Some(installed.id),
-            "a retired connection was left in the cache for every later caller"
-        );
-    }
-
     /// `retire` marks a connection before it forgets it, so between those two
     /// moments the cached attempt still answers with a connection nobody is
     /// meant to be given. Handing it back turns every caller arriving in that
@@ -1587,12 +1311,18 @@ mod test {
     async fn a_retired_connection_is_not_handed_to_the_next_caller() {
         let (target, _peer) = silent_peer().await;
         let config = GrpcClientConfig::default();
-        let connections = Connections::new();
+        let (connections, build) = cache();
 
-        let first = connections.connect(target.clone(), &config).await.unwrap();
+        let first = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
         retired_by_the_peer(&first.retirement);
 
-        let next = connections.connect(target.clone(), &config).await.unwrap();
+        let next = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
         assert_ne!(
             next.id, first.id,
             "a connection that had been retired was handed straight back"
@@ -1613,13 +1343,19 @@ mod test {
     async fn a_target_nobody_calls_loses_its_connection() {
         let (target, _peer) = silent_peer().await;
         let config = GrpcClientConfig::default();
-        let connections = Connections::new();
+        let (connections, build) = cache();
 
-        let first = connections.connect(target.clone(), &config).await.unwrap();
+        let first = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
 
         // Just used, so no sweep should touch it.
         connections.prune(Duration::from_secs(60)).await;
-        let kept = connections.connect(target.clone(), &config).await.unwrap();
+        let kept = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
         assert_eq!(
             kept.id, first.id,
             "the sweep dropped a connection that was still in use"
@@ -1627,7 +1363,10 @@ mod test {
 
         // Against a zero TTL everything counts as cold.
         connections.prune(Duration::ZERO).await;
-        let replacement = connections.connect(target.clone(), &config).await.unwrap();
+        let replacement = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
         assert_ne!(
             replacement.id, first.id,
             "the sweep kept a connection nobody had called"
@@ -1646,7 +1385,7 @@ mod test {
 
         let (target, _peer) = silent_peer().await;
         let (client, _built) = counting_client();
-        let mut connection = client.connected_client(target.clone()).await.unwrap();
+        let mut connection = connect(&client, target.clone()).await.unwrap();
 
         let config = RetryConfig::default();
         let attempts = CallAttempts::new(&config, "test", "test", tracing::Span::none());
@@ -1657,63 +1396,55 @@ mod test {
         assert!(futures::poll!(running.as_mut()).is_pending());
 
         // Against a zero TTL everything that is merely idle counts as cold.
-        client.sweep(Duration::ZERO).await;
+        client.connections.prune(Duration::ZERO).await;
         assert!(
             client.connections.by_target.contains_async(&target).await,
             "the sweep took a connection with a request still riding it"
         );
-        assert!(
-            client.clients.contains_async(&target).await,
-            "the sweep took the client for a connection with a request still \
-             riding it"
-        );
 
         drop(running);
-        client.sweep(Duration::ZERO).await;
+        client.connections.prune(Duration::ZERO).await;
         assert!(
             !client.connections.by_target.contains_async(&target).await,
             "the connection stayed exempt from the sweep after its request \
              had ended"
         );
-        assert!(
-            !client.clients.contains_async(&target).await,
-            "the client stayed exempt from the sweep after its request had \
-             ended"
-        );
     }
 
-    /// A caller cannot go back for another connection for ever. This seam
-    /// retires every connection the caller establishes, so it has to run out of
-    /// attempts and say so rather than spin against a target something else
-    /// keeps taking out from under it.
+    /// A caller cannot go back for another connection for ever. The seam retires
+    /// every connection the caller establishes, so it has to run out of attempts
+    /// and say so rather than spin against a target something else keeps taking
+    /// out from under it.
+    ///
+    /// Counted as well as bounded, because the count is what says where it
+    /// stopped. Each turn costs a connection built and thrown away, which is
+    /// what building the client with the connection rather than after it buys
+    /// the window it closes.
     #[test]
     async fn a_caller_stops_going_back_for_another_connection() {
         let (target, _peer) = silent_peer().await;
         let (client, built) = counting_client();
 
-        // Something is retiring connections to this target as fast as they are
-        // made, the one already cached included — so the caller below has to get
-        // past that one as well, which is the way it comes to be reading an
-        // entry rather than an empty cache.
-        let cached = client.connected_client(target.clone()).await.unwrap();
+        // The connection already cached is retired too, so the caller has to get
+        // past that one as well, which is how it comes to be reading an entry
+        // rather than an empty cache.
+        let cached = connect(&client, target.clone()).await.unwrap();
         retired_by_the_peer(&cached.retirement);
         let built_before = built.load(Ordering::SeqCst);
 
-        let (connections, config, endpoint) = (
-            client.connections.clone(),
-            client.config.clone(),
-            target.clone(),
-        );
-        client.set_install_interleave(Arc::new(move |_| {
-            let (connections, config, endpoint) =
-                (connections.clone(), config.clone(), endpoint.clone());
+        // Something is retiring connections to this target as fast as they are
+        // made: whatever the caller has just been handed goes the moment it has
+        // it, so every turn round the loop finds the same verdict.
+        let by_target = client.connections.by_target.clone();
+        let retire_target = target.clone();
+        client.connections.set_interleave(Arc::new(move || {
+            let (by_target, target) = (by_target.clone(), retire_target.clone());
             async move {
-                let connected = connections
-                    .connect(endpoint.clone(), &config)
-                    .await
-                    .unwrap();
-                retired_by_the_peer(&connected.retirement);
-                connections.forget(&endpoint, connected.id).await;
+                if let Some(attempt) = by_target.read_async(&target, |_, a| a.clone()).await
+                    && let Some(Ok(connected)) = attempt.peek()
+                {
+                    retired_by_the_peer(&connected.retirement);
+                }
             }
             .boxed()
         }));
@@ -1722,7 +1453,7 @@ mod test {
         expect(
             "the caller never stopped going back for another connection",
             async {
-                connected = Some(client.connected_client(target.clone()).await);
+                connected = Some(connect(&client, target.clone()).await);
             },
         )
         .await;
@@ -1733,74 +1464,85 @@ mod test {
              had been retired"
         );
         assert_eq!(
-            built.load(Ordering::SeqCst),
-            built_before,
-            "a retired connection was built into a client for someone to use"
-        );
-        assert!(
-            !client.clients.contains_async(&target).await,
-            "a caller that gave up left the retired connection in the cache \
-             behind it"
+            built.load(Ordering::SeqCst) - built_before,
+            CONNECT_ATTEMPTS as u64,
+            "the caller did not go back exactly {CONNECT_ATTEMPTS} times before \
+             giving up"
         );
     }
 
-    /// The single-target twin of
-    /// [`a_caller_stops_going_back_for_another_connection`].
+    /// The single-target client is the multi-target one with its target filled
+    /// in, so what needs checking is that the target reaches it and that its one
+    /// connection is exempt from the sweep.
+    ///
+    /// One test rather than a copy of each above, because there is now one
+    /// implementation rather than two. The two drifted apart while they were
+    /// separate: the single-target call loop ended up with no test reaching it
+    /// at all, and the stall this file exists to fix lived in that half.
     #[test]
-    async fn the_single_target_caller_also_stops_going_back() {
-        let (target, _peer) = silent_peer().await;
-        let (client, built) = counting_single_target_client(target.clone());
+    async fn the_single_target_client_calls_the_target_it_was_given() {
+        // Refuses at once, so the failure is the connect to this target and
+        // nothing slower.
+        let target: Uri = "http://127.0.0.1:1/".parse().unwrap();
+        let client = GrpcClient::new("test", |_, _| (), target, one_attempt());
 
-        // Something is retiring connections to this target as fast as they are
-        // made, the one already cached included — so the caller below has to get
-        // past that one as well, which is the way it comes to be reading an
-        // entry rather than an empty cache.
-        let cached = client.connected_client().await.unwrap();
-        retired_by_the_peer(&cached.retirement);
-        let built_before = built.load(Ordering::SeqCst);
-
-        let (connections, config, endpoint) = (
-            client.connections.clone(),
-            client.config.clone(),
-            target.clone(),
-        );
-        client.set_install_interleave(Arc::new(move |_| {
-            let (connections, config, endpoint) =
-                (connections.clone(), config.clone(), endpoint.clone());
-            async move {
-                let connected = connections
-                    .connect(endpoint.clone(), &config)
-                    .await
-                    .unwrap();
-                retired_by_the_peer(&connected.retirement);
-                connections.forget(&endpoint, connected.id).await;
-            }
-            .boxed()
-        }));
-
-        let mut connected = None;
-        expect(
-            "the caller never stopped going back for another connection",
-            async {
-                connected = Some(client.connected_client().await);
-            },
-        )
-        .await;
-
+        let failed = client
+            .call("test", |_: &mut ()| Box::pin(async { Ok(()) }))
+            .await
+            .expect_err("nothing is listening on port 1");
+        assert_eq!(failed.code(), Code::Unavailable);
         assert!(
-            connected.unwrap().is_err(),
-            "a caller was handed a connection every one of whose predecessors \
-             had been retired"
+            failed.message().contains("tcp connect error"),
+            "expected the failure to come from connecting to the fixed target, \
+             got: {}",
+            failed.message()
         );
         assert_eq!(
-            built.load(Ordering::SeqCst),
-            built_before,
-            "a retired connection was built into a client for someone to use"
+            client.inner.connections.idle_ttl,
+            Duration::MAX,
+            "a client with one fixed target would drop its connection for \
+             going idle"
         );
-        assert!(
-            client.client.lock().await.is_none(),
-            "a caller that gave up left the retired connection in the cache \
-             behind it"
+    }
+
+    /// The sweep has to run on calls that find their target already connected,
+    /// because in a cluster whose targets are all connected those are all the
+    /// calls there are. Hanging it off a cache miss meant a target that went
+    /// quiet was never dropped: nothing missed, so nothing swept, so the ten
+    /// minutes this documents were never up for anybody.
+    #[test]
+    async fn a_call_to_a_connected_target_still_sweeps() {
+        let (target, _peer) = silent_peer().await;
+        let config = GrpcClientConfig::default();
+        let build: ClientFactory<()> = Arc::new(|_, _| ());
+
+        // Nothing is ever due, so nothing is ever swept.
+        let mut connections = Connections::<()>::new(Duration::ZERO, Duration::MAX);
+        let first = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
+        let reused = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
+        assert_eq!(
+            reused.id, first.id,
+            "a sweep ran before its interval was up"
+        );
+
+        // Now everything is due, and every connection counts as cold. A call
+        // that would otherwise have been served the cached connection sweeps it
+        // first and builds another.
+        connections.prune_interval = Duration::ZERO;
+        let after = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
+        assert_ne!(
+            after.id, first.id,
+            "a call to an already-connected target did not sweep, so a target \
+             nobody calls keeps its connection for as long as the process lives"
         );
     }
 
@@ -1810,13 +1552,13 @@ mod test {
     #[test]
     async fn the_sweep_leaves_an_attempt_in_flight_alone() {
         let config = GrpcClientConfig::default();
-        let connections = Connections::new();
+        let (connections, _build) = cache();
 
         // Nothing listens here, and the connect is held open by a timeout far
         // longer than the test, so the attempt stays unsettled throughout.
         let target: Uri = "http://127.0.0.1:1/".parse().unwrap();
         let endpoint = build_endpoint(target.clone(), &config).unwrap();
-        let attempt = connect_shared(endpoint, Duration::from_secs(600));
+        let attempt = attempt_bounded_by(endpoint, Duration::from_secs(600));
         connections
             .by_target
             .insert_async(target.clone(), attempt)
@@ -1967,20 +1709,24 @@ mod test {
         assert!(!connection_is_gone(&timed_out));
     }
 
-    /// Retires `connection` while the very lock `retire` has to take to clear
-    /// the cache is held, and comes back once the retirement has landed.
+    /// Retires `connection` while the very lock `retire` has to take to forget
+    /// it is held, and comes back once the retirement has landed.
     ///
-    /// The install guard is only worth something if it has landed by then:
-    /// `retire` marks first and takes the lock second, so a caller holding that
-    /// lock must find the connection already retired. Swap that order and the
-    /// guard reads live every time, which is the bug it exists to stop.
+    /// A caller reading the cached entry under that lock has to find the
+    /// connection already retired, or it reuses one its owner has given up on.
+    /// `retire` marks first and takes the lock second, so the mark is always
+    /// there by then. Swap the order and the reader sees live every time.
     async fn retire_while_the_cache_lock_is_held(
         client: &MultiTargetGrpcClient<()>,
         target: &Uri,
         connection: &GrpcClientConnection<()>,
         cause: Status,
     ) {
-        let held = client.clients.entry_async(target.clone()).await;
+        let held = client
+            .connections
+            .by_target
+            .entry_async(target.clone())
+            .await;
         let retiring = tokio::spawn({
             let (client, target, connection) = (client.clone(), target.clone(), connection.clone());
             async move { client.retire(&target, &connection, &cause).await }
@@ -1988,7 +1734,7 @@ mod test {
 
         expect(
             "retire had not marked the connection by the time it wanted the \
-             lock, so an installer holding that lock would read it as live",
+             lock, so a caller reading under that lock would see it as live",
             connection.retirement.retired.cancelled(),
         )
         .await;
@@ -2007,7 +1753,7 @@ mod test {
             "the cause has to be one that means the connection is gone"
         );
 
-        let connection = client.connected_client(target.clone()).await.unwrap();
+        let connection = connect(&client, target.clone()).await.unwrap();
         retire_while_the_cache_lock_is_held(&client, &target, &connection, cause).await;
 
         assert!(
@@ -2030,7 +1776,7 @@ mod test {
             "the cause has to be one the peer sent back"
         );
 
-        let connection = client.connected_client(target.clone()).await.unwrap();
+        let connection = connect(&client, target.clone()).await.unwrap();
         retire_while_the_cache_lock_is_held(&client, &target, &connection, cause).await;
 
         assert!(
@@ -2038,33 +1784,6 @@ mod test {
             "a status the peer sent back cut short every request riding the \
              connection"
         );
-    }
-
-    /// The single-target client keeps its connection behind its own lock, so the
-    /// same ordering has to hold there too.
-    #[test]
-    async fn the_single_target_client_retires_in_the_same_order() {
-        let (target, _peer) = silent_peer().await;
-        let (client, _built) = counting_single_target_client(target.clone());
-        let cause = dead_transport_status().await;
-
-        let connection = client.connected_client().await.unwrap();
-
-        let held = client.client.lock().await;
-        let retiring = tokio::spawn({
-            let (client, connection) = (client.clone(), connection.clone());
-            async move { client.retire(&connection, &cause).await }
-        });
-
-        expect(
-            "retire had not marked the connection by the time it wanted the \
-             lock, so an installer holding that lock would read it as live",
-            connection.retirement.retired.cancelled(),
-        )
-        .await;
-
-        drop(held);
-        retiring.await.unwrap();
     }
 
     /// Releasing a connection that is gone is what wakes every request parked
@@ -2077,10 +1796,10 @@ mod test {
         let (target, _peer) = silent_peer().await;
         let (client, built) = counting_client();
 
-        let first = client.connected_client(target.clone()).await.unwrap();
+        let first = connect(&client, target.clone()).await.unwrap();
         retired_by_the_peer(&first.retirement);
 
-        let next = client.connected_client(target.clone()).await.unwrap();
+        let next = connect(&client, target.clone()).await.unwrap();
         assert_ne!(
             next.id, first.id,
             "the cache handed back a connection it had already given up on"
@@ -2094,68 +1813,6 @@ mod test {
             2,
             "the dead connection was replaced without a client being built for \
              the replacement"
-        );
-    }
-
-    /// The single-target twin of
-    /// [`a_connection_already_known_dead_is_not_handed_out_again`]. This client
-    /// reads its connection in two places, so both have to skip a dead one.
-    #[test]
-    async fn the_single_target_client_does_not_hand_out_a_connection_known_dead() {
-        let (target, _peer) = silent_peer().await;
-        let (client, built) = counting_single_target_client(target);
-
-        let first = client.connected_client().await.unwrap();
-        retired_by_the_peer(&first.retirement);
-
-        let next = client.connected_client().await.unwrap();
-        assert_ne!(
-            next.id, first.id,
-            "the cache handed back a connection it had already given up on"
-        );
-        assert!(
-            !next.retirement.is_retired(),
-            "the connection put in its place came out retired too"
-        );
-        assert_eq!(
-            built.load(Ordering::SeqCst),
-            2,
-            "the dead connection was replaced without a client being built for \
-             the replacement"
-        );
-    }
-
-    /// The single-target twin of
-    /// [`a_late_failure_does_not_evict_the_replacement_client`]. Two callers can
-    /// fail on the same connection at different moments here as well.
-    #[test]
-    async fn a_late_failure_does_not_evict_the_replacement_single_target_client() {
-        let (target, _peer) = silent_peer().await;
-        let (client, built) = counting_single_target_client(target);
-        let cause = Status::unavailable("peer went away");
-
-        let first = client.connected_client().await.unwrap();
-        client.retire(&first, &cause).await;
-
-        let replacement = client.connected_client().await.unwrap();
-        assert_ne!(
-            replacement.id, first.id,
-            "the first failure evicted nothing"
-        );
-
-        // A second caller, still holding the original, fails late.
-        client.retire(&first, &cause).await;
-        let handed_out = client.connected_client().await.unwrap();
-
-        assert_eq!(
-            handed_out.id, replacement.id,
-            "a failure on the old connection sent the next caller elsewhere"
-        );
-        assert_eq!(
-            built.load(Ordering::SeqCst),
-            2,
-            "a failure on the old connection threw away the replacement, so it \
-             had to be built again"
         );
     }
 
@@ -2176,7 +1833,7 @@ mod test {
 
         let (target, _peer) = silent_peer().await;
         let (client, _built) = counting_client();
-        let mut connection = client.connected_client(target).await.unwrap();
+        let mut connection = connect(&client, target).await.unwrap();
         let retirement = connection.retirement.clone();
 
         let config = RetryConfig::default();
@@ -2202,133 +1859,6 @@ mod test {
         );
     }
 
-    /// The install guard is only worth anything because it runs under the lock
-    /// `retire` has to take to clear the cache. Read outside that lock, it reads
-    /// the retirement in the moment before `retire` writes it, and the caller
-    /// then caches a connection its sibling has already given up on, with that
-    /// sibling long past the point where it would have cleared it.
-    #[test]
-    async fn a_connection_retired_after_the_guard_read_it_is_still_cleared() {
-        let (target, _peer) = silent_peer().await;
-        let (client, _built) = counting_client();
-        let (hook, at_seam, resume) = park_at_install(Installing::AfterReading);
-        client.set_install_interleave(hook);
-
-        let installing = tokio::spawn({
-            let (client, target) = (client.clone(), target.clone());
-            async move { client.connected_client(target).await }
-        });
-        expect(
-            "the call never reached the seam between reading the retirement \
-             and caching the connection",
-            at_seam.notified(),
-        )
-        .await;
-
-        // The sibling it is racing, failing on the same connection. `retire`
-        // marks before it wants the lock, and gets no further while the caller
-        // above is holding it.
-        let connected = client
-            .connections
-            .connect(target.clone(), &client.config)
-            .await
-            .unwrap();
-        let connection = held(&connected);
-        let retiring = tokio::spawn({
-            let (client, target, connection) = (client.clone(), target.clone(), connection.clone());
-            async move {
-                client
-                    .retire(
-                        &target,
-                        &connection,
-                        &Status::unavailable("shard is being reassigned"),
-                    )
-                    .await
-            }
-        });
-        expect(
-            "retire never marked the connection it was retiring",
-            connection.retirement.retired.cancelled(),
-        )
-        .await;
-
-        resume.notify_one();
-        expect("the call never came back after being let go", async {
-            installing.await.unwrap().unwrap();
-        })
-        .await;
-        expect("retire never got the lock it was waiting for", async {
-            retiring.await.unwrap();
-        })
-        .await;
-
-        assert!(
-            !client.clients.contains_async(&target).await,
-            "a connection was cached after the sibling retiring it had been \
-             and gone, so nothing is left to take it out again"
-        );
-    }
-
-    /// The single-target twin of
-    /// [`a_connection_retired_after_the_guard_read_it_is_still_cleared`].
-    #[test]
-    async fn the_single_target_client_clears_what_was_retired_under_the_lock() {
-        let (target, _peer) = silent_peer().await;
-        let (client, _built) = counting_single_target_client(target.clone());
-        let (hook, at_seam, resume) = park_at_install(Installing::AfterReading);
-        client.set_install_interleave(hook);
-
-        let installing = tokio::spawn({
-            let client = client.clone();
-            async move { client.connected_client().await }
-        });
-        expect(
-            "the call never reached the seam between reading the retirement \
-             and caching the connection",
-            at_seam.notified(),
-        )
-        .await;
-
-        let connected = client
-            .connections
-            .connect(target.clone(), &client.config)
-            .await
-            .unwrap();
-        let connection = held(&connected);
-        let retiring = tokio::spawn({
-            let (client, connection) = (client.clone(), connection.clone());
-            async move {
-                client
-                    .retire(
-                        &connection,
-                        &Status::unavailable("shard is being reassigned"),
-                    )
-                    .await
-            }
-        });
-        expect(
-            "retire never marked the connection it was retiring",
-            connection.retirement.retired.cancelled(),
-        )
-        .await;
-
-        resume.notify_one();
-        expect("the call never came back after being let go", async {
-            installing.await.unwrap().unwrap();
-        })
-        .await;
-        expect("retire never got the lock it was waiting for", async {
-            retiring.await.unwrap();
-        })
-        .await;
-
-        assert!(
-            client.client.lock().await.is_none(),
-            "a connection was cached after the sibling retiring it had been \
-             and gone, so nothing is left to take it out again"
-        );
-    }
-
     /// A call that failed on a dead connection has to retire it. Left cached it
     /// is handed to every caller after this one, and nothing takes it out,
     /// because taking it out is what this failure was for.
@@ -2338,7 +1868,7 @@ mod test {
         let client = MultiTargetGrpcClient::new("test", |_, _| (), one_attempt());
         let cause = Arc::new(dead_transport_status().await);
 
-        let first = client.connected_client(target.clone()).await.unwrap();
+        let first = connect(&client, target.clone()).await.unwrap();
         let failed = client
             .call("test", target.clone(), move |_: &mut ()| {
                 let cause = cause.clone();
@@ -2353,37 +1883,7 @@ mod test {
              the next caller"
         );
         assert_ne!(
-            client.connected_client(target.clone()).await.unwrap().id,
-            first.id,
-            "the connection the failed call rode was handed out again"
-        );
-    }
-
-    /// The single-target twin of [`a_failed_call_retires_the_connection_it_rode`].
-    /// This client has its own copy of the retiring, and the shard-manager and
-    /// registry clients are the ones riding on it.
-    #[test]
-    async fn the_single_target_client_retires_what_a_failed_call_rode() {
-        let (target, _peer) = silent_peer().await;
-        let client = GrpcClient::new("test", |_, _| (), target, one_attempt());
-        let cause = Arc::new(dead_transport_status().await);
-
-        let first = client.connected_client().await.unwrap();
-        let failed = client
-            .call("test", move |_: &mut ()| {
-                let cause = cause.clone();
-                Box::pin(async move { Err::<(), Status>((*cause).clone()) })
-            })
-            .await;
-        assert!(failed.is_err(), "the call under test has to have failed");
-
-        assert!(
-            first.retirement.is_retired(),
-            "a call that failed on a dead connection left it fit to hand to \
-             the next caller"
-        );
-        assert_ne!(
-            client.connected_client().await.unwrap().id,
+            connect(&client, target.clone()).await.unwrap().id,
             first.id,
             "the connection the failed call rode was handed out again"
         );
@@ -2397,15 +1897,24 @@ mod test {
     async fn a_replacement_attempt_takes_the_place_of_the_one_it_replaces() {
         let (target, _peer) = silent_peer().await;
         let config = GrpcClientConfig::default();
-        let connections = Connections::new();
+        let (connections, build) = cache();
 
-        let first = connections.connect(target.clone(), &config).await.unwrap();
+        let first = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
         retired_by_the_peer(&first.retirement);
 
-        let second = connections.connect(target.clone(), &config).await.unwrap();
+        let second = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
         assert_ne!(second.id, first.id, "a retired attempt was inherited");
 
-        let third = connections.connect(target.clone(), &config).await.unwrap();
+        let third = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
         assert_eq!(
             third.id, second.id,
             "the replacement never took the retired one's place, so every \
@@ -2453,13 +1962,13 @@ mod test {
     #[test]
     async fn forget_leaves_an_attempt_in_flight_alone() {
         let config = GrpcClientConfig::default();
-        let connections = Connections::new();
+        let (connections, _build) = cache();
 
         // Nothing listens here, and the connect is held open by a timeout far
         // longer than the test, so the attempt stays unsettled throughout.
         let target: Uri = "http://127.0.0.1:1/".parse().unwrap();
         let endpoint = build_endpoint(target.clone(), &config).unwrap();
-        let attempt = connect_shared(endpoint, Duration::from_secs(600));
+        let attempt = attempt_bounded_by(endpoint, Duration::from_secs(600));
         connections
             .by_target
             .insert_async(target.clone(), attempt)
@@ -2482,14 +1991,14 @@ mod test {
     #[test]
     async fn a_replacement_attempt_is_driven_like_the_first() {
         let config = GrpcClientConfig::default();
-        let connections = Connections::new();
+        let (connections, build) = cache();
 
         // Nothing listens here, so every attempt to it fails. Seeded rather than
         // made, because an attempt that failed on its own would have been
         // cleared by the very task this is about.
         let target: Uri = "http://127.0.0.1:1/".parse().unwrap();
         let endpoint = build_endpoint(target.clone(), &config).unwrap();
-        let failed = connect_shared(endpoint, config.connect_timeout);
+        let failed = attempt_bounded_by(endpoint, config.connect_timeout);
         assert!(
             failed.clone().await.is_err(),
             "the attempt being replaced has to be one nobody would inherit"
@@ -2501,7 +2010,10 @@ mod test {
             .unwrap();
 
         assert!(
-            connections.connect(target.clone(), &config).await.is_err(),
+            connections
+                .connect(target.clone(), &config, &build)
+                .await
+                .is_err(),
             "the replacement this test is about has to be one that failed"
         );
 
@@ -2525,20 +2037,26 @@ mod test {
     async fn a_failed_attempts_own_task_does_not_clear_the_replacement() {
         let (target, _peer) = silent_peer().await;
         let config = GrpcClientConfig::default();
-        let connections = Connections::new();
+        let (connections, build) = cache();
 
         // Nothing listens here, and no time at all to reach it.
         let endpoint = build_endpoint("http://127.0.0.1:1/".parse().unwrap(), &config).unwrap();
-        let failed = connect_shared(endpoint, Duration::ZERO);
+        let failed = attempt_bounded_by(endpoint, Duration::ZERO);
         assert!(
             failed.clone().await.is_err(),
             "the attempt this test is about has to be one that failed"
         );
 
-        let replacement = connections.connect(target.clone(), &config).await.unwrap();
+        let replacement = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
         connections.drive(target.clone(), failed).await.unwrap();
 
-        let kept = connections.connect(target.clone(), &config).await.unwrap();
+        let kept = connections
+            .connect(target.clone(), &config, &build)
+            .await
+            .unwrap();
         assert_eq!(
             kept.id, replacement.id,
             "a failed attempt's own task cleared the replacement that had taken \
