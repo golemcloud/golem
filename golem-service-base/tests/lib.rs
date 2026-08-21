@@ -13,5 +13,6 @@
 // limitations under the License.
 
 pub mod blob_storage;
+pub mod grpc_client;
 
 test_r::enable!();
