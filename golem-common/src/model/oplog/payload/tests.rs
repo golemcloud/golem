@@ -39,24 +39,25 @@ use crate::model::oplog::types::{
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
-    HostRequestFileSystemPath, HostRequestGolemApiOplogEnrich, HostRequestGolemApiOplogRead,
-    HostRequestGolemRpcActivate, HostRequestGolemToolGetTool, HostRequestGolemToolInvoke,
-    HostRequestKVCacheKey, HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
-    HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp, HostRequestNoInput,
+    HostRequestEntityInvocation, HostRequestFileSystemPath, HostRequestGolemApiOplogEnrich,
+    HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
+    HostRequestGolemToolInvoke, HostRequestKVCacheKey, HostRequestKVCacheKeyAndTtl,
+    HostRequestKVCacheKeyValueAndTtl, HostRequestMonotonicClockDuration,
+    HostRequestMonotonicClockTimestamp, HostRequestNoInput,
     HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
     HostRequestP3SocketsConnect, HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse,
-    HostResponseCliEnvironmentGetEnvironment, HostResponseGolemApiOplogChunk,
-    HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit, HostResponseGolemRpcActivate,
-    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcScheduledInvocationCompat,
-    HostResponseGolemToolInvokeResult, HostResponseGolemToolTool, HostResponseGolemToolTools,
-    HostResponseGolemToolUnitOrFailure, HostResponseKVDelete, HostResponseKVGet,
-    HostResponseKVUnit, HostResponseMonotonicClockTimestamp,
-    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3FileSystemStat,
-    HostResponseP3FileSystemWriteAdmission, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientRequestBodyTransmission,
-    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
-    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsConnect,
-    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseCliEnvironmentGetEnvironment, HostResponseEntityInvocation,
+    HostResponseGolemApiOplogChunk, HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit,
+    HostResponseGolemRpcActivate, HostResponseGolemRpcScheduledInvocation,
+    HostResponseGolemRpcScheduledInvocationCompat, HostResponseGolemToolInvokeResult,
+    HostResponseGolemToolTool, HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
+    HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
+    HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
+    HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
+    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
+    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
+    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
+    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
     HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
@@ -65,9 +66,8 @@ use crate::model::worker::{
     ResolvedRevert, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
 };
 use crate::model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
-use crate::schema::SchemaValue;
 use crate::schema::tool::{CommandNode, CommandTree, DiscoveredTool, Doc, Globals, Tool};
-use crate::schema::{IntoTypedSchemaValue, SchemaGraph};
+use crate::schema::{IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 use http::Version;
 use iso8601_timestamp as iso_ts;
 use proptest::collection::vec;
@@ -456,6 +456,28 @@ fn pre_epoch_serializable_datetime_to_datetime_utc_roundtrip() {
 
     let result: SerializableDateTime = datetime.into();
     assert_eq!(result, value);
+}
+
+#[test]
+fn entity_invocation_host_payload_pair_roundtrips() {
+    fn empty_value() -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::tuple(Vec::new())),
+            SchemaValue::Tuple {
+                elements: Vec::new(),
+            },
+        )
+    }
+
+    assert_host_payload_pair_roundtrip::<host_functions::GolemEntityInvoke>(
+        HostRequestEntityInvocation {
+            metadata: vec![1, 2, 3],
+            input: empty_value(),
+        },
+        HostResponseEntityInvocation {
+            result: Ok(empty_value()),
+        },
+    );
 }
 
 #[test]

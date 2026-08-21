@@ -4474,6 +4474,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                         })),
                         secret_keys_readable: SecretKeyScope::All,
                         secret_keys_revealable: SecretKeyScope::All,
+                        filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
                         source,
                     },
                 )

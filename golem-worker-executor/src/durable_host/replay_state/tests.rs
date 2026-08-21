@@ -1,5 +1,5 @@
 use super::*;
-use crate::services::oplog::{CommitLevel, OrderedOplogStart, PendingUpload};
+use crate::services::oplog::{CommitLevel, OplogAddReceipt, OrderedOplogStart, PendingUpload};
 use async_trait::async_trait;
 use golem_common::model::card::{
     AgentCardHolder, Card, CardHolder, CardId, InvocationWalletPin, StoredCard, WalletVersionToken,
@@ -28,14 +28,14 @@ type StoredExternalPayload = (PayloadId, Vec<u8>, Vec<u8>);
 /// Minimal in-memory `Oplog` used to drive a [`ReplayState`] over hand-built entries.
 #[derive(Debug)]
 struct InMemoryOplog {
-    entries: tokio::sync::Mutex<Vec<OplogEntry>>,
+    entries: std::sync::Mutex<Vec<OplogEntry>>,
     external_payloads: tokio::sync::Mutex<Vec<StoredExternalPayload>>,
 }
 
 impl InMemoryOplog {
     fn new() -> Self {
         Self {
-            entries: tokio::sync::Mutex::new(Vec::new()),
+            entries: std::sync::Mutex::new(Vec::new()),
             external_payloads: tokio::sync::Mutex::new(Vec::new()),
         }
     }
@@ -59,9 +59,16 @@ impl InMemoryOplog {
 #[async_trait]
 impl Oplog for InMemoryOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        let mut entries = self.entries.lock().await;
+        let mut entries = self.entries.lock().unwrap();
         entries.push(entry);
         OplogIndex::from_u64(entries.len() as u64)
+    }
+
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        let mut entries = self.entries.lock().unwrap();
+        entries.push(entry);
+        let index = OplogIndex::from_u64(entries.len() as u64);
+        Box::pin(async move { index })
     }
 
     async fn add_pair(
@@ -69,7 +76,7 @@ impl Oplog for InMemoryOplog {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> (OplogIndex, OplogIndex) {
-        let mut entries = self.entries.lock().await;
+        let mut entries = self.entries.lock().unwrap();
         entries.push(start);
         let first_idx = OplogIndex::from_u64(entries.len() as u64);
         entries.push(make_second(first_idx));
@@ -100,7 +107,7 @@ impl Oplog for InMemoryOplog {
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
-        OplogIndex::from_u64(self.entries.lock().await.len() as u64)
+        OplogIndex::from_u64(self.entries.lock().unwrap().len() as u64)
     }
 
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
@@ -112,13 +119,13 @@ impl Oplog for InMemoryOplog {
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        let entries = self.entries.lock().await;
+        let entries = self.entries.lock().unwrap();
         let idx: u64 = oplog_index.into();
         entries[(idx - 1) as usize].clone()
     }
 
     async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        let entries = self.entries.lock().await;
+        let entries = self.entries.lock().unwrap();
         let start: u64 = oplog_index.into();
         let mut result = BTreeMap::new();
         for i in start..(start + n) {
@@ -130,7 +137,7 @@ impl Oplog for InMemoryOplog {
     }
 
     async fn length(&self) -> u64 {
-        self.entries.lock().await.len() as u64
+        self.entries.lock().unwrap().len() as u64
     }
 
     async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
@@ -509,6 +516,36 @@ async fn incomplete_observational_tree_does_not_block_custom_live_fallback() {
     let rs = replay_state_over(vec![
         noop(),
         custom_start("outer", 1, None, 1),
+        observational_start_now(2, None),
+    ])
+    .await;
+
+    let custom = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("outer".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        rs.await_resolution_outcome(custom.handle).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+    assert!(rs.is_live());
+}
+
+#[test]
+async fn delivered_observational_completion_does_not_block_custom_live_fallback() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        observational_start_now(2, None),
+        end_for(3, 42),
+        delivered_for(3),
         observational_start_now(2, None),
     ])
     .await;
@@ -1098,6 +1135,7 @@ async fn snapshot_prefix_suppresses_replayed_permission_events() {
 fn stdout_log(message: &str) -> OplogEntry {
     OplogEntry::Log {
         timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
         level: LogLevel::Stdout,
         context: "stdout".to_string(),
         message: message.to_string(),
@@ -1648,6 +1686,13 @@ fn discarded_for(start_index: u64) -> OplogEntry {
     }
 }
 
+fn delivered_for(start_index: u64) -> OplogEntry {
+    OplogEntry::CompletionDelivered {
+        timestamp: Timestamp::now_utc(),
+        start_index: OplogIndex::from_u64(start_index),
+    }
+}
+
 fn start_with_parent(parent_start_index: u64) -> OplogEntry {
     OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
@@ -1696,6 +1741,29 @@ async fn invocation_boundary_tolerates_abandoned_closed_start() {
         result,
         Some(AgentInvocationResult::AgentInitialization)
     ));
+}
+
+#[test]
+async fn invocation_boundary_rejects_abandoned_delivered_completion() {
+    // A CompletionDelivered marker proves the recorded guest received the call's result. If replay
+    // reaches the invocation boundary without claiming that Start, this is divergence rather than
+    // a tolerable live-only abandoned branch and must fail instead of parking forever at the marker.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        delivered_for(2),
+        invocation_finished(),
+    ])
+    .await;
+
+    let error = read_invocation_finished(&rs)
+        .await
+        .expect_err("an unclaimed delivered completion must be fatal");
+    assert!(
+        error.to_string().contains("recorded guest received"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
@@ -2124,6 +2192,509 @@ async fn replay_resolves_completed_but_discarded() {
 }
 
 #[test]
+async fn marked_completion_is_prefetched_without_advancing_past_intervening_entry() {
+    // The call completed only after another durable operation was recorded. Replay must expose the
+    // host result without consuming that intervening operation, otherwise a guest scheduler that
+    // waits for the call's readiness before reproducing the operation deadlocks. Guest delivery is
+    // still held at the marker after both the intervening entry and the End are consumed.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        begin_atomic_region(),
+        end_for(2, 42),
+        delivered_for(2),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+
+    match rs.await_resolution(handle).await.unwrap() {
+        Resolution::Completed {
+            end_idx,
+            delivery_marker,
+            ..
+        } => {
+            assert_eq!(end_idx, OplogIndex::from_u64(4));
+            assert_eq!(delivery_marker, Some(OplogIndex::from_u64(5)));
+        }
+        other => panic!("expected marked completion, got {other:?}"),
+    }
+    assert_eq!(
+        rs.last_replayed_index(),
+        OplogIndex::from_u64(2),
+        "prefetching the End must not advance the positional cursor"
+    );
+
+    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(3));
+    assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
+
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(5))
+        .await
+        .unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    barrier.acknowledge();
+}
+
+#[test]
+async fn replay_delivery_marker_holds_cursor_until_guest_boundary() {
+    // A completed before B was started, but A's callback was handed to the guest only after B
+    // completed. Replay returns A's response to its host-side continuation at End, lets B advance,
+    // then positionally consumes A's delivery marker. Once consumed, no later entry can advance
+    // until A's actual guest-facing boundary acknowledges the transferred cursor gate.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        start_now(),
+        end_for(4, 43),
+        delivered_for(2),
+        noop(),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed {
+            end_idx,
+            delivery_marker,
+            ..
+        } => {
+            assert_eq!(end_idx, OplogIndex::from_u64(3));
+            assert_eq!(delivery_marker, Some(OplogIndex::from_u64(6)));
+        }
+        other => panic!("expected A to complete for host-side continuation, got {other:?}"),
+    }
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
+
+    let handle_b = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_b).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
+        other => panic!("expected B to complete, got {other:?}"),
+    }
+    let next = rs.get_oplog_entry();
+    tokio::pin!(next);
+    assert!(
+        futures::poll!(next.as_mut()).is_pending(),
+        "an unrelated positional reader must not steal A's delivery marker"
+    );
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6))
+        .await
+        .unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(6));
+    assert_eq!(
+        rs.last_replayed_non_hint_index(),
+        OplogIndex::from_u64(5),
+        "the delivery scheduling barrier remains a hint"
+    );
+
+    assert!(
+        futures::poll!(next.as_mut()).is_pending(),
+        "later cursor work must wait until the recorded guest boundary"
+    );
+    barrier.acknowledge();
+    let (idx, _) = next.await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(7));
+}
+
+#[test]
+async fn replay_delivery_marker_skips_following_hints_after_guest_boundary() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        delivered_for(2),
+        stdout_log("after-delivery"),
+        start_now(),
+        end_for(6, 43),
+    ])
+    .await;
+    let first = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(first).await.unwrap();
+
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4))
+        .await
+        .unwrap();
+    barrier.acknowledge();
+
+    let second = tokio::time::timeout(
+        Duration::from_secs(1),
+        rs.claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ),
+    )
+    .await
+    .expect("a hint after the delivery marker must not strand the replay cursor")
+    .unwrap();
+    assert_eq!(second.start_idx(), OplogIndex::from_u64(6));
+    match rs.await_resolution(second).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => {
+            assert_eq!(end_idx, OplogIndex::from_u64(7));
+        }
+        other => panic!("expected the second call to complete, got {other:?}"),
+    }
+}
+
+#[test]
+async fn optional_reader_waits_at_delivery_marker_before_testing_later_entry() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        delivered_for(2),
+        noop(),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+
+    let optional = rs.try_get_oplog_entry(|entry| matches!(entry, OplogEntry::NoOp { .. }));
+    tokio::pin!(optional);
+    assert!(
+        futures::poll!(optional.as_mut()).is_pending(),
+        "a completion marker is a replay barrier, not a predicate mismatch"
+    );
+
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4))
+        .await
+        .unwrap();
+    assert!(
+        futures::poll!(optional.as_mut()).is_pending(),
+        "the optional reader must remain blocked until guest delivery"
+    );
+    barrier.acknowledge();
+    assert_eq!(optional.await.unwrap().unwrap().0, OplogIndex::from_u64(5));
+}
+
+#[test]
+async fn identity_claim_does_not_scan_past_delivery_marker() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        delivered_for(2),
+        start_now(),
+        end_for(5, 43),
+    ])
+    .await;
+    let first = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(first).await.unwrap();
+
+    let second = rs.claim_concurrent_start(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+    );
+    tokio::pin!(second);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), second.as_mut())
+            .await
+            .is_err(),
+        "an identity claim must not scan ahead to a Start after the delivery marker"
+    );
+
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4))
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), second.as_mut())
+            .await
+            .is_err()
+    );
+    barrier.acknowledge();
+    assert_eq!(second.await.unwrap().start_idx(), OplogIndex::from_u64(5));
+}
+
+#[test]
+async fn request_matching_claim_does_not_scan_past_delivery_marker() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        delivered_for(2),
+        start_now(),
+        end_for(5, 43),
+    ])
+    .await;
+    let request = HostRequest::NoInput(HostRequestNoInput {});
+    let first = rs
+        .claim_concurrent_start_matching_request(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            &request,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(first).await.unwrap();
+
+    let second = rs.claim_concurrent_start_matching_request(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+        &request,
+    );
+    tokio::pin!(second);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), second.as_mut())
+            .await
+            .is_err(),
+        "a request-matching claim must not scan ahead to a Start after the delivery marker"
+    );
+
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4))
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), second.as_mut())
+            .await
+            .is_err()
+    );
+    barrier.acknowledge();
+    assert_eq!(second.await.unwrap().start_idx(), OplogIndex::from_u64(5));
+}
+
+#[test]
+async fn markerless_completed_end_resolves_without_delivery_marker() {
+    // The recorded run crashed after the `End` became durable but before the completion crossed
+    // to the guest, so no `CompletionDelivered` marker follows. The resolution must expose that
+    // as `delivery_marker: None` — the deferred accessor path tail-gates such completions.
+    let rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+
+    match rs.await_resolution(handle).await.unwrap() {
+        Resolution::Completed {
+            end_idx,
+            delivery_marker,
+            ..
+        } => {
+            assert_eq!(end_idx, OplogIndex::from_u64(3));
+            assert_eq!(delivery_marker, None);
+        }
+        other => panic!("expected markerless completion, got {other:?}"),
+    }
+}
+
+#[test]
+async fn await_natural_tail_end_returns_once_tail_drains() {
+    // After the markerless call is claimed and resolved, the remaining tail holds only its own
+    // awaited `End` terminal and a trailing hint — entries the drain loop consumes without a
+    // positional owner — so the tail-gated waiter exhausts the tail and returns.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        stdout_log("crash tail hint"),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+
+    rs.await_natural_tail_end().await.unwrap();
+    assert!(rs.is_live());
+}
+
+#[test]
+async fn await_natural_tail_end_waits_for_positionally_owned_entry() {
+    // The crash tail contains a real entry (`BeginAtomicRegion`) owned by the replaying guest:
+    // the tail-gated waiter must park until the guest's positional reader consumes it, and only
+    // then observe the exhausted tail. Delivering earlier could make the replayed guest skip
+    // recorded entries — the crash window this gate closes.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        begin_atomic_region(),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+
+    let waiter = rs.await_natural_tail_end();
+    tokio::pin!(waiter);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
+            .await
+            .is_err(),
+        "the tail-gated waiter must park while a positionally-owned entry remains"
+    );
+
+    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(4));
+    assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
+
+    waiter.await.unwrap();
+    assert!(rs.is_live());
+}
+
+#[test]
+async fn await_natural_tail_end_propagates_delivery_failure() {
+    // Poisoning replay (a delivery boundary fired while a completion was still tail-gated) must
+    // wake and fail a parked tail waiter instead of leaving it parked forever.
+    let rs = replay_state_over(vec![noop(), begin_atomic_region()]).await;
+
+    let waiter = rs.await_natural_tail_end();
+    tokio::pin!(waiter);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), waiter.as_mut())
+            .await
+            .is_err()
+    );
+
+    rs.fail_tail_delivery(OplogIndex::from_u64(1), "test poisoning");
+    let err = waiter.await.expect_err("the poisoned waiter must fail");
+    assert!(
+        err.to_string().contains("test poisoning"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+async fn replay_delivery_barriers_preserve_adjacent_callback_order() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(2, 42),
+        end_for(3, 43),
+        delivered_for(2),
+        delivered_for(3),
+        noop(),
+    ])
+    .await;
+    let a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let b = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(a).await.unwrap();
+    rs.await_resolution(b).await.unwrap();
+
+    let barrier_a = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(6))
+        .await
+        .unwrap();
+    let barrier_b = rs.await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(7));
+    tokio::pin!(barrier_b);
+    assert!(
+        futures::poll!(barrier_b.as_mut()).is_pending(),
+        "B's delivery marker must remain blocked until A reaches the guest"
+    );
+
+    barrier_a.acknowledge();
+    let barrier_b = barrier_b.await.unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(7));
+    barrier_b.acknowledge();
+    assert_eq!(
+        rs.get_oplog_entry().await.unwrap().0,
+        OplogIndex::from_u64(8)
+    );
+}
+
+#[test]
+async fn dropped_replay_delivery_barrier_fails_later_cursor_work() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        delivered_for(2),
+        noop(),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4))
+        .await
+        .unwrap();
+    drop(barrier);
+
+    let error = rs
+        .get_oplog_entry()
+        .await
+        .expect_err("an unacknowledged recorded delivery must fail replay");
+    assert!(
+        error
+            .to_string()
+            .contains("dropped before the recorded guest-delivery boundary"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 async fn marker_in_deleted_region_delivers_end_normally() {
     // A CompletionDiscarded marker inside a deleted region belongs to an abandoned timeline:
     // the still-visible End must be delivered normally.
@@ -2161,6 +2732,39 @@ async fn marker_in_deleted_region_delivers_end_normally() {
 }
 
 #[test]
+async fn delivered_marker_with_deleted_start_is_skipped_as_orphan() {
+    // The deleted Start/End belong to an abandoned timeline. Their surviving delivery marker is
+    // therefore an orphan hint and must not strand positional replay before the next kept entry.
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        delivered_for(2),
+        noop(),
+    ] {
+        oplog.add(entry).await;
+    }
+    let oplog: Arc<dyn Oplog> = oplog;
+    let skipped =
+        golem_common::model::regions::DeletedRegionsBuilder::from_regions([OplogRegion {
+            start: OplogIndex::from_u64(2),
+            end: OplogIndex::from_u64(3),
+        }])
+        .build();
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
+        .await
+        .expect("failed to build replay state");
+
+    let (index, entry) = tokio::time::timeout(Duration::from_millis(100), rs.get_oplog_entry())
+        .await
+        .expect("an orphan CompletionDelivered marker must not block replay")
+        .expect("the next kept entry must remain readable");
+    assert_eq!(index, OplogIndex::from_u64(5));
+    assert!(matches!(entry, OplogEntry::NoOp { .. }));
+}
+
+#[test]
 async fn duplicate_completion_discarded_markers_fail_construction() {
     // Two markers referencing the same Start is oplog corruption; the upfront scan rejects it.
     let oplog = Arc::new(InMemoryOplog::new());
@@ -2179,6 +2783,29 @@ async fn duplicate_completion_discarded_markers_fail_construction() {
         .expect_err("duplicate markers must fail replay state construction");
     assert!(
         err.to_string().contains("CompletionDiscarded"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+async fn conflicting_completion_markers_fail_construction() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        delivered_for(2),
+        discarded_for(2),
+    ] {
+        oplog.add(entry).await;
+    }
+    let oplog: Arc<dyn Oplog> = oplog;
+    let err = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default(), None)
+        .await
+        .expect_err("conflicting markers must fail replay state construction");
+    assert!(
+        err.to_string().contains("CompletionDelivered")
+            && err.to_string().contains("CompletionDiscarded"),
         "unexpected error: {err}"
     );
 }
@@ -2655,9 +3282,150 @@ async fn switch_to_live_wakes_parked_awaiter_as_incomplete() {
     );
 }
 
+#[test]
+async fn completed_entity_body_detects_unconsumed_owned_start_at_cursor_head() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 41),
+        end_for(2, 42),
+    ])
+    .await;
+    let outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(outer.start_idx(), OplogIndex::from_u64(2));
+
+    assert_eq!(
+        rs.unconsumed_scope_head(
+            OplogIndex::from_u64(2),
+            HashSet::from([OplogIndex::from_u64(3)]),
+        )
+        .await
+        .unwrap(),
+        None,
+        "a nested reconstructed entity body remains able to claim its own Start"
+    );
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        Some(OplogIndex::from_u64(3)),
+        "once no nested body can consume the owned Start, it is structural divergence"
+    );
+}
+
+#[test]
+async fn completed_entity_body_waits_for_active_owner_of_retried_transaction_begin() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        noop(),
+        OplogEntry::begin_remote_transaction(
+            golem_common::model::TransactionId::new("retried".to_string()),
+            Some(OplogIndex::from_u64(3)),
+        ),
+        end_for(3, 41),
+        end_for(2, 42),
+    ])
+    .await;
+    let _outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let _child = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+
+    let (index, _) = rs.get_oplog_entry().await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert_eq!(
+        rs.unconsumed_scope_head(
+            OplogIndex::from_u64(2),
+            HashSet::from([OplogIndex::from_u64(3)]),
+        )
+        .await
+        .unwrap(),
+        None,
+        "a retried transaction Begin belongs to its original scope Start even when it is not adjacent"
+    );
+}
+
+#[test]
+async fn completed_entity_body_does_not_reject_auto_drainable_dropped_call_terminal() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        cancelled_for(3),
+        end_for(2, 42),
+    ])
+    .await;
+    let outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let dropped_child = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    drop(dropped_child);
+
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        None,
+        "a pending terminal with a dropped receiver remains auto-drainable"
+    );
+
+    rs.drain_awaited_terminals().await.unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    match rs.await_resolution(outer).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
+        other => panic!("expected completed outer call, got {other:?}"),
+    }
+}
+
+#[test]
+async fn visible_terminal_scan_crosses_multiple_chunks() {
+    let mut entries = vec![noop(), start_now()];
+    entries.extend(std::iter::repeat_with(noop).take(CHUNK_SIZE as usize + 1));
+    entries.push(end_for(2, 42));
+    let rs = replay_state_over(entries).await;
+
+    assert!(
+        rs.has_visible_terminal(OplogIndex::from_u64(2)).await,
+        "entity execution mode classification must scan through the complete replay prefix"
+    );
+}
+
 fn log_entry() -> OplogEntry {
     OplogEntry::Log {
         timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
         level: LogLevel::Info,
         context: "ctx".to_string(),
         message: "msg".to_string(),
@@ -3705,7 +4473,11 @@ async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver()
     // is claimed by identity (parent_start_index), and the scope End resolves response-less.
     let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let (scope_idx, scope_handle) = rs
-        .claim_scope_start(&scope_name, &DurableFunctionType::WriteRemoteBatched(None))
+        .claim_scope_start(
+            &scope_name,
+            &DurableFunctionType::WriteRemoteBatched(None),
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(scope_idx, OplogIndex::from_u64(11));
@@ -3772,6 +4544,7 @@ async fn discriminated_scope_claim_never_matches_plain_scope_start() {
         .claim_scope_start(
             &discriminated,
             &DurableFunctionType::WriteRemoteBatched(None),
+            None,
         )
         .await
         .expect_err("discriminated claim must not match the plain scope Start");
@@ -3783,7 +4556,7 @@ async fn discriminated_scope_claim_never_matches_plain_scope_start() {
 
     let plain = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let (scope_idx, scope_handle) = rs
-        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None))
+        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None), None)
         .await
         .unwrap();
     assert_eq!(scope_idx, OplogIndex::from_u64(2));
@@ -3812,7 +4585,7 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
 
     let plain = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let err = rs
-        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None))
+        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None), None)
         .await
         .expect_err("plain claim must not match a discriminated scope Start");
     let message = format!("{err}");
@@ -3826,6 +4599,7 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
         .claim_scope_start(
             &discriminated,
             &DurableFunctionType::WriteRemoteBatched(None),
+            None,
         )
         .await
         .unwrap();
@@ -3837,6 +4611,44 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
         other => panic!("expected Completed for the discriminated scope, got {other:?}"),
     }
     assert!(rs.is_live(), "replay must reach live at the end");
+}
+
+#[test]
+async fn entity_owned_scope_claim_requires_the_recorded_parent() {
+    let parent = OplogIndex::from_u64(7);
+    let scope_start = OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: Some(parent),
+        function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
+        invocation_id: None,
+        observational_owner: None,
+        request: None,
+        durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+    };
+    let rs = replay_state_over(vec![noop(), scope_start, batched_scope_end(2)]).await;
+    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
+
+    rs.claim_scope_start(
+        &scope_name,
+        &DurableFunctionType::WriteRemoteBatched(None),
+        Some(OplogIndex::from_u64(8)),
+    )
+    .await
+    .expect_err("a scope claim must not steal a sibling entity invocation's scope");
+
+    let (scope_index, handle) = rs
+        .claim_scope_start(
+            &scope_name,
+            &DurableFunctionType::WriteRemoteBatched(None),
+            Some(parent),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scope_index, OplogIndex::from_u64(2));
+    assert!(matches!(
+        rs.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
 }
 
 /// Pins the exact "expected" label each [`StartClaim`] variant renders for
@@ -3854,7 +4666,7 @@ fn start_claim_expected_descriptions_are_stable() {
     );
 
     assert_eq!(
-        StartClaim::scope(&name, &DurableFunctionType::WriteRemoteBatched(None))
+        StartClaim::scope(&name, &DurableFunctionType::WriteRemoteBatched(None), None)
             .expected_description(),
         format!(
             "Start {{ {name}, WriteRemoteBatched(None), request: None, parent_start_index: None }}"

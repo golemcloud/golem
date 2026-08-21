@@ -43,11 +43,11 @@ pub fn wasmExportAsyncSave(event_raw : Int, waitable : Int, code : Int) -> Int {
 }
 
 ///|
-#owned(str)
-extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
+#owned(bytes)
+extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
   #|(func (param i32) (result i32) local.get 0)
 
 ///|
-#owned(bytes)
-extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
+#owned(str)
+extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
   #|(func (param i32) (result i32) local.get 0)

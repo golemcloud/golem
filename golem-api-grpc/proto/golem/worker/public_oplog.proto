@@ -73,11 +73,12 @@ message OplogEntry {
     CardExpiredParameters CardExpired = 51;
     HostStreamFrameParameters HostStreamFrame = 52;
     CompletionDiscardedParameters CompletionDiscarded = 53;
-    CardDerivedParameters CardDerived = 54;
-    CardTransferStartedParameters CardTransferStarted = 55;
-    CardTransferredParameters CardTransferred = 56;
-    CardRevokedCascadeParameters CardRevokedCascade = 57;
-    CardTransferConfirmedParameters CardTransferConfirmed = 58;
+    CompletionDeliveredParameters CompletionDelivered = 54;
+    CardDerivedParameters CardDerived = 55;
+    CardTransferStartedParameters CardTransferStarted = 56;
+    CardTransferredParameters CardTransferred = 57;
+    CardRevokedCascadeParameters CardRevokedCascade = 58;
+    CardTransferConfirmedParameters CardTransferConfirmed = 59;
   }
 }
 
@@ -155,6 +156,11 @@ message CancelledParameters {
 }
 
 message CompletionDiscardedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 start_index = 2;
+}
+
+message CompletionDeliveredParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 start_index = 2;
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::active_workers::ActiveWorkers;
+use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::card::{CardService, CardState};
 use crate::services::card_interest::{CardAuthorityRecoveryEpoch, CardAuthorityRecoveryFinalize};
@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 pub(crate) struct WorkerExecutorRegistryInvalidationHandler<Ctx: WorkerCtx> {
-    active_workers: Arc<ActiveWorkers<Ctx>>,
+    active_agents: Arc<ActiveAgents<Ctx>>,
     card_service: Arc<dyn CardService>,
     component_service: Arc<dyn ComponentService>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
@@ -40,7 +40,7 @@ pub(crate) struct WorkerExecutorRegistryInvalidationHandler<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
     pub async fn run(
         registry_service: Arc<dyn RegistryService>,
-        active_workers: Arc<ActiveWorkers<Ctx>>,
+        active_agents: Arc<ActiveAgents<Ctx>>,
         card_service: Arc<dyn CardService>,
         component_service: Arc<dyn ComponentService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
@@ -53,7 +53,7 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
                 "worker-executor",
                 Some(shutdown_token),
                 Arc::new(Self {
-                    active_workers,
+                    active_agents,
                     card_service,
                     component_service,
                     environment_state_service,
@@ -75,15 +75,12 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
     async fn reevaluate_tracked_cards(&self, epoch: CardAuthorityRecoveryEpoch) {
         let mut retry_delay = Duration::from_millis(100);
         loop {
-            if !self
-                .active_workers
-                .is_current_card_authority_recovery(epoch)
-            {
+            if !self.active_agents.is_current_card_authority_recovery(epoch) {
                 return;
             }
 
             let (interest_revision, card_ids) =
-                self.active_workers.tracked_card_ids_with_revision().await;
+                self.active_agents.tracked_card_ids_with_revision().await;
             let revoked = if card_ids.is_empty() {
                 Vec::new()
             } else {
@@ -125,11 +122,11 @@ impl<Ctx: WorkerCtx> WorkerExecutorRegistryInvalidationHandler<Ctx> {
                     card_count = revoked.len(),
                     "Cursor expiry re-validation found revoked cards, notifying running workers"
                 );
-                self.active_workers.notify_revoked_cards(&revoked).await;
+                self.active_agents.notify_revoked_cards(&revoked).await;
             }
 
             match self
-                .active_workers
+                .active_agents
                 .finalize_card_authority_recovery(epoch, interest_revision)
                 .await
             {
@@ -181,7 +178,7 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
         match &event {
             RegistryInvalidationEvent::CursorExpired { .. } => {
                 warn!("Registry invalidation cursor expired, flushing all caches");
-                let recovery_epoch = self.active_workers.close_card_authority();
+                let recovery_epoch = self.active_agents.close_card_authority();
                 self.component_service.invalidate_all().await;
                 self.environment_state_service.invalidate_all().await;
                 self.agent_types_service.invalidate_all().await;
@@ -270,7 +267,7 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                     "Received card revocation event, recording revoked card ids"
                 );
                 self.card_service.record_revoked_cards(&card_ids).await;
-                self.active_workers.notify_revoked_cards(&card_ids).await;
+                self.active_agents.notify_revoked_cards(&card_ids).await;
             }
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,
@@ -289,7 +286,7 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                 // Invalidate each environment individually using the provided UUIDs
                 // rather than flushing all caches.
                 for env_id in environment_ids {
-                    self.active_workers.unload_environment(*env_id).await;
+                    self.active_agents.unload_environment(*env_id).await;
                     self.component_service
                         .invalidate_all_metadata_for_environment(*env_id)
                         .await;
@@ -313,9 +310,7 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                     env_name,
                     "Received environment deleted event, invalidating environment caches"
                 );
-                self.active_workers
-                    .unload_environment(*environment_id)
-                    .await;
+                self.active_agents.unload_environment(*environment_id).await;
                 self.component_service
                     .invalidate_all_metadata_for_environment(*environment_id)
                     .await;

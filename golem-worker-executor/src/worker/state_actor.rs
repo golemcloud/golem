@@ -65,6 +65,7 @@ use golem_common::model::{
     AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction, Timestamp,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
+use std::any::Any;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -74,7 +75,7 @@ use tracing::debug;
 /// Handle to the worker-state actor's two job queues. Owned by [`Worker`]; dropping it aborts
 /// both tasks.
 pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
-    status_jobs: mpsc::UnboundedSender<StatusJob<Ctx>>,
+    commit: Arc<OwnerCommitController>,
     lifecycle_jobs: mpsc::UnboundedSender<LifecycleJob<Ctx>>,
     notification_queued: Arc<AtomicBool>,
     status_task: tokio::task::JoinHandle<()>,
@@ -82,11 +83,21 @@ pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
 }
 
+/// Owner-scoped handle for serializing oplog commits with status publication.
+///
+/// The controller communicates with the independently-polled status actor and never acquires the
+/// primary Store or the worker instance lock. Primary and entity Stores can therefore commit the
+/// shared owner oplog while another Store is suspended in a guest call.
+pub(crate) struct OwnerCommitController {
+    status_jobs: mpsc::UnboundedSender<StatusJob>,
+    owned_agent_id: OwnedAgentId,
+}
+
 /// A request processed by the status task, which exclusively owns the commit + status-fold
 /// transaction. Jobs are processed strictly in enqueue order, giving the same serialization the
 /// former `update_state_lock` mutex provided — without lock-ownership handoff to potentially
 /// unpollable callers.
-enum StatusJob<Ctx: WorkerCtx> {
+enum StatusJob {
     /// Commits the oplog and folds the newly committed entries into the published status.
     /// Replies with the current oplog index after the commit and whether the status changed.
     /// The reply deliberately does not depend on the instance lock; if the caller wants the
@@ -99,7 +110,7 @@ enum StatusJob<Ctx: WorkerCtx> {
     /// cancelled. The caller-acquired guards remain owned by this job until the transaction ends.
     AppendAndCommitAttached {
         entry: Box<OplogEntry>,
-        _worker: Arc<Worker<Ctx>>,
+        _worker_keepalive: Arc<dyn Any + Send + Sync>,
         _instance_guard: OwnedMutexGuard<WorkerInstance>,
         _card_event_boundary_guard: OwnedMutexGuard<()>,
         done: oneshot::Sender<()>,
@@ -177,22 +188,6 @@ impl<Ctx: WorkerCtx> Drop for WorkerStateActor<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
-    async fn run_status_job<R>(
-        &self,
-        make_job: impl FnOnce(oneshot::Sender<R>) -> StatusJob<Ctx>,
-    ) -> R {
-        let (done, done_rx) = oneshot::channel();
-        self.status_jobs.send(make_job(done)).unwrap_or_else(|_| {
-            panic!("Worker state actor for {} terminated", self.owned_agent_id)
-        });
-        done_rx.await.unwrap_or_else(|_| {
-            panic!(
-                "Worker state actor for {} dropped a request",
-                self.owned_agent_id
-            )
-        })
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         deps: All<Ctx>,
@@ -220,7 +215,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             published_authority_generation,
         };
 
-        let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob<Ctx>>();
+        let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob>();
         let status_task = tokio::spawn(async move {
             while let Some(job) = status_rx.recv().await {
                 match job {
@@ -237,7 +232,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     }
                     StatusJob::AppendAndCommitAttached {
                         entry,
-                        _worker,
+                        _worker_keepalive,
                         _instance_guard,
                         _card_event_boundary_guard,
                         done,
@@ -313,7 +308,10 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         });
 
         Self {
-            status_jobs,
+            commit: Arc::new(OwnerCommitController {
+                status_jobs,
+                owned_agent_id: owned_agent_id.clone(),
+            }),
             lifecycle_jobs,
             notification_queued,
             status_task,
@@ -328,7 +326,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// If the caller's future is dropped while awaiting the reply, the commit still runs to
     /// completion on the status task (the same semantics as the oplog actor's own jobs).
     pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
-        self.run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
+        self.commit
+            .run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
             .await
     }
 
@@ -339,18 +338,21 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         instance_guard: OwnedMutexGuard<WorkerInstance>,
         card_event_boundary_guard: OwnedMutexGuard<()>,
     ) {
-        self.run_status_job(|done| StatusJob::AppendAndCommitAttached {
-            entry: Box::new(entry),
-            _worker: worker,
-            _instance_guard: instance_guard,
-            _card_event_boundary_guard: card_event_boundary_guard,
-            done,
-        })
-        .await
+        let worker_keepalive: Arc<dyn Any + Send + Sync> = worker;
+        self.commit
+            .run_status_job(|done| StatusJob::AppendAndCommitAttached {
+                entry: Box::new(entry),
+                _worker_keepalive: worker_keepalive,
+                _instance_guard: instance_guard,
+                _card_event_boundary_guard: card_event_boundary_guard,
+                done,
+            })
+            .await
     }
 
     pub async fn attached_status(&self) -> Arc<AgentStatusRecord> {
-        self.run_status_job(|done| StatusJob::AttachedStatus { done })
+        self.commit
+            .run_status_job(|done| StatusJob::AttachedStatus { done })
             .await
     }
 
@@ -358,7 +360,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// any in-flight commit/reattach transactions. The assert lives here on the caller side, so
     /// a job left behind by a cancelled caller cannot panic the actor.
     pub async fn non_detached_status(&self) -> AgentStatusRecord {
-        self.run_status_job(|done| StatusJob::NonDetachedStatus { done })
+        self.commit
+            .run_status_job(|done| StatusJob::NonDetachedStatus { done })
             .await
             .expect("worker status was unexpectedly detached from the oplog")
     }
@@ -366,8 +369,13 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// Commits and, if the status is detached, recomputes and republishes it (see
     /// [`Worker::reattach_worker_status`]).
     pub async fn reattach_worker_status(&self) {
-        self.run_status_job(|done| StatusJob::Reattach { done })
+        self.commit
+            .run_status_job(|done| StatusJob::Reattach { done })
             .await
+    }
+
+    pub fn owner_commit_controller(&self) -> Arc<OwnerCommitController> {
+        self.commit.clone()
     }
 
     /// Asks the lifecycle task to wake the invocation loop about a status change. Fire and
@@ -434,6 +442,35 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             );
         }
         done_rx
+    }
+}
+
+impl OwnerCommitController {
+    pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
+        self.run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
+            .await
+    }
+
+    /// Sends a job to the status task and waits for its reply.
+    ///
+    /// Panics if the task is gone: it is only aborted from `Drop` (when no caller can be in
+    /// flight anymore), so a missing reply means the task itself panicked and the worker's
+    /// status state is no longer trustworthy.
+    async fn run_status_job<R>(&self, make_job: impl FnOnce(oneshot::Sender<R>) -> StatusJob) -> R {
+        let (done, done_rx) = oneshot::channel();
+        if self.status_jobs.send(make_job(done)).is_err() {
+            panic!(
+                "Worker state actor for {} terminated unexpectedly",
+                self.owned_agent_id
+            );
+        }
+        match done_rx.await {
+            Ok(result) => result,
+            Err(_) => panic!(
+                "Worker state actor for {} dropped a request without replying",
+                self.owned_agent_id
+            ),
+        }
     }
 }
 

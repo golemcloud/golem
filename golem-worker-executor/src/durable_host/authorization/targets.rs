@@ -24,7 +24,7 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::workerctx::WorkerCtx;
 
 pub fn agent_owner<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> AgentOwnerPattern {
-    let component = ctx.component_metadata();
+    let component = ctx.owner_component_metadata();
     AgentOwnerPattern::Agent {
         account: component.account_email.clone(),
         application: component.application_name.clone(),

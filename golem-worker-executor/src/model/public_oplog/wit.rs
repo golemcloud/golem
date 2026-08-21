@@ -23,17 +23,17 @@ use golem_common::model::oplog::public_oplog_entry::{
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
     CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
-    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters,
-    NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PluginInstallationDescription, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StringAttributeValue,
-    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
+    ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams,
+    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams,
+    ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
     WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
@@ -312,6 +312,13 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp,
                 start_index,
             }) => Self::CompletionDiscarded(oplog::CompletionDiscardedParameters {
+                timestamp: timestamp.into(),
+                start_index: start_index.into(),
+            }),
+            PublicOplogEntry::CompletionDelivered(CompletionDeliveredParams {
+                timestamp,
+                start_index,
+            }) => Self::CompletionDelivered(oplog::CompletionDeliveredParameters {
                 timestamp: timestamp.into(),
                 start_index: start_index.into(),
             }),
@@ -1166,6 +1173,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 start_index: golem_common::base_model::OplogIndex::from_u64(params.start_index),
             }),
+            oplog::OplogEntry::CompletionDelivered(params) => Ok(Self::CompletionDelivered {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                start_index: golem_common::base_model::OplogIndex::from_u64(params.start_index),
+            }),
             oplog::OplogEntry::AgentInvocationStarted(params) => {
                 let trace_id = golem_common::model::invocation_context::TraceId::from_string(
                     &params.trace_id,
@@ -1307,6 +1318,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::Log(params) => Ok(Self::Log {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                parent_start_index: None,
                 level: params.level.into(),
                 context: params.context,
                 message: params.message,
@@ -1362,6 +1374,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     .collect();
                 Ok(Self::StartSpan {
                     timestamp: timestamp_from_datetime(params.timestamp),
+                    parent_start_index: None,
                     span_id,
                     parent,
                     linked_context_id,
@@ -1373,6 +1386,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     golem_common::model::invocation_context::SpanId::from_string(&params.span_id)?;
                 Ok(Self::FinishSpan {
                     timestamp: timestamp_from_datetime(params.timestamp),
+                    parent_start_index: None,
                     span_id,
                 })
             }
@@ -1382,6 +1396,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 let value = params.value.into();
                 Ok(Self::SetSpanAttribute {
                     timestamp: timestamp_from_datetime(params.timestamp),
+                    parent_start_index: None,
                     span_id,
                     key: params.key,
                     value,
@@ -1907,6 +1922,15 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     start_index: start_index.into(),
                 },
             )),
+            M::CompletionDelivered {
+                timestamp,
+                start_index,
+            } => Ok(Self::CompletionDelivered(
+                oplog::RawCompletionDeliveredParameters {
+                    timestamp: timestamp.into(),
+                    start_index: start_index.into(),
+                },
+            )),
             M::AgentInvocationStarted {
                 timestamp,
                 idempotency_key,
@@ -2126,6 +2150,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 level,
                 context,
                 message,
+                ..
             } => Ok(Self::Log(oplog::LogParameters {
                 timestamp: timestamp.into(),
                 level: level.into(),
@@ -2174,6 +2199,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 parent,
                 linked_context_id,
                 attributes,
+                ..
             } => Ok(Self::StartSpan(oplog::StartSpanParameters {
                 timestamp: timestamp.into(),
                 span_id: span_id.to_string(),
@@ -2188,17 +2214,18 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     })
                     .collect(),
             })),
-            M::FinishSpan { timestamp, span_id } => {
-                Ok(Self::FinishSpan(oplog::FinishSpanParameters {
-                    timestamp: timestamp.into(),
-                    span_id: span_id.to_string(),
-                }))
-            }
+            M::FinishSpan {
+                timestamp, span_id, ..
+            } => Ok(Self::FinishSpan(oplog::FinishSpanParameters {
+                timestamp: timestamp.into(),
+                span_id: span_id.to_string(),
+            })),
             M::SetSpanAttribute {
                 timestamp,
                 span_id,
                 key,
                 value,
+                ..
             } => Ok(Self::SetSpanAttribute(oplog::SetSpanAttributeParameters {
                 timestamp: timestamp.into(),
                 span_id: span_id.to_string(),

@@ -25,6 +25,7 @@ pub mod component_metadata;
 pub mod deployment;
 pub mod diff;
 pub mod domain_registration;
+pub mod entity;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod error;
@@ -278,8 +279,11 @@ impl BinaryDeserializer for Timestamp {
 }
 
 /// Associates an agent-id with its owner project
-#[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
+#[derive(
+    Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, BinaryCodec,
+)]
 #[desert(evolution())]
+#[serde(rename_all = "camelCase")]
 pub struct OwnedAgentId {
     pub environment_id: EnvironmentId,
     pub agent_id: AgentId,
@@ -307,6 +311,10 @@ impl OwnedAgentId {
 
     pub fn agent_name(&self) -> String {
         self.agent_id.agent_id.clone()
+    }
+
+    pub fn owner_id(&self) -> &OwnedAgentId {
+        self
     }
 }
 

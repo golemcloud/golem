@@ -51,10 +51,10 @@ use crate::model::oplog::public_oplog_entry::{
     CancelledParams, CardDerivedParams, CardEventQueuedParams, CardInstallFailedParams,
     CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
     CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
-    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
+    ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams,
+    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
     OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
     RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
@@ -811,6 +811,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     ),
                 }),
             ),
+            oplog_entry::Entry::CompletionDelivered(completion_delivered) => Ok(
+                PublicOplogEntry::CompletionDelivered(CompletionDeliveredParams {
+                    timestamp: completion_delivered
+                        .timestamp
+                        .ok_or("Missing timestamp field")?
+                        .into(),
+                    start_index: crate::base_model::OplogIndex::from_u64(
+                        completion_delivered.start_index,
+                    ),
+                }),
+            ),
             oplog_entry::Entry::AgentInvocationStarted(agent_invocation_started) => Ok(
                 PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                     timestamp: agent_invocation_started
@@ -1406,6 +1417,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::CompletionDiscardedParameters {
                             timestamp: Some(completion_discarded.timestamp.into()),
                             start_index: completion_discarded.start_index.as_u64(),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::CompletionDelivered(completion_delivered) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::CompletionDelivered(
+                        golem_api_grpc::proto::golem::worker::CompletionDeliveredParameters {
+                            timestamp: Some(completion_delivered.timestamp.into()),
+                            start_index: completion_delivered.start_index.as_u64(),
                         },
                     )),
                 }
@@ -2913,6 +2934,12 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     start_index: completion_discarded.start_index,
                 })
             }
+            PublicOplogEntry::CompletionDelivered(completion_delivered) => {
+                Ok(OplogEntry::CompletionDelivered {
+                    timestamp: completion_delivered.timestamp,
+                    start_index: completion_delivered.start_index,
+                })
+            }
             PublicOplogEntry::AgentInvocationStarted(_) => {
                 Err("Converting AgentInvocationStarted from public to raw oplog entry is not yet supported".to_string())
             }
@@ -3012,6 +3039,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             }),
             PublicOplogEntry::Log(p) => Ok(OplogEntry::Log {
                 timestamp: p.timestamp,
+                parent_start_index: None,
                 level: p.level,
                 context: p.context,
                 message: p.message,
@@ -3039,6 +3067,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             }
             PublicOplogEntry::StartSpan(p) => Ok(OplogEntry::StartSpan {
                 timestamp: p.timestamp,
+                parent_start_index: None,
                 span_id: p.span_id,
                 parent: p.parent_id,
                 linked_context_id: p.linked_context,
@@ -3051,10 +3080,12 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             }),
             PublicOplogEntry::FinishSpan(p) => Ok(OplogEntry::FinishSpan {
                 timestamp: p.timestamp,
+                parent_start_index: None,
                 span_id: p.span_id,
             }),
             PublicOplogEntry::SetSpanAttribute(p) => Ok(OplogEntry::SetSpanAttribute {
                 timestamp: p.timestamp,
+                parent_start_index: None,
                 span_id: p.span_id,
                 key: p.key,
                 value: p.value.into(),
@@ -3573,13 +3604,14 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             RawCardEventQueuedParameters, RawCardInstallFailedParameters,
             RawCardInstalledParameters, RawCardRevokedCascadeParameters, RawCardRevokedParameters,
             RawCardTransferConfirmedParameters, RawCardTransferStartedParameters,
-            RawCardTransferredParameters, RawCompletionDiscardedParameters, RawCreateParameters,
-            RawCreateResourceParameters, RawDeactivatePluginParameters, RawDropResourceParameters,
-            RawEndAtomicRegionParameters, RawEndParameters, RawEnvVar, RawErrorParameters,
-            RawFailedUpdateParameters, RawFilesystemStorageUsageUpdateParameters,
-            RawFinishSpanParameters, RawGrowMemoryParameters, RawHostStreamFrameParameters,
-            RawJumpParameters, RawLogParameters, RawOplogProcessorCheckpointParameters,
-            RawOplogRegion, RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
+            RawCardTransferredParameters, RawCompletionDeliveredParameters,
+            RawCompletionDiscardedParameters, RawCreateParameters, RawCreateResourceParameters,
+            RawDeactivatePluginParameters, RawDropResourceParameters, RawEndAtomicRegionParameters,
+            RawEndParameters, RawEnvVar, RawErrorParameters, RawFailedUpdateParameters,
+            RawFilesystemStorageUsageUpdateParameters, RawFinishSpanParameters,
+            RawGrowMemoryParameters, RawHostStreamFrameParameters, RawJumpParameters,
+            RawLogParameters, RawOplogProcessorCheckpointParameters, RawOplogRegion,
+            RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
             RawRemoteTransactionParameters, RawRemoveRetryPolicyParameters, RawResourceTypeId,
             RawRevertParameters, RawSetRetryPolicyParameters, RawSetSpanAttributeParameters,
             RawSnapshotParameters, RawStartParameters, RawStartSpanParameters,
@@ -3666,6 +3698,11 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::CompletionDiscarded { start_index, .. } => {
                 Entry::CompletionDiscarded(RawCompletionDiscardedParameters {
+                    start_index: start_index.as_u64(),
+                })
+            }
+            OplogEntry::CompletionDelivered { start_index, .. } => {
+                Entry::CompletionDelivered(RawCompletionDeliveredParameters {
                     start_index: start_index.as_u64(),
                 })
             }
@@ -3804,6 +3841,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 }),
             }),
             OplogEntry::Log {
+                parent_start_index,
                 level,
                 context,
                 message,
@@ -3813,6 +3851,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     as i32,
                 context,
                 message,
+                parent_start_index: parent_start_index.map(|index| index.as_u64()),
             }),
             OplogEntry::Restart { .. } => Entry::Restart(RawTimestampOnly {}),
             OplogEntry::ActivatePlugin {
@@ -3837,6 +3876,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 idempotency_key: Some(idempotency_key.into()),
             }),
             OplogEntry::StartSpan {
+                parent_start_index,
                 span_id,
                 parent,
                 linked_context_id,
@@ -3858,11 +3898,18 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                         )
                     })
                     .collect(),
+                parent_start_index: parent_start_index.map(|index| index.as_u64()),
             }),
-            OplogEntry::FinishSpan { span_id, .. } => Entry::FinishSpan(RawFinishSpanParameters {
+            OplogEntry::FinishSpan {
+                parent_start_index,
+                span_id,
+                ..
+            } => Entry::FinishSpan(RawFinishSpanParameters {
                 span_id: span_id.to_string(),
+                parent_start_index: parent_start_index.map(|index| index.as_u64()),
             }),
             OplogEntry::SetSpanAttribute {
+                parent_start_index,
                 span_id,
                 key,
                 value,
@@ -3873,6 +3920,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 value: match value {
                     crate::model::invocation_context::AttributeValue::String(s) => s,
                 },
+                parent_start_index: parent_start_index.map(|index| index.as_u64()),
             }),
             OplogEntry::BeginRemoteTransaction {
                 transaction_id,
@@ -4190,6 +4238,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 timestamp,
                 start_index: crate::base_model::OplogIndex::from_u64(p.start_index),
             }),
+            Entry::CompletionDelivered(p) => Ok(OplogEntry::CompletionDelivered {
+                timestamp,
+                start_index: crate::base_model::OplogIndex::from_u64(p.start_index),
+            }),
             Entry::AgentInvocationStarted(p) => {
                 let idempotency_key = p.idempotency_key.ok_or("Missing idempotency_key")?.into();
                 let payload = oplog_payload_from_proto(p.payload.ok_or("Missing payload")?)?;
@@ -4350,6 +4402,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         .into();
                 Ok(OplogEntry::Log {
                     timestamp,
+                    parent_start_index: p.parent_start_index.map(OplogIndex::from_u64),
                     level,
                     context: p.context,
                     message: p.message,
@@ -4409,6 +4462,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         .collect();
                 Ok(OplogEntry::StartSpan {
                     timestamp,
+                    parent_start_index: p.parent_start_index.map(OplogIndex::from_u64),
                     span_id,
                     parent,
                     linked_context_id,
@@ -4417,12 +4471,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             }
             Entry::FinishSpan(p) => {
                 let span_id = SpanId::from_string(p.span_id)?;
-                Ok(OplogEntry::FinishSpan { timestamp, span_id })
+                Ok(OplogEntry::FinishSpan {
+                    timestamp,
+                    parent_start_index: p.parent_start_index.map(OplogIndex::from_u64),
+                    span_id,
+                })
             }
             Entry::SetSpanAttribute(p) => {
                 let span_id = SpanId::from_string(p.span_id)?;
                 Ok(OplogEntry::SetSpanAttribute {
                     timestamp,
+                    parent_start_index: p.parent_start_index.map(OplogIndex::from_u64),
                     span_id,
                     key: p.key,
                     value: crate::model::invocation_context::AttributeValue::String(p.value),

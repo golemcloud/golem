@@ -111,6 +111,7 @@ fn binding(
         parameters: NormalizedJsonValue::new(serde_json::json!({})),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,
+        filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
         source: tool.source.clone(),
     }
 }

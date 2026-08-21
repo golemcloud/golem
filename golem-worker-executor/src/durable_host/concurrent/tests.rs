@@ -15,6 +15,9 @@
 use super::*;
 
 use golem_common::model::oplog::host_functions;
+use golem_common::model::oplog::{
+    HostRequestNoInput, HostResponseMonotonicClockTimestamp, LogLevel,
+};
 use golem_common::model::{NamedRetryPolicy, Predicate, RetryPolicy, RetryPolicyState};
 use std::time::Duration;
 use test_r::test;
@@ -37,6 +40,7 @@ fn completed(end_idx: u64) -> Resolution {
     Resolution::Completed {
         end_idx: idx(end_idx),
         response: None,
+        delivery_marker: None,
         forced_commit: false,
     }
 }
@@ -52,7 +56,7 @@ fn resolver_out_of_order_completion() {
     assert!(rx1.try_recv().is_err());
     assert!(rx2.try_recv().is_err());
 
-    assert!(resolver.resolve_if_pending(idx(2), completed(3)));
+    assert!(resolver.resolve_if_pending(idx(2), idx(3), completed(3)));
     match rx2.try_recv() {
         Ok(ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })) => {
             assert_eq!(end_idx, idx(3))
@@ -61,7 +65,7 @@ fn resolver_out_of_order_completion() {
     }
     assert!(rx1.try_recv().is_err());
 
-    assert!(resolver.resolve_if_pending(idx(1), completed(4)));
+    assert!(resolver.resolve_if_pending(idx(1), idx(4), completed(4)));
     match rx1.try_recv() {
         Ok(ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })) => {
             assert_eq!(end_idx, idx(4))
@@ -77,6 +81,7 @@ fn resolver_cancelled() {
     let mut rx = resolver.register(idx(1));
     assert!(resolver.resolve_if_pending(
         idx(1),
+        idx(2),
         Resolution::Cancelled {
             cancelled_idx: idx(2),
             partial: None,
@@ -109,7 +114,7 @@ fn resolver_missing_pending_is_dropped_not_buffered() {
     let mut resolver = ConcurrentReplayResolver::default();
     // No registration: resolve_if_pending must not buffer (this is the unregistered-End case,
     // e.g. the guest-facing manual durability pair).
-    assert!(!resolver.resolve_if_pending(idx(1), completed(2)));
+    assert!(!resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
     let mut rx = resolver.register(idx(1));
     assert!(rx.try_recv().is_err());
 }
@@ -121,7 +126,7 @@ fn resolver_fail_all_pending_incomplete_wakes_everyone() {
     let mut resolver = ConcurrentReplayResolver::default();
     let mut rx1 = resolver.register(idx(1));
     let mut rx2 = resolver.register(idx(2));
-    assert!(resolver.resolve_if_pending(idx(1), completed(3)));
+    assert!(resolver.resolve_if_pending(idx(1), idx(3), completed(3)));
 
     resolver.fail_all_pending_incomplete();
 
@@ -142,9 +147,9 @@ fn resolver_fail_all_pending_incomplete_wakes_everyone() {
 fn resolver_duplicate_resolution_is_ignored() {
     let mut resolver = ConcurrentReplayResolver::default();
     let mut rx = resolver.register(idx(1));
-    assert!(resolver.resolve_if_pending(idx(1), completed(2)));
+    assert!(resolver.resolve_if_pending(idx(1), idx(2), completed(2)));
     // Second resolution: no longer pending.
-    assert!(!resolver.resolve_if_pending(idx(1), completed(3)));
+    assert!(!resolver.resolve_if_pending(idx(1), idx(3), completed(3)));
     match rx.try_recv() {
         Ok(ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })) => {
             assert_eq!(end_idx, idx(2))
@@ -378,12 +383,12 @@ async fn live_delivery_token(
     )
     .await
     .expect("failed to build replay state");
+    let recorder = CompletionMarkerRecorder::new(oplog_dyn, replay_state);
     CompletionDelivery {
         state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
-            marker: DiscardMarker {
+            marker: CompletionMarkerRecord {
                 start_idx: idx(1),
-                oplog: oplog_dyn,
-                replay_state,
+                recorder,
             },
             trap_context: DurableCallTrapContext {
                 retry_from: idx(1),
@@ -397,26 +402,110 @@ async fn live_delivery_token(
 }
 
 #[test]
-async fn completion_delivery_delivered_and_suppress_record_no_marker() {
-    // `delivered` (successful final guest transfer) and `suppress` (caller-observed
-    // post-`End` error) must not record a `CompletionDiscarded` marker and must release the
-    // in-flight permit without queueing a drain event (no pending ordered append).
-    let variants: [fn(CompletionDelivery); 2] =
-        [CompletionDelivery::delivered, CompletionDelivery::suppress];
-    for consume in variants {
-        let oplog = Arc::new(InMemoryOplog::new());
-        let counter = Arc::new(AtomicUsize::new(0));
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
-        assert_eq!(counter.load(Ordering::Acquire), 1);
-        consume(token);
-        assert_eq!(counter.load(Ordering::Acquire), 0);
-        assert!(rx.try_recv().is_err(), "no drain event may be queued");
-        assert!(
-            oplog.entries.lock().await.is_empty(),
-            "no marker may be recorded"
-        );
+async fn completion_delivery_suppress_records_no_marker() {
+    // `suppress` represents a caller-observed post-`End` error. It records no delivery marker and
+    // releases the in-flight permit without queueing a drain event.
+    let oplog = Arc::new(InMemoryOplog::new());
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
+    assert_eq!(counter.load(Ordering::Acquire), 1);
+    token.suppress();
+    assert_eq!(counter.load(Ordering::Acquire), 0);
+    assert!(rx.try_recv().is_err(), "no drain event may be queued");
+    assert!(
+        oplog.entries.lock().await.is_empty(),
+        "no marker may be recorded"
+    );
+}
+
+#[test]
+async fn completion_delivery_delivered_records_marker_via_drain() {
+    // The successful guest handoff is itself durable. Queueing the marker is synchronous; the
+    // receipt and permit remain in the drain queue until the append completes.
+    let oplog = Arc::new(InMemoryOplog::new());
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
+    token.delivered();
+    assert_eq!(counter.load(Ordering::Acquire), 1);
+    match rx.try_recv() {
+        Ok(DropEvent::AwaitCompletionMarker {
+            mut receipt,
+            live_call_permit,
+            ..
+        }) => {
+            await_marker_receipt(
+                receipt
+                    .as_mut()
+                    .expect("the drain event must carry the marker receipt"),
+            )
+            .await
+            .expect("marker append must succeed");
+            let entries = oplog.entries.lock().await;
+            assert!(matches!(
+                entries.as_slice(),
+                [OplogEntry::CompletionDelivered { start_index, .. }] if *start_index == idx(1)
+            ));
+            drop(live_call_permit);
+            assert_eq!(counter.load(Ordering::Acquire), 0);
+        }
+        other => panic!("expected an AwaitCompletionMarker drop event, got {other:?}"),
     }
+}
+
+#[test]
+async fn completion_delivery_markers_preserve_handoff_order() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    let seed_oplog = Arc::new(InMemoryOplog::new());
+    seed_oplog
+        .add(OplogEntry::NoOp {
+            timestamp: Timestamp::now_utc(),
+        })
+        .await;
+    let seed_oplog_dyn: Arc<dyn Oplog> = seed_oplog;
+    let replay_state = ReplayState::new(
+        golem_common::model::OwnedAgentId {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "completion-marker-order-test".to_string(),
+            },
+        },
+        seed_oplog_dyn,
+        golem_common::model::regions::DeletedRegions::default(),
+        None,
+    )
+    .await
+    .expect("failed to build replay state");
+    let oplog_dyn: Arc<dyn Oplog> = oplog.clone();
+    let recorder = CompletionMarkerRecorder::new(oplog_dyn, replay_state);
+
+    // These synchronous submissions model two terminal-observer callbacks. Even though the
+    // appends are asynchronous, their oplog order must equal the callback handoff order.
+    let mut first = recorder.record(idx(10), CompletionMarkerKind::Delivered, None);
+    let mut second = recorder.record(idx(20), CompletionMarkerKind::Delivered, None);
+    await_marker_receipt(&mut second)
+        .await
+        .expect("second marker append must succeed");
+    await_marker_receipt(&mut first)
+        .await
+        .expect("first marker append must succeed");
+
+    let entries = oplog.entries.lock().await;
+    assert!(matches!(
+        entries.as_slice(),
+        [
+            OplogEntry::CompletionDelivered {
+                start_index: first,
+                ..
+            },
+            OplogEntry::CompletionDelivered {
+                start_index: second,
+                ..
+            }
+        ] if *first == idx(10) && *second == idx(20)
+    ));
 }
 
 #[test]
@@ -438,16 +527,18 @@ async fn completion_delivery_armed_drop_records_marker_via_drain() {
         "the queued drain event must own the permit"
     );
     match rx.try_recv() {
-        Ok(DropEvent::AwaitDiscardMarker {
-            terminal,
+        Ok(DropEvent::AwaitCompletionMarker {
+            mut receipt,
             live_call_permit,
             ..
         }) => {
-            terminal
-                .expect("the drain event must carry the marker join")
-                .await
-                .expect("marker task must not panic")
-                .expect("marker append must succeed");
+            await_marker_receipt(
+                receipt
+                    .as_mut()
+                    .expect("the drain event must carry the marker receipt"),
+            )
+            .await
+            .expect("marker append must succeed");
             let entries = oplog.entries.lock().await;
             assert_eq!(entries.len(), 1, "expected exactly one marker entry");
             match &entries[0] {
@@ -459,7 +550,7 @@ async fn completion_delivery_armed_drop_records_marker_via_drain() {
             drop(live_call_permit);
             assert_eq!(counter.load(Ordering::Acquire), 0);
         }
-        other => panic!("expected an AwaitDiscardMarker drop event, got {other:?}"),
+        other => panic!("expected an AwaitCompletionMarker drop event, got {other:?}"),
     }
 }
 
@@ -511,8 +602,8 @@ async fn completion_delivery_discarded_is_cancellation_safe() {
 
     // The drain event owns the join and the permit; the marker still lands.
     match rx.try_recv() {
-        Ok(DropEvent::AwaitDiscardMarker {
-            terminal,
+        Ok(DropEvent::AwaitCompletionMarker {
+            mut receipt,
             live_call_permit,
             ..
         }) => {
@@ -522,11 +613,13 @@ async fn completion_delivery_discarded_is_cancellation_safe() {
                 "the drain event must own the permit"
             );
             gate.add_permits(1);
-            terminal
-                .expect("the drain event must carry the marker join")
-                .await
-                .expect("marker task must not panic")
-                .expect("marker append must succeed");
+            await_marker_receipt(
+                receipt
+                    .as_mut()
+                    .expect("the drain event must carry the marker receipt"),
+            )
+            .await
+            .expect("marker append must succeed");
             let entries = oplog.entries.lock().await;
             assert_eq!(entries.len(), 1, "expected exactly one marker entry");
             assert!(matches!(
@@ -536,7 +629,7 @@ async fn completion_delivery_discarded_is_cancellation_safe() {
             drop(live_call_permit);
             assert_eq!(counter.load(Ordering::Acquire), 0);
         }
-        other => panic!("expected an AwaitDiscardMarker drop event, got {other:?}"),
+        other => panic!("expected an AwaitCompletionMarker drop event, got {other:?}"),
     }
 }
 
@@ -558,7 +651,7 @@ async fn completion_delivery_replay_tokens_are_inert() {
         .await
         .expect("discarding a replay-discarded token is a no-op");
 
-    let delivered = CompletionDelivery::replay_delivered();
+    let delivered = CompletionDelivery::test_replay_delivered_immediate();
     assert!(!delivered.is_replay_discarded());
     assert!(!delivered.is_live_armed());
     delivered.delivered();
@@ -566,6 +659,180 @@ async fn completion_delivery_replay_tokens_are_inert() {
     // Dropping an unconsumed replay-discarded token is a no-op as well (the park path drops
     // the token after waiting for the guest to abandon the delivery boundary).
     drop(CompletionDelivery::replay_discarded());
+}
+
+/// Builds an in-memory oplog `[NoOp, Start, End]` (a markerless completed call — the recorded
+/// run crashed after the `End` became durable but before delivery), a replay state over it with
+/// the call claimed and resolved (as `replay_access_deferred` guarantees), and the tail-gated
+/// token exactly as the deferred accessor replay path constructs one.
+async fn tail_gated_token_over_crash_tail(
+    extra_tail: Vec<OplogEntry>,
+    cleanup_sink: Option<mpsc::UnboundedSender<DropEvent>>,
+) -> (Arc<InMemoryOplog>, ReplayState, CompletionDelivery) {
+    let oplog = Arc::new(InMemoryOplog::new());
+    oplog
+        .add(OplogEntry::NoOp {
+            timestamp: Timestamp::now_utc(),
+        })
+        .await;
+    oplog
+        .add(OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            invocation_id: None,
+            observational_owner: None,
+            function_name: HostFunctionName::MonotonicClockNow,
+            request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
+                HostRequestNoInput {},
+            )))),
+            durable_function_type: DurableFunctionType::ReadLocal,
+        })
+        .await;
+    oplog
+        .add(OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: idx(2),
+            response: Some(OplogPayload::Inline(Box::new(
+                HostResponse::MonotonicClockTimestamp(HostResponseMonotonicClockTimestamp {
+                    nanos: 42,
+                }),
+            ))),
+            forced_commit: false,
+        })
+        .await;
+    for entry in extra_tail {
+        oplog.add(entry).await;
+    }
+    let oplog_dyn: Arc<dyn Oplog> = oplog.clone();
+    let replay_state = ReplayState::new(
+        golem_common::model::OwnedAgentId {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId::new(),
+                agent_id: "tail-gated-token-test".to_string(),
+            },
+        },
+        oplog_dyn.clone(),
+        golem_common::model::regions::DeletedRegions::default(),
+        None,
+    )
+    .await
+    .expect("failed to build replay state");
+    let handle = replay_state
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .expect("claim must succeed");
+    replay_state
+        .await_resolution(handle)
+        .await
+        .expect("resolution must succeed");
+    let token = CompletionDelivery::test_replay_at_tail(
+        oplog_dyn,
+        replay_state.clone(),
+        idx(2),
+        cleanup_sink,
+    );
+    (oplog, replay_state, token)
+}
+
+#[test]
+async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
+    // A markerless completed `End` replays tail-gated: `prepare_delivery` waits for the recorded
+    // tail to exhaust naturally, then converts the token to live-armed so the eventual real
+    // delivery records a durable `CompletionDelivered` marker — a second crash after the tail
+    // delivery replays marker-gated instead of re-opening the crash window.
+    let (oplog, replay_state, mut token) = tail_gated_token_over_crash_tail(
+        vec![OplogEntry::Log {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            level: LogLevel::Stdout,
+            context: "stdout".to_string(),
+            message: "crash tail hint".to_string(),
+        }],
+        None,
+    )
+    .await;
+    assert!(!token.is_live_armed());
+
+    token
+        .prepare_delivery()
+        .await
+        .expect("tail gating must succeed over a drainable tail");
+    assert!(
+        token.is_live_armed(),
+        "the tail-gated token must convert to live-armed after the tail exhausts"
+    );
+    assert!(replay_state.is_live());
+
+    token.delivered();
+    // With no cleanup sink the marker append is only settlement-tracked via the drain queue;
+    // poll the oplog for the spawned append.
+    for _ in 0..100 {
+        {
+            let entries = oplog.entries.lock().await;
+            if let Some(OplogEntry::CompletionDelivered { start_index, .. }) = entries.last() {
+                assert_eq!(*start_index, idx(2));
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the delivered marker append never landed");
+}
+
+#[test]
+async fn tail_gated_token_torn_after_conversion_records_discarded_marker() {
+    // After tail conversion the token is a real live-armed token: tearing it (dropping the
+    // delivering future) must record a `CompletionDiscarded` marker through the drain queue.
+    let (oplog, _replay_state, mut token) = tail_gated_token_over_crash_tail(vec![], None).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    token
+        .prepare_delivery()
+        .await
+        .expect("tail gating must succeed over a drainable tail");
+    assert!(token.is_live_armed());
+    if let CompletionDeliveryState::Live(live) = &mut token.state {
+        live.cleanup_sink = Some(tx);
+    }
+    drop(token);
+
+    match rx.try_recv() {
+        Ok(DropEvent::AwaitCompletionMarker { mut receipt, .. }) => {
+            await_marker_receipt(
+                receipt
+                    .as_mut()
+                    .expect("the drain event must carry the marker receipt"),
+            )
+            .await
+            .expect("marker append must succeed");
+            let entries = oplog.entries.lock().await;
+            match entries.last() {
+                Some(OplogEntry::CompletionDiscarded { start_index, .. }) => {
+                    assert_eq!(*start_index, idx(2))
+                }
+                other => panic!("expected CompletionDiscarded, got {other:?}"),
+            }
+        }
+        other => panic!("expected an AwaitCompletionMarker drop event, got {other:?}"),
+    }
+}
+
+#[test]
+async fn tail_gated_token_delivered_without_prepare_poisons_replay() {
+    // A delivery boundary firing while the completion is still tail-gated means the call site
+    // never awaited `prepare_delivery`: replay must fail loudly instead of silently re-opening
+    // the crash window the gate closes.
+    let (_oplog, replay_state, token) = tail_gated_token_over_crash_tail(vec![], None).await;
+    token.delivered();
+
+    let err = replay_state
+        .await_natural_tail_end()
+        .await
+        .expect_err("the poisoned cursor must reject further operations");
+    assert!(err.to_string().contains("tail"), "unexpected error: {err}");
 }
 
 #[test]
@@ -584,14 +851,16 @@ async fn completion_delivery_ordered_append_lands_before_marker() {
         drop(token);
     }
     match rx.try_recv() {
-        Ok(DropEvent::AwaitDiscardMarker { terminal, .. }) => {
-            terminal
-                .expect("the drain event must carry the chained join")
-                .await
-                .expect("chained task must not panic")
-                .expect("chained appends must succeed");
+        Ok(DropEvent::AwaitCompletionMarker { mut receipt, .. }) => {
+            await_marker_receipt(
+                receipt
+                    .as_mut()
+                    .expect("the drain event must carry the marker receipt"),
+            )
+            .await
+            .expect("chained appends must succeed");
         }
-        other => panic!("expected an AwaitDiscardMarker drop event, got {other:?}"),
+        other => panic!("expected an AwaitCompletionMarker drop event, got {other:?}"),
     }
     let entries = oplog.entries.lock().await;
     assert_eq!(entries.len(), 2, "expected [ordered entry, marker]");
@@ -604,20 +873,26 @@ async fn completion_delivery_ordered_append_lands_before_marker() {
 
 /// Minimal in-memory [`Oplog`] recording appended entries, for tests that assert what a
 /// drained drop event writes durably. With an `end_gate` installed, appending an `End` or
-/// `CompletionDiscarded` entry first signals `reached` and then blocks until the gate
-/// semaphore yields a permit, so a test can hold the terminal or marker append open and
-/// observe what is (not) visible meanwhile.
+/// completion marker first signals `reached` and then blocks until the gate semaphore yields a
+/// permit, so a test can hold the terminal or marker append open and observe what is (not) visible
+/// meanwhile.
 #[derive(Debug)]
 struct InMemoryOplog {
-    entries: tokio::sync::Mutex<Vec<OplogEntry>>,
+    entries: Arc<tokio::sync::Mutex<Vec<OplogEntry>>>,
     end_gate: Option<(mpsc::UnboundedSender<()>, Arc<tokio::sync::Semaphore>)>,
+    next_reserved: Arc<std::sync::atomic::AtomicU64>,
+    next_commit: Arc<tokio::sync::Mutex<u64>>,
+    append_progress: Arc<tokio::sync::Notify>,
 }
 
 impl InMemoryOplog {
     fn new() -> Self {
         Self {
-            entries: tokio::sync::Mutex::new(Vec::new()),
+            entries: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             end_gate: None,
+            next_reserved: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            next_commit: Arc::new(tokio::sync::Mutex::new(1)),
+            append_progress: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -626,8 +901,11 @@ impl InMemoryOplog {
         gate: Arc<tokio::sync::Semaphore>,
     ) -> Self {
         Self {
-            entries: tokio::sync::Mutex::new(Vec::new()),
+            entries: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             end_gate: Some((reached, gate)),
+            next_reserved: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            next_commit: Arc::new(tokio::sync::Mutex::new(1)),
+            append_progress: Arc::new(tokio::sync::Notify::new()),
         }
     }
 }
@@ -635,20 +913,54 @@ impl InMemoryOplog {
 #[async_trait]
 impl Oplog for InMemoryOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        if matches!(
-            entry,
-            OplogEntry::End { .. } | OplogEntry::CompletionDiscarded { .. }
-        ) && let Some((reached, gate)) = &self.end_gate
-        {
-            let _ = reached.send(());
-            gate.acquire()
+        self.enqueue_add(entry).await
+    }
+
+    fn enqueue_add(&self, entry: OplogEntry) -> crate::services::oplog::OplogAddReceipt {
+        let index = self
+            .next_reserved
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let entries = self.entries.clone();
+        let end_gate = self.end_gate.clone();
+        let next_commit = self.next_commit.clone();
+        let append_progress = self.append_progress.clone();
+        let (done, receipt) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            loop {
+                let progress = append_progress.notified();
+                tokio::pin!(progress);
+                progress.as_mut().enable();
+                let mut next = next_commit.lock().await;
+                if *next == index {
+                    if matches!(
+                        &entry,
+                        OplogEntry::End { .. }
+                            | OplogEntry::CompletionDiscarded { .. }
+                            | OplogEntry::CompletionDelivered { .. }
+                    ) && let Some((reached, gate)) = &end_gate
+                    {
+                        let _ = reached.send(());
+                        gate.acquire()
+                            .await
+                            .expect("end gate semaphore is never closed")
+                            .forget();
+                    }
+                    entries.lock().await.push(entry);
+                    *next += 1;
+                    drop(next);
+                    append_progress.notify_waiters();
+                    let _ = done.send(OplogIndex::from_u64(index));
+                    return;
+                }
+                drop(next);
+                progress.await;
+            }
+        });
+        Box::pin(async move {
+            receipt
                 .await
-                .expect("end gate semaphore is never closed")
-                .forget();
-        }
-        let mut entries = self.entries.lock().await;
-        entries.push(entry);
-        OplogIndex::from_u64(entries.len() as u64)
+                .expect("the in-memory oplog append task must reply")
+        })
     }
 
     async fn add_pair(
@@ -864,10 +1176,12 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     )
     .await
     .expect("failed to build replay state");
+    let completion_marker_recorder =
+        CompletionMarkerRecorder::new(persist_oplog.clone(), persist_replay_state);
     let persist = tokio::spawn(async move {
         let response = HostResponseMonotonicClockTimestamp { nanos: 42 };
         let result = CallHandle::<host_functions::MonotonicClockNow, NotCancellable>::
-                persist_access_terminal(persist_oplog, persist_replay_state, &mut guard, start_idx, &response, None)
+                persist_access_terminal(persist_oplog, completion_marker_recorder, &mut guard, start_idx, &response, None)
             .await;
         (result, guard)
     });
@@ -1594,10 +1908,14 @@ fn classify_completed_is_delivered() {
     let outcome = ResolutionOutcome::Resolved(Resolution::Completed {
         end_idx: idx(3),
         response: Some(payload(vec![1, 2, 3])),
+        delivery_marker: None,
         forced_commit: false,
     });
     match classify_replay_resolution(outcome) {
-        ReplayedResolution::Delivered(ReplayedPayload::Completed(Some(p))) => {
+        ReplayedResolution::Delivered(
+            ReplayedPayload::Completed(Some(p)),
+            ReplayDeliveryDisposition::AtReplayTail,
+        ) => {
             assert_eq!(p, payload(vec![1, 2, 3]), "payload preserved")
         }
         other => panic!("expected Delivered(Completed), got {other:?}"),
@@ -1611,10 +1929,14 @@ fn classify_completed_without_response_payload_is_delivered() {
     let outcome = ResolutionOutcome::Resolved(Resolution::Completed {
         end_idx: idx(3),
         response: None,
+        delivery_marker: None,
         forced_commit: false,
     });
     match classify_replay_resolution(outcome) {
-        ReplayedResolution::Delivered(ReplayedPayload::Completed(None)) => {}
+        ReplayedResolution::Delivered(
+            ReplayedPayload::Completed(None),
+            ReplayDeliveryDisposition::AtReplayTail,
+        ) => {}
         other => panic!("expected Delivered(Completed(None)), got {other:?}"),
     }
 }
@@ -1626,7 +1948,10 @@ fn classify_cancelled_with_partial_is_delivered() {
         partial: Some(payload(vec![9])),
     });
     match classify_replay_resolution(outcome) {
-        ReplayedResolution::Delivered(ReplayedPayload::CancelledPartial(p)) => {
+        ReplayedResolution::Delivered(
+            ReplayedPayload::CancelledPartial(p),
+            ReplayDeliveryDisposition::Immediate,
+        ) => {
             assert_eq!(p, payload(vec![9]), "partial payload preserved")
         }
         other => panic!("expected Delivered(CancelledPartial), got {other:?}"),

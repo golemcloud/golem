@@ -437,6 +437,7 @@ oplog_entry! {
         wit_raw_type: "log-parameters"
         wit_public_type: "log-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             level: LogLevel,
             context: String,
             message: String,
@@ -509,6 +510,7 @@ oplog_entry! {
         wit_raw_type: "start-span-parameters"
         wit_public_type: "start-span-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             span_id: SpanId,
             parent: Option<SpanId>,
             linked_context_id: Option<SpanId>,
@@ -527,6 +529,7 @@ oplog_entry! {
         wit_raw_type: "finish-span-parameters"
         wit_public_type: "finish-span-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             span_id: SpanId,
         }
         public {
@@ -539,6 +542,7 @@ oplog_entry! {
         wit_raw_type: "set-span-attribute-parameters"
         wit_public_type: "set-span-attribute-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             span_id: SpanId,
             key: String,
             value: AttributeValue,
@@ -926,4 +930,23 @@ oplog_entry! {
             start_index: OplogIndex,
         }
     },
+    /// Marks the point where the successful completion (`End`) of the durable host call started
+    /// by the `Start` at `start_index` was delivered to the guest. Unlike `End`, this is a guest
+    /// execution boundary: replay may prepare the recorded host result earlier, but must not hand
+    /// it to the guest until this marker, so callbacks run in their recorded order.
+    ///
+    /// The marker is a hint entry and always lies physically after its `End`. Replay indexes it
+    /// before resolving the `End`; only the matching completion may consume it at its physical
+    /// position, and later oplog entries remain blocked until the result crosses to the guest.
+    CompletionDelivered {
+        hint: true
+        wit_raw_type: "raw-completion-delivered-parameters"
+        wit_public_type: "completion-delivered-parameters"
+        raw {
+            start_index: OplogIndex,
+        }
+        public {
+            start_index: OplogIndex,
+        }
+    }
 }

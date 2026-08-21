@@ -4660,6 +4660,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardTransferConfirmedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
       discriminator:
         propertyName: type
         mapping:
@@ -4715,6 +4716,7 @@ components:
           CardTransferConfirmed: '#/components/schemas/PublicOplogEntry_r#CardTransferConfirmedParams'
           HostStreamFrame: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
+          CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
     PublicOplogEntryWithIndex:
       type: object
       title: PublicOplogEntryWithIndex
@@ -4943,6 +4945,18 @@ components:
             - CommittedRemoteTransaction
             example: CommittedRemoteTransaction
       - $ref: '#/components/schemas/r#CommittedRemoteTransactionParams'
+    PublicOplogEntry_r#CompletionDeliveredParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CompletionDelivered
+            example: CompletionDelivered
+      - $ref: '#/components/schemas/r#CompletionDeliveredParams'
     PublicOplogEntry_r#CompletionDiscardedParams:
       allOf:
       - type: object
@@ -7868,6 +7882,19 @@ components:
           type: string
           format: date-time
         beginIndex:
+          type: integer
+          format: uint64
+    r#CompletionDeliveredParams:
+      type: object
+      title: r#CompletionDeliveredParams
+      required:
+      - timestamp
+      - startIndex
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        startIndex:
           type: integer
           format: uint64
     r#CompletionDiscardedParams:

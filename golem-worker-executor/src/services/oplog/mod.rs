@@ -399,11 +399,27 @@ pub struct OrderedOplogStart {
     pub pending_upload: PendingUpload,
 }
 
+/// A single oplog append that has already been synchronously enqueued in the oplog's ordering
+/// domain. Creating this receipt reserves the entry's position; awaiting it returns the assigned
+/// index after the append finishes.
+pub type OplogAddReceipt = BoxFuture<'static, OplogIndex>;
+
 /// An open oplog providing write access
 #[async_trait]
 pub trait Oplog: Any + Debug + Send + Sync {
     /// Adds a single entry to the oplog (possibly buffered), and returns its index
-    async fn add(&self, entry: OplogEntry) -> OplogIndex;
+    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+        self.enqueue_add(entry).await
+    }
+
+    /// Synchronously enqueues a single entry before returning its asynchronous completion receipt.
+    ///
+    /// This is used at synchronous guest-observation boundaries where deferring the enqueue until
+    /// an async task is polled would allow later guest operations to overtake the observed event.
+    /// Replayable implementations and wrapper layers must reserve the entry in the same ordering
+    /// domain as [`Self::add`] before this method returns; they must not implement it by merely
+    /// boxing an unpolled call to `add`.
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt;
 
     /// A variant of add that can inject failures in tests. TO BE REMOVED
     async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
@@ -695,6 +711,16 @@ pub trait OplogOps: Oplog {
         invocation: AgentInvocation,
         wallet_pin: InvocationWalletPin,
     ) -> Result<OplogEntry, String> {
+        self.add_agent_invocation_started_with_index(invocation, wallet_pin)
+            .await
+            .map(|(_, entry)| entry)
+    }
+
+    async fn add_agent_invocation_started_with_index(
+        &self,
+        invocation: AgentInvocation,
+        wallet_pin: InvocationWalletPin,
+    ) -> Result<(OplogIndex, OplogEntry), String> {
         let (idempotency_key, invocation_payload, ctx) = invocation.into_parts();
         let payload = self.upload_payload(&invocation_payload).await?;
         let trace_id = ctx.trace_id.clone();
@@ -709,8 +735,8 @@ pub trait OplogOps: Oplog {
             invocation_context,
             wallet_pin: Some(wallet_pin),
         };
-        self.add(entry.clone()).await;
-        Ok(entry)
+        let index = self.add(entry.clone()).await;
+        Ok((index, entry))
     }
 
     async fn add_agent_invocation_finished(

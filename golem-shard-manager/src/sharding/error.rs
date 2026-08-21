@@ -70,16 +70,22 @@ pub enum HealthCheckError {
     GrpcTransportError(#[source] tonic::transport::Error),
     #[error("gRPC: {0}")]
     GrpcOther(&'static str),
+    #[cfg(feature = "kubernetes")]
     #[error("K8s: connect error: {0}")]
     K8sConnectError(#[source] kube::Error),
+    #[cfg(feature = "kubernetes")]
     #[error("K8s: pod not found")]
     K8sPodNotFound,
+    #[cfg(feature = "kubernetes")]
     #[error("K8s: pod terminated")]
     K8sPodTerminated,
+    #[cfg(feature = "kubernetes")]
     #[error("K8s: pod is not ready")]
     K8sPodNotReady,
+    #[cfg(feature = "kubernetes")]
     #[error("K8s: no pod status")]
     K8sNoPodStatus,
+    #[cfg(feature = "kubernetes")]
     #[error("K8s: no pod name")]
     K8sNoPodName,
 }
@@ -90,11 +96,17 @@ impl IsRetriableError for HealthCheckError {
             HealthCheckError::GrpcError(status) => status.is_retriable(),
             HealthCheckError::GrpcTransportError(_) => true,
             HealthCheckError::GrpcOther(_) => true,
+            #[cfg(feature = "kubernetes")]
             HealthCheckError::K8sConnectError(_) => true,
+            #[cfg(feature = "kubernetes")]
             HealthCheckError::K8sPodNotFound => false,
+            #[cfg(feature = "kubernetes")]
             HealthCheckError::K8sPodTerminated => false,
+            #[cfg(feature = "kubernetes")]
             HealthCheckError::K8sPodNotReady => true,
+            #[cfg(feature = "kubernetes")]
             HealthCheckError::K8sNoPodStatus => true,
+            #[cfg(feature = "kubernetes")]
             HealthCheckError::K8sNoPodName => false,
         }
     }

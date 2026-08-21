@@ -13,6 +13,11 @@ import {
 pub fn enrich_oplog_entries(@host.EnvironmentId, @types.AgentId, Array[(UInt64, OplogEntry)], UInt64) -> Result[Array[PublicOplogEntry], String]
 
 // Errors
+pub(all) suberror OplogReadError {
+  PermissionDenied
+  InternalError(String)
+} derive(Eq, Show)
+
 pub(all) suberror WorkerError {
   Unknown(String)
   InvalidRequest(String)
@@ -165,6 +170,11 @@ pub(all) struct CardRevokedParameters {
   card_id : @types.CardId
 } derive(Eq, Show)
 
+pub(all) struct CompletionDeliveredParameters {
+  timestamp : @system-clock.Instant
+  start_index : UInt64
+} derive(Eq, Show)
+
 pub(all) struct CompletionDiscardedParameters {
   timestamp : @system-clock.Instant
   start_index : UInt64
@@ -274,7 +284,7 @@ pub(all) struct FinishSpanParameters {
 
 pub(all) struct GetOplog(Int) derive(Eq, Show)
 pub fn GetOplog::drop(Self) -> Unit
-pub fn GetOplog::get_next(Self) -> Array[PublicOplogEntry]?
+pub fn GetOplog::get_next(Self) -> Result[Array[PublicOplogEntry]?, OplogReadError]
 pub fn GetOplog::get_oplog(@types.AgentId, UInt64) -> Self
 
 pub(all) struct GrowMemoryParameters {
@@ -390,6 +400,7 @@ pub(all) enum OplogEntry {
   CardExpired(CardExpiredParameters)
   HostStreamFrame(RawHostStreamFrameParameters)
   CompletionDiscarded(RawCompletionDiscardedParameters)
+  CompletionDelivered(RawCompletionDeliveredParameters)
 } derive(Eq, Show)
 
 pub(all) struct OplogExternalPayload {
@@ -492,6 +503,7 @@ pub(all) enum PublicOplogEntry {
   CardExpired(CardExpiredParameters)
   HostStreamFrame(HostStreamFrameParameters)
   CompletionDiscarded(CompletionDiscardedParameters)
+  CompletionDelivered(CompletionDeliveredParameters)
 } derive(Eq, Show)
 
 pub(all) enum QueuedCardEvent {
@@ -545,6 +557,11 @@ pub(all) struct RawCardInstalledParameters {
   timestamp : @system-clock.Instant
   queued_event_index : UInt64?
   card : FixedArray[Byte]
+} derive(Eq, Show)
+
+pub(all) struct RawCompletionDeliveredParameters {
+  timestamp : @system-clock.Instant
+  start_index : UInt64
 } derive(Eq, Show)
 
 pub(all) struct RawCompletionDiscardedParameters {
@@ -705,7 +722,7 @@ pub(all) struct SaveSnapshotResultParameters {
 
 pub(all) struct SearchOplog(Int) derive(Eq, Show)
 pub fn SearchOplog::drop(Self) -> Unit
-pub fn SearchOplog::get_next(Self) -> Array[(UInt64, PublicOplogEntry)]?
+pub fn SearchOplog::get_next(Self) -> Result[Array[(UInt64, PublicOplogEntry)]?, OplogReadError]
 pub fn SearchOplog::search_oplog(@types.AgentId, String) -> Self
 
 pub(all) struct SetRetryPolicyParameters {
@@ -790,4 +807,3 @@ pub(all) enum WrappedFunctionType {
 // Type aliases
 
 // Traits
-

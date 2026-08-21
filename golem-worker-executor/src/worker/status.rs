@@ -448,7 +448,7 @@ fn calculate_latest_worker_status(
             OplogEntry::Cancelled { .. } => {
                 current_status = AgentStatus::Running;
             }
-            OplogEntry::CompletionDiscarded { .. } => {}
+            OplogEntry::CompletionDiscarded { .. } | OplogEntry::CompletionDelivered { .. } => {}
             OplogEntry::AgentInvocationStarted { .. } => {
                 current_status = AgentStatus::Running;
                 current_retry_state.clear();

@@ -65,11 +65,12 @@ message RawOplogEntry {
     RawCardExpiredParameters card_expired = 50;
     RawHostStreamFrameParameters host_stream_frame = 51;
     RawCompletionDiscardedParameters completion_discarded = 52;
-    RawCardDerivedParameters card_derived = 53;
-    RawCardTransferStartedParameters card_transfer_started = 54;
-    RawCardTransferredParameters card_transferred = 55;
-    RawCardRevokedCascadeParameters card_revoked_cascade = 56;
-    RawCardTransferConfirmedParameters card_transfer_confirmed = 57;
+    RawCompletionDeliveredParameters completion_delivered = 53;
+    RawCardDerivedParameters card_derived = 54;
+    RawCardTransferStartedParameters card_transfer_started = 55;
+    RawCardTransferredParameters card_transferred = 56;
+    RawCardRevokedCascadeParameters card_revoked_cascade = 57;
+    RawCardTransferConfirmedParameters card_transfer_confirmed = 58;
   }
 }
 
@@ -179,6 +180,10 @@ message RawCompletionDiscardedParameters {
   uint64 start_index = 1;
 }
 
+message RawCompletionDeliveredParameters {
+  uint64 start_index = 1;
+}
+
 message RawAgentInvocationStartedParameters {
   IdempotencyKey idempotency_key = 1;
   RawOplogPayload payload = 2;
@@ -267,6 +272,7 @@ message RawLogParameters {
   OplogLogLevel level = 1;
   string context = 2;
   string message = 3;
+  optional uint64 parent_start_index = 4;
 }
 
 message RawActivatePluginParameters {
@@ -290,16 +296,19 @@ message RawStartSpanParameters {
   optional string parent = 2;
   optional string linked_context_id = 3;
   map<string, string> attributes = 4;
+  optional uint64 parent_start_index = 5;
 }
 
 message RawFinishSpanParameters {
   string span_id = 1;
+  optional uint64 parent_start_index = 2;
 }
 
 message RawSetSpanAttributeParameters {
   string span_id = 1;
   string key = 2;
   string value = 3;
+  optional uint64 parent_start_index = 4;
 }
 
 message RawBeginRemoteTransactionParameters {

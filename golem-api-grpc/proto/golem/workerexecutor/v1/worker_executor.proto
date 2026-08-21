@@ -14,6 +14,7 @@ import "golem/schema/schema.proto";
 import "golem/shardmanager/shard_id.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/cursor.proto";
+import "golem/worker/entity.proto";
 import "golem/worker/filesystem.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation.proto";

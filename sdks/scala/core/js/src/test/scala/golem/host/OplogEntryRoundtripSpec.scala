@@ -739,6 +739,30 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         inv.asInstanceOf[AgentInvocation.ManualUpdate].componentRevision == BigInt(7)
       )
     },
+    test("CompletionDiscarded from dynamic") {
+      val raw = wrapEntry(
+        "completion-discarded",
+        js.Dynamic.literal(timestamp = ts(), startIndex = js.BigInt("42"))
+      )
+      val parsed = OplogEntry.fromJs(raw)
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.CompletionDiscarded],
+        parsed.asInstanceOf[OplogEntry.CompletionDiscarded].params.startIndex == BigInt(42),
+        parsed.timestamp.seconds == BigInt(1700000000)
+      )
+    },
+    test("CompletionDelivered from dynamic") {
+      val raw = wrapEntry(
+        "completion-delivered",
+        js.Dynamic.literal(timestamp = ts(), startIndex = js.BigInt("43"))
+      )
+      val parsed = OplogEntry.fromJs(raw)
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.CompletionDelivered],
+        parsed.asInstanceOf[OplogEntry.CompletionDelivered].params.startIndex == BigInt(43),
+        parsed.timestamp.seconds == BigInt(1700000000)
+      )
+    },
     // --- Edge cases ---
 
     test("unknown oplog entry tag throws") {

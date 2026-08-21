@@ -345,6 +345,10 @@ mod tests {
             unreachable!("oplog is unused by promise waits")
         }
 
+        fn enqueue_add(&self, _entry: OplogEntry) -> crate::services::oplog::OplogAddReceipt {
+            Box::pin(async { unreachable!("oplog is unused by promise waits") })
+        }
+
         async fn add_pair(
             &self,
             _start: OplogEntry,
@@ -489,6 +493,10 @@ mod tests {
     impl Oplog for StubOplog {
         async fn add(&self, _entry: OplogEntry) -> OplogIndex {
             unreachable!("oplog writes are unused by wakeup scheduling")
+        }
+
+        fn enqueue_add(&self, _entry: OplogEntry) -> crate::services::oplog::OplogAddReceipt {
+            Box::pin(async { unreachable!("oplog writes are unused by wakeup scheduling") })
         }
 
         async fn add_pair(

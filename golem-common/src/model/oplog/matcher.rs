@@ -151,6 +151,10 @@ impl PublicOplogEntry {
                 Self::string_match("CompletionDiscarded", &[], query_path, query)
                     || Self::string_match("completion-discarded", &[], query_path, query)
             }
+            PublicOplogEntry::CompletionDelivered(_) => {
+                Self::string_match("CompletionDelivered", &[], query_path, query)
+                    || Self::string_match("completion-delivered", &[], query_path, query)
+            }
             PublicOplogEntry::AgentInvocationStarted(params) => {
                 Self::string_match("agentinvocationstarted", &[], query_path, query)
                     || Self::string_match("invoke", &[], query_path, query)

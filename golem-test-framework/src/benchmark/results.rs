@@ -490,11 +490,33 @@ pub struct BenchmarkSuiteResultCollection {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BenchmarkRunner {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BenchmarkSource {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub commit_sha: Option<String>,
+    #[serde(rename = "ref", skip_serializing_if = "Option::is_none", default)]
+    pub source_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkSuiteResult {
     pub suite: String,
     pub environment: String,
     pub version: String,
     pub timestamp: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub runner: Option<BenchmarkRunner>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<BenchmarkSource>,
     /// Suite-level run-id. Set in cloud mode to `bench-{run_id}` to allow
     /// cross-run correlation and garbage collection of orphaned state.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -534,6 +556,8 @@ impl BenchmarkSuiteResult {
             environment,
             version: golem_common::golem_version().to_string(),
             timestamp: Utc::now(),
+            runner: None,
+            source: None,
             run_id: None,
             results: vec![],
         }
@@ -747,5 +771,69 @@ impl BenchmarkRunResult {
             let results = self.count_results.entry(key.clone()).or_default();
             results.add_iteration(&counts);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn suite_result() -> BenchmarkSuiteResult {
+        BenchmarkSuiteResult {
+            suite: "CI".to_string(),
+            environment: "test environment".to_string(),
+            version: "0.0.0".to_string(),
+            timestamp: Utc::now(),
+            runner: None,
+            source: None,
+            run_id: None,
+            results: vec![],
+        }
+    }
+
+    #[test]
+    fn legacy_suite_result_deserializes_without_metadata() {
+        let result: BenchmarkSuiteResult = serde_json::from_value(serde_json::json!({
+            "suite": "CI",
+            "environment": "test environment",
+            "version": "0.0.0",
+            "timestamp": "2026-08-19T00:00:00Z",
+            "results": []
+        }))
+        .unwrap();
+
+        assert_eq!(result.runner, None);
+        assert_eq!(result.source, None);
+    }
+
+    #[test]
+    fn appending_preserves_runner_and_source_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("results.json");
+        let mut existing = suite_result();
+        existing.runner = Some(BenchmarkRunner {
+            id: "amp-orb-a1.xxlarge".to_string(),
+            label: Some("Amp orb (a1.xxlarge)".to_string()),
+        });
+        existing.source = Some(BenchmarkSource {
+            repository: Some("golemcloud/golem".to_string()),
+            commit_sha: Some("0123456789abcdef".to_string()),
+            source_ref: Some("refs/heads/main".to_string()),
+        });
+        existing.save_to_json(&path).unwrap();
+
+        suite_result().add_to_json(&path).unwrap();
+
+        let raw = std::fs::read_to_string(path).unwrap();
+        let collection: BenchmarkSuiteResultCollection = serde_json::from_str(&raw).unwrap();
+        assert_eq!(collection.runs.len(), 2);
+        assert_eq!(collection.runs[0], existing);
+        assert_eq!(collection.runs[1].runner, None);
+        assert_eq!(collection.runs[1].source, None);
+        assert!(raw.contains("\"commitSha\""));
+        assert!(raw.contains("\"ref\""));
+        assert!(!raw.contains("\"commit_sha\""));
+        assert!(!raw.contains("\"source_ref\""));
     }
 }

@@ -96,6 +96,13 @@ pub enum SecretKeyScope {
 }
 
 impl SecretKeyScope {
+    pub fn contains(&self, key: &CanonicalAgentSecretPath) -> bool {
+        match self {
+            Self::All => true,
+            Self::Keys(keys) => keys.contains(key),
+        }
+    }
+
     pub fn intersection(&self, other: &Self) -> Self {
         match (self, other) {
             (Self::All, value) | (value, Self::All) => value.clone(),
@@ -174,6 +181,18 @@ impl Default for ToolProvisionConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub enum ToolFilesystemAccess {
+    #[default]
+    Unset,
+    Allowed,
+    Denied,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
@@ -250,6 +269,10 @@ pub struct CompiledToolBinding {
     pub parameters: NormalizedJsonValue,
     pub secret_keys_readable: SecretKeyScope,
     pub secret_keys_revealable: SecretKeyScope,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", desert(default))]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub filesystem_access: ToolFilesystemAccess,
     pub source: ToolSource,
 }
 
@@ -319,8 +342,11 @@ mod tests {
 
         assert_eq!(
             left.intersection(&right),
-            SecretKeyScope::Keys(BTreeSet::from([a]))
+            SecretKeyScope::Keys(BTreeSet::from([a.clone()]))
         );
         assert_eq!(left.intersection(&SecretKeyScope::All), left);
+        assert!(left.contains(&a));
+        assert!(!right.contains(&CanonicalAgentSecretPath(vec!["b".to_string()])));
+        assert!(SecretKeyScope::All.contains(&CanonicalAgentSecretPath(vec!["c".to_string()])));
     }
 }

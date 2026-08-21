@@ -331,6 +331,10 @@ oplog_payload! {
             method_name: String,
             decision: Result<(), SerializableRpcError>,
         },
+        EntityInvocation {
+            metadata: Vec<u8>,
+            input: TypedSchemaValue,
+        },
     }
 }
 
@@ -650,7 +654,10 @@ oplog_payload! {
         },
         GolemRpcActivate {
             result: Result<AgentFingerprint, SerializableRpcError>
-        }
+        },
+        EntityInvocation {
+            result: Result<TypedSchemaValue, String>
+        },
     }
 }
 
@@ -879,7 +886,8 @@ pub mod host_functions {
         (GolemToolRpcAsyncInvokeAndAwait => "golem::tool::host::tool-rpc", "async-invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
         (GolemApiGetAgents => "golem::api::get-agents", "get-next", GolemApiGetAgents, GolemApiAgents),
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
-        (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate)
+        (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
+        (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation)
     }
 }
 

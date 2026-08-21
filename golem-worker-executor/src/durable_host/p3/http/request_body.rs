@@ -1179,6 +1179,7 @@ where
             AccessClaimOptions {
                 scope_discriminator: None,
                 request_identity: None,
+                parent_start_index: None,
                 observational_owner,
             },
             async |_| Ok(HostRequestNoInput {}),

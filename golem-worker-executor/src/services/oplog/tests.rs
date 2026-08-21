@@ -3832,6 +3832,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                     debug!("Adding more oplog entries to primary");
                     oplog
                         .add_and_commit(OplogEntry::log(
+                            None,
                             LogLevel::Debug,
                             "test".to_string(),
                             "test".to_string(),
@@ -3850,6 +3851,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                     );
                     oplog
                         .add_and_commit(OplogEntry::log(
+                            None,
                             LogLevel::Debug,
                             "test".to_string(),
                             "test".to_string(),
@@ -3864,6 +3866,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                     debug!("Adding more oplog entries to primary");
                     oplog
                         .add_and_commit(OplogEntry::log(
+                            None,
                             LogLevel::Debug,
                             "test".to_string(),
                             "test".to_string(),
