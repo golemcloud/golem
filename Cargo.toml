@@ -65,7 +65,7 @@ async-trait = "0.1.87"
 async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "deflate"] }
 auditable-serde = "0.8.0"
 aws-config = "1.5.10"
-aws-sdk-s3 = { version = "1.65.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-s3 = { version = "1.65.0", default-features = false, features = ["default-https-client", "rt-tokio", "rustls"] }
 backtrace-on-stack-overflow = "0.3.0"
 axum = { version = "0.8", features = ["multipart"] }
 axum-jrpc = "0.9.0"
