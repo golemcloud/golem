@@ -56,12 +56,13 @@ use http_body_util::combinators::UnsyncBoxBody;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 use wasmtime::component::{
     Access, Accessor, AccessorTask, Destination, FutureProducer, FutureReader, Resource,
-    StreamProducer, StreamReader, StreamResult,
+    StreamProducer, StreamReader, StreamResult, TerminalConsumption,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi_http::FieldMap;
@@ -196,18 +197,125 @@ pub(super) enum HttpBodyChunkReply {
 /// Resolution delivered to the guest-facing trailers future once the body closes
 /// (or the durable task fails before recording the terminal).
 pub(super) enum HttpTrailersResolution {
-    /// The body terminal: clean trailers (or a body `ErrorCode`), together with the delivery
-    /// token that is consumed only when the guest-facing future produces the outcome.
-    Outcome {
-        outcome: HttpTrailersOutcome,
-        delivery: CompletionDelivery,
-    },
+    /// The body terminal: clean trailers (or a body `ErrorCode`).
+    Outcome(HttpTrailersOutcome),
     /// A durability failure: the trailers future traps with this message, tagged
     /// with the failing call scope's trap context.
     Trap {
         message: String,
         trap_context: DurableCallTrapContext,
     },
+}
+
+enum HttpTrailersDeliveryState {
+    Awaiting,
+    Armed(CompletionDelivery),
+    Observed(Option<TerminalConsumption>),
+    Done,
+}
+
+struct HttpTrailersDelivery {
+    state: Mutex<HttpTrailersDeliveryState>,
+}
+
+impl HttpTrailersDelivery {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(HttpTrailersDeliveryState::Awaiting),
+        })
+    }
+
+    fn arm(&self, delivery: CompletionDelivery) {
+        let observed = {
+            let mut state = self.state.lock().expect("trailers delivery lock poisoned");
+            match &*state {
+                HttpTrailersDeliveryState::Awaiting => {
+                    *state = HttpTrailersDeliveryState::Armed(delivery);
+                    return;
+                }
+                HttpTrailersDeliveryState::Observed(observed) => {
+                    let observed = *observed;
+                    *state = HttpTrailersDeliveryState::Done;
+                    observed
+                }
+                HttpTrailersDeliveryState::Armed(_) | HttpTrailersDeliveryState::Done => {
+                    unreachable!("trailers delivery is armed exactly once")
+                }
+            }
+        };
+        Self::settle(delivery, observed);
+    }
+
+    fn observe(&self, consumption: TerminalConsumption) {
+        let delivery = {
+            let mut state = self.state.lock().expect("trailers delivery lock poisoned");
+            match std::mem::replace(&mut *state, HttpTrailersDeliveryState::Done) {
+                HttpTrailersDeliveryState::Awaiting => {
+                    *state = HttpTrailersDeliveryState::Observed(Some(consumption));
+                    return;
+                }
+                HttpTrailersDeliveryState::Armed(delivery) => delivery,
+                HttpTrailersDeliveryState::Observed(_) | HttpTrailersDeliveryState::Done => {
+                    unreachable!("trailers terminal observer is invoked at most once")
+                }
+            }
+        };
+        Self::settle(delivery, Some(consumption));
+    }
+
+    fn abandon(&self) {
+        let delivery = {
+            let mut state = self.state.lock().expect("trailers delivery lock poisoned");
+            match std::mem::replace(&mut *state, HttpTrailersDeliveryState::Done) {
+                HttpTrailersDeliveryState::Awaiting => {
+                    *state = HttpTrailersDeliveryState::Observed(None);
+                    return;
+                }
+                HttpTrailersDeliveryState::Armed(delivery) => delivery,
+                HttpTrailersDeliveryState::Observed(_) | HttpTrailersDeliveryState::Done => return,
+            }
+        };
+        delivery.suppress();
+    }
+
+    fn settle(delivery: CompletionDelivery, consumption: Option<TerminalConsumption>) {
+        match consumption {
+            Some(TerminalConsumption::Delivered) => delivery.delivered(),
+            Some(TerminalConsumption::NotDelivered) => drop(delivery),
+            Some(TerminalConsumption::Superseded) => {
+                tracing::error!("consume-body trailers terminal observer was superseded");
+                delivery.suppress();
+            }
+            None => delivery.suppress(),
+        }
+    }
+}
+
+struct HttpTrailersDeliveryGuard {
+    delivery: Arc<HttpTrailersDelivery>,
+    observed: bool,
+}
+
+impl HttpTrailersDeliveryGuard {
+    fn new(delivery: Arc<HttpTrailersDelivery>) -> Self {
+        Self {
+            delivery,
+            observed: false,
+        }
+    }
+
+    fn observe(mut self, consumption: TerminalConsumption) {
+        self.observed = true;
+        self.delivery.observe(consumption);
+    }
+}
+
+impl Drop for HttpTrailersDeliveryGuard {
+    fn drop(&mut self) {
+        if !self.observed {
+            self.delivery.abandon();
+        }
+    }
 }
 
 /// Body stream returned to the guest from `consume-body`.
@@ -469,7 +577,7 @@ where
         match Pin::new(&mut this.rx).poll(cx) {
             Poll::Pending if finish => Poll::Ready(Ok(None)),
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(HttpTrailersResolution::Outcome { outcome, delivery })) => {
+            Poll::Ready(Ok(HttpTrailersResolution::Outcome(outcome))) => {
                 let item = match outcome {
                     Ok(None) => Ok(None),
                     Ok(Some(headers)) => {
@@ -477,7 +585,6 @@ where
                         match view.table.push(FieldMap::new_immutable(headers)) {
                             Ok(resource) => Ok(Some(resource)),
                             Err(err) => {
-                                delivery.suppress();
                                 return Poll::Ready(Err(wasmtime::Error::from(err)
                                     .context("failed to push consume-body trailers to table")));
                             }
@@ -485,7 +592,6 @@ where
                     }
                     Err(error) => Err(error),
                 };
-                delivery.delivered();
                 Poll::Ready(Ok(Some(item)))
             }
             // A durability failure occurred before the terminal was recorded: the
@@ -750,6 +856,7 @@ pub(super) struct HttpConsumeBodyTask<Ctx> {
     body: UnsyncBoxBody<Bytes, ErrorCode>,
     demand_rx: mpsc::Receiver<HttpBodyDemand>,
     trailers_tx: oneshot::Sender<HttpTrailersResolution>,
+    trailers_delivery: Arc<HttpTrailersDelivery>,
     /// Open-response state of the send that produced this response (its
     /// `outgoing-http-request` span, retry properties, and — for a replayed
     /// response — the send rebuild info), taken over from the response
@@ -766,6 +873,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
         body: UnsyncBoxBody<Bytes, ErrorCode>,
         demand_rx: mpsc::Receiver<HttpBodyDemand>,
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
+        trailers_delivery: Arc<HttpTrailersDelivery>,
         response_state: Option<OpenP3HttpResponseState>,
         activity: TailActivity,
     ) -> Self {
@@ -773,6 +881,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
             body,
             demand_rx,
             trailers_tx,
+            trailers_delivery,
             response_state,
             activity,
             _phantom: PhantomData,
@@ -790,6 +899,7 @@ where
             mut body,
             mut demand_rx,
             trailers_tx,
+            trailers_delivery,
             response_state,
             activity,
             ..
@@ -1502,11 +1612,10 @@ where
         // exists only for the crash/drop contract (task dropped without
         // finishing), handled by the call handle's drop machinery.
         //
-        // The trailers send below is the real guest-facing delivery boundary,
-        // so the terminal is recorded through the deferred-delivery API: a
-        // closed trailers receiver after the persisted `End` records a
-        // `CompletionDiscarded` marker instead of replay redelivering the
-        // outcome.
+        // The trailers future's terminal-consumption observer is the real guest-facing delivery
+        // boundary, so the terminal is recorded through the deferred-delivery API. Dropping the
+        // future after the persisted `End` records a `CompletionDiscarded` marker instead of
+        // replay redelivering the outcome.
         //
         // Capture the parent scope's trap context first (it is a pure function of
         // the scope and survives the handle being consumed below) so every
@@ -1632,24 +1741,12 @@ where
                     parent_trap_context,
                 ))
             })?;
-            match trailers_tx.send(HttpTrailersResolution::Outcome { outcome, delivery }) {
+            trailers_delivery.arm(delivery);
+            match trailers_tx.send(HttpTrailersResolution::Outcome(outcome)) {
                 Ok(()) => {}
-                Err(HttpTrailersResolution::Outcome { delivery, .. }) => {
-                    // The guest dropped the trailers future after the terminal
-                    // was persisted: the completion is silently discarded, so
-                    // record the marker before acknowledging any cancellation
-                    // (the task itself holds a `TailActivity`, and `discarded`
-                    // hands a torn wait to the drain queue, so the marker stays
-                    // settlement-accounted either way).
-                    if let Err(error) = delivery.discarded().await {
-                        return Err(wasmtime::Error::from_anyhow(
-                            mark_durable_call_trap_context(
-                                anyhow::Error::from(error),
-                                parent_trap_context,
-                            ),
-                        ));
-                    }
-                }
+                // The terminal observer has already settled the delivery token if the guest
+                // dropped the future, or suppressed it if the future disappeared during a trap.
+                Err(HttpTrailersResolution::Outcome(_)) => {}
                 Err(HttpTrailersResolution::Trap { .. }) => {
                     unreachable!("the sent trailers resolution is an outcome")
                 }
@@ -1735,6 +1832,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         // producer keeps at most one demand in flight at a time.
         let (demand_tx, demand_rx) = mpsc::channel(1);
         let (trailers_tx, trailers_rx) = oneshot::channel();
+        let trailers_delivery = HttpTrailersDelivery::new();
 
         // Build both guest-facing handles before spawning the durable task. The
         // task appends the `consume-body` `Start`; the guest cannot poll either
@@ -1742,7 +1840,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         // committing a `Start` with no terminal (orphaned `Start`) if a later
         // handle construction fails.
         let mut stream = StreamReader::new(&mut store, DurableHttpBodyProducer::new(demand_tx))?;
-        let trailers = match FutureReader::new(
+        let mut trailers = match FutureReader::new(
             &mut store,
             HttpTrailersFutureProducer::<Ctx, U>::new(trailers_rx),
         ) {
@@ -1752,6 +1850,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
                 return Err(err);
             }
         };
+        let delivery_guard = HttpTrailersDeliveryGuard::new(trailers_delivery.clone());
+        if let Err(err) = trailers.register_terminal_observer(&mut store, move |consumption| {
+            delivery_guard.observe(consumption);
+        }) {
+            let _ = trailers.close(store.as_context_mut());
+            let _ = stream.close(store.as_context_mut());
+            return Err(err);
+        }
 
         let activity = {
             let mut store_ctx = store.as_context_mut();
@@ -1763,6 +1869,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             body,
             demand_rx,
             trailers_tx,
+            trailers_delivery,
             response_state,
             activity,
         ));
