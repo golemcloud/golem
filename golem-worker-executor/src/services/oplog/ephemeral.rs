@@ -18,7 +18,8 @@ use crate::services::oplog::multilayer::{
     TransferFiber, WrappedOplogArchive,
 };
 use crate::services::oplog::{
-    CommitLevel, Oplog, OplogService, OrderedOplogStart, PendingUpload, downcast_oplog,
+    CommitLevel, Oplog, OplogAddReceipt, OplogService, OrderedOplogStart, PendingUpload,
+    downcast_oplog,
 };
 use async_trait::async_trait;
 use golem_common::model::OwnedAgentId;
@@ -513,9 +514,23 @@ impl Debug for EphemeralOplog {
 
 #[async_trait]
 impl Oplog for EphemeralOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         record_oplog_call("add");
-        self.run_job(|done| EphemeralJob::Add { entry, done }).await
+        let (done, done_rx) = tokio::sync::oneshot::channel();
+        if self.jobs.send(EphemeralJob::Add { entry, done }).is_err() {
+            panic!(
+                "Ephemeral oplog actor for {:?} terminated unexpectedly",
+                self.owned_agent_id
+            );
+        }
+        let owned_agent_id = self.owned_agent_id.clone();
+        Box::pin(async move {
+            done_rx.await.unwrap_or_else(|_| {
+                panic!(
+                    "Ephemeral oplog actor for {owned_agent_id:?} dropped an add request without replying"
+                )
+            })
+        })
     }
 
     async fn add_pair(

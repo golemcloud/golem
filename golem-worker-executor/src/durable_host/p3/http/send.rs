@@ -190,7 +190,7 @@ where
     let mut handle = CallHandle::<P3HttpClientSend, P>::start_access_with_options(
         store,
         durable_worker_ctx::<Ctx, U>,
-        function_type,
+        function_type.clone(),
         claim_options,
         async |_| Ok(host_request),
     )
@@ -227,7 +227,14 @@ where
         // `ReplayedRequestLeakGuard`. Both arms below hand request ownership
         // over (inline consume / live re-execution) and disarm it first.
         let (disarm_leak_guard_tx, disarm_leak_guard_rx) = oneshot::channel();
-        spawn_replayed_request_leak_guard::<Ctx, U>(store, req.rep(), disarm_leak_guard_rx);
+        let replay_scope = (handle.begin_index() != handle.start_index())
+            .then_some((function_type.clone(), handle.begin_index()));
+        spawn_replayed_request_leak_guard::<Ctx, U>(
+            store,
+            req.rep(),
+            replay_scope,
+            disarm_leak_guard_rx,
+        );
         match handle
             .replay_access_deferred(store, durable_worker_ctx::<Ctx, U>)
             .await
@@ -324,7 +331,10 @@ where
                             std::future::pending::<()>().await;
                             unreachable!("std::future::pending never completes")
                         }
-                        delivery.delivered();
+                        delivery
+                            .deliver_at_accessor_terminal(store)
+                            .await
+                            .map_err(HttpError::trap)?;
                         return Ok(response);
                     }
                     Err(error) => {
@@ -351,7 +361,10 @@ where
                             std::future::pending::<()>().await;
                             unreachable!("std::future::pending never completes")
                         }
-                        delivery.delivered();
+                        delivery
+                            .deliver_at_accessor_terminal(store)
+                            .await
+                            .map_err(HttpError::trap)?;
                         return Err(error);
                     }
                 }
@@ -451,7 +464,10 @@ where
                 // The guest-visible error return below still crosses Wasmtime's lowering
                 // and terminal-consumption boundary: hand the token to the terminal
                 // observer instead of consuming it here.
-                delivery.deliver_at_accessor_terminal(store);
+                delivery
+                    .deliver_at_accessor_terminal(store)
+                    .await
+                    .map_err(HttpError::trap)?;
             } else {
                 // Unpersisted live call (snapshotting): the original span handling
                 // applies.
@@ -760,7 +776,10 @@ where
             // Everything since the `End` was synchronous, so no tear window remains between
             // here and handing the token to Wasmtime's terminal observer, which settles it
             // when the guest actually consumes (or discards) the lowered response.
-            delivery.deliver_at_accessor_terminal(store);
+            delivery
+                .deliver_at_accessor_terminal(store)
+                .await
+                .map_err(HttpError::trap)?;
             Ok(response)
         }
         Err(error_code) => {
@@ -848,7 +867,10 @@ where
             // The guest-visible error return below still crosses Wasmtime's lowering and
             // terminal-consumption boundary: hand the token to the terminal observer instead
             // of consuming it here.
-            delivery.deliver_at_accessor_terminal(store);
+            delivery
+                .deliver_at_accessor_terminal(store)
+                .await
+                .map_err(HttpError::trap)?;
             Err(error_code.into())
         }
     }

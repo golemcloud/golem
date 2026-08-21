@@ -220,6 +220,16 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     startIndex: OplogIndex;
   };
+  /**
+   * Parameters of a `completion-delivered` entry: the successful result of the durable host
+   * call started at `start-index` was handed to the agent at this point in the recorded
+   * execution. Replay may prepare the recorded host result earlier, but does not hand it to the
+   * agent until this marker and prevents later oplog entries from advancing until that handoff.
+   */
+  export type CompletionDeliveredParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
   export type LocalSpanData = {
     spanId: SpanId;
     start: Datetime;
@@ -710,6 +720,10 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     startIndex: OplogIndex;
   };
+  export type RawCompletionDeliveredParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
   /**
    * Parameters for a host-stream-frame oplog entry, with the frame payload in raw
    * (possibly externally stored) form.
@@ -1083,6 +1097,14 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'completion-discarded'
     val: RawCompletionDiscardedParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was delivered to the agent at this point in the recorded execution
+   */
+  {
+    tag: 'completion-delivered'
+    val: RawCompletionDeliveredParameters
   };
   export type PublicOplogEntry =
   /** The initial agent oplog entry */
@@ -1347,6 +1369,14 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'completion-discarded'
     val: CompletionDiscardedParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was delivered to the agent at this point in the recorded execution
+   */
+  {
+    tag: 'completion-delivered'
+    val: CompletionDeliveredParameters
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

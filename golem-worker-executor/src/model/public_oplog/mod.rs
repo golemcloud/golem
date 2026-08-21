@@ -31,10 +31,10 @@ use golem_common::model::oplog::public_oplog_entry::{
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
     CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
-    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
+    ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams,
+    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
     OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
     RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
@@ -428,6 +428,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 start_index,
             } => Ok(PublicOplogEntry::CompletionDiscarded(
                 CompletionDiscardedParams {
+                    timestamp,
+                    start_index,
+                },
+            )),
+            OplogEntry::CompletionDelivered {
+                timestamp,
+                start_index,
+            } => Ok(PublicOplogEntry::CompletionDelivered(
+                CompletionDeliveredParams {
                     timestamp,
                     start_index,
                 },

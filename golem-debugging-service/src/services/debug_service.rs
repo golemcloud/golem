@@ -334,20 +334,19 @@ impl DebugServiceDefault {
     }
 
     /// Scans the full recorded oplog and returns the first durable call whose `End` lies at or
-    /// before `target_index` while its `CompletionDiscarded` marker lies strictly after it —
-    /// that is, a target that splits a call's completion from its recorded delivery status.
+    /// before `target_index` while its completion-delivery marker lies strictly after it — that
+    /// is, a target that splits a call's completion from its recorded delivery status or timing.
     /// Returns `(start_index, end_index, marker_index)` for the offending call.
     ///
-    /// Replaying to such a target would deliver the completion to the guest, but the recorded
-    /// execution never observed it (the marker records that it was discarded before delivery),
-    /// so every recorded entry after the `End` reflects the discarded outcome. A debug session
-    /// parked at such a target would diverge from the recording as soon as its target advances
-    /// past the marker, so the target is rejected up front.
+    /// Without the marker replay would use the legacy behavior and deliver at the `End`, either
+    /// delivering a discarded completion or delivering a successful completion too early. A
+    /// debug session parked at such a target would therefore diverge from the recording, so the
+    /// target is rejected up front.
     ///
     /// Regions dropped by `Jump` or `Revert` entries are excluded on both sides, mirroring how
     /// replay skips them: a marker in a dropped region never influences replay, and an `End` in
     /// a dropped region is never resolved from.
-    pub async fn find_split_discarded_completion_at(
+    pub async fn find_split_completion_delivery_at(
         raw_oplog: Arc<dyn Oplog>,
         target_index: OplogIndex,
     ) -> Option<(OplogIndex, OplogIndex, OplogIndex)> {
@@ -361,7 +360,7 @@ impl DebugServiceDefault {
         // start_index -> End index, for End entries at or before the target
         let mut ends: std::collections::BTreeMap<OplogIndex, OplogIndex> =
             std::collections::BTreeMap::new();
-        // marker index -> start_index, for CompletionDiscarded entries after the target
+        // marker index -> start_index, for completion-delivery entries after the target
         let mut markers: std::collections::BTreeMap<OplogIndex, OplogIndex> =
             std::collections::BTreeMap::new();
 
@@ -377,7 +376,10 @@ impl DebugServiceDefault {
                     OplogEntry::End { start_index, .. } if *idx <= target_index => {
                         ends.insert(*start_index, *idx);
                     }
-                    OplogEntry::CompletionDiscarded { start_index, .. } if *idx > target_index => {
+                    OplogEntry::CompletionDiscarded { start_index, .. }
+                    | OplogEntry::CompletionDelivered { start_index, .. }
+                        if *idx > target_index =>
+                    {
                         markers.insert(*idx, *start_index);
                     }
                     OplogEntry::Jump { jump, .. } => {
@@ -600,17 +602,16 @@ impl DebugService for DebugServiceDefault {
             });
         }
 
-        // Refuse targets that split a completed durable call's `End` from its
-        // `CompletionDiscarded` marker: replay to such a target would deliver a completion the
-        // recorded execution never observed, diverging from the recording as soon as the target
-        // advances past the marker.
+        // Refuse targets that split a completed durable call's `End` from its delivery marker:
+        // without the marker replay would deliver at the End, either incorrectly delivering a
+        // discarded completion or delivering a successful completion too early.
         if let Some((start_index, end_index, marker_index)) =
-            Self::find_split_discarded_completion_at(raw_oplog.clone(), new_target_index).await
+            Self::find_split_completion_delivery_at(raw_oplog.clone(), new_target_index).await
         {
             return Err(DebugServiceError::ValidationFailed {
                 agent_id: Some(agent_id.clone()),
                 errors: vec![format!(
-                    "Playback target index {new_target_index} splits a durable call's completion from its recorded delivery status: the call started at oplog index {start_index} completed at {end_index}, but its completion was discarded before reaching the guest (CompletionDiscarded marker at {marker_index}). Replaying to this target would deliver a completion the recorded execution never observed; choose a target index before the call's completion or at/after the marker"
+                    "Playback target index {new_target_index} splits a durable call's completion from its recorded delivery outcome: the call started at oplog index {start_index}, completed at {end_index}, and has a delivery marker at {marker_index}. Replaying to this target would use legacy End-time delivery instead of the recorded outcome; choose a target index before the call's completion or at/after the marker"
                 )],
             });
         }
@@ -782,16 +783,15 @@ impl DebugService for DebugServiceDefault {
             });
         }
 
-        // Refuse targets that split a completed durable call's `End` from its
-        // `CompletionDiscarded` marker, exactly like playback: replay to such a target would
-        // deliver a completion the recorded execution never observed.
+        // Refuse targets that split a completed durable call's `End` from its delivery marker,
+        // exactly like playback.
         if let Some((start_index, end_index, marker_index)) =
-            Self::find_split_discarded_completion_at(raw_oplog.clone(), new_target_index).await
+            Self::find_split_completion_delivery_at(raw_oplog.clone(), new_target_index).await
         {
             return Err(DebugServiceError::ValidationFailed {
                 agent_id: Some(owned_agent_id.agent_id.clone()),
                 errors: vec![format!(
-                    "Rewind target index {new_target_index} splits a durable call's completion from its recorded delivery status: the call started at oplog index {start_index} completed at {end_index}, but its completion was discarded before reaching the guest (CompletionDiscarded marker at {marker_index}). Replaying to this target would deliver a completion the recorded execution never observed; choose a target index before the call's completion or at/after the marker"
+                    "Rewind target index {new_target_index} splits a durable call's completion from its recorded delivery outcome: the call started at oplog index {start_index}, completed at {end_index}, and has a delivery marker at {marker_index}. Replaying to this target would use legacy End-time delivery instead of the recorded outcome; choose a target index before the call's completion or at/after the marker"
                 )],
             });
         }
@@ -1019,6 +1019,13 @@ mod tests {
         }
     }
 
+    fn delivered_entry(start_index: u64) -> OplogEntry {
+        OplogEntry::CompletionDelivered {
+            timestamp: Timestamp::now_utc(),
+            start_index: OplogIndex::from_u64(start_index),
+        }
+    }
+
     fn jump_entry(start: u64, end: u64) -> OplogEntry {
         OplogEntry::Jump {
             timestamp: Timestamp::now_utc(),
@@ -1040,7 +1047,7 @@ mod tests {
     }
 
     async fn split_at(entries: Vec<OplogEntry>, target: u64) -> Option<(u64, u64, u64)> {
-        DebugServiceDefault::find_split_discarded_completion_at(
+        DebugServiceDefault::find_split_completion_delivery_at(
             Arc::new(SeqOplog { entries }),
             OplogIndex::from_u64(target),
         )
@@ -1058,6 +1065,15 @@ mod tests {
         // Target before the End: the completion is not visible at all, nothing splits
         assert_eq!(split_at(entries.clone(), 1).await, None);
         // Target at the marker: the marker is visible and replay parks the delivery
+        assert_eq!(split_at(entries, 4).await, None);
+    }
+
+    #[test]
+    async fn split_delivered_completion_is_rejected_between_end_and_marker() {
+        let entries = vec![noop_entry(), end_entry(1), noop_entry(), delivered_entry(1)];
+        assert_eq!(split_at(entries.clone(), 2).await, Some((1, 2, 4)));
+        assert_eq!(split_at(entries.clone(), 3).await, Some((1, 2, 4)));
+        assert_eq!(split_at(entries.clone(), 1).await, None);
         assert_eq!(split_at(entries, 4).await, None);
     }
 
@@ -1115,6 +1131,13 @@ mod tests {
     impl Oplog for SeqOplog {
         async fn add(&self, _entry: OplogEntry) -> OplogIndex {
             unimplemented!()
+        }
+
+        fn enqueue_add(
+            &self,
+            _entry: OplogEntry,
+        ) -> golem_worker_executor::services::oplog::OplogAddReceipt {
+            Box::pin(async { unimplemented!() })
         }
 
         async fn add_pair(
@@ -1213,6 +1236,13 @@ mod tests {
     impl Oplog for TestOplog {
         async fn add(&self, _entry: OplogEntry) -> OplogIndex {
             unimplemented!()
+        }
+
+        fn enqueue_add(
+            &self,
+            _entry: OplogEntry,
+        ) -> golem_worker_executor::services::oplog::OplogAddReceipt {
+            Box::pin(async { unimplemented!() })
         }
 
         async fn add_pair(

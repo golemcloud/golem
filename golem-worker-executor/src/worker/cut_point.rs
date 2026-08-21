@@ -101,14 +101,15 @@ where
         }
         let entry = read(idx).await;
         let spanning = match &entry {
-            // `CompletionDiscarded` is a hint, not a second terminal, but it carries the delivery
-            // status of its call's `End`: a cut between the `End` and the marker would leave a
-            // prefix whose recorded guest behavior reflects the discarded completion while replay
-            // (with the marker cut off) would deliver the response, so such a cut is rejected the
-            // same way as one splitting a `Start` from its terminal.
+            // Completion markers are hints, not second terminals, but they carry the delivery
+            // status and timing of their call's `End`. A cut between the `End` and its marker
+            // would leave a completed call that looks markerless, making replay tail-gate a
+            // delivery the recorded run actually consumed at the marker's position, so reject
+            // it the same way as one splitting a `Start` from its terminal.
             OplogEntry::End { start_index, .. }
             | OplogEntry::Cancelled { start_index, .. }
-            | OplogEntry::CompletionDiscarded { start_index, .. } => Some((
+            | OplogEntry::CompletionDiscarded { start_index, .. }
+            | OplogEntry::CompletionDelivered { start_index, .. } => Some((
                 *start_index,
                 SpanningConstruct::DurableCall {
                     start_index: *start_index,
@@ -295,6 +296,21 @@ mod tests {
         let entries = HashMap::from([
             (3, OplogEntry::end(idx(2), None, false)),
             (5, OplogEntry::completion_discarded(idx(2))),
+        ]);
+        assert_eq!(
+            scan(&entries, 4, 6, &deleted(vec![])).await,
+            Some(SpanningConstruct::DurableCall {
+                start_index: idx(2),
+                terminal_index: idx(5),
+            })
+        );
+    }
+
+    #[test]
+    async fn completion_delivered_after_cut_referencing_surviving_start_is_rejected() {
+        let entries = HashMap::from([
+            (3, OplogEntry::end(idx(2), None, false)),
+            (5, OplogEntry::completion_delivered(idx(2))),
         ]);
         assert_eq!(
             scan(&entries, 4, 6, &deleted(vec![])).await,

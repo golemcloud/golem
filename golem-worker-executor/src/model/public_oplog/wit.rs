@@ -21,17 +21,17 @@ use golem_common::model::oplog::public_oplog_entry::{
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
     CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
     CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
-    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams, GrowMemoryParams,
-    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters,
-    NoOpParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PluginInstallationDescription, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StringAttributeValue,
-    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
+    ExitedParams, FailedUpdateParams, FilesystemStorageUsageUpdateParams, FinishSpanParams,
+    GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams, LogParams,
+    ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttributeValue, PublicDurableFunctionType, PublicSpanData,
+    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
+    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
     WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
@@ -277,6 +277,13 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp,
                 start_index,
             }) => Self::CompletionDiscarded(oplog::CompletionDiscardedParameters {
+                timestamp: timestamp.into(),
+                start_index: start_index.into(),
+            }),
+            PublicOplogEntry::CompletionDelivered(CompletionDeliveredParams {
+                timestamp,
+                start_index,
+            }) => Self::CompletionDelivered(oplog::CompletionDeliveredParameters {
                 timestamp: timestamp.into(),
                 start_index: start_index.into(),
             }),
@@ -1116,6 +1123,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 start_index: golem_common::base_model::OplogIndex::from_u64(params.start_index),
             }),
+            oplog::OplogEntry::CompletionDelivered(params) => Ok(Self::CompletionDelivered {
+                timestamp: timestamp_from_datetime(params.timestamp),
+                start_index: golem_common::base_model::OplogIndex::from_u64(params.start_index),
+            }),
             oplog::OplogEntry::AgentInvocationStarted(params) => {
                 let trace_id = golem_common::model::invocation_context::TraceId::from_string(
                     &params.trace_id,
@@ -1848,6 +1859,15 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 start_index,
             } => Ok(Self::CompletionDiscarded(
                 oplog::RawCompletionDiscardedParameters {
+                    timestamp: timestamp.into(),
+                    start_index: start_index.into(),
+                },
+            )),
+            M::CompletionDelivered {
+                timestamp,
+                start_index,
+            } => Ok(Self::CompletionDelivered(
+                oplog::RawCompletionDeliveredParameters {
                     timestamp: timestamp.into(),
                     start_index: start_index.into(),
                 },

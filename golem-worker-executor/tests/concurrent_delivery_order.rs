@@ -14,15 +14,18 @@
 
 //! Seam 3 runtime test for concurrent durability.
 //!
-//! Durable replay of concurrently-completing host calls requires that the
-//! host->guest event *delivery* order equals the order the host recorded the
-//! completions (the oplog `End` order). The Golem Wasmtime fork pins the
-//! component-model-async ready queue to FIFO/insertion order for exactly this
-//! reason (`WaitableSet.ready` is a `VecDeque` drained front-first); before that
-//! change the ready set was a `BTreeSet<Waitable>` ordered by table-slot
-//! identity (`TableId` rep), so when several host calls completed before the
-//! guest drained them they were delivered by allocation order instead of
-//! completion order.
+//! When several host calls become ready before the guest drains them, their
+//! host->guest events must retain that ready order. The Golem Wasmtime fork pins
+//! the component-model-async ready queue to FIFO/insertion order for this reason
+//! (`WaitableSet.ready` is a `VecDeque` drained front-first); before that change
+//! the ready set was a `BTreeSet<Waitable>` ordered by table-slot identity
+//! (`TableId` rep), so events were delivered by allocation order instead.
+//!
+//! Host completion and guest delivery are still distinct durability boundaries:
+//! unrelated guest work may run between a call's oplog `End` and its callback.
+//! Durable replay records that callback boundary separately. This test isolates
+//! the runtime ready-queue ordering only; it does not equate `End` order with
+//! delivery order in the general case.
 //!
 //! Unlike the `replay_state` fuzz tests (Seam 1), which operate on fabricated
 //! oplogs, this test exercises the *actual* runtime: a bespoke minimal

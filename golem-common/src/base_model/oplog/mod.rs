@@ -786,4 +786,23 @@ oplog_entry! {
             start_index: OplogIndex,
         }
     },
+    /// Marks the point where the successful completion (`End`) of the durable host call started
+    /// by the `Start` at `start_index` was delivered to the guest. Unlike `End`, this is a guest
+    /// execution boundary: replay may prepare the recorded host result earlier, but must not hand
+    /// it to the guest until this marker, so callbacks run in their recorded order.
+    ///
+    /// The marker is a hint entry and always lies physically after its `End`. Replay indexes it
+    /// before resolving the `End`; only the matching completion may consume it at its physical
+    /// position, and later oplog entries remain blocked until the result crosses to the guest.
+    CompletionDelivered {
+        hint: true
+        wit_raw_type: "raw-completion-delivered-parameters"
+        wit_public_type: "completion-delivered-parameters"
+        raw {
+            start_index: OplogIndex,
+        }
+        public {
+            start_index: OplogIndex,
+        }
+    }
 }

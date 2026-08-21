@@ -136,6 +136,7 @@ impl OplogEntry {
             // free of concurrent side effects until its semantics have been reviewed.
             OplogEntry::Create { .. }
             | OplogEntry::CompletionDiscarded { .. }
+            | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::Suspend { .. }
             | OplogEntry::Error { .. }
@@ -213,6 +214,7 @@ impl OplogEntry {
             | OplogEntry::End { .. }
             | OplogEntry::Cancelled { .. }
             | OplogEntry::CompletionDiscarded { .. }
+            | OplogEntry::CompletionDelivered { .. }
             | OplogEntry::AgentInvocationStarted { .. }
             | OplogEntry::AgentInvocationFinished { .. }
             | OplogEntry::Suspend { .. }
@@ -313,7 +315,8 @@ impl OplogScopeProjection {
             }
             OplogEntry::End { start_index, .. }
             | OplogEntry::Cancelled { start_index, .. }
-            | OplogEntry::CompletionDiscarded { start_index, .. } => {
+            | OplogEntry::CompletionDiscarded { start_index, .. }
+            | OplogEntry::CompletionDelivered { start_index, .. } => {
                 self.starts.contains(start_index)
             }
             OplogEntry::HostStreamFrame {

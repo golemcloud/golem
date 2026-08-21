@@ -150,6 +150,14 @@ impl TextOutput for PublicOplogEntry {
                 ));
                 logln(format!("{pad}start index:       {}", params.start_index));
             }
+            PublicOplogEntry::CompletionDelivered(params) => {
+                logln(format_message_highlight("COMPLETION DELIVERED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!("{pad}start index:       {}", params.start_index));
+            }
             PublicOplogEntry::AgentInvocationStarted(params) => {
                 log_agent_invocation(
                     AgentInvocationRenderKind::Started,

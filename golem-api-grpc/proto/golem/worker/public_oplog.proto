@@ -73,6 +73,7 @@ message OplogEntry {
     CardExpiredParameters CardExpired = 51;
     HostStreamFrameParameters HostStreamFrame = 52;
     CompletionDiscardedParameters CompletionDiscarded = 53;
+    CompletionDeliveredParameters CompletionDelivered = 54;
   }
 }
 
@@ -150,6 +151,11 @@ message CancelledParameters {
 }
 
 message CompletionDiscardedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 start_index = 2;
+}
+
+message CompletionDeliveredParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 start_index = 2;
 }
