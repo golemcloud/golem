@@ -285,6 +285,10 @@ async fn filesystem_permissions_enforce_recipient_isolation_across_recovery(
         .try_update_agent_provision_config("FileSystem", |config| {
             for grant in [
                 format!(
+                    "env(?agent) @ {} : read : GOLEM_AGENT_ID",
+                    filesystem_recipient.render()
+                ),
+                format!(
                     "filesystem(?agent) @ {} : write : /allowed.txt",
                     filesystem_recipient.render()
                 ),
