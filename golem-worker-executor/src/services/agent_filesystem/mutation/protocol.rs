@@ -112,6 +112,7 @@ update_admission!(
 
 effect_admission!(
     AdmittedFilesystemSync,
+    AdmittedFilesystemDurableTimesRestoration,
     AdmittedFilesystemCreateDirectory,
     AdmittedFilesystemHardLink,
     AdmittedFilesystemRename,
@@ -306,6 +307,14 @@ impl AgentFilesystemMutations {
             .map(|effect| AdmittedFilesystemSync { effect })
     }
 
+    pub(crate) async fn admit_durable_times_restoration(
+        &self,
+    ) -> AgentFilesystemOperationResult<AdmittedFilesystemDurableTimesRestoration> {
+        self.begin_effect()
+            .await
+            .map(|effect| AdmittedFilesystemDurableTimesRestoration { effect })
+    }
+
     pub(crate) async fn admit_resize(
         &self,
     ) -> AgentFilesystemOperationResult<AdmittedFilesystemResize> {
@@ -449,6 +458,67 @@ impl AgentFilesystemMutations {
                     unreachable!("sync failure has an unknown effect")
                 }
             },
+        }
+    }
+
+    pub(crate) async fn restore_durable_times(
+        &self,
+        admitted: AdmittedFilesystemDurableTimesRestoration,
+        path: PathBuf,
+        accessed: Option<std::time::SystemTime>,
+        modified: Option<std::time::SystemTime>,
+    ) -> AgentFilesystemOperationResult {
+        self.restore_durable_times_with_native(
+            admitted,
+            Arc::new(NativeFilesystemTimesRestorer { path }),
+            accessed,
+            modified,
+        )
+        .await
+    }
+
+    async fn restore_durable_times_with_native(
+        &self,
+        admitted: AdmittedFilesystemDurableTimesRestoration,
+        native: Arc<dyn FilesystemTimesRestorer>,
+        accessed: Option<std::time::SystemTime>,
+        modified: Option<std::time::SystemTime>,
+    ) -> AgentFilesystemOperationResult {
+        let before = self
+            .initial_probe(FilesystemPressureOperation::Metadata, native.state().await)
+            .await?;
+        let started = Instant::now();
+        let mut failures = 0;
+        loop {
+            match native
+                .restore(accessed, modified, Arc::clone(&admitted.effect))
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    failures += 1;
+                    let postcondition = restored_times_postcondition(
+                        native.state().await,
+                        before,
+                        accessed,
+                        modified,
+                    );
+                    match self
+                        .resolve_non_prefix_failure(
+                            FilesystemPressureOperation::Metadata,
+                            error,
+                            postcondition,
+                            failures,
+                            started,
+                        )
+                        .await
+                    {
+                        NonPrefixResolution::Retry => {}
+                        NonPrefixResolution::Success => return Ok(()),
+                        NonPrefixResolution::Error(error) => return Err(error),
+                    }
+                }
+            }
         }
     }
 
@@ -2107,6 +2177,18 @@ trait FilesystemResize: Send + Sync {
 }
 
 #[async_trait]
+trait FilesystemTimesRestorer: Send + Sync {
+    async fn state(&self) -> std::io::Result<TimesState>;
+
+    async fn restore(
+        &self,
+        accessed: Option<std::time::SystemTime>,
+        modified: Option<std::time::SystemTime>,
+        effect: Arc<AgentFilesystemEffectLease>,
+    ) -> std::io::Result<()>;
+}
+
+#[async_trait]
 trait FilesystemSafeReopen: Send + Sync {
     async fn reopen(
         &self,
@@ -2116,6 +2198,30 @@ trait FilesystemSafeReopen: Send + Sync {
 
 struct NativeFilesystemResize {
     file: File,
+}
+
+struct NativeFilesystemTimesRestorer {
+    path: PathBuf,
+}
+
+#[async_trait]
+impl FilesystemTimesRestorer for NativeFilesystemTimesRestorer {
+    async fn state(&self) -> std::io::Result<TimesState> {
+        ambient_path_times(&self.path).await
+    }
+
+    async fn restore(
+        &self,
+        accessed: Option<std::time::SystemTime>,
+        modified: Option<std::time::SystemTime>,
+        effect: Arc<AgentFilesystemEffectLease>,
+    ) -> std::io::Result<()> {
+        let path = self.path.clone();
+        run_blocking_filesystem_mutation(effect, move || {
+            restore_ambient_path_times(&path, accessed, modified)
+        })
+        .await
+    }
 }
 
 #[async_trait]
@@ -2345,6 +2451,12 @@ mod tests {
         attempts: std::sync::Mutex<VecDeque<Option<i32>>>,
     }
 
+    struct ScriptedFilesystemTimesRestorer {
+        states: std::sync::Mutex<VecDeque<Result<TimesState, i32>>>,
+        attempts: std::sync::Mutex<VecDeque<Option<i32>>>,
+        calls: AtomicUsize,
+    }
+
     struct ScriptedFilesystemSafeReopen {
         attempts: std::sync::Mutex<VecDeque<i32>>,
     }
@@ -2365,6 +2477,31 @@ mod tests {
             _size: u64,
             _effect: Arc<AgentFilesystemUpdateEffectLease>,
         ) -> std::io::Result<()> {
+            match self.attempts.lock().unwrap().pop_front().unwrap() {
+                Some(errno) => Err(std::io::Error::from_raw_os_error(errno)),
+                None => Ok(()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl FilesystemTimesRestorer for ScriptedFilesystemTimesRestorer {
+        async fn state(&self) -> std::io::Result<TimesState> {
+            self.states
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap()
+                .map_err(std::io::Error::from_raw_os_error)
+        }
+
+        async fn restore(
+            &self,
+            _accessed: Option<std::time::SystemTime>,
+            _modified: Option<std::time::SystemTime>,
+            _effect: Arc<AgentFilesystemEffectLease>,
+        ) -> std::io::Result<()> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
             match self.attempts.lock().unwrap().pop_front().unwrap() {
                 Some(errno) => Err(std::io::Error::from_raw_os_error(errno)),
                 None => Ok(()),
@@ -2493,6 +2630,17 @@ mod tests {
             identity: None,
             type_: PathObjectType::RegularFile,
             size,
+        }
+    }
+
+    fn times_state(accessed: u64, modified: u64) -> TimesState {
+        TimesState {
+            identity: Some(super::super::super::postcondition::ObjectIdentity {
+                device: 1,
+                inode: 2,
+            }),
+            accessed: Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(accessed)),
+            modified: Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(modified)),
         }
     }
 
@@ -2726,6 +2874,230 @@ mod tests {
 
         assert_eq!(result, Ok(0));
         assert_eq!(std::fs::read(path).unwrap(), b"he");
+    }
+
+    #[test]
+    async fn semantic_durable_times_restoration_executes_behind_mutation_seam() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("restored");
+        std::fs::write(&path, b"contents").unwrap();
+        let accessed = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(10);
+        let modified = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(20);
+        let mutations = runtime.mutations();
+        let admitted = mutations.admit_durable_times_restoration().await.unwrap();
+        assert!(runtime.has_active_effects());
+
+        mutations
+            .restore_durable_times(admitted, path.clone(), Some(accessed), Some(modified))
+            .await
+            .unwrap();
+
+        assert!(!runtime.has_active_effects());
+        let restored = std::fs::symlink_metadata(path).unwrap();
+        assert_eq!(restored.accessed().unwrap(), accessed);
+        assert_eq!(restored.modified().unwrap(), modified);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    async fn ordinary_durable_times_restoration_failure_preserves_guest_errno() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let native = Arc::new(ScriptedFilesystemTimesRestorer {
+            states: std::sync::Mutex::new(
+                [Ok(times_state(1, 2)), Ok(times_state(1, 2))]
+                    .into_iter()
+                    .collect(),
+            ),
+            attempts: std::sync::Mutex::new([Some(libc::ENOENT)].into_iter().collect()),
+            calls: AtomicUsize::new(0),
+        });
+        let mutations = runtime.mutations();
+        let admitted = mutations.admit_durable_times_restoration().await.unwrap();
+
+        let result = mutations
+            .restore_durable_times_with_native(
+                admitted,
+                native,
+                Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(10)),
+                Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(20)),
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(AgentFilesystemMutationError::Native { error, completed: 0 })
+                if error.raw_os_error() == Some(libc::ENOENT)
+        ));
+        assert!(runtime.begin_effect().await.is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    async fn proven_no_effect_durable_times_restoration_failure_retries() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let native = Arc::new(ScriptedFilesystemTimesRestorer {
+            states: std::sync::Mutex::new(
+                [Ok(times_state(1, 2)), Ok(times_state(1, 2))]
+                    .into_iter()
+                    .collect(),
+            ),
+            attempts: std::sync::Mutex::new([Some(libc::EBUSY), None].into_iter().collect()),
+            calls: AtomicUsize::new(0),
+        });
+        let mutations = runtime.mutations();
+        let admitted = mutations.admit_durable_times_restoration().await.unwrap();
+
+        let result = mutations
+            .restore_durable_times_with_native(
+                admitted,
+                Arc::clone(&native) as Arc<dyn FilesystemTimesRestorer>,
+                Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(10)),
+                Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(20)),
+            )
+            .await;
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(native.calls.load(Ordering::Acquire), 2);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    async fn durable_times_restored_despite_native_error_returns_success() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let native = Arc::new(ScriptedFilesystemTimesRestorer {
+            states: std::sync::Mutex::new(
+                [Ok(times_state(1, 2)), Ok(times_state(10, 20))]
+                    .into_iter()
+                    .collect(),
+            ),
+            attempts: std::sync::Mutex::new([Some(libc::EBUSY)].into_iter().collect()),
+            calls: AtomicUsize::new(0),
+        });
+        let mutations = runtime.mutations();
+        let admitted = mutations.admit_durable_times_restoration().await.unwrap();
+
+        let result = mutations
+            .restore_durable_times_with_native(
+                admitted,
+                native,
+                Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(10)),
+                Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(20)),
+            )
+            .await;
+
+        assert_eq!(result, Ok(()));
+        assert!(runtime.begin_effect().await.is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    async fn unknown_effect_durable_times_restoration_failure_invalidates_runtime() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let native = Arc::new(ScriptedFilesystemTimesRestorer {
+            states: std::sync::Mutex::new(
+                [Ok(times_state(1, 2)), Ok(times_state(3, 4))]
+                    .into_iter()
+                    .collect(),
+            ),
+            attempts: std::sync::Mutex::new([Some(libc::EBUSY)].into_iter().collect()),
+            calls: AtomicUsize::new(0),
+        });
+        let mutations = runtime.mutations();
+        let admitted = mutations.admit_durable_times_restoration().await.unwrap();
+
+        let result = mutations
+            .restore_durable_times_with_native(
+                admitted,
+                native,
+                Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(10)),
+                Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(20)),
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(AgentFilesystemMutationError::RuntimeInvalidated {
+                error: Some(error),
+                completed: Some(0),
+            }) if error.raw_os_error() == Some(libc::EBUSY)
+        ));
+        assert!(runtime.begin_effect().await.is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    async fn replacement_object_with_durable_times_invalidates_runtime() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let mut replacement = times_state(10, 20);
+        replacement.identity = Some(super::super::super::postcondition::ObjectIdentity {
+            device: 1,
+            inode: 3,
+        });
+        let native = Arc::new(ScriptedFilesystemTimesRestorer {
+            states: std::sync::Mutex::new(
+                [Ok(times_state(1, 2)), Ok(replacement)]
+                    .into_iter()
+                    .collect(),
+            ),
+            attempts: std::sync::Mutex::new([Some(libc::EBUSY)].into_iter().collect()),
+            calls: AtomicUsize::new(0),
+        });
+        let mutations = runtime.mutations();
+        let admitted = mutations.admit_durable_times_restoration().await.unwrap();
+
+        let result = mutations
+            .restore_durable_times_with_native(
+                admitted,
+                native,
+                Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(10)),
+                Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(20)),
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(AgentFilesystemMutationError::RuntimeInvalidated {
+                error: Some(error),
+                completed: Some(0),
+            }) if error.raw_os_error() == Some(libc::EBUSY)
+        ));
+        assert!(runtime.begin_effect().await.is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    async fn changed_unspecified_timestamp_invalidates_runtime() {
+        let runtime = AgentFilesystemRuntime::new_for_test();
+        let native = Arc::new(ScriptedFilesystemTimesRestorer {
+            states: std::sync::Mutex::new(
+                [Ok(times_state(1, 2)), Ok(times_state(10, 3))]
+                    .into_iter()
+                    .collect(),
+            ),
+            attempts: std::sync::Mutex::new([Some(libc::EBUSY)].into_iter().collect()),
+            calls: AtomicUsize::new(0),
+        });
+        let mutations = runtime.mutations();
+        let admitted = mutations.admit_durable_times_restoration().await.unwrap();
+
+        let result = mutations
+            .restore_durable_times_with_native(
+                admitted,
+                native,
+                Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(10)),
+                None,
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(AgentFilesystemMutationError::RuntimeInvalidated {
+                error: Some(error),
+                completed: Some(0),
+            }) if error.raw_os_error() == Some(libc::EBUSY)
+        ));
+        assert!(runtime.begin_effect().await.is_err());
     }
 
     #[test]

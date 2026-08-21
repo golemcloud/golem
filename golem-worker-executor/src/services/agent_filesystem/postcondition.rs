@@ -19,6 +19,8 @@ use super::mutation::RequestedTime;
 
 #[cfg(target_os = "linux")]
 use cap_std::fs::MetadataExt as _;
+#[cfg(target_os = "linux")]
+use std::os::linux::fs::MetadataExt as _;
 use wasmtime_wasi::filesystem::{Descriptor, Dir};
 use wasmtime_wasi::runtime::spawn_blocking;
 
@@ -357,6 +359,34 @@ fn times_state(metadata: cap_std::fs::Metadata) -> TimesState {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn ambient_object_identity(metadata: &std::fs::Metadata) -> Option<ObjectIdentity> {
+    Some(ObjectIdentity {
+        device: metadata.st_dev(),
+        inode: metadata.st_ino(),
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ambient_object_identity(_metadata: &std::fs::Metadata) -> Option<ObjectIdentity> {
+    None
+}
+
+fn ambient_times_state(metadata: std::fs::Metadata) -> TimesState {
+    TimesState {
+        identity: ambient_object_identity(&metadata),
+        accessed: metadata.accessed().ok(),
+        modified: metadata.modified().ok(),
+    }
+}
+
+pub(crate) async fn ambient_path_times(
+    path: &std::path::Path,
+) -> Result<TimesState, std::io::Error> {
+    let path = path.to_path_buf();
+    spawn_blocking(move || std::fs::symlink_metadata(path).map(ambient_times_state)).await
+}
+
 pub(crate) async fn descriptor_times(
     descriptor: &Descriptor,
 ) -> Result<TimesState, std::io::Error> {
@@ -428,6 +458,41 @@ pub(crate) fn times_postcondition(
                         .identity
                         .zip(before.identity)
                         .is_some_and(|(current, before)| current == before)) =>
+        {
+            MutationPostcondition::NoEffect
+        }
+        Ok(_) | Err(_) => MutationPostcondition::Unknown,
+    }
+}
+
+pub(crate) fn restored_times_postcondition(
+    current: Result<TimesState, std::io::Error>,
+    before: TimesState,
+    accessed: Option<SystemTime>,
+    modified: Option<SystemTime>,
+) -> MutationPostcondition {
+    match current {
+        Ok(current)
+            if current
+                .identity
+                .zip(before.identity)
+                .is_some_and(|(current, before)| current == before)
+                && accessed.map_or(current.accessed == before.accessed, |accessed| {
+                    current.accessed == Some(accessed)
+                })
+                && modified.map_or(current.modified == before.modified, |modified| {
+                    current.modified == Some(modified)
+                }) =>
+        {
+            MutationPostcondition::Satisfied
+        }
+        Ok(current)
+            if current.accessed == before.accessed
+                && current.modified == before.modified
+                && current
+                    .identity
+                    .zip(before.identity)
+                    .is_some_and(|(current, before)| current == before) =>
         {
             MutationPostcondition::NoEffect
         }

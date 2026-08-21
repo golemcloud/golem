@@ -17,7 +17,6 @@ use std::time::Duration;
 use std::time::SystemTime;
 
 use bytes::Bytes;
-use fs_set_times::{SystemTimeSpec, set_symlink_times};
 use metrohash::MetroHash128;
 use wasmtime::component::Resource;
 use wasmtime_wasi::FilePerms;
@@ -30,7 +29,6 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
     HostDirectoryEntryStream, InputStream, MetadataHashValue, NewTimestamp, OpenFlags,
     OutputStream, PathFlags,
 };
-use wasmtime_wasi::runtime::spawn_blocking;
 
 use crate::durable_host::concurrent::{CallHandle, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, FilesystemOutputStreamState};
@@ -357,11 +355,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             Descriptor::File(f) => f.path.clone(),
             Descriptor::Dir(d) => d.path.clone(),
         };
-        let _effect = self
-            .filesystem_runtime()
-            .begin_effect()
-            .await
-            .map_err(FsError::trap)?;
+        let mutations = self.filesystem_runtime().mutations();
+        let restoration = p2_mutation_result(mutations.admit_durable_times_restoration().await)?;
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
         // value), so only the file-times are made durable via `CallHandle::run`.
@@ -407,22 +402,19 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         match result.result {
             Ok(times) => {
-                let accessed = times.data_access_timestamp.as_ref().map(|t| {
-                    SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
-                        t.clone(),
-                    ))
-                });
-                let modified = times.data_modification_timestamp.as_ref().map(|t| {
-                    SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
-                        t.clone(),
-                    ))
-                });
-                let span = tracing::Span::current();
-                spawn_blocking(move || {
-                    let _enter = span.enter();
-                    set_symlink_times(path, accessed, modified)
-                })
-                .await?;
+                let accessed = times
+                    .data_access_timestamp
+                    .as_ref()
+                    .map(|t| <SerializableDateTime as Into<SystemTime>>::into(t.clone()));
+                let modified = times
+                    .data_modification_timestamp
+                    .as_ref()
+                    .map(|t| <SerializableDateTime as Into<SystemTime>>::into(t.clone()));
+                p2_mutation_result(
+                    mutations
+                        .restore_durable_times(restoration, path, accessed, modified)
+                        .await,
+                )?;
                 let mut stat = stat.unwrap();
                 stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
                 stat.data_modification_timestamp =
@@ -443,11 +435,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             Descriptor::File(f) => f.path.join(path.clone()),
             Descriptor::Dir(d) => d.path.join(path.clone()),
         };
-        let _effect = self
-            .filesystem_runtime()
-            .begin_effect()
-            .await
-            .map_err(FsError::trap)?;
+        let mutations = self.filesystem_runtime().mutations();
+        let restoration = p2_mutation_result(mutations.admit_durable_times_restoration().await)?;
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
         // value), so only the file-times are made durable via `CallHandle::run`.
@@ -493,22 +482,19 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         match result.result {
             Ok(times) => {
-                let accessed = times.data_access_timestamp.as_ref().map(|t| {
-                    SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
-                        t.clone(),
-                    ))
-                });
-                let modified = times.data_modification_timestamp.as_ref().map(|t| {
-                    SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
-                        t.clone(),
-                    ))
-                });
-                let span = tracing::Span::current();
-                spawn_blocking(move || {
-                    let _enter = span.enter();
-                    set_symlink_times(full_path, accessed, modified)
-                })
-                .await?;
+                let accessed = times
+                    .data_access_timestamp
+                    .as_ref()
+                    .map(|t| <SerializableDateTime as Into<SystemTime>>::into(t.clone()));
+                let modified = times
+                    .data_modification_timestamp
+                    .as_ref()
+                    .map(|t| <SerializableDateTime as Into<SystemTime>>::into(t.clone()));
+                p2_mutation_result(
+                    mutations
+                        .restore_durable_times(restoration, full_path, accessed, modified)
+                        .await,
+                )?;
                 let mut stat = stat.unwrap();
                 stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
                 stat.data_modification_timestamp =

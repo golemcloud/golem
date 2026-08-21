@@ -17,17 +17,18 @@ use super::failure::{
     MutationEffect, native_write_failure_effect, proven_write_progress_effect,
 };
 use super::postcondition::{
-    MutationPostcondition, PathObjectType, PathState, SymlinkState, create_directory_postcondition,
-    descriptor_state, descriptor_times, link_postcondition, open_postcondition, path_state,
-    path_state_with_follow, path_times, remove_postcondition, rename_postcondition,
-    resize_postcondition, symlink_postcondition, symlink_state, times_postcondition,
+    MutationPostcondition, PathObjectType, PathState, SymlinkState, TimesState, ambient_path_times,
+    create_directory_postcondition, descriptor_state, descriptor_times, link_postcondition,
+    open_postcondition, path_state, path_state_with_follow, path_times, remove_postcondition,
+    rename_postcondition, resize_postcondition, restored_times_postcondition,
+    symlink_postcondition, symlink_state, times_postcondition,
 };
 use super::*;
 use async_trait::async_trait;
 use bytes::Bytes;
 use cap_fs_ext::{DirExt as _, FollowSymlinks, OpenOptionsFollowExt, OpenOptionsMaybeDirExt};
 use cap_std::fs::FileExt;
-use fs_set_times::{SetTimes as _, SystemTimeSpec};
+use fs_set_times::{SetTimes as _, SystemTimeSpec, set_symlink_times};
 use golem_common::model::component::AgentFilePermissions;
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::Ordering;
@@ -187,6 +188,18 @@ pub(crate) fn set_path_times(
     } else {
         directory.dir.set_symlink_times(path, accessed, modified)
     }
+}
+
+pub(crate) fn restore_ambient_path_times(
+    path: &Path,
+    accessed: Option<std::time::SystemTime>,
+    modified: Option<std::time::SystemTime>,
+) -> std::io::Result<()> {
+    set_symlink_times(
+        path,
+        accessed.map(SystemTimeSpec::Absolute),
+        modified.map(SystemTimeSpec::Absolute),
+    )
 }
 
 pub(crate) fn create_directory(directory: &Dir, path: &str) -> std::io::Result<()> {
