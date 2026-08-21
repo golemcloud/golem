@@ -1038,7 +1038,7 @@ fn requires_reconnect(e: &Status) -> bool {
 /// including the ones tonic derives from an HTTP/2 reset: each of those ends one
 /// stream and leaves the connection carrying everybody else.
 fn worth_reconnecting(code: Code, transport_failed: bool) -> bool {
-    code == Code::Unavailable || (code_means_connection_gone(code) && transport_failed)
+    code == Code::Unavailable || connection_gone(code, transport_failed)
 }
 
 /// Whether the request ran out of its own time, rather than the connection
@@ -1088,15 +1088,29 @@ fn request_timed_out(e: &Status) -> bool {
 /// arrives too, so no code tells those two apart. Reading a refused stream as a
 /// dead connection costs a reconnect and a retry, which is the cheaper way to be
 /// wrong.
+/// Whether the connection under this status has failed, as against the peer
+/// having sent an answer back over one that works.
+///
+/// Only ever asked about a status `requires_reconnect` has already accepted, so
+/// a request that ran out of its own time cannot reach here: that is excluded
+/// there, once. Excluding it twice only hid which of the two was doing the work,
+/// and the second copy could not be shown to matter either way.
 fn connection_is_gone(e: &Status) -> bool {
-    if request_timed_out(e) {
-        return false;
-    }
-    code_means_connection_gone(e.code()) && has_transport_source(e)
+    connection_gone(e.code(), has_transport_source(e))
 }
 
-fn code_means_connection_gone(code: Code) -> bool {
-    matches!(code, Code::Unavailable | Code::Unknown | Code::Cancelled)
+/// Whether a status describes the connection under it having failed, rather than
+/// an answer the peer sent back over one that works.
+///
+/// Both halves are needed. Measured against a real peer, a blackholed connect
+/// and an expired keep-alive ping arrive as `Unavailable`, a connection the
+/// kernel gives up on arrives as `Unknown`, and a connection closing with
+/// requests still on it arrives as `Cancelled`. The codes tonic derives from an
+/// HTTP/2 reset — `Internal`, `ResourceExhausted`, `PermissionDenied` — each end
+/// one stream and leave the connection carrying everybody else, and they arrive
+/// with a transport error attached just the same.
+fn connection_gone(code: Code, transport_failed: bool) -> bool {
+    matches!(code, Code::Unavailable | Code::Unknown | Code::Cancelled) && transport_failed
 }
 
 fn has_transport_source(e: &Status) -> bool {
@@ -1465,9 +1479,10 @@ mod test {
         );
         assert_eq!(
             built.load(Ordering::SeqCst) - built_before,
-            CONNECT_ATTEMPTS as u64,
-            "the caller did not go back exactly {CONNECT_ATTEMPTS} times before \
-             giving up"
+            3,
+            "the caller did not establish exactly three connections before \
+             giving up; written out rather than read from CONNECT_ATTEMPTS, \
+             which would agree with whatever that came to say"
         );
     }
 
@@ -1604,8 +1619,14 @@ mod test {
         // it arrives as Cancelled.
         for code in [Code::Unavailable, Code::Unknown, Code::Cancelled] {
             assert!(
-                code_means_connection_gone(code),
-                "{code:?} is what a dead connection arrives as"
+                connection_gone(code, true),
+                "{code:?} over a failed transport is what a dead connection \
+                 arrives as"
+            );
+            assert!(
+                !connection_gone(code, false),
+                "{code:?} with nothing wrong underneath is an answer, not a \
+                 dead connection"
             );
         }
 
@@ -1617,7 +1638,7 @@ mod test {
             Code::PermissionDenied,
         ] {
             assert!(
-                !code_means_connection_gone(code),
+                !connection_gone(code, true),
                 "{code:?} describes one reset stream, not the connection \
                  carrying it"
             );
@@ -1664,7 +1685,7 @@ mod test {
         for code in ALL_CODES {
             for transport_failed in [true, false] {
                 assert!(
-                    !(code_means_connection_gone(code) && transport_failed)
+                    !connection_gone(code, transport_failed)
                         || worth_reconnecting(code, transport_failed),
                     "{code:?} is gone but would not be replaced"
                 );
