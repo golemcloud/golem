@@ -16,6 +16,7 @@ use crate::Tracing;
 use anyhow::anyhow;
 use axum::Router;
 use axum::routing::get;
+use golem_api_grpc::proto::golem::workerexecutor::v1::{AssignShardsRequest, RevokeShardsRequest};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     ComponentModelElementValue, DataValue, ElementValue, ElementValues,
@@ -25,7 +26,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentMetadataDto;
 use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, RetryConfig,
-    ScanCursor, StringFilterComparator,
+    ScanCursor, ShardId, StringFilterComparator,
 };
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -35,9 +36,10 @@ use golem_wasm::analysis::analysed_type;
 use golem_wasm::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
 use golem_wasm::{IntoValue, Record};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_worker_executor::worker::INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
+    WorkerExecutorTestDependencies, fake_ownership, start, start_customized, start_with_overrides,
     start_with_redis_storage,
 };
 use pretty_assertions::assert_eq;
@@ -603,6 +605,377 @@ async fn promise(
         Value::Option(Some(Box::new(Value::List(vec![Value::U8(42)]))))
     );
     Ok(())
+}
+
+/// Control for [`a_caller_is_answered_when_its_agents_shard_is_taken_away`].
+///
+/// An agent's shard leaves this executor and comes straight back, and the
+/// promise it is parked on is then completed here. What this pins, and the test
+/// below cannot, is that revoking a shard interrupts the agents on it with
+/// `InterruptKind::Restart`, and that interrupt on its own does not strand the
+/// caller. So the test below is measuring the handoff and not the interrupt.
+///
+/// It does *not* prove the `select!` is cancel-safe, though it did have to stop
+/// claiming that twice. Only the `wait_for` future is dropped on a tick;
+/// `EventsSubscription` keeps the same `broadcast::Receiver`, which holds its
+/// cursor and buffers anything published while no `recv()` is pending. Nothing
+/// is rebuilt, so nothing can be lost, and no test here could tell you
+/// otherwise: the promise below is completed at a moment uncorrelated with the
+/// tick, so a genuinely lossy variant would pass this almost every time.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_is_answered_when_its_agents_shard_comes_back(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let parked = park_a_caller_on_a_promise(
+        &executor,
+        &context,
+        host_api_tests,
+        "promise-shard-returned",
+    )
+    .await?;
+
+    info!("Revoking the shard, then handing it straight back");
+
+    revoke_shard_zero(&executor).await?;
+    assign_shard_zero(&executor).await?;
+
+    // Sit here long enough for the caller's ownership re-check to run several
+    // times before the result exists, so the answer has to survive the re-check
+    // firing repeatedly and finding nothing wrong.
+    sleep(INVOCATION_OWNERSHIP_RECHECK_INTERVAL * 3).await;
+
+    parked.complete_the_promise(&executor, vec![42]).await?;
+
+    let value = parked
+        .value_within(
+            Duration::from_secs(30),
+            "caller was not answered even though the shard came back and the promise \
+             was completed on this executor",
+        )
+        .await?;
+    assert_eq!(value, Value::List(vec![Value::U8(42)]));
+    Ok(())
+}
+
+/// An executor that loses an agent must answer anyone still awaiting it.
+///
+/// [`Worker::wait_for_invocation_result`] can end in exactly two ways: the
+/// result turns up in this `Worker`'s in-memory state, or an
+/// `Event::InvocationCompleted` lands on *this executor's* event bus. Once the
+/// agent belongs to a different executor, neither can happen here - the work is
+/// finished over there, on a bus this caller does not subscribe to. There is no
+/// timeout and no ownership re-check, so the caller waits for as long as it is
+/// willing to. Chaos scenario S11 (GOL-377) measured that as the client's own
+/// timeout, 120s, on an executor that was never killed and whose transport was
+/// never disturbed, so nothing below the application layer had anything to
+/// notice.
+///
+/// What it should get is an error of the `InvalidShardId` family, which is
+/// already what worker-service needs to invalidate its routing table and retry
+/// against the new owner. That path exists and works; nothing used to reach it.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_is_answered_when_its_agents_shard_is_taken_away(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let parked =
+        park_a_caller_on_a_promise(&executor, &context, host_api_tests, "promise-shard-taken")
+            .await?;
+
+    info!("Revoking the shard that owns the suspended agent, for good");
+
+    revoke_shard_zero(&executor).await?;
+
+    // The agent is somebody else's now. Whatever this executor does about that,
+    // the caller holding an open invoke_and_await has to be told something: an
+    // error it can retry against the new owner is fine, silence is not.
+    // Four turns of INVOCATION_OWNERSHIP_RECHECK_INTERVAL, which is 5s. Left
+    // absolute on purpose: a bound derived from that constant would stretch
+    // along with it, and this test has to stay red when it is neutralised.
+    let answer = parked
+        .answer_within(
+            Duration::from_secs(20),
+            "caller parked in invoke_and_await was never answered, although this \
+             executor no longer owns the agent and can never finish the call",
+        )
+        .await?;
+    info!(result = ?answer, "caller was answered");
+
+    let error =
+        answer.expect_err("nobody completed the promise, so the only honest answer is an error");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("InvalidShardId"),
+        "the caller has to be told the shard moved, because that is what makes \
+         worker-service invalidate its routing table and retry against the new \
+         owner; instead it got: {rendered}"
+    );
+    Ok(())
+}
+
+/// The test executor runs `ShardManagerServiceSingleShard`, so every agent in
+/// these tests lives on shard 0. Moving that one shard moves all of them.
+async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
+    executor
+        .client
+        .clone()
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![ShardId::new(0).into()],
+        })
+        .await?;
+    Ok(())
+}
+
+/// A result that lands while ownership is being checked must still win.
+///
+/// The check and the completion are not ordered against each other. If the
+/// check comes back "not ours" a moment after the invocation finished here, the
+/// caller has to be handed its result rather than sent to a new owner that
+/// would run the work a second time. Mutation testing is what found this:
+/// deleting the re-poll from the timer arm left every other test green.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_result_that_lands_while_ownership_is_being_checked_still_reaches_the_caller(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let (overrides, controls) = fake_ownership();
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let parked =
+        park_a_caller_on_a_promise(&executor, &context, host_api_tests, "promise-check-race")
+            .await?;
+
+    controls.hold_the_next_check().await?;
+
+    info!("Ownership check is held open; landing the result behind it");
+
+    parked.complete_the_promise(&executor, vec![42]).await?;
+    executor
+        .wait_for_status(&parked.agent_id, AgentStatus::Idle, Duration::from_secs(20))
+        .await?;
+
+    // Only now does the held check report that the agent is not ours. The
+    // result is already sitting in the agent's invocation results.
+    controls.release_the_held_check()?;
+
+    let value = parked
+        .value_within(
+            Duration::from_secs(20),
+            "caller was never answered, although its result had already landed",
+        )
+        .await?;
+    assert_eq!(value, Value::List(vec![Value::U8(42)]));
+
+    // Without this the test also passes when the held check reports that the
+    // agent is still ours, which exercises none of the code it is aimed at.
+    assert_eq!(
+        controls.agent_moved_reports(),
+        1,
+        "the caller's re-check should have been told exactly once that the agent had moved"
+    );
+    Ok(())
+}
+
+/// An executor that does not know its shards yet has not lost the agent.
+///
+/// `check_worker` fails in that state too, with the `Unknown` that
+/// `sharding_not_ready_error` produces, and only `InvalidShardId` means the
+/// agent has moved. Treating any failure as a move would fail callers during
+/// startup and rebalance windows, when an assignment is simply on its way.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_caller_is_not_given_up_on_while_the_shard_assignment_is_missing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let (overrides, controls) = fake_ownership();
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    let parked =
+        park_a_caller_on_a_promise(&executor, &context, host_api_tests, "promise-not-ready")
+            .await?;
+
+    info!("Reporting no shard assignment for long enough to span several re-checks");
+
+    controls.pretend_the_assignment_is_missing();
+    sleep(INVOCATION_OWNERSHIP_RECHECK_INTERVAL * 2 + Duration::from_secs(1)).await;
+    controls.stop_pretending();
+
+    // Both bounds earn their place. Without the lower one this passes against an
+    // executor that never had the fake installed and reported nothing at all.
+    // Without the upper one it passes just as happily when the re-check stops
+    // being paced and spins: dropping the deadline reset in
+    // `wait_for_invocation_result` turns these two checks into millions, and
+    // every other assertion in this file is blind to that.
+    let checks = controls.assignment_missing_reports();
+    assert!(
+        (2..=5).contains(&checks),
+        "expected a handful of re-checks across an 11s window while the assignment \
+         was missing, got {checks}"
+    );
+
+    parked.complete_the_promise(&executor, vec![42]).await?;
+
+    let value = parked
+        .value_within(
+            Duration::from_secs(30),
+            "caller was given up on while this executor merely did not know its \
+             shards yet",
+        )
+        .await?;
+    assert_eq!(value, Value::List(vec![Value::U8(42)]));
+    Ok(())
+}
+
+/// Hands shard 0 back, so the agents on it are this executor's again.
+async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
+    executor
+        .client
+        .clone()
+        .assign_shards(AssignShardsRequest {
+            shard_ids: vec![ShardId::new(0).into()],
+        })
+        .await?;
+    Ok(())
+}
+
+/// Starts an agent, opens an `invoke_and_await` against it, and returns once
+/// that call is parked on a promise.
+///
+/// The returned fiber is the caller. It is deliberately left running: every test
+/// using this asks what the executor does to a caller it has stopped being able
+/// to answer.
+async fn park_a_caller_on_a_promise(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    host_api_tests: &PrecompiledComponent,
+    agent_name: &str,
+) -> anyhow::Result<ParkedCaller> {
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("GolemHostApi", agent_name);
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    let promise_data = DataValue::Tuple(ElementValues {
+        elements: vec![ElementValue::ComponentModel(ComponentModelElementValue {
+            value: ValueAndType::new(promise_id_value.clone(), PromiseId::get_type()),
+        })],
+    });
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "await_promise",
+                    promise_data,
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+
+    Ok(ParkedCaller {
+        agent_id: worker_id,
+        promise_id: promise_id_value,
+        caller: fiber,
+    })
+}
+
+/// A caller left parked inside `invoke_and_await`, and what a test needs to
+/// either answer it or take its agent away.
+struct ParkedCaller {
+    agent_id: AgentId,
+    promise_id: Value,
+    caller: JoinHandle<anyhow::Result<DataValue>>,
+}
+
+impl ParkedCaller {
+    /// Waits for the parked call to come back. The outer result says whether it
+    /// was answered at all; the inner one is what it was told.
+    async fn answer_within(
+        mut self,
+        patience: Duration,
+        gave_up: &str,
+    ) -> anyhow::Result<anyhow::Result<DataValue>> {
+        match tokio::time::timeout(patience, &mut self.caller).await {
+            Ok(joined) => Ok(joined?),
+            Err(_) => {
+                self.caller.abort();
+                Err(anyhow!("{gave_up}"))
+            }
+        }
+    }
+
+    /// Completes the promise this caller is parked on, which is what lets the
+    /// invocation it is waiting for finish.
+    async fn complete_the_promise(
+        &self,
+        executor: &TestWorkerExecutor,
+        payload: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        let oplog_idx = extract_oplog_idx_from_promise_id(&self.promise_id);
+        executor
+            .complete_promise(
+                &PromiseId {
+                    agent_id: self.agent_id.clone(),
+                    oplog_idx,
+                },
+                payload,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Waits for the parked call and returns the value it was given, failing if
+    /// it was not answered in time or was answered with an error.
+    async fn value_within(self, patience: Duration, gave_up: &str) -> anyhow::Result<Value> {
+        self.answer_within(patience, gave_up)
+            .await??
+            .into_return_value()
+            .ok_or_else(|| anyhow!("expected return value"))
+    }
 }
 
 fn extract_oplog_idx_from_promise_id(promise_id_value: &Value) -> OplogIndex {

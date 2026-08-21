@@ -54,7 +54,8 @@ use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
-    IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, TransactionId,
+    IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, ShardAssignment, ShardId,
+    TransactionId,
 };
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
@@ -123,7 +124,7 @@ use golem_worker_executor::services::resource_limits::{
 };
 use golem_worker_executor::services::rpc::{Rpc, RpcDemand, RpcError as ServiceRpcError};
 use golem_worker_executor::services::scheduler::SchedulerService;
-use golem_worker_executor::services::shard::ShardService;
+use golem_worker_executor::services::shard::{ShardService, ShardServiceDefault};
 use golem_worker_executor::services::worker::WorkerService;
 use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
 use golem_worker_executor::services::worker_event::WorkerEventService;
@@ -144,8 +145,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU16, AtomicU32, Ordering};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::runtime::Handle;
@@ -503,6 +505,7 @@ type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
 type CreateDirectInvocationAuthFn = dyn Fn() -> Arc<dyn DirectInvocationAuthService> + Send + Sync;
+type WrapShardServiceFn = dyn Fn(Arc<dyn ShardService>) -> Arc<dyn ShardService> + Send + Sync;
 
 #[derive(Clone, Default)]
 pub struct TestExecutorOverrides {
@@ -510,6 +513,11 @@ pub struct TestExecutorOverrides {
     pub wrap_key_value_service: Option<Arc<WrapKeyValueServiceFn>>,
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
+    /// Wraps the executor's `ShardService`, so a test can observe or fake which
+    /// agents this executor owns. Everything that gates on ownership reads it,
+    /// including the periodic re-check a caller parked in
+    /// `Worker::wait_for_invocation_result` runs.
+    pub wrap_shard_service: Option<Arc<WrapShardServiceFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
     /// Named retry policies that the executor's `EnvironmentStateService`
     /// should expose to running agents (mirrors `retryPolicyDefaults` in
@@ -1415,6 +1423,16 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
                 &golem_config.agent_status_flush,
                 shutdown_token,
             )),
+        }
+    }
+
+    fn create_shard_service(&self) -> Arc<dyn ShardService> {
+        let shard_service: Arc<dyn ShardService> = Arc::new(ShardServiceDefault::new());
+
+        if let Some(wrap) = &self.overrides.wrap_shard_service {
+            wrap(shard_service)
+        } else {
+            shard_service
         }
     }
 
@@ -2413,6 +2431,201 @@ impl AdditionalTestDeps {
 
         *inner.entry_async(entry).await.or_default().get_mut() += 1;
     }
+}
+
+/// What a [`FakeOwnership`] has been told to report, and what it has reported.
+///
+/// Private: tests drive it through [`OwnershipControls`], which keeps the
+/// atomics and the channel ends out of the test body.
+struct FakeOwnershipState {
+    /// Fail every check the way an executor whose shard assignment has not
+    /// arrived yet fails, with the `Unknown` that `sharding_not_ready_error`
+    /// produces. That must never be read as "the agent moved".
+    assignment_missing: AtomicBool,
+    /// Make the next check announce itself, wait, and only then report that the
+    /// agent is not ours.
+    hold_next_check: AtomicBool,
+    assignment_missing_reports: AtomicUsize,
+    agent_moved_reports: AtomicUsize,
+    at_the_gate: SyncSender<()>,
+    release: Mutex<Receiver<()>>,
+}
+
+/// A [`ShardService`] that reports what a test has told it to report, and
+/// otherwise tells the truth.
+///
+/// Blocking inside `check_worker` is the point of the paused mode. The method is
+/// synchronous, so a wrapper that waits there holds a parked caller's ownership
+/// re-check open mid-flight, which is the only way a test can land an invocation
+/// result inside the window that re-check has to cope with.
+struct FakeOwnership {
+    inner: Arc<dyn ShardService>,
+    state: Arc<FakeOwnershipState>,
+}
+
+impl ShardService for FakeOwnership {
+    fn check_worker(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError> {
+        if self.state.assignment_missing.load(Ordering::SeqCst) {
+            self.state
+                .assignment_missing_reports
+                .fetch_add(1, Ordering::SeqCst);
+            return Err(WorkerExecutorError::Unknown {
+                details: "Sharding is not ready".to_string(),
+            });
+        }
+
+        // Taken, not read, so concurrent checks from other calls fall straight
+        // through to the truth while this one is held at the gate.
+        if self.state.hold_next_check.swap(false, Ordering::SeqCst) {
+            let _ = self.state.at_the_gate.send(());
+            // `check_worker` is sync and is called from async code, so waiting
+            // here occupies a runtime worker. `block_in_place` hands the worker
+            // back rather than starving a small runtime: without it this
+            // deadlocks whenever tokio has a single worker thread.
+            tokio::task::block_in_place(|| {
+                let _ = self
+                    .state
+                    .release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(60));
+            });
+            // Counted from the verdict rather than beside it, so the count says
+            // what was actually reported. A fake that quietly started reporting
+            // "still ours" would otherwise leave its tests passing vacuously.
+            let verdict = Err(WorkerExecutorError::invalid_shard_id(
+                ShardId::new(0),
+                HashSet::new(),
+            ));
+            if verdict.is_err() {
+                self.state
+                    .agent_moved_reports
+                    .fetch_add(1, Ordering::SeqCst);
+            }
+            return verdict;
+        }
+
+        self.inner.check_worker(agent_id)
+    }
+
+    fn is_ready(&self) -> bool {
+        self.inner.is_ready()
+    }
+
+    fn assign_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError> {
+        self.inner.assign_shards(shard_ids)
+    }
+
+    fn register(&self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
+        self.inner.register(number_of_shards, shard_ids)
+    }
+
+    fn revoke_shards(&self, shard_ids: &HashSet<ShardId>) -> Result<(), WorkerExecutorError> {
+        self.inner.revoke_shards(shard_ids)
+    }
+
+    fn set_shard_assignment(
+        &self,
+        number_of_shards: usize,
+        shard_ids: &HashSet<ShardId>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.inner.set_shard_assignment(number_of_shards, shard_ids)
+    }
+
+    fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError> {
+        self.inner.current_assignment()
+    }
+
+    fn try_get_current_assignment(&self) -> Option<ShardAssignment> {
+        self.inner.try_get_current_assignment()
+    }
+}
+
+/// A test's handle on a [`FakeOwnership`]: what it should report, when to hold
+/// a check open, and what it has reported so far.
+pub struct OwnershipControls {
+    state: Arc<FakeOwnershipState>,
+    gate_reached: Receiver<()>,
+    release: SyncSender<()>,
+}
+
+impl OwnershipControls {
+    /// Report every ownership check the way an executor whose shard assignment
+    /// has not arrived reports it. Lasts until [`Self::stop_pretending`].
+    pub fn pretend_the_assignment_is_missing(&self) {
+        self.state.assignment_missing.store(true, Ordering::SeqCst);
+    }
+
+    pub fn stop_pretending(&self) {
+        self.state.assignment_missing.store(false, Ordering::SeqCst);
+    }
+
+    /// Hold the next ownership check open, and return once one has arrived.
+    ///
+    /// The waiting happens inside the fake's synchronous `check_worker`, which
+    /// is the only way to pause a parked caller's re-check mid-flight and land
+    /// something behind it. Nothing is held after this returns until
+    /// [`Self::release_the_held_check`] is called.
+    pub async fn hold_the_next_check(&self) -> anyhow::Result<()> {
+        self.state.hold_next_check.store(true, Ordering::SeqCst);
+        tokio::task::block_in_place(|| self.gate_reached.recv_timeout(Duration::from_secs(30)))
+            .map_err(|_| anyhow::anyhow!("no ownership check arrived within 30s"))?;
+        Ok(())
+    }
+
+    pub fn release_the_held_check(&self) -> anyhow::Result<()> {
+        self.release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("the held ownership check stopped waiting"))
+    }
+
+    /// How many checks have been failed as "assignment not here yet". A test
+    /// asserts on this so it cannot quietly pass against an executor that never
+    /// had the fake installed at all.
+    pub fn assignment_missing_reports(&self) -> usize {
+        self.state.assignment_missing_reports.load(Ordering::SeqCst)
+    }
+
+    /// How many checks have reported that the agent has moved away.
+    pub fn agent_moved_reports(&self) -> usize {
+        self.state.agent_moved_reports.load(Ordering::SeqCst)
+    }
+}
+
+/// Builds overrides that put a [`FakeOwnership`] in front of the real shard
+/// service, plus the controls for it.
+pub fn fake_ownership() -> (TestExecutorOverrides, OwnershipControls) {
+    let (at_the_gate, gate_reached) = sync_channel(1);
+    let (release, released) = sync_channel(1);
+
+    let state = Arc::new(FakeOwnershipState {
+        assignment_missing: AtomicBool::new(false),
+        hold_next_check: AtomicBool::new(false),
+        assignment_missing_reports: AtomicUsize::new(0),
+        agent_moved_reports: AtomicUsize::new(0),
+        at_the_gate,
+        release: Mutex::new(released),
+    });
+
+    let for_closure = state.clone();
+    let overrides = TestExecutorOverrides {
+        wrap_shard_service: Some(Arc::new(move |inner| {
+            Arc::new(FakeOwnership {
+                inner,
+                state: for_closure.clone(),
+            })
+        })),
+        ..Default::default()
+    };
+
+    (
+        overrides,
+        OwnershipControls {
+            state,
+            gate_reached,
+            release,
+        },
+    )
 }
 
 pub struct FailingKeyValueService {

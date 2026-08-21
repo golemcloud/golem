@@ -122,6 +122,15 @@ enum TargetChargeAction {
     Retry,
 }
 
+/// How often a caller parked in [`Worker::wait_for_invocation_result`] re-checks
+/// that this executor still owns the agent it is waiting for.
+///
+/// Reached only when the wait is otherwise idle. A tick that finds the agent
+/// still owned costs one set lookup for the ownership check, then re-enters the
+/// loop and re-runs `lookup_invocation_result`, which clones the agent's last
+/// known status. Cheap, but not free, so this is not a millisecond knob.
+pub const INVOCATION_OWNERSHIP_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Classifies a `get_metadata(target)` result into the startup charge action,
 /// preserving the invariant that admission charges the target revision whenever
 /// `create_instance` can still load it. Only a definitely-absent target
@@ -1847,24 +1856,73 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         key: &IdempotencyKey,
         mut subscription: EventsSubscription,
     ) -> Result<LookupResult, RecvError> {
+        // A deadline, so how often the check runs is a property of the check
+        // rather than of how often this loop happens to restart. Both `continue`
+        // paths below re-enter it, and a sleep started fresh each time would
+        // measure the interval from the last restart instead of running every
+        // interval. Reaching that today needs a receiver falling
+        // `invocation_result_broadcast_capacity` events behind over and over,
+        // which is remote enough that this is insurance rather than a fix, but
+        // it costs a single `Instant`.
+        let mut next_ownership_check =
+            tokio::time::Instant::now() + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
+
         loop {
             match self.lookup_invocation_result(key).await {
                 LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
                 LookupResult::New | LookupResult::Pending => {
-                    let wait_result = subscription
-                        .wait_for(|event| match event {
-                            Event::InvocationCompleted {
-                                agent_id,
-                                idempotency_key,
-                                result,
-                            } if *agent_id == self.owned_agent_id.agent_id
-                                && idempotency_key == key =>
+                    let waiting = subscription.wait_for(|event| match event {
+                        Event::InvocationCompleted {
+                            agent_id,
+                            idempotency_key,
+                            result,
+                        } if *agent_id == self.owned_agent_id.agent_id
+                            && idempotency_key == key =>
+                        {
+                            Some(LookupResult::Complete(result.clone()))
+                        }
+                        _ => None,
+                    });
+
+                    let wait_result = tokio::select! {
+                        biased;
+                        result = waiting => result,
+                        () = tokio::time::sleep_until(next_ownership_check) => {
+                            next_ownership_check = tokio::time::Instant::now()
+                                + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
+
+                            // An agent whose shard has moved is resumed by whoever owns
+                            // it now, and its `InvocationCompleted` is published on that
+                            // executor's bus. Nothing will ever arrive on ours, and the
+                            // only other way out of this loop is the result turning up in
+                            // this `Worker`'s own memory, which it never will either. So
+                            // hand the caller the error that makes worker-service
+                            // invalidate its routing table and retry against the new
+                            // owner, rather than leave it to find out by timing out.
+                            //
+                            // Only `InvalidShardId` ends the wait. An executor whose
+                            // shard assignment is not set yet fails this check too, with
+                            // an `Unknown` from `sharding_not_ready_error`, and that one
+                            // has to fall through and keep waiting: an assignment is on
+                            // its way, and the agent may well still be ours.
+                            if let Err(error @ WorkerExecutorError::InvalidShardId { .. }) =
+                                self.shard_service().check_worker(&self.owned_agent_id.agent_id)
                             {
-                                Some(LookupResult::Complete(result.clone()))
+                                // The invocation can have finished while we were deciding
+                                // that. `store_invocation_success` fills `invocation_results`
+                                // before it publishes, so the result is already readable
+                                // here, and a real result always beats a reroute.
+                                match self.lookup_invocation_result(key).await {
+                                    LookupResult::New | LookupResult::Pending => {
+                                        debug!("Agent is no longer owned by this executor, ending the wait for its invocation result");
+                                        break Ok(LookupResult::Complete(Err(error)));
+                                    }
+                                    settled => break Ok(settled),
+                                }
                             }
-                            _ => None,
-                        })
-                        .await;
+                            continue;
+                        }
+                    };
                     match wait_result {
                         Ok(result) => break Ok(result),
                         Err(RecvError::Lagged(_)) => {
