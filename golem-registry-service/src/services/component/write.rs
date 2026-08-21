@@ -1671,10 +1671,11 @@ mod tests {
         validate_component_metadata_invariants,
     };
     use crate::services::component::ComponentError;
-    use chrono::Utc;
     use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
     use golem_common::model::card::recipient::RecipientPattern;
-    use golem_common::model::card::{Card, CardId, DelegationSurface, PermissionPattern};
+    use golem_common::model::card::{
+        CardId, DelegationCard, DelegationSurface, permission_envelopes_for_recipient_patterns,
+    };
     use golem_common::model::component::{
         AgentFileOptions, AgentFilePath, AgentFilePermissions, AgentTypeInitialPermissions,
         ArchiveFilePath, ToolDeploymentConfigCreation, ToolProvisionConfigCreation,
@@ -1685,39 +1686,20 @@ mod tests {
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
     use std::collections::{BTreeMap, HashMap};
-    use std::str::FromStr;
     use test_r::test;
 
-    fn permission(value: &str) -> PermissionPattern {
-        PermissionPattern::from_str(value).unwrap()
-    }
-
     fn parent_surface(parent_id: CardId) -> DelegationSurface {
-        let card = Card {
-            card_id: parent_id,
-            parent_ids: Vec::new(),
-            lower_positive: vec![
-                permission("environment(*/*/*) @ * : view : *"),
-                permission("component(*/*/*/*) @ * : view : *"),
-                permission("agent(*/*/*/*/*) @ * : view : *"),
-                permission("agent(*/*/*/*/*) @ * : invoke : *"),
-                permission("agent(*/*/*/*/*) @ * : resume :"),
-                permission("agent(*/*/*/*/*) @ * : update-revision :"),
-                permission("env(*/*/*/*/*) @ * : read : GOLEM_AGENT_ID"),
-                permission("env(*/*/*/*/*) @ * : read : GOLEM_AGENT_TYPE"),
-                permission("env(*/*/*/*/*) @ * : read : GOLEM_WORKER_NAME"),
-                permission("env(*/*/*/*/*) @ * : read : GOLEM_COMPONENT_ID"),
-                permission("env(*/*/*/*/*) @ * : read : GOLEM_COMPONENT_REVISION"),
-            ],
+        let defaults = AgentTypeInitialPermissions::default_for_recipient(RecipientPattern::Any)
+            .to_polymorphic_card();
+        let card = DelegationCard {
+            source_card_id: Some(parent_id),
+            lower_positive: permission_envelopes_for_recipient_patterns(&defaults.lower_positive)
+                .unwrap(),
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: Utc::now(),
-            expires_at: None,
-            system_card: false,
-            managed_by: None,
         };
-        DelegationSurface::from_cards(&[card])
+        DelegationSurface { cards: vec![card] }
     }
 
     fn tool(name: &str, version: &str) -> Tool {
