@@ -72,11 +72,21 @@ use tracing::debug;
 /// Handle to the worker-state actor's two job queues. Owned by [`Worker`]; dropping it aborts
 /// both tasks.
 pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
-    status_jobs: mpsc::UnboundedSender<StatusJob>,
+    commit: Arc<OwnerCommitController>,
     lifecycle_jobs: mpsc::UnboundedSender<LifecycleJob<Ctx>>,
     notification_queued: Arc<AtomicBool>,
     status_task: tokio::task::JoinHandle<()>,
     lifecycle_task: tokio::task::JoinHandle<()>,
+    owned_agent_id: OwnedAgentId,
+}
+
+/// Owner-scoped handle for serializing oplog commits with status publication.
+///
+/// The controller communicates with the independently-polled status actor and never acquires the
+/// primary Store or the worker instance lock. Primary and entity Stores can therefore commit the
+/// shared owner oplog while another Store is suspended in a guest call.
+pub(crate) struct OwnerCommitController {
+    status_jobs: mpsc::UnboundedSender<StatusJob>,
     owned_agent_id: OwnedAgentId,
 }
 
@@ -246,7 +256,10 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         });
 
         Self {
-            status_jobs,
+            commit: Arc::new(OwnerCommitController {
+                status_jobs,
+                owned_agent_id: owned_agent_id.clone(),
+            }),
             lifecycle_jobs,
             notification_queued,
             status_task,
@@ -261,7 +274,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// If the caller's future is dropped while awaiting the reply, the commit still runs to
     /// completion on the status task (the same semantics as the oplog actor's own jobs).
     pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
-        self.run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
+        self.commit
+            .run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
             .await
     }
 
@@ -269,7 +283,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// any in-flight commit/reattach transactions. The assert lives here on the caller side, so
     /// a job left behind by a cancelled caller cannot panic the actor.
     pub async fn non_detached_status(&self) -> AgentStatusRecord {
-        self.run_status_job(|done| StatusJob::NonDetachedStatus { done })
+        self.commit
+            .run_status_job(|done| StatusJob::NonDetachedStatus { done })
             .await
             .expect("worker status was unexpectedly detached from the oplog")
     }
@@ -277,8 +292,13 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// Commits and, if the status is detached, recomputes and republishes it (see
     /// [`Worker::reattach_worker_status`]).
     pub async fn reattach_worker_status(&self) {
-        self.run_status_job(|done| StatusJob::Reattach { done })
+        self.commit
+            .run_status_job(|done| StatusJob::Reattach { done })
             .await
+    }
+
+    pub fn owner_commit_controller(&self) -> Arc<OwnerCommitController> {
+        self.commit.clone()
     }
 
     /// Asks the lifecycle task to wake the invocation loop about a status change. Fire and
@@ -345,6 +365,13 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             );
         }
         done_rx
+    }
+}
+
+impl OwnerCommitController {
+    pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
+        self.run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
+            .await
     }
 
     /// Sends a job to the status task and waits for its reply.

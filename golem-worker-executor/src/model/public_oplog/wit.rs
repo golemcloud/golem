@@ -1267,6 +1267,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::Log(params) => Ok(Self::Log {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                parent_start_index: None,
                 level: params.level.into(),
                 context: params.context,
                 message: params.message,
@@ -1322,6 +1323,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     .collect();
                 Ok(Self::StartSpan {
                     timestamp: timestamp_from_datetime(params.timestamp),
+                    parent_start_index: None,
                     span_id,
                     parent,
                     linked_context_id,
@@ -1333,6 +1335,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     golem_common::model::invocation_context::SpanId::from_string(&params.span_id)?;
                 Ok(Self::FinishSpan {
                     timestamp: timestamp_from_datetime(params.timestamp),
+                    parent_start_index: None,
                     span_id,
                 })
             }
@@ -1342,6 +1345,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 let value = params.value.into();
                 Ok(Self::SetSpanAttribute {
                     timestamp: timestamp_from_datetime(params.timestamp),
+                    parent_start_index: None,
                     span_id,
                     key: params.key,
                     value,
@@ -2074,6 +2078,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 level,
                 context,
                 message,
+                ..
             } => Ok(Self::Log(oplog::LogParameters {
                 timestamp: timestamp.into(),
                 level: level.into(),
@@ -2122,6 +2127,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 parent,
                 linked_context_id,
                 attributes,
+                ..
             } => Ok(Self::StartSpan(oplog::StartSpanParameters {
                 timestamp: timestamp.into(),
                 span_id: span_id.to_string(),
@@ -2136,17 +2142,18 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     })
                     .collect(),
             })),
-            M::FinishSpan { timestamp, span_id } => {
-                Ok(Self::FinishSpan(oplog::FinishSpanParameters {
-                    timestamp: timestamp.into(),
-                    span_id: span_id.to_string(),
-                }))
-            }
+            M::FinishSpan {
+                timestamp, span_id, ..
+            } => Ok(Self::FinishSpan(oplog::FinishSpanParameters {
+                timestamp: timestamp.into(),
+                span_id: span_id.to_string(),
+            })),
             M::SetSpanAttribute {
                 timestamp,
                 span_id,
                 key,
                 value,
+                ..
             } => Ok(Self::SetSpanAttribute(oplog::SetSpanAttributeParameters {
                 timestamp: timestamp.into(),
                 span_id: span_id.to_string(),

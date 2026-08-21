@@ -1398,7 +1398,7 @@ mod grant_guard_liveness {
     use super::super::admission::{
         AdmissionController, AdmissionPolicy, MemoryGrant, NoEvictionSource,
     };
-    use crate::services::active_workers::memory_probe::{MemoryProbe, MemorySnapshot};
+    use crate::services::active_agents::memory_probe::{MemoryProbe, MemorySnapshot};
     use proptest::prelude::*;
     use std::sync::Arc;
     use std::time::Duration;

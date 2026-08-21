@@ -30,11 +30,12 @@ pub(super) enum StartClaim {
         /// value; see [`recorded_request_payload_matches`].
         matching_request: Option<HostRequest>,
     },
-    /// A durable-*scope* `Start`: request-less and unowned (e.g. `<scope:batched-write>` /
-    /// `<scope:transaction>`).
+    /// A durable-*scope* `Start`: request-less and optionally owned by an entity invocation.
+    /// Primary scopes remain unowned; entity scope Starts point at the entity invocation Start.
     Scope {
         function_name: HostFunctionName,
         function_type: DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
     },
     /// Any top-level durable-call `Start`, whatever its function name and durable function type
     /// (the dynamic guest-facing durability read learns the identity from the claimed entry
@@ -104,10 +105,12 @@ impl StartClaim {
     pub(super) fn scope(
         function_name: &HostFunctionName,
         function_type: &DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
     ) -> Self {
         Self::Scope {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
+            parent_start_index,
         }
     }
 
@@ -155,7 +158,10 @@ impl StartClaim {
             Self::Owned {
                 parent_start_index, ..
             } => Some(*parent_start_index),
-            Self::Scope { .. } | Self::AnyUnownedCall => None,
+            Self::Scope {
+                parent_start_index, ..
+            } => *parent_start_index,
+            Self::AnyUnownedCall => None,
         }
     }
 
@@ -184,9 +190,10 @@ impl StartClaim {
             Self::Scope {
                 function_name,
                 function_type,
+                parent_start_index,
             } => {
                 format!(
-                    "Start {{ {function_name}, {function_type:?}, request: None, parent_start_index: None }}"
+                    "Start {{ {function_name}, {function_type:?}, request: None, parent_start_index: {parent_start_index:?} }}"
                 )
             }
             Self::Unowned {
@@ -366,11 +373,13 @@ impl ReplayState {
         &self,
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
+        parent_start_index: Option<OplogIndex>,
     ) -> Result<(OplogIndex, ReplayCallHandle), WorkerExecutorError> {
         let (handle, _) = self
             .claim_start(StartClaim::scope(
                 expected_function_name,
                 expected_function_type,
+                parent_start_index,
             ))
             .await?;
         Ok((handle.start_idx(), handle))

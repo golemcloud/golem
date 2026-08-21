@@ -283,6 +283,7 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     replay_state: crate::durable_host::replay_state::ReplayState,
     linear_memory: crate::services::linear_memory::LinearMemoryTracker,
     execution_scope: BegunCallExecutionScope,
+    entity_parent_start_index: Option<OplogIndex>,
     retry: InFunctionRetryController,
     /// The registered atomic-region membership lease for a live persisted call initiated inside an
     /// open atomic region; `None` otherwise.
@@ -333,6 +334,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
 pub(crate) struct AccessClaimOptions {
     pub(crate) scope_discriminator: Option<String>,
     pub(crate) request_identity: Option<HostRequest>,
+    /// Explicit durable parent for runtimes whose invocation scope is established outside the
+    /// calling Store, such as entity sidecar bodies. When an ambient durable parent also exists,
+    /// both identities must agree.
+    pub(crate) parent_start_index: Option<OplogIndex>,
     /// Ownership propagated from a resource created by an earlier observational call. When absent,
     /// initiation captures the current custom-invocation task context.
     pub(crate) observational_owner: Option<OplogIndex>,
@@ -409,7 +414,8 @@ impl Drop for AccessStartAtomicGuard {
 fn is_write_side_effect_for_access(function_type: &DurableFunctionType) -> bool {
     matches!(
         function_type,
-        DurableFunctionType::WriteRemote
+        DurableFunctionType::WriteLocal
+            | DurableFunctionType::WriteRemote
             | DurableFunctionType::WriteRemoteBatched(_)
             | DurableFunctionType::WriteRemoteTransaction(_)
     )
@@ -714,7 +720,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .and_then(CustomInvocationContext::current);
         if !is_accessor_supported_function_type(&function_type) {
             return Err(WorkerExecutorError::runtime(format!(
-                "p3 accessor durable call path currently supports only ReadLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
+                "p3 accessor durable call path currently supports only ReadLocal/WriteLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
             )));
         }
         let prepared = store.with(|mut access| {
@@ -846,9 +852,19 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .last()
             .map(|region| region.begin_index);
 
-        let parent_start_index = ctx
-            .state
-            .child_parent_start_index(&function_type, OplogIndex::INITIAL);
+        let ambient_parent_start_index =
+            ctx.child_parent_start_index(&function_type, OplogIndex::INITIAL);
+        if claim_options.parent_start_index.is_some()
+            && ambient_parent_start_index.is_some()
+            && claim_options.parent_start_index != ambient_parent_start_index
+        {
+            return Err(WorkerExecutorError::runtime(
+                "durable call has conflicting explicit and ambient parent Start indexes",
+            ));
+        }
+        let parent_start_index = claim_options
+            .parent_start_index
+            .or(ambient_parent_start_index);
         let observational_owner = resolve_observational_owner(
             ctx,
             claim_options.observational_owner,
@@ -895,6 +911,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             replay_state: ctx.state.replay_state.clone(),
             linear_memory: ctx.linear_memory.clone(),
             execution_scope,
+            entity_parent_start_index: ctx.entity_parent_start_index(),
             retry,
             atomic_lease,
             drop_sink: P::production_drop_sink(ctx.state.dropped_call_event_sender()),
@@ -1166,7 +1183,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         if prepared.is_live {
             let entry = OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
-                parent_start_index: None,
+                parent_start_index: prepared.entity_parent_start_index,
                 function_name: scope_name,
                 invocation_id: None,
                 observational_owner: prepared.execution_scope.observational_owner,
@@ -1190,7 +1207,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             // replayed oplog was recorded with the discriminators already in place.
             let (begin_index, replay_handle) = prepared
                 .replay_state
-                .claim_scope_start(&scope_name, &function_type)
+                .claim_scope_start(
+                    &scope_name,
+                    &function_type,
+                    prepared.entity_parent_start_index,
+                )
                 .await
                 .map_err(|err| {
                     (
@@ -1370,9 +1391,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .await?;
         let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
         let execution_scope = BegunCallExecutionScope {
-            parent_start_index: ctx
-                .state
-                .child_parent_start_index(&function_type, begin_index),
+            parent_start_index: ctx.child_parent_start_index(&function_type, begin_index),
             atomic_region: ctx
                 .state
                 .active_atomic_regions
@@ -1399,6 +1418,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
 
     pub fn start_index(&self) -> OplogIndex {
         self.start_idx
+    }
+
+    pub(crate) fn parent_start_index(&self) -> Option<OplogIndex> {
+        self.execution_scope.durable_scope
     }
 
     /// The index returned by `begin_durable_function`: the durable scope `Start` for a
@@ -2148,6 +2171,80 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     },
                 )?;
                 Ok(CallReplayOutcome::Incomplete(self))
+            }
+        }
+    }
+
+    /// Replay terminal handling for entity-body reconstruction. Unlike the guest-future accessor
+    /// path, a recorded cancellation is returned to the reconstruction coordinator instead of
+    /// parking forever: the coordinator owns the transient entity task and aborts it at that
+    /// durable boundary. Completed responses are decoded normally and incomplete Starts become
+    /// live-repair handles under the original Start index.
+    pub async fn replay_reconstruction_access<T, D, Ctx>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<ReconstructionReplayOutcome<Pair, P>, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.ensure_accessor_terminal_supported("replay_reconstruction_access")?;
+        let function_type = self.retry.function_type().clone();
+        let begin_index = self.begin_index;
+        let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.state.replay_state.clone(),
+                ctx.state.oplog.clone(),
+                ctx.state.completion_marker_recorder(),
+            )
+        });
+        let replay = self
+            .replay
+            .take()
+            .expect("replay_reconstruction_access() called on a live handle");
+        let outcome = replay_state.await_resolution_outcome(replay).await?;
+        match classify_replay_resolution(outcome) {
+            ReplayedResolution::Delivered(payload, disposition) => {
+                self.finished = true;
+                let response = decode_replayed_payload::<Pair>(&oplog, payload).await?;
+                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
+                    .await?;
+                CompletionDelivery::replay_delivered(
+                    disposition,
+                    self.start_idx,
+                    completion_marker_recorder,
+                    self.trap_context(),
+                    self.cleanup_sink.clone(),
+                )
+                .deliver_at_accessor_terminal(store)
+                .await?;
+                Ok(ReconstructionReplayOutcome::Replayed(response))
+            }
+            ReplayedResolution::Undelivered(UndeliveredTerminal::CancelledWithoutPartial {
+                ..
+            }) => {
+                self.finished = true;
+                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
+                    .await?;
+                Ok(ReconstructionReplayOutcome::Cancelled)
+            }
+            ReplayedResolution::Undelivered(terminal) => {
+                self.finished = true;
+                Err(terminal.direct_divergence_error())
+            }
+            ReplayedResolution::Incomplete => {
+                self.prepare_incomplete_live_repair(
+                    Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
+                    || {
+                        store.with(|mut access| {
+                            get_ctx(access.data_mut()).state.live_host_call_counter()
+                        })
+                    },
+                )?;
+                Ok(ReconstructionReplayOutcome::Incomplete(self))
             }
         }
     }
@@ -2945,18 +3042,19 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (is_live, worker, replay_state) = store.with(|mut access| {
+    let (is_live, worker, replay_state, parent_start_index) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
         (
             ctx.state.is_live(),
             ctx.public_state.worker(),
             ctx.state.replay_state.clone(),
+            ctx.entity_parent_start_index(),
         )
     });
 
     if is_live {
         worker
-            .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
+            .add_to_oplog(OplogEntry::finish_span(parent_start_index, span_id.clone()))
             .await;
     } else {
         crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
@@ -2972,6 +3070,7 @@ fn is_accessor_supported_function_type(function_type: &DurableFunctionType) -> b
     matches!(
         function_type,
         DurableFunctionType::ReadLocal
+            | DurableFunctionType::WriteLocal
             | DurableFunctionType::ReadRemote
             | DurableFunctionType::WriteRemote
             | DurableFunctionType::WriteRemoteBatched(_)
@@ -3175,7 +3274,7 @@ where
             owned_agent_id: ctx.owned_agent_id.clone(),
             agent_id: ctx.state.agent_id.clone(),
             initial_agent_config: ctx.state.initial_agent_config.clone(),
-            worker_dir: ctx.worker_dir.path().to_path_buf(),
+            worker_dir: ctx.owner_filesystem.path().to_path_buf(),
             current_revision: ctx.state.component_metadata.revision,
         }
     });
@@ -3536,11 +3635,24 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
     ) -> Result<CallHandle<Pair, P>, WorkerExecutorError> {
         debug_assert!(!self.is_live(), "start_replay() called on a live handle");
-        let replay = ctx
-            .state
-            .replay_state
-            .claim_concurrent_start(&Pair::HOST_FUNCTION_NAME, self.retry.function_type())
-            .await?;
+        let replay = match self.execution_scope.parent_start_index {
+            Some(parent_start_index) => {
+                ctx.state
+                    .replay_state
+                    .claim_owned_concurrent_start(
+                        &Pair::HOST_FUNCTION_NAME,
+                        self.retry.function_type(),
+                        parent_start_index,
+                    )
+                    .await?
+            }
+            None => {
+                ctx.state
+                    .replay_state
+                    .claim_concurrent_start(&Pair::HOST_FUNCTION_NAME, self.retry.function_type())
+                    .await?
+            }
+        };
         let start_idx = replay.start_idx();
         // Replay handles never participate in the live in-flight member guard, but keep their
         // initiation-time region for trap/retry classification.

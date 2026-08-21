@@ -24,14 +24,14 @@ use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
-    HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasCardService,
+    HasActiveAgents, HasAgentTypesService, HasBlobStoreService, HasCardService,
     HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
     HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService,
     HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWorkerActivator,
     HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
-    active_workers, agent_types, blob_store, card, component, golem_config, key_value, oplog,
+    active_agents, agent_types, blob_store, card, component, golem_config, key_value, oplog,
     promise, rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
     worker_fork,
 };
@@ -424,7 +424,7 @@ fn caller_agent_principal(self_agent_id: &AgentId) -> Principal {
 pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     remote_rpc: Arc<RemoteInvocationRpc>,
     direct_invocation_auth: Arc<dyn DirectInvocationAuthService>,
-    active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+    active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
@@ -465,7 +465,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
         Self {
             remote_rpc: self.remote_rpc.clone(),
             direct_invocation_auth: self.direct_invocation_auth.clone(),
-            active_workers: self.active_workers.clone(),
+            active_agents: self.active_agents.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
@@ -508,9 +508,9 @@ impl<Ctx: WorkerCtx> HasEvents for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DirectWorkerInvocationRpc<Ctx> {
-    fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>> {
-        self.active_workers.clone()
+impl<Ctx: WorkerCtx> HasActiveAgents<Ctx> for DirectWorkerInvocationRpc<Ctx> {
+    fn active_agents(&self) -> Arc<active_agents::ActiveAgents<Ctx>> {
+        self.active_agents.clone()
     }
 }
 
@@ -716,7 +716,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     pub fn new(
         remote_rpc: Arc<RemoteInvocationRpc>,
         direct_invocation_auth: Arc<dyn DirectInvocationAuthService>,
-        active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+        active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
@@ -755,7 +755,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         Self {
             remote_rpc,
             direct_invocation_auth,
-            active_workers,
+            active_agents,
             engine,
             linker,
             runtime,

@@ -276,6 +276,10 @@ oplog_payload! {
         GolemToolGetTool {
             name: String
         },
+        EntityInvocation {
+            metadata: Vec<u8>,
+            input: TypedSchemaValue,
+        },
     }
 }
 
@@ -550,6 +554,9 @@ oplog_payload! {
         },
         GolemToolTool {
             result: Result<Option<Arc<DiscoveredTool>>, String>
+        },
+        EntityInvocation {
+            result: Result<TypedSchemaValue, String>
         }
     }
 }
@@ -718,7 +725,8 @@ pub mod host_functions {
         (FilesystemInputStreamSkip => "filesystem::input_stream", "skip", NoInput, StreamSkip),
         (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite),
         (GolemToolGetAllTools => "golem::tool::host", "get_all_tools", NoInput, GolemToolTools),
-        (GolemToolGetTool => "golem::tool::host", "get_tool", GolemToolGetTool, GolemToolTool)
+        (GolemToolGetTool => "golem::tool::host", "get_tool", GolemToolGetTool, GolemToolTool),
+        (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation)
     }
 }
 

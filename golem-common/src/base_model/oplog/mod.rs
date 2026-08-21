@@ -434,6 +434,7 @@ oplog_entry! {
         wit_raw_type: "log-parameters"
         wit_public_type: "log-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             level: LogLevel,
             context: String,
             message: String,
@@ -506,6 +507,7 @@ oplog_entry! {
         wit_raw_type: "start-span-parameters"
         wit_public_type: "start-span-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             span_id: SpanId,
             parent: Option<SpanId>,
             linked_context_id: Option<SpanId>,
@@ -524,6 +526,7 @@ oplog_entry! {
         wit_raw_type: "finish-span-parameters"
         wit_public_type: "finish-span-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             span_id: SpanId,
         }
         public {
@@ -536,6 +539,7 @@ oplog_entry! {
         wit_raw_type: "set-span-attribute-parameters"
         wit_public_type: "set-span-attribute-parameters"
         raw {
+            parent_start_index: Option<OplogIndex>,
             span_id: SpanId,
             key: String,
             value: AttributeValue,

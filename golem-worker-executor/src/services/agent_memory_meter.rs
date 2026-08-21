@@ -87,6 +87,10 @@ impl AgentMemoryMeter {
         *self.inner.limit_exceeded.lock().unwrap() = Some(callback);
     }
 
+    pub(crate) fn clear_limit_exceeded_callback(&self) {
+        *self.inner.limit_exceeded.lock().unwrap() = None;
+    }
+
     pub(crate) fn enforce_limit(&self, limit: u64) {
         if self.protected_bytes_exceed(limit)
             && let Some(callback) = self.inner.limit_exceeded.lock().unwrap().as_ref()
@@ -327,6 +331,22 @@ mod tests {
         meter.enforce_limit(10);
 
         assert!(notified.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn clearing_self_referencing_callback_releases_meter() {
+        let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0));
+        let meter = AgentMemoryMeter::new(AgentMode::Durable, 10, true, entry, Instant::now());
+        let weak_inner = Arc::downgrade(&meter.inner);
+        let callback_meter = meter.clone();
+        meter.set_limit_exceeded_callback(Arc::new(move || {
+            let _ = callback_meter.exceeds_current_limit();
+        }));
+
+        meter.clear_limit_exceeded_callback();
+        drop(meter);
+
+        assert!(weak_inner.upgrade().is_none());
     }
 
     #[test]

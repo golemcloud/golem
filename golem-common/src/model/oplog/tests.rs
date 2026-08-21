@@ -15,7 +15,7 @@
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::card::{Card, CardId};
 use crate::model::component::PluginPriority;
-use crate::model::invocation_context::{SpanId, TraceId};
+use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::lucene::Query;
 use crate::model::oplog::host_functions::HostFunctionName;
 use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
@@ -34,9 +34,9 @@ use crate::model::oplog::public_oplog_entry::{
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, AgentResourceId, DurableFunctionType, JsonSnapshotData,
-    LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry,
-    OplogPayload, PluginInstallationDescription, PublicAgentInvocation,
+    AgentMethodInvocationParameters, AgentResourceId, AttributeMap, DurableFunctionType,
+    JsonSnapshotData, LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart,
+    OplogEntry, OplogPayload, PluginInstallationDescription, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
     PublicLocalSpanData, PublicOplogEntry, PublicSnapshotData, PublicSpanData,
     PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
@@ -52,7 +52,7 @@ use crate::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, Variant
 use crate::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
 use poem_openapi::types::ToJSON;
 use pretty_assertions::assert_eq;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use test_r::test;
 use uuid::Uuid;
 
@@ -88,6 +88,50 @@ fn observational_start_public_protobuf_roundtrip() {
 
     let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
     assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), entry);
+}
+
+#[test]
+fn entity_attribution_raw_protobuf_roundtrip() {
+    let parent_start_index = Some(OplogIndex::from_u64(17));
+    let span_id = SpanId::generate();
+    let entries = vec![
+        OplogEntry::Log {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index,
+            level: LogLevel::Info,
+            context: "entity".to_string(),
+            message: "message".to_string(),
+        },
+        OplogEntry::StartSpan {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index,
+            span_id: span_id.clone(),
+            parent: None,
+            linked_context_id: None,
+            attributes: AttributeMap(HashMap::from([(
+                "key".to_string(),
+                AttributeValue::String("value".to_string()),
+            )])),
+        },
+        OplogEntry::SetSpanAttribute {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index,
+            span_id: span_id.clone(),
+            key: "other".to_string(),
+            value: AttributeValue::String("value".to_string()),
+        },
+        OplogEntry::FinishSpan {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index,
+            span_id,
+        },
+    ];
+
+    for entry in entries {
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            entry.clone().try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
+    }
 }
 
 /// Build a single-root [`TypedSchemaValue`] fixture from an anonymous schema
@@ -1123,9 +1167,17 @@ fn remove_retry_policy_serialization_poem_serde_equivalence() {
 }
 
 mod scope_scan {
+    use crate::model::invocation_context::SpanId;
     use crate::model::oplog::host_functions::HostFunctionName;
-    use crate::model::oplog::{DurableFunctionType, OplogEntry, OplogPayload, ScopeScanState};
-    use crate::model::{AgentInvocationResult, ComponentRevision, OplogIndex, Timestamp};
+    use crate::model::oplog::{
+        AttributeMap, DurableFunctionType, LogLevel, OplogEntry, OplogPayload,
+        OplogScopeProjection, ScopeScanState,
+    };
+    use crate::model::regions::OplogRegion;
+    use crate::model::{
+        AgentInvocationResult, ComponentRevision, OplogIndex, Timestamp, TransactionId,
+    };
+    use std::collections::HashMap;
     use test_r::test;
 
     fn idx(i: u64) -> OplogIndex {
@@ -1167,6 +1219,198 @@ mod scope_scan {
             consumed_fuel: 0,
             component_revision: ComponentRevision(0),
         }
+    }
+
+    fn end(start: u64) -> OplogEntry {
+        OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: idx(start),
+            response: None,
+            forced_commit: false,
+        }
+    }
+
+    #[test]
+    fn scope_projection_selects_only_transitive_call_tree_entries() {
+        let entries = vec![
+            (10, start(None, DurableFunctionType::WriteLocal)),
+            (11, start(None, DurableFunctionType::WriteLocal)),
+            (12, start(Some(10), DurableFunctionType::ReadLocal)),
+            (13, start(Some(12), DurableFunctionType::ReadLocal)),
+            (14, start(Some(11), DurableFunctionType::ReadLocal)),
+            (15, end(13)),
+            (16, end(14)),
+            (17, end(12)),
+            (18, end(10)),
+        ];
+        let mut projection = OplogScopeProjection::new(idx(10));
+
+        let projected = entries
+            .iter()
+            .filter_map(|(index, entry)| projection.includes(idx(*index), entry).then_some(*index))
+            .collect::<Vec<_>>();
+
+        assert_eq!(projected, vec![10, 12, 13, 15, 17, 18]);
+    }
+
+    #[test]
+    fn scope_projection_includes_attributed_logs_spans_and_transaction_markers() {
+        let span_id = SpanId::generate();
+        let entries = vec![
+            (10, start(None, DurableFunctionType::WriteLocal)),
+            (
+                11,
+                OplogEntry::Log {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: Some(idx(10)),
+                    level: LogLevel::Info,
+                    context: "entity".to_string(),
+                    message: "included".to_string(),
+                },
+            ),
+            (
+                12,
+                OplogEntry::Log {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
+                    level: LogLevel::Info,
+                    context: "owner".to_string(),
+                    message: "excluded".to_string(),
+                },
+            ),
+            (
+                13,
+                OplogEntry::StartSpan {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: Some(idx(10)),
+                    span_id: span_id.clone(),
+                    parent: None,
+                    linked_context_id: None,
+                    attributes: AttributeMap(HashMap::new()),
+                },
+            ),
+            (
+                14,
+                OplogEntry::FinishSpan {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: Some(idx(10)),
+                    span_id,
+                },
+            ),
+            (
+                15,
+                start(Some(10), DurableFunctionType::WriteRemoteTransaction(None)),
+            ),
+            (
+                16,
+                OplogEntry::BeginRemoteTransaction {
+                    timestamp: Timestamp::now_utc(),
+                    transaction_id: TransactionId::new("entity-tx".to_string()),
+                    original_begin_index: None,
+                },
+            ),
+            (
+                17,
+                OplogEntry::PreCommitRemoteTransaction {
+                    timestamp: Timestamp::now_utc(),
+                    begin_index: idx(15),
+                },
+            ),
+            (
+                18,
+                OplogEntry::CommittedRemoteTransaction {
+                    timestamp: Timestamp::now_utc(),
+                    begin_index: idx(15),
+                },
+            ),
+            (19, end(15)),
+            (
+                20,
+                OplogEntry::CompletionDiscarded {
+                    timestamp: Timestamp::now_utc(),
+                    start_index: idx(10),
+                },
+            ),
+        ];
+        let mut projection = OplogScopeProjection::new(idx(10));
+
+        let projected = entries
+            .iter()
+            .filter_map(|(index, entry)| projection.includes(idx(*index), entry).then_some(*index))
+            .collect::<Vec<_>>();
+
+        assert_eq!(projected, vec![10, 11, 13, 14, 15, 16, 17, 18, 19, 20]);
+    }
+
+    #[test]
+    fn scope_projection_includes_retried_transaction_begin_marker() {
+        let entries = [
+            (
+                10,
+                start(None, DurableFunctionType::WriteRemoteTransaction(None)),
+            ),
+            (
+                11,
+                OplogEntry::BeginRemoteTransaction {
+                    timestamp: Timestamp::now_utc(),
+                    transaction_id: TransactionId::new("initial".to_string()),
+                    original_begin_index: None,
+                },
+            ),
+            (
+                12,
+                OplogEntry::Jump {
+                    timestamp: Timestamp::now_utc(),
+                    jump: OplogRegion {
+                        start: idx(11),
+                        end: idx(12),
+                    },
+                },
+            ),
+            (
+                13,
+                OplogEntry::BeginRemoteTransaction {
+                    timestamp: Timestamp::now_utc(),
+                    transaction_id: TransactionId::new("retry".to_string()),
+                    original_begin_index: Some(idx(10)),
+                },
+            ),
+        ];
+        let mut projection = OplogScopeProjection::new(idx(10));
+
+        let projected = entries
+            .iter()
+            .filter_map(|(index, entry)| projection.includes(idx(*index), entry).then_some(*index))
+            .collect::<Vec<_>>();
+
+        assert_eq!(projected, vec![10, 11, 13]);
+    }
+
+    #[test]
+    fn scope_projection_excludes_adjacent_foreign_retried_transaction_begin_marker() {
+        let entries = [
+            (10, start(None, DurableFunctionType::WriteLocal)),
+            (
+                11,
+                start(Some(10), DurableFunctionType::WriteRemoteTransaction(None)),
+            ),
+            (
+                12,
+                OplogEntry::BeginRemoteTransaction {
+                    timestamp: Timestamp::now_utc(),
+                    transaction_id: TransactionId::new("foreign-retry".to_string()),
+                    original_begin_index: Some(idx(20)),
+                },
+            ),
+        ];
+        let mut projection = OplogScopeProjection::new(idx(10));
+
+        let projected = entries
+            .iter()
+            .filter_map(|(index, entry)| projection.includes(idx(*index), entry).then_some(*index))
+            .collect::<Vec<_>>();
+
+        assert_eq!(projected, vec![10, 11]);
     }
 
     #[test]

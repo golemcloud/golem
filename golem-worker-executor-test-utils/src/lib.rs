@@ -38,6 +38,7 @@ use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::card::{Card, CardId, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
+use golem_common::model::entity::{EntityInvocationScope, FilesystemCapability, OwnerRuntime};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
@@ -89,8 +90,8 @@ use golem_worker_executor::preview2::golem::agent::host::{
     RpcError, ScheduledInvocationReceipt, WasmRpc,
 };
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
-use golem_worker_executor::services::active_workers::ActiveWorkers;
-use golem_worker_executor::services::active_workers::memory_probe::FixedProbe;
+use golem_worker_executor::services::active_agents::ActiveAgents;
+use golem_worker_executor::services::active_agents::memory_probe::FixedProbe;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
@@ -140,9 +141,9 @@ use golem_worker_executor::services::{HasAll, NoAdditionalDeps, rdbms};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    CallCountManagement, EntityInvocationManagement, ExternalOperations, FileSystemReading,
+    FuelManagement, InvocationContextManagement, InvocationHooks, InvocationManagement,
+    LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails, bootstrap_and_run_worker_executor};
 use prometheus::Registry;
@@ -590,6 +591,19 @@ impl TestWorkerExecutor {
         })
     }
 
+    /// Returns the owner-keyed active-agent group for executor instance-layer tests.
+    pub async fn active_agent(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<Arc<golem_worker_executor::services::active_agents::ActiveAgent<TestWorkerCtx>>>
+    {
+        self.additional_test_deps
+            .active_agents
+            .get()?
+            .try_get_active_agent(owned_agent_id)
+            .await
+    }
+
     pub async fn store_component_with_id(
         &self,
         name: &str,
@@ -611,9 +625,9 @@ impl TestWorkerExecutor {
     }
 
     /// Returns `true` iff the `Worker` shell for `owned_agent_id` is currently
-    /// registered in `ActiveWorkers` *and* has a loaded wasmtime instance.
+    /// registered in `ActiveAgents` *and* has a loaded wasmtime instance.
     /// Returns `false` when:
-    ///   - no `Worker` shell is currently in `ActiveWorkers` for this id, or
+    ///   - no `Worker` shell is currently in `ActiveAgents` for this id, or
     ///   - the shell is present but the wasmtime instance has been unloaded
     ///     (e.g. after memory-pressure eviction).
     ///
@@ -630,7 +644,7 @@ impl TestWorkerExecutor {
     }
 
     /// Returns the current eviction classification for the worker shell
-    /// registered in `ActiveWorkers`, or `None` if the worker is missing or
+    /// registered in `ActiveAgents`, or `None` if the worker is missing or
     /// non-evictable. Used by tests to wait until the worker is `LoadedIdle`
     /// before triggering memory-pressure eviction.
     pub async fn worker_eviction_class(
@@ -674,7 +688,7 @@ impl TestWorkerExecutor {
             .additional_test_deps
             .try_get_worker(owned_agent_id)
             .await
-            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveWorkers"))?;
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
         Ok(worker.memory_requirement().await?)
     }
 
@@ -1235,7 +1249,7 @@ async fn run(
     .await
 }
 
-struct TestWorkerCtx {
+pub struct TestWorkerCtx {
     durable_ctx: DurableWorkerCtx<TestWorkerCtx>,
 }
 
@@ -1286,6 +1300,8 @@ impl FuelManagement for TestWorkerCtx {
     fn return_fuel(&mut self, _current_level: u64) -> u64 {
         0
     }
+
+    fn settle_fuel(&mut self, _current_level: u64) {}
 }
 
 impl CallCountManagement for TestWorkerCtx {
@@ -1527,7 +1543,7 @@ impl WorkerCtx for TestWorkerCtx {
         rdbms_service: Arc<dyn rdbms::RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
-        active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
+        active_agents: Arc<ActiveAgents<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<TestWorkerCtx>>,
@@ -1552,24 +1568,29 @@ impl WorkerCtx for TestWorkerCtx {
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
+        runtime: OwnerRuntime,
+        owner_execution: Arc<golem_worker_executor::worker::instance::OwnerExecution>,
+        owner_resources: Arc<golem_worker_executor::worker::instance::OwnerRuntimeResources>,
+        filesystem: FilesystemCapability,
+        executable_component: Component,
+        entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
-        // Capture the executor's ActiveWorkers handle the first time we see
+        // Capture the executor's ActiveAgents handle the first time we see
         // it, so test helpers (e.g. `worker_is_loaded`) can observe worker
         // shells under memory-pressure eviction (#3393 T5).
-        extra_deps.set_active_workers(active_workers.clone());
+        extra_deps.set_active_agents(active_agents.clone());
 
         let oplog = Arc::new(TestOplog::new(
             owned_agent_id.clone(),
             oplog.clone(),
             extra_deps,
         ));
-        let account_resource_limits = Arc::new(AtomicResourceEntry::new(
-            u64::MAX,
-            usize::MAX,
-            usize::MAX,
-            u64::MAX,
-            u64::MAX,
-        ));
+        if !Arc::ptr_eq(&execution_status, &owner_resources.execution_status()) {
+            return Err(WorkerExecutorError::runtime(
+                "Store execution status does not belong to its owner runtime resources",
+            ));
+        }
+        let account_resource_limits = owner_resources.resource_limits();
 
         let durable_ctx = DurableWorkerCtx::create(
             owned_agent_id,
@@ -1607,6 +1628,12 @@ impl WorkerCtx for TestWorkerCtx {
             original_phantom_id,
             u64::MAX,
             u64::MAX,
+            runtime,
+            owner_execution,
+            owner_resources,
+            filesystem,
+            executable_component,
+            entity_activation,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -1688,6 +1715,19 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn max_disk_space(&self) -> u64 {
         u64::MAX // no plan limit enforcement in tests by default
+    }
+}
+
+impl EntityInvocationManagement for TestWorkerCtx {
+    fn set_entity_invocation_scope(
+        &mut self,
+        scope: Option<EntityInvocationScope>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.durable_ctx.set_entity_invocation_scope(scope)
+    }
+
+    fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope> {
+        self.durable_ctx.entity_invocation_scope()
     }
 }
 
@@ -1885,11 +1925,11 @@ impl InvocationContextManagement for TestWorkerCtx {
 
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
-    fn create_active_workers(
+    fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
         shutdown_token: tokio_util::sync::CancellationToken,
-    ) -> Arc<ActiveWorkers<TestWorkerCtx>> {
+    ) -> Arc<ActiveAgents<TestWorkerCtx>> {
         // The in-process test harness shares its process (and RSS) with the test
         // framework and other services, so a process-RSS probe cannot isolate
         // this executor's footprint. Disable measured admission for ordinary
@@ -1899,7 +1939,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         // granted accounting (exact and process-isolated) against the pinned
         // limit. The usable_ratio (worker_memory_ratio) still applies.
         match golem_config.memory.system_memory_override {
-            Some(limit) => Arc::new(ActiveWorkers::new_with_probe(
+            Some(limit) => Arc::new(ActiveAgents::new_with_probe(
                 Box::new(FixedProbe::new(limit, 0)),
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
@@ -1909,7 +1949,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             None => {
                 let mut memory_config = golem_config.memory.clone();
                 memory_config.enable_measured_admission = false;
-                Arc::new(ActiveWorkers::new(
+                Arc::new(ActiveAgents::new(
                     &memory_config,
                     &golem_config.filesystem_storage,
                     &golem_config.agent_status_flush,
@@ -2262,7 +2302,7 @@ async fn run_production_context_bootstrap(
                 // helpers do not apply here. We hand the executor a fresh, empty
                 // `AdditionalTestDeps` purely to satisfy the field; calling
                 // `worker_is_loaded` / `worker_eviction_class` / `worker_memory_requirement`
-                // on this path will report "no worker" because no `ActiveWorkers`
+                // on this path will report "no worker" because no `ActiveAgents`
                 // handle was ever captured.
                 additional_test_deps: AdditionalTestDeps::new(),
                 leak_detector,
@@ -3010,7 +3050,7 @@ pub struct AdditionalTestDeps {
     /// `worker_eviction_class`, `worker_memory_requirement`) to observe
     /// live `Worker` state for the memory-pressure-driven eviction test
     /// (issue #3393 T5).
-    active_workers: Arc<std::sync::OnceLock<Arc<ActiveWorkers<TestWorkerCtx>>>>,
+    active_agents: Arc<std::sync::OnceLock<Arc<ActiveAgents<TestWorkerCtx>>>>,
 }
 
 impl Default for AdditionalTestDeps {
@@ -3027,7 +3067,7 @@ impl AdditionalTestDeps {
             oplog_failures,
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
-            active_workers: Arc::new(std::sync::OnceLock::new()),
+            active_agents: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -3065,13 +3105,13 @@ impl AdditionalTestDeps {
             .await
     }
 
-    /// Stores the executor's `ActiveWorkers` registry on first call. Subsequent
+    /// Stores the executor's `ActiveAgents` registry on first call. Subsequent
     /// calls are no-ops because they all carry the same `Arc`.
-    pub(crate) fn set_active_workers(&self, workers: Arc<ActiveWorkers<TestWorkerCtx>>) {
-        let _ = self.active_workers.set(workers);
+    pub(crate) fn set_active_agents(&self, agents: Arc<ActiveAgents<TestWorkerCtx>>) {
+        let _ = self.active_agents.set(agents);
     }
 
-    /// Look up a `Worker` shell currently registered in `ActiveWorkers`.
+    /// Look up a `Worker` shell currently registered in `ActiveAgents`.
     /// Returns `None` if the executor has not loaded any worker yet (handle
     /// not captured), or if no `Worker` for `owned_agent_id` is currently
     /// resident.
@@ -3079,7 +3119,7 @@ impl AdditionalTestDeps {
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> Option<Arc<Worker<TestWorkerCtx>>> {
-        self.active_workers.get()?.try_get(owned_agent_id).await
+        self.active_agents.get()?.try_get(owned_agent_id).await
     }
 
     pub async fn get_oplog_failures_count(&self, agent_id: AgentId, entry: String) -> usize {

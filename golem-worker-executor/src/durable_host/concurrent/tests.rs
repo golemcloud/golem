@@ -740,6 +740,7 @@ async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
     let (oplog, replay_state, mut token) = tail_gated_token_over_crash_tail(
         vec![OplogEntry::Log {
             timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
             level: LogLevel::Stdout,
             context: "stdout".to_string(),
             message: "crash tail hint".to_string(),

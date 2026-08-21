@@ -370,6 +370,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             self,
             &self_,
             "golem::rpc::wasm-rpc::invoke-and-await",
+            true,
             method_name,
             input,
         )? {
@@ -438,6 +439,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             self,
             &self_,
             "golem::rpc::wasm-rpc::invoke",
+            false,
             method_name,
             input,
         )? {
@@ -1007,6 +1009,7 @@ fn prepare_rpc_invocation<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     resource: &Resource<WasmRpcEntry>,
     host_function_name: &str,
+    synchronous: bool,
     method_name: String,
     input: core_wire::SchemaValueTree,
 ) -> anyhow::Result<Result<PreparedRpcInvocation, RpcError>> {
@@ -1047,9 +1050,21 @@ fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         };
 
     if ephemeral_logical_agent_id.is_none() && logical_remote_agent_id == own_agent_id {
-        return Err(anyhow::anyhow!(
-            "RPC calls to the same agent are not supported"
-        ));
+        match ctx.runtime() {
+            golem_common::model::entity::OwnerRuntime::Agent => {
+                return Err(anyhow::anyhow!(
+                    "RPC calls to the same agent are not supported"
+                ));
+            }
+            golem_common::model::entity::OwnerRuntime::Entity(_) if synchronous => {
+                let caller = ctx.owner_invocation_id()?;
+                ctx.owner_execution
+                    .lane()
+                    .ensure_synchronous_owner_call(&caller)
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            }
+            golem_common::model::entity::OwnerRuntime::Entity(_) => {}
+        }
     }
 
     Ok(Ok(PreparedRpcInvocation {
@@ -1331,18 +1346,19 @@ async fn finish_span_access<T, Ctx: WorkerCtx>(
     accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
     span_id: &SpanId,
 ) -> Result<(), WorkerExecutorError> {
-    let (is_live, worker, replay_state) = accessor.with(|mut access| {
+    let (is_live, worker, replay_state, parent_start_index) = accessor.with(|mut access| {
         let ctx = access.get();
         (
             ctx.state.is_live(),
             ctx.public_state.worker(),
             ctx.state.replay_state.clone(),
+            ctx.entity_parent_start_index(),
         )
     });
 
     if is_live {
         worker
-            .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
+            .add_to_oplog(OplogEntry::finish_span(parent_start_index, span_id.clone()))
             .await;
     } else {
         crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
@@ -1603,17 +1619,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         }
                     };
                     match task_result {
-                        Ok(rpc_result) => handle
-                            .complete_access_deferred(
-                                accessor,
-                                accessor.getter(),
-                                HostResponseGolemRpcInvokeAndAwait {
-                                    result: rpc_result.map_err(Into::into),
-                                },
-                                Some(OplogEntry::finish_span(span_id.clone())),
-                            )
-                            .await
-                            .map_err(anyhow::Error::from)?,
+                        Ok(rpc_result) => {
+                            let finish_span = OplogEntry::finish_span(
+                                handle.parent_start_index(),
+                                span_id.clone(),
+                            );
+                            handle
+                                .complete_access_deferred(
+                                    accessor,
+                                    accessor.getter(),
+                                    HostResponseGolemRpcInvokeAndAwait {
+                                        result: rpc_result.map_err(Into::into),
+                                    },
+                                    Some(finish_span),
+                                )
+                                .await
+                                .map_err(anyhow::Error::from)?
+                        }
                         Err(err) => {
                             // The background RPC failed hard after its in-task retries. This is a
                             // trap, not a durable result: abandon the call, leaving its `Start`
@@ -1667,17 +1689,22 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                     )
                                     .await;
                                 }
-                                Some(Ok(rpc_result)) => live
-                                    .complete_access_deferred(
+                                Some(Ok(rpc_result)) => {
+                                    let finish_span = OplogEntry::finish_span(
+                                        live.parent_start_index(),
+                                        span_id.clone(),
+                                    );
+                                    live.complete_access_deferred(
                                         accessor,
                                         accessor.getter(),
                                         HostResponseGolemRpcInvokeAndAwait {
                                             result: rpc_result.map_err(Into::into),
                                         },
-                                        Some(OplogEntry::finish_span(span_id.clone())),
+                                        Some(finish_span),
                                     )
                                     .await
-                                    .map_err(anyhow::Error::from)?,
+                                    .map_err(anyhow::Error::from)?
+                                }
                                 Some(Err(err)) => {
                                     return Err(live.trap(anyhow::anyhow!(err.to_string())));
                                 }

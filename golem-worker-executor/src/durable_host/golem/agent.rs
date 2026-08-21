@@ -163,6 +163,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         declared_graph: &SchemaGraph,
         declared_type: &SchemaType,
     ) -> anyhow::Result<SchemaValue> {
+        let canonical_path = CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
+        if self.entity_invocation_scope().is_some_and(|scope| {
+            !scope
+                .activation()
+                .policy()
+                .secret_keys_readable()
+                .contains(&canonical_path)
+        }) {
+            return Err(anyhow!(
+                "Entity invocation is not allowed to read secret config key {path_str}"
+            ));
+        }
+
         // Future automatic-update transforms belong here, where both
         // the component-declared type and the guest-expected type are
         // available together with the resolved secret metadata/value.
@@ -216,9 +229,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .get_agent_secrets(ctx.state.component_metadata.environment_id)
                     .await?;
 
-                let canonical_agent_secret_path =
-                    CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
-                let agent_secret = agent_secrets.get(&canonical_agent_secret_path);
+                let agent_secret = agent_secrets.get(&canonical_path);
 
                 let result_schema = match agent_secret {
                     None if optional => SchemaValue::Option { inner: None },
@@ -625,7 +636,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         })?;
 
         let agent_type = self
-            .component_metadata()
+            .owner_component_metadata()
             .metadata
             .find_agent_type_by_name(&agent_id.agent_type)
             .expect("Active agent type of agent was not declared in component metadata");

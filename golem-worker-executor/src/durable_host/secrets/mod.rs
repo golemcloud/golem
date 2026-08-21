@@ -242,6 +242,21 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
         };
 
         let entry = secret_entry(self, &s)?.clone();
+        let config_key = match canonical_config_key(&entry) {
+            Ok(config_key) => config_key,
+            Err(error) => return Ok(Err(reveal_error_to_wit(error))),
+        };
+        if self.entity_invocation_scope().is_some_and(|scope| {
+            !scope
+                .activation()
+                .policy()
+                .secret_keys_revealable()
+                .contains(&config_key)
+        }) {
+            return Ok(Err(SecretError::Unavailable(format!(
+                "Entity invocation is not allowed to reveal secret config key {config_key}"
+            ))));
+        }
         let mut handle = CallHandle::<GolemSecretsReveal, NotCancellable>::start(
             self,
             HostRequestSecretReveal {

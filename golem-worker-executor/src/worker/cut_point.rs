@@ -143,7 +143,50 @@ where
                     reference_index: idx,
                 },
             )),
-            _ => None,
+            // Keep this exhaustive: every new entry that can reference an earlier opening entry
+            // must be considered before it is allowed across a fork/snapshot cut point.
+            OplogEntry::Create { .. }
+            | OplogEntry::Start { .. }
+            | OplogEntry::AgentInvocationStarted { .. }
+            | OplogEntry::AgentInvocationFinished { .. }
+            | OplogEntry::Suspend { .. }
+            | OplogEntry::Error { .. }
+            | OplogEntry::NoOp { .. }
+            | OplogEntry::Jump { .. }
+            | OplogEntry::Interrupted { .. }
+            | OplogEntry::Exited { .. }
+            | OplogEntry::BeginAtomicRegion { .. }
+            | OplogEntry::PendingAgentInvocation { .. }
+            | OplogEntry::PendingUpdate { .. }
+            | OplogEntry::SuccessfulUpdate { .. }
+            | OplogEntry::FailedUpdate { .. }
+            | OplogEntry::GrowMemory { .. }
+            | OplogEntry::FilesystemStorageUsageUpdate { .. }
+            | OplogEntry::CreateResource { .. }
+            | OplogEntry::DropResource { .. }
+            | OplogEntry::Log { .. }
+            | OplogEntry::Restart { .. }
+            | OplogEntry::ActivatePlugin { .. }
+            | OplogEntry::DeactivatePlugin { .. }
+            | OplogEntry::Revert { .. }
+            | OplogEntry::CancelPendingInvocation { .. }
+            | OplogEntry::StartSpan { .. }
+            | OplogEntry::FinishSpan { .. }
+            | OplogEntry::SetSpanAttribute { .. }
+            | OplogEntry::BeginRemoteTransaction {
+                original_begin_index: None,
+                ..
+            }
+            | OplogEntry::Snapshot { .. }
+            | OplogEntry::OplogProcessorCheckpoint { .. }
+            | OplogEntry::SetRetryPolicy { .. }
+            | OplogEntry::RemoveRetryPolicy { .. }
+            | OplogEntry::CardEventQueued { .. }
+            | OplogEntry::CardInstalled { .. }
+            | OplogEntry::CardInstallFailed { .. }
+            | OplogEntry::CardRevoked { .. }
+            | OplogEntry::CardExpired { .. }
+            | OplogEntry::HostStreamFrame { .. } => None,
         };
 
         if let Some((opening_index, construct)) = spanning
