@@ -940,7 +940,7 @@ fn to_tungstenite_message(message: Message) -> tungstenite::Message {
 fn to_user_message(msg: tungstenite::Message) -> Result<Option<Message>, Error> {
     match msg {
         tungstenite::Message::Text(text) => Ok(Some(Message::Text(text.as_str().to_owned()))),
-        tungstenite::Message::Binary(data) => Ok(Some(Message::Binary(data.as_slice().to_vec()))),
+        tungstenite::Message::Binary(data) => Ok(Some(Message::Binary(data.as_ref().to_vec()))),
         tungstenite::Message::Close(frame) => {
             let (code, reason) = match frame {
                 Some(frame) => (frame.code.into(), frame.reason.to_string()),
