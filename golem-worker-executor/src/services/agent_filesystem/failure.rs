@@ -17,29 +17,32 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 
-pub(crate) type AgentFilesystemInvalidationCallback =
+pub(super) type AgentFilesystemInvalidationCallback =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
-pub(crate) type AgentFilesystemRetryCallback =
+pub(super) type AgentFilesystemRetryCallback =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
-pub(crate) type AgentFilesystemPressureRecoveryCallback = Arc<
-    dyn Fn(MutationOperation, std::time::Instant) -> Pin<Box<dyn Future<Output = bool> + Send>>
+pub(super) type AgentFilesystemPressureRecoveryCallback = Arc<
+    dyn Fn(
+            FilesystemPressureOperation,
+            std::time::Instant,
+        ) -> Pin<Box<dyn Future<Output = bool> + Send>>
         + Send
         + Sync,
 >;
 
-pub(crate) const FILESYSTEM_MUTATION_MAX_ATTEMPTS: usize = 2;
-pub(crate) const FILESYSTEM_MUTATION_RETRY_TIMEOUT: std::time::Duration =
+pub(super) const FILESYSTEM_MUTATION_MAX_ATTEMPTS: usize = 2;
+pub(super) const FILESYSTEM_MUTATION_RETRY_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MutationEffect {
+pub(super) enum MutationEffect {
     ProvenNoEffect,
     KnownCompletedPrefix { bytes: u64 },
     DesiredPostconditionSatisfied,
     Unknown,
 }
 
-pub(crate) fn proven_write_progress_effect(completed: usize) -> MutationEffect {
+pub(super) fn proven_write_progress_effect(completed: usize) -> MutationEffect {
     match u64::try_from(completed) {
         Ok(0) => MutationEffect::ProvenNoEffect,
         Ok(bytes) => MutationEffect::KnownCompletedPrefix { bytes },
@@ -47,7 +50,7 @@ pub(crate) fn proven_write_progress_effect(completed: usize) -> MutationEffect {
     }
 }
 
-pub(crate) fn native_write_failure_effect(
+pub(super) fn native_write_failure_effect(
     error: &std::io::Error,
     completed: usize,
 ) -> MutationEffect {
@@ -59,27 +62,15 @@ pub(crate) fn native_write_failure_effect(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MutationOperation {
+pub(crate) enum FilesystemPressureOperation {
     Write,
     Resize,
     Create,
     Metadata,
 }
 
-#[derive(Debug)]
-pub(crate) enum MutationFailure<G> {
-    Guest(G),
-    StorageExhaustion { guest: G, quota_hint: bool },
-    TransientGuest(G),
-    AccessGuest(G),
-    UnclassifiedGuest(G),
-    Io(std::io::Error),
-    Infrastructure(std::io::Error),
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MutationDecision<G> {
-    PreserveGuest(G),
+pub(super) enum MutationDecision {
     Quota,
     InsufficientSpace,
     PhysicalPressure,
@@ -90,21 +81,12 @@ pub(crate) enum MutationDecision<G> {
 }
 
 impl AgentFilesystemRuntime {
-    pub(crate) async fn classify_mutation_failure<G>(
+    pub(super) async fn classify_io_failure(
         &self,
-        failure: MutationFailure<G>,
+        operation: FilesystemPressureOperation,
+        error: std::io::Error,
         effect: MutationEffect,
-    ) -> MutationDecision<G> {
-        self.classify_mutation_failure_for(MutationOperation::Metadata, failure, effect)
-            .await
-    }
-
-    pub(crate) async fn classify_mutation_failure_for<G>(
-        &self,
-        operation: MutationOperation,
-        failure: MutationFailure<G>,
-        effect: MutationEffect,
-    ) -> MutationDecision<G> {
+    ) -> MutationDecision {
         if effect != MutationEffect::ProvenNoEffect
             && self.observe_usage_for_billing().await.is_err()
         {
@@ -113,124 +95,62 @@ impl AgentFilesystemRuntime {
         if effect == MutationEffect::Unknown {
             return self.invalidate().await;
         }
-        if matches!(&failure, MutationFailure::Infrastructure(_))
-            || matches!(&failure, MutationFailure::Io(error) if is_terminal_io(error))
-        {
+        if is_terminal_io(&error) {
             return self.invalidate().await;
         }
         if effect == MutationEffect::DesiredPostconditionSatisfied {
             return MutationDecision::Success;
         }
-        if let MutationFailure::Guest(error) = failure {
-            return MutationDecision::PreserveGuest(error);
-        }
-
-        match failure {
-            MutationFailure::Guest(_) => {
-                unreachable!("guest failures return before classification")
-            }
-            MutationFailure::StorageExhaustion { guest, quota_hint } => {
-                match self.fresh_failure_observations().await {
-                    Ok((usage, limits, capacity)) => {
-                        let quota_exhausted = usage.zip(limits).is_some_and(|(usage, limits)| {
-                            quota_exhausted(operation, usage, limits)
-                        });
-                        let physical_exhausted = self
-                            .runtime_state
-                            .pressure
-                            .pressure(operation, capacity)
-                            .is_some();
-                        if quota_hint || quota_exhausted {
-                            MutationDecision::Quota
-                        } else if physical_exhausted {
-                            MutationDecision::PhysicalPressure
-                        } else {
-                            tracing::warn!(
-                                operation = ?operation,
-                                quota_hint,
-                                "Filesystem storage exhaustion was not explained by fresh quota or capacity observations"
-                            );
-                            MutationDecision::PreserveGuest(guest)
-                        }
+        if is_storage_exhaustion(&error) {
+            match self.fresh_failure_observations().await {
+                Ok((usage, limits, capacity)) => {
+                    let quota_exhausted = usage
+                        .zip(limits)
+                        .is_some_and(|(usage, limits)| quota_exhausted(operation, usage, limits));
+                    let physical_exhausted = self
+                        .runtime_state
+                        .pressure
+                        .pressure(operation, capacity)
+                        .is_some();
+                    if is_quota_error(&error) || quota_exhausted {
+                        MutationDecision::Quota
+                    } else if physical_exhausted {
+                        MutationDecision::PhysicalPressure
+                    } else {
+                        tracing::warn!(
+                            operation = ?operation,
+                            raw_os_error = ?error.raw_os_error(),
+                            "Filesystem storage exhaustion was not explained by fresh quota or capacity observations"
+                        );
+                        MutationDecision::InsufficientSpace
                     }
-                    Err(error) if error.is_terminal_failure() => self.invalidate().await,
-                    Err(_) if quota_hint => MutationDecision::PreserveGuest(guest),
-                    Err(_) => MutationDecision::PreserveGuest(guest),
                 }
-            }
-            MutationFailure::TransientGuest(guest) => {
-                match self.fresh_failure_observations().await {
-                    Ok(_) if self.retry_permitted().await => MutationDecision::BoundedRetry,
-                    Ok(_) => MutationDecision::PreserveGuest(guest),
-                    Err(error) if error.is_terminal_failure() => self.invalidate().await,
-                    Err(_) => MutationDecision::PreserveGuest(guest),
+                Err(observation_error) if observation_error.is_terminal_failure() => {
+                    self.invalidate().await
                 }
+                Err(_) if is_quota_error(&error) => MutationDecision::Quota,
+                Err(_) => MutationDecision::InsufficientSpace,
             }
-            MutationFailure::AccessGuest(guest) => match self.fresh_failure_observations().await {
-                Ok(_) => MutationDecision::PreserveGuest(guest),
+        } else if is_transient_io(&error) {
+            match self.fresh_failure_observations().await {
+                Ok(_) if self.retry_permitted().await => MutationDecision::BoundedRetry,
+                Ok(_) => MutationDecision::PreserveRaw,
+                Err(observation_error) if observation_error.is_terminal_failure() => {
+                    self.invalidate().await
+                }
+                Err(_) => MutationDecision::PreserveRaw,
+            }
+        } else if is_guest_scoped_io(&error) {
+            match self.fresh_failure_observations().await {
+                Ok(_) => MutationDecision::PreserveRaw,
                 Err(_) => self.invalidate().await,
-            },
-            MutationFailure::UnclassifiedGuest(guest) => {
-                match self.fresh_failure_observations().await {
-                    Ok(_) if self.retry_permitted().await => MutationDecision::BoundedRetry,
-                    Ok(_) => MutationDecision::PreserveGuest(guest),
-                    Err(_) => self.invalidate().await,
-                }
             }
-            MutationFailure::Infrastructure(_) => self.invalidate().await,
-            MutationFailure::Io(error) if is_terminal_io(&error) => self.invalidate().await,
-            MutationFailure::Io(error) if is_storage_exhaustion(&error) => {
-                match self.fresh_failure_observations().await {
-                    Ok((usage, limits, capacity)) => {
-                        let quota_exhausted = usage.zip(limits).is_some_and(|(usage, limits)| {
-                            quota_exhausted(operation, usage, limits)
-                        });
-                        let physical_exhausted = self
-                            .runtime_state
-                            .pressure
-                            .pressure(operation, capacity)
-                            .is_some();
-                        if is_quota_error(&error) || quota_exhausted {
-                            MutationDecision::Quota
-                        } else if physical_exhausted {
-                            MutationDecision::PhysicalPressure
-                        } else {
-                            tracing::warn!(
-                                operation = ?operation,
-                                raw_os_error = ?error.raw_os_error(),
-                                "Filesystem storage exhaustion was not explained by fresh quota or capacity observations"
-                            );
-                            MutationDecision::InsufficientSpace
-                        }
-                    }
-                    Err(observation_error) if observation_error.is_terminal_failure() => {
-                        self.invalidate().await
-                    }
-                    Err(_) if is_quota_error(&error) => MutationDecision::Quota,
-                    Err(_) => MutationDecision::InsufficientSpace,
-                }
-            }
-            MutationFailure::Io(error) if is_transient_io(&error) => {
-                match self.fresh_failure_observations().await {
-                    Ok(_) if self.retry_permitted().await => MutationDecision::BoundedRetry,
-                    Ok(_) => MutationDecision::PreserveRaw,
-                    Err(observation_error) if observation_error.is_terminal_failure() => {
-                        self.invalidate().await
-                    }
-                    Err(_) => MutationDecision::PreserveRaw,
-                }
-            }
-            MutationFailure::Io(error) if is_guest_scoped_io(&error) => {
-                match self.fresh_failure_observations().await {
-                    Ok(_) => MutationDecision::PreserveRaw,
-                    Err(_) => self.invalidate().await,
-                }
-            }
-            MutationFailure::Io(_) => match self.fresh_failure_observations().await {
+        } else {
+            match self.fresh_failure_observations().await {
                 Ok(_) if self.retry_permitted().await => MutationDecision::BoundedRetry,
                 Ok(_) => MutationDecision::PreserveRaw,
                 Err(_) => self.invalidate().await,
-            },
+            }
         }
     }
 
@@ -266,7 +186,7 @@ impl AgentFilesystemRuntime {
 
     pub(crate) async fn recover_physical_pressure(
         &self,
-        operation: MutationOperation,
+        operation: FilesystemPressureOperation,
         deadline: std::time::Instant,
     ) -> bool {
         if std::time::Instant::now() >= deadline {
@@ -308,7 +228,7 @@ impl AgentFilesystemRuntime {
         }
     }
 
-    async fn invalidate<G>(&self) -> MutationDecision<G> {
+    async fn invalidate(&self) -> MutationDecision {
         self.seal();
         if !self
             .runtime_state
@@ -329,22 +249,22 @@ impl AgentFilesystemRuntime {
     }
 
     pub(crate) async fn invalidate_runtime(&self) {
-        let _: MutationDecision<()> = self.invalidate().await;
+        let _ = self.invalidate().await;
     }
 }
 
 fn quota_exhausted(
-    operation: MutationOperation,
+    operation: FilesystemPressureOperation,
     usage: AgentFilesystemUsage,
     limits: ResolvedAgentFilesystemLimits,
 ) -> bool {
     let bytes_exhausted = usage.allocated_bytes >= limits.allocated_bytes;
     let objects_exhausted = usage.filesystem_objects >= limits.filesystem_objects;
     match operation {
-        MutationOperation::Write | MutationOperation::Resize | MutationOperation::Metadata => {
-            bytes_exhausted
-        }
-        MutationOperation::Create => bytes_exhausted || objects_exhausted,
+        FilesystemPressureOperation::Write
+        | FilesystemPressureOperation::Resize
+        | FilesystemPressureOperation::Metadata => bytes_exhausted,
+        FilesystemPressureOperation::Create => bytes_exhausted || objects_exhausted,
     }
 }
 

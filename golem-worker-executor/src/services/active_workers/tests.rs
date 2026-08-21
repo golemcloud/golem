@@ -4,7 +4,7 @@ use super::{
     FilesystemPressureRecoverySource, recover_filesystem_pressure_from,
     sort_filesystem_pressure_candidates, spawn_before_deadline,
 };
-use crate::services::agent_filesystem::{FilesystemCapacity, MutationOperation};
+use crate::services::agent_filesystem::{FilesystemCapacity, FilesystemPressureOperation};
 use crate::services::golem_config::FilesystemPressureConfig;
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::EvictionStopOutcome;
@@ -129,7 +129,7 @@ async fn filesystem_pressure_recovery_observes_after_successful_deletion() {
         recover_filesystem_pressure_from(
             &source,
             &pressure_policy(),
-            MutationOperation::Write,
+            FilesystemPressureOperation::Write,
             recovery_deadline(),
         )
         .await
@@ -162,7 +162,7 @@ async fn filesystem_pressure_recovery_rechecks_raced_candidate_eligibility() {
         recover_filesystem_pressure_from(
             &source,
             &pressure_policy(),
-            MutationOperation::Write,
+            FilesystemPressureOperation::Write,
             recovery_deadline(),
         )
         .await
@@ -194,7 +194,7 @@ async fn filesystem_pressure_recovery_waits_for_delayed_reclamation() {
         recover_filesystem_pressure_from(
             &source,
             &pressure_policy(),
-            MutationOperation::Write,
+            FilesystemPressureOperation::Write,
             recovery_deadline(),
         )
         .await
@@ -222,7 +222,7 @@ async fn filesystem_pressure_recovery_handles_object_pressure() {
         recover_filesystem_pressure_from(
             &source,
             &pressure_policy(),
-            MutationOperation::Create,
+            FilesystemPressureOperation::Create,
             recovery_deadline(),
         )
         .await
@@ -262,7 +262,7 @@ async fn filesystem_pressure_recovery_includes_new_pressure_dimensions() {
         recover_filesystem_pressure_from(
             &source,
             &pressure_policy(),
-            MutationOperation::Create,
+            FilesystemPressureOperation::Create,
             recovery_deadline(),
         )
         .await
@@ -283,7 +283,7 @@ async fn filesystem_pressure_observation_failure_stops_without_eviction() {
         !recover_filesystem_pressure_from(
             &source,
             &pressure_policy(),
-            MutationOperation::Write,
+            FilesystemPressureOperation::Write,
             recovery_deadline(),
         )
         .await
@@ -304,7 +304,7 @@ async fn filesystem_pressure_recovery_does_not_start_after_deadline() {
         !recover_filesystem_pressure_from(
             &source,
             &pressure_policy(),
-            MutationOperation::Write,
+            FilesystemPressureOperation::Write,
             Instant::now(),
         )
         .await
@@ -335,7 +335,7 @@ async fn filesystem_pressure_reclamation_wait_is_bounded_by_deadline() {
         !recover_filesystem_pressure_from(
             &source,
             &policy,
-            MutationOperation::Write,
+            FilesystemPressureOperation::Write,
             Instant::now() + Duration::from_millis(10),
         )
         .await

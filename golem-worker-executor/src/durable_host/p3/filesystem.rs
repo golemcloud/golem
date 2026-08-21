@@ -26,8 +26,6 @@ use crate::durable_host::p3::{
     observe_function_call_store, run_read_access, wasi_filesystem_view,
 };
 use crate::durable_host::tail_work::TailActivity;
-#[cfg(test)]
-use crate::services::agent_filesystem::state_postcondition;
 use crate::services::agent_filesystem::{
     AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemRuntime,
     AgentFilesystemWriteMode, AgentFilesystemWriter, NativeMutationGuestError, NativeOpenOptions,
@@ -1640,11 +1638,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::agent_filesystem::{
-        MutationPostcondition, ObjectIdentity, PathObjectType, PathState,
-        create_directory_postcondition, link_postcondition, open_postcondition, path_state,
-        remove_postcondition, rename_postcondition, symlink_postcondition,
-    };
     use fs_set_times::{SystemTimeSpec, set_symlink_times, set_times};
     use golem_common::model::oplog::types::SerializableDateTime;
     use std::time::{Duration, SystemTime};
@@ -1658,146 +1651,6 @@ mod tests {
             false,
             path,
         )
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    async fn p3_shared_path_probe_distinguishes_unchanged_and_satisfied_state() {
-        let tempdir = tempfile::TempDir::new().unwrap();
-        let directory = Dir::new(
-            cap_std::fs::Dir::open_ambient_dir(tempdir.path(), cap_std::ambient_authority())
-                .unwrap(),
-            DirPerms::all(),
-            FilePerms::all(),
-            wasmtime_wasi::filesystem::OpenMode::READ | wasmtime_wasi::filesystem::OpenMode::WRITE,
-            false,
-            tempdir.path().to_path_buf(),
-        );
-        let before = path_state(&directory, "entry").await.unwrap();
-        assert_eq!(before, None);
-
-        let unchanged = state_postcondition(
-            path_state(&directory, "entry").await,
-            |state| state.is_some(),
-            |state| state == before,
-        );
-        assert_eq!(unchanged, MutationPostcondition::NoEffect);
-
-        std::fs::create_dir(tempdir.path().join("entry")).unwrap();
-        let satisfied = state_postcondition(
-            path_state(&directory, "entry").await,
-            |state| state.is_some_and(|state| state.type_ == PathObjectType::Directory),
-            |_| false,
-        );
-        assert_eq!(satisfied, MutationPostcondition::Satisfied);
-    }
-
-    #[test]
-    fn p3_shared_operation_postconditions_cover_non_prefix_effects() {
-        let source = PathState {
-            identity: Some(ObjectIdentity {
-                device: 1,
-                inode: 10,
-            }),
-            type_: PathObjectType::RegularFile,
-            size: 17,
-        };
-        let replacement = PathState {
-            identity: Some(ObjectIdentity {
-                device: 1,
-                inode: 11,
-            }),
-            type_: PathObjectType::RegularFile,
-            size: 8,
-        };
-
-        let open_cases = [
-            (
-                None,
-                Ok(None),
-                false,
-                false,
-                MutationPostcondition::NoEffect,
-            ),
-            (
-                Some(source),
-                Ok(Some(source)),
-                false,
-                false,
-                MutationPostcondition::Satisfied,
-            ),
-            (
-                Some(source),
-                Ok(Some(replacement)),
-                false,
-                false,
-                MutationPostcondition::Satisfied,
-            ),
-            (
-                Some(source),
-                Ok(Some(PathState { size: 0, ..source })),
-                true,
-                false,
-                MutationPostcondition::Satisfied,
-            ),
-        ];
-        for (before, current, truncate, exclusive, expected) in open_cases {
-            assert_eq!(
-                open_postcondition(
-                    before,
-                    current,
-                    PathObjectType::RegularFile,
-                    truncate,
-                    exclusive,
-                ),
-                expected
-            );
-        }
-
-        assert_eq!(
-            rename_postcondition(Some(source), Some(replacement), Ok(None), Ok(Some(source))),
-            MutationPostcondition::Satisfied
-        );
-        assert_eq!(
-            rename_postcondition(
-                Some(source),
-                Some(replacement),
-                Ok(Some(source)),
-                Ok(Some(replacement)),
-            ),
-            MutationPostcondition::NoEffect
-        );
-        assert_eq!(
-            link_postcondition(Some(source), None, Ok(Some(source)), Ok(Some(source))),
-            MutationPostcondition::Satisfied
-        );
-        assert_eq!(
-            create_directory_postcondition(Some(source), Ok(Some(source))),
-            MutationPostcondition::NoEffect
-        );
-        assert_eq!(
-            remove_postcondition(None, Ok(None)),
-            MutationPostcondition::NoEffect
-        );
-        assert_eq!(
-            link_postcondition(None, Some(replacement), Ok(None), Ok(Some(replacement))),
-            MutationPostcondition::NoEffect
-        );
-        assert_eq!(
-            rename_postcondition(None, Some(replacement), Ok(None), Ok(Some(replacement))),
-            MutationPostcondition::NoEffect
-        );
-        let existing_symlink = crate::services::agent_filesystem::SymlinkState {
-            object: Some(PathState {
-                type_: PathObjectType::SymbolicLink,
-                ..source
-            }),
-            target: Some("existing".into()),
-        };
-        assert_eq!(
-            symlink_postcondition(&existing_symlink, Ok(existing_symlink.clone()), "requested",),
-            MutationPostcondition::NoEffect
-        );
     }
 
     #[test]

@@ -33,10 +33,6 @@ use std::time::Instant;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 mod backend;
-#[allow(
-    dead_code,
-    reason = "mutation classification is exposed for filesystem host adapters"
-)]
 mod failure;
 mod initial_files;
 mod mutation;
@@ -47,40 +43,12 @@ mod unmanaged;
 #[cfg(target_os = "linux")]
 mod xfs;
 
-#[allow(
-    unused_imports,
-    reason = "mutation classification is exposed for filesystem host adapters"
-)]
-pub(crate) use failure::{
-    AgentFilesystemInvalidationCallback, AgentFilesystemPressureRecoveryCallback,
-    AgentFilesystemRetryCallback, FILESYSTEM_MUTATION_MAX_ATTEMPTS,
-    FILESYSTEM_MUTATION_RETRY_TIMEOUT, MutationDecision, MutationEffect, MutationFailure,
-    MutationOperation, native_write_failure_effect, proven_write_progress_effect,
-};
-#[allow(
-    unused_imports,
-    reason = "the agent filesystem module exposes the semantic mutation boundary"
-)]
+pub(crate) use failure::FilesystemPressureOperation;
 pub(crate) use mutation::{
-    AdmittedFilesystemWrite, AgentFilesystemEffectAdmission, AgentFilesystemEffectLease,
-    AgentFilesystemMutationError, AgentFilesystemMutationResult, AgentFilesystemMutations,
-    AgentFilesystemOperationResult, AgentFilesystemUpdateEffectLease,
-    AgentFilesystemWriteCompletion, AgentFilesystemWriteMode, AgentFilesystemWriter,
-    ClassifiedFileOutputStream, FilesystemStreamMode, NativeFilesystemError,
-    NativeMutationGuestError, NativeOpenOptions, NativeOpenResult,
-    classified_filesystem_stream_error_code,
-};
-#[allow(
-    unused_imports,
-    reason = "shared probe vocabulary is consumed across host adapters and tests"
-)]
-pub(crate) use postcondition::{
-    MutationPostcondition, ObjectIdentity, PathObjectType, PathState, RequestedTime, SymlinkState,
-    TimesState, create_directory_postcondition, descriptor_state, descriptor_times,
-    link_postcondition, open_postcondition, path_state, path_state_with_follow, path_times,
-    remove_postcondition, rename_postcondition, resize_postcondition, same_object,
-    same_optional_object, state_postcondition, symlink_postcondition, symlink_state,
-    times_postcondition,
+    AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemUpdateEffectLease,
+    AgentFilesystemWriteMode, AgentFilesystemWriter, ClassifiedFileOutputStream,
+    FilesystemStreamMode, NativeMutationGuestError, NativeOpenOptions, NativeOpenResult,
+    RequestedTime, classified_filesystem_stream_error_code,
 };
 use quota::FilesystemLimitExceededCallback;
 pub(crate) use quota::{

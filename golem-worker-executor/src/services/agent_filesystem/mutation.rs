@@ -12,6 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::failure::{
+    FILESYSTEM_MUTATION_MAX_ATTEMPTS, FILESYSTEM_MUTATION_RETRY_TIMEOUT, MutationDecision,
+    MutationEffect, native_write_failure_effect, proven_write_progress_effect,
+};
+use super::postcondition::{
+    MutationPostcondition, PathObjectType, PathState, SymlinkState, create_directory_postcondition,
+    descriptor_state, descriptor_times, link_postcondition, open_postcondition, path_state,
+    path_state_with_follow, path_times, remove_postcondition, rename_postcondition,
+    resize_postcondition, symlink_postcondition, symlink_state, times_postcondition,
+};
 use super::*;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -43,10 +53,17 @@ mod protocol;
     reason = "the mutation module defines the semantic host-adapter boundary"
 )]
 pub(crate) use protocol::{
-    AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemMutationResult,
-    AgentFilesystemMutations, AgentFilesystemOperationResult, AgentFilesystemWriteCompletion,
-    AgentFilesystemWriteMode, AgentFilesystemWriter, NativeFilesystemError,
+    AdmittedFilesystemWrite, AgentFilesystemMutationError, AgentFilesystemWriteMode,
+    AgentFilesystemWriter,
 };
+use protocol::{AgentFilesystemMutations, AgentFilesystemWriteCompletion};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RequestedTime {
+    NoChange,
+    Now,
+    Timestamp { seconds: i128, nanoseconds: u32 },
+}
 
 // Terminal flag: once set, this runtime never admits another filesystem effect.
 const FILESYSTEM_RUNTIME_SEALED: usize = 1 << (usize::BITS - 1);

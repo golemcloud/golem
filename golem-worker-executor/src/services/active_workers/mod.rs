@@ -37,7 +37,7 @@ use tracing::{Instrument, debug};
 
 use crate::services::HasAll;
 use crate::services::agent_filesystem::{
-    AgentFilesystems, FilesystemCapacity, FilesystemStorageError, MutationOperation,
+    AgentFilesystems, FilesystemCapacity, FilesystemPressureOperation, FilesystemStorageError,
 };
 use crate::services::card_interest::CardInterestIndex;
 use crate::services::golem_config::{
@@ -181,7 +181,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
     pub(crate) async fn recover_filesystem_pressure(
         &self,
-        operation: MutationOperation,
+        operation: FilesystemPressureOperation,
         deadline: Instant,
     ) -> bool {
         let Ok(_recovery) = tokio::time::timeout_at(
@@ -554,7 +554,7 @@ fn sort_filesystem_pressure_candidates<T>(candidates: &mut [(u64, String, T)]) {
 async fn recover_filesystem_pressure_from<S: FilesystemPressureRecoverySource>(
     source: &S,
     policy: &FilesystemPressureConfig,
-    operation: MutationOperation,
+    operation: FilesystemPressureOperation,
     deadline: Instant,
 ) -> bool {
     if Instant::now() >= deadline {

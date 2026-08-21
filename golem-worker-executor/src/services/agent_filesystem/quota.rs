@@ -146,11 +146,11 @@ impl FilesystemPressureConfig {
 
     pub(crate) fn pressure(
         &self,
-        operation: MutationOperation,
+        operation: FilesystemPressureOperation,
         capacity: FilesystemCapacity,
     ) -> Option<FilesystemPressure> {
         let bytes = capacity.available_bytes <= self.minimum_available_bytes;
-        let filesystem_objects = operation == MutationOperation::Create
+        let filesystem_objects = operation == FilesystemPressureOperation::Create
             && capacity.available_filesystem_objects <= self.minimum_available_filesystem_objects;
         (bytes || filesystem_objects).then_some(FilesystemPressure {
             bytes,

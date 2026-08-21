@@ -436,7 +436,7 @@ impl AgentFilesystemMutations {
             Ok(()) => Ok(()),
             Err(error) => match self
                 .resolve_non_prefix_failure(
-                    MutationOperation::Metadata,
+                    FilesystemPressureOperation::Metadata,
                     error,
                     MutationPostcondition::Unknown,
                     FILESYSTEM_MUTATION_MAX_ATTEMPTS,
@@ -508,7 +508,7 @@ impl AgentFilesystemMutations {
         let ValidatedFilesystemDescriptorTimes { effect, descriptor } = validated;
         let before = self
             .initial_probe(
-                MutationOperation::Metadata,
+                FilesystemPressureOperation::Metadata,
                 descriptor_times(&descriptor).await,
             )
             .await?;
@@ -534,7 +534,7 @@ impl AgentFilesystemMutations {
                     );
                     match self
                         .resolve_non_prefix_failure(
-                            MutationOperation::Metadata,
+                            FilesystemPressureOperation::Metadata,
                             error,
                             postcondition,
                             failures,
@@ -619,7 +619,7 @@ impl AgentFilesystemMutations {
         } = validated;
         let before = self
             .initial_probe(
-                MutationOperation::Metadata,
+                FilesystemPressureOperation::Metadata,
                 path_times(&directory, &path, follow).await,
             )
             .await?;
@@ -652,7 +652,7 @@ impl AgentFilesystemMutations {
                     );
                     match self
                         .resolve_non_prefix_failure(
-                            MutationOperation::Metadata,
+                            FilesystemPressureOperation::Metadata,
                             error,
                             postcondition,
                             failures,
@@ -1038,7 +1038,7 @@ impl AgentFilesystemMutations {
         } = prepared;
         let before = self
             .initial_probe(
-                MutationOperation::Metadata,
+                FilesystemPressureOperation::Metadata,
                 path_state_with_follow(&directory, &path, options.follow).await,
             )
             .await?;
@@ -1048,9 +1048,9 @@ impl AgentFilesystemMutations {
             PathObjectType::RegularFile
         };
         let operation = if options.create {
-            MutationOperation::Create
+            FilesystemPressureOperation::Create
         } else {
-            MutationOperation::Resize
+            FilesystemPressureOperation::Resize
         };
         let started = Instant::now();
         let mut failures = 0;
@@ -1116,7 +1116,7 @@ impl AgentFilesystemMutations {
         &self,
         native: Arc<dyn FilesystemSafeReopen>,
         effect: Arc<AgentFilesystemUpdateEffectLease>,
-        operation: MutationOperation,
+        operation: FilesystemPressureOperation,
         mut failures: usize,
         started: Instant,
     ) -> AgentFilesystemOperationResult<NativeOpenResult> {
@@ -1336,7 +1336,7 @@ impl AgentFilesystemMutations {
 
     async fn initial_probe<T>(
         &self,
-        operation: MutationOperation,
+        operation: FilesystemPressureOperation,
         result: std::io::Result<T>,
     ) -> AgentFilesystemOperationResult<T> {
         match result {
@@ -1350,7 +1350,7 @@ impl AgentFilesystemMutations {
 
     async fn resolve_non_prefix_failure(
         &self,
-        operation: MutationOperation,
+        operation: FilesystemPressureOperation,
         error: std::io::Error,
         postcondition: MutationPostcondition,
         failures: usize,
@@ -1364,7 +1364,7 @@ impl AgentFilesystemMutations {
         };
         let decision = self
             .runtime
-            .classify_mutation_failure_for::<()>(operation, MutationFailure::Io(error), effect)
+            .classify_io_failure(operation, error, effect)
             .await;
         let failures = if postcondition == MutationPostcondition::NoEffect {
             failures
@@ -1411,7 +1411,7 @@ impl AgentFilesystemMutations {
             Ok(before) => before,
             Err(error) => {
                 return self
-                    .classify_probe_failure(MutationOperation::Resize, error)
+                    .classify_probe_failure(FilesystemPressureOperation::Resize, error)
                     .await
                     .map(|_| unreachable!("probe failure cannot produce resize progress"));
             }
@@ -1452,11 +1452,7 @@ impl AgentFilesystemMutations {
             };
             let decision = self
                 .runtime
-                .classify_mutation_failure_for::<()>(
-                    MutationOperation::Resize,
-                    MutationFailure::Io(error),
-                    mutation_effect,
-                )
+                .classify_io_failure(FilesystemPressureOperation::Resize, error, mutation_effect)
                 .await;
             match resolve_decision(
                 &self.runtime,
@@ -1466,7 +1462,7 @@ impl AgentFilesystemMutations {
                 failures,
                 started,
                 false,
-                MutationOperation::Resize,
+                FilesystemPressureOperation::Resize,
             )
             .await
             {
@@ -1478,17 +1474,13 @@ impl AgentFilesystemMutations {
 
     async fn classify_probe_failure(
         &self,
-        operation: MutationOperation,
+        operation: FilesystemPressureOperation,
         error: std::io::Error,
     ) -> AgentFilesystemMutationResult {
         let native_error = NativeFilesystemError::capture(&error);
         match self
             .runtime
-            .classify_mutation_failure_for::<()>(
-                operation,
-                MutationFailure::Io(error),
-                MutationEffect::ProvenNoEffect,
-            )
+            .classify_io_failure(operation, error, MutationEffect::ProvenNoEffect)
             .await
         {
             MutationDecision::Quota => Err(AgentFilesystemMutationError::QuotaExhausted {
@@ -1505,12 +1497,12 @@ impl AgentFilesystemMutations {
                 error: Some(native_error),
                 completed: Some(0),
             }),
-            MutationDecision::PreserveGuest(())
-            | MutationDecision::BoundedRetry
-            | MutationDecision::PreserveRaw => Err(AgentFilesystemMutationError::Native {
-                error: native_error,
-                completed: 0,
-            }),
+            MutationDecision::BoundedRetry | MutationDecision::PreserveRaw => {
+                Err(AgentFilesystemMutationError::Native {
+                    error: native_error,
+                    completed: 0,
+                })
+            }
             MutationDecision::Success => unreachable!("failed probe cannot satisfy a mutation"),
         }
     }
@@ -1574,10 +1566,12 @@ enum NamespaceBefore {
 }
 
 impl NamespaceMutation {
-    fn operation(&self) -> MutationOperation {
+    fn operation(&self) -> FilesystemPressureOperation {
         match self {
-            Self::CreateDirectory { .. } | Self::Symlink { .. } => MutationOperation::Create,
-            _ => MutationOperation::Metadata,
+            Self::CreateDirectory { .. } | Self::Symlink { .. } => {
+                FilesystemPressureOperation::Create
+            }
+            _ => FilesystemPressureOperation::Metadata,
         }
     }
 
@@ -1590,7 +1584,7 @@ impl NamespaceMutation {
             | Self::RemoveDirectory { directory, path }
             | Self::UnlinkFile { directory, path } => mutations
                 .initial_probe(
-                    MutationOperation::Metadata,
+                    FilesystemPressureOperation::Metadata,
                     path_state(directory, path).await,
                 )
                 .await
@@ -1610,13 +1604,13 @@ impl NamespaceMutation {
             } => {
                 let source = mutations
                     .initial_probe(
-                        MutationOperation::Metadata,
+                        FilesystemPressureOperation::Metadata,
                         path_state(source, source_path).await,
                     )
                     .await?;
                 let destination = mutations
                     .initial_probe(
-                        MutationOperation::Metadata,
+                        FilesystemPressureOperation::Metadata,
                         path_state(destination, destination_path).await,
                     )
                     .await?;
@@ -1629,7 +1623,7 @@ impl NamespaceMutation {
                 directory, path, ..
             } => mutations
                 .initial_probe(
-                    MutationOperation::Metadata,
+                    FilesystemPressureOperation::Metadata,
                     symlink_state(directory, path).await,
                 )
                 .await
@@ -1959,11 +1953,7 @@ impl AdmittedFilesystemWrite {
             let native_error = NativeFilesystemError::capture(&error);
             let decision = self
                 .runtime
-                .classify_mutation_failure_for::<()>(
-                    MutationOperation::Write,
-                    MutationFailure::Io(error),
-                    mutation_effect,
-                )
+                .classify_io_failure(FilesystemPressureOperation::Write, error, mutation_effect)
                 .await;
             let completed_u64 = completed_u64(completed);
             match resolve_decision(
@@ -1974,7 +1964,7 @@ impl AdmittedFilesystemWrite {
                 failures,
                 started,
                 cancellation.is_cancelled(),
-                MutationOperation::Write,
+                FilesystemPressureOperation::Write,
             )
             .await
             {
@@ -2217,13 +2207,13 @@ enum NonPrefixResolution {
 
 async fn resolve_decision(
     runtime: &AgentFilesystemRuntime,
-    decision: MutationDecision<()>,
+    decision: MutationDecision,
     error: NativeFilesystemError,
     completed: u64,
     failures: usize,
     started: Instant,
     cancelled: bool,
-    operation: MutationOperation,
+    operation: FilesystemPressureOperation,
 ) -> DecisionResolution {
     let within_retry_bound = failures < FILESYSTEM_MUTATION_MAX_ATTEMPTS
         && started.elapsed() <= FILESYSTEM_MUTATION_RETRY_TIMEOUT;
@@ -2233,12 +2223,6 @@ async fn resolve_decision(
         }
         MutationDecision::BoundedRetry if within_retry_bound => DecisionResolution::Retry,
         MutationDecision::BoundedRetry | MutationDecision::PreserveRaw => {
-            DecisionResolution::Complete(Err(AgentFilesystemMutationError::Native {
-                error,
-                completed,
-            }))
-        }
-        MutationDecision::PreserveGuest(()) => {
             DecisionResolution::Complete(Err(AgentFilesystemMutationError::Native {
                 error,
                 completed,
@@ -2871,7 +2855,13 @@ mod tests {
             });
 
             let result = mutations
-                .safe_reopen(native, effect, MutationOperation::Create, 0, Instant::now())
+                .safe_reopen(
+                    native,
+                    effect,
+                    FilesystemPressureOperation::Create,
+                    0,
+                    Instant::now(),
+                )
                 .await;
 
             assert!(matches!(
@@ -2896,7 +2886,13 @@ mod tests {
         });
 
         let result = mutations
-            .safe_reopen(native, effect, MutationOperation::Create, 0, Instant::now())
+            .safe_reopen(
+                native,
+                effect,
+                FilesystemPressureOperation::Create,
+                0,
+                Instant::now(),
+            )
             .await;
 
         assert!(matches!(

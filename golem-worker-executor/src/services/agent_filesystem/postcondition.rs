@@ -15,26 +15,28 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use super::mutation::RequestedTime;
+
 #[cfg(target_os = "linux")]
 use cap_std::fs::MetadataExt as _;
 use wasmtime_wasi::filesystem::{Descriptor, Dir};
 use wasmtime_wasi::runtime::spawn_blocking;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MutationPostcondition {
+pub(super) enum MutationPostcondition {
     Satisfied,
     NoEffect,
     Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ObjectIdentity {
-    pub(crate) device: u64,
-    pub(crate) inode: u64,
+pub(super) struct ObjectIdentity {
+    pub(super) device: u64,
+    pub(super) inode: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PathObjectType {
+pub(super) enum PathObjectType {
     Directory,
     RegularFile,
     SymbolicLink,
@@ -42,30 +44,23 @@ pub(crate) enum PathObjectType {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PathState {
-    pub(crate) identity: Option<ObjectIdentity>,
-    pub(crate) type_: PathObjectType,
-    pub(crate) size: u64,
+pub(super) struct PathState {
+    pub(super) identity: Option<ObjectIdentity>,
+    pub(super) type_: PathObjectType,
+    pub(super) size: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SymlinkState {
-    pub(crate) object: Option<PathState>,
-    pub(crate) target: Option<String>,
+pub(super) struct SymlinkState {
+    pub(super) object: Option<PathState>,
+    pub(super) target: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TimesState {
-    pub(crate) identity: Option<ObjectIdentity>,
-    pub(crate) accessed: Option<SystemTime>,
-    pub(crate) modified: Option<SystemTime>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RequestedTime {
-    NoChange,
-    Now,
-    Timestamp { seconds: i128, nanoseconds: u32 },
+pub(super) struct TimesState {
+    pub(super) identity: Option<ObjectIdentity>,
+    pub(super) accessed: Option<SystemTime>,
+    pub(super) modified: Option<SystemTime>,
 }
 
 #[cfg(target_os = "linux")]
