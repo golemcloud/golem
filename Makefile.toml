@@ -668,6 +668,7 @@ cargo-test-r run --package golem-service-base --test '*' -- --nocapture --report
 cargo-test-r run --package golem-registry-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 RUST_LOG=debug cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-shard-manager --test integration -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group6]

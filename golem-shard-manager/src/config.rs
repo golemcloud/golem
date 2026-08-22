@@ -40,6 +40,8 @@ pub struct ShardManagerConfig {
     pub grpc: GrpcApiConfig,
     pub number_of_shards: usize,
     pub rebalance_threshold: f64,
+    #[serde(with = "humantime_serde")]
+    pub shard_lease_duration: Duration,
     pub registry_service: GrpcRegistryServiceConfig,
     pub resource_definition_fetcher: ResourceDefinitionFetcherConfig,
     pub quota: QuotaServiceConfig,
@@ -80,6 +82,11 @@ impl SafeDisplay for ShardManagerConfig {
             "rebalance threshold: {}",
             self.rebalance_threshold
         );
+        let _ = writeln!(
+            &mut result,
+            "shard lease duration: {:?}",
+            self.shard_lease_duration
+        );
         let _ = writeln!(&mut result, "registry service:");
         let _ = writeln!(
             &mut result,
@@ -113,6 +120,7 @@ impl Default for ShardManagerConfig {
             grpc: GrpcApiConfig::default(),
             number_of_shards: 1024,
             rebalance_threshold: 0.1,
+            shard_lease_duration: Duration::from_secs(60),
             registry_service: GrpcRegistryServiceConfig::default(),
             resource_definition_fetcher: ResourceDefinitionFetcherConfig::default(),
             quota: QuotaServiceConfig::default(),
