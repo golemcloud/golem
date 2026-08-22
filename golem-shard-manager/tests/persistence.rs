@@ -13,20 +13,24 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
-use golem_common::model::{Pod, ShardId};
+use golem_common::model::ShardId;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_shard_manager::{
-    DbRoutingTablePersistence, PodState, RoutingTable, RoutingTablePersistence,
+    DbRoutingTablePersistence, ExecutorAddr, ExecutorId, RoutingTablePersistence,
+    ShardLeaseRevision, ShardLeaseState,
 };
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
-use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use test_r::{define_matrix_dimension, test, test_dep};
 use url::Url;
 use uuid::Uuid;
+
+const LEASE_TTL: Duration = Duration::from_secs(60);
 
 #[async_trait]
 trait GetRoutingTablePersistence: std::fmt::Debug + Send + Sync {
@@ -85,7 +89,7 @@ impl GetRoutingTablePersistence for PostgresRoutingTablePersistence {
             .await
             .expect("Cannot create postgres pool");
 
-        Arc::new(DbRoutingTablePersistence::new(pool, 16))
+        Arc::new(DbRoutingTablePersistence::new(pool, 16, LEASE_TTL))
     }
 }
 
@@ -126,7 +130,7 @@ impl GetRoutingTablePersistence for SqliteRoutingTablePersistence {
             .await
             .expect("Cannot create sqlite pool");
 
-        Arc::new(DbRoutingTablePersistence::new(pool, 16))
+        Arc::new(DbRoutingTablePersistence::new(pool, 16, LEASE_TTL))
     }
 }
 
@@ -151,13 +155,16 @@ async fn read_returns_default_when_empty(
     #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence>,
 ) {
     let persistence = persistence.get_persistence().await;
-    let routing_table = persistence
+    let shard_state = persistence
         .read()
         .await
-        .expect("Reading default routing table should succeed");
+        .expect("Reading default shard lease state should succeed");
 
-    assert_eq!(routing_table.number_of_shards, 16);
-    assert!(routing_table.pod_states.is_empty());
+    assert_eq!(shard_state.number_of_shards, 16);
+    assert_eq!(shard_state.revision, ShardLeaseRevision::INITIAL);
+    assert!(shard_state.shard_assignments.is_empty());
+    assert!(shard_state.executor_leases.is_empty());
+    assert!(shard_state.pending_rebalance.is_empty());
 }
 
 #[test]
@@ -166,7 +173,7 @@ async fn write_then_read_roundtrip(
     #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence>,
 ) {
     let persistence = persistence.get_persistence().await;
-    let expected = sample_routing_table(16);
+    let expected = sample_shard_state(16);
 
     persistence
         .write(&expected)
@@ -187,8 +194,8 @@ async fn last_write_wins(
     #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence>,
 ) {
     let persistence = persistence.get_persistence().await;
-    let first = sample_routing_table(16);
-    let second = replacement_routing_table(16);
+    let first = sample_shard_state(16);
+    let second = replacement_shard_state(16);
 
     persistence
         .write(&first)
@@ -207,50 +214,68 @@ async fn last_write_wins(
     assert_eq!(actual, second);
 }
 
-fn sample_routing_table(number_of_shards: usize) -> RoutingTable {
-    let mut pod_states = BTreeMap::new();
-    pod_states.insert(
-        Pod {
-            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
-            port: 9010,
-        },
-        PodState {
-            pod_name: None,
-            assigned_shards: BTreeSet::from([ShardId::new(0), ShardId::new(1), ShardId::new(2)]),
-        },
-    );
-    pod_states.insert(
-        Pod {
-            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
-            port: 9011,
-        },
-        PodState {
-            pod_name: None,
-            assigned_shards: BTreeSet::from([ShardId::new(3), ShardId::new(4)]),
-        },
-    );
+fn granted_at() -> DateTime<Utc> {
+    DateTime::from_timestamp(1_700_000_000, 0).expect("valid timestamp")
+}
 
-    RoutingTable {
-        number_of_shards,
-        pod_states,
+fn executor(idx: u128) -> ExecutorId {
+    ExecutorId(Uuid::from_u128(idx))
+}
+
+fn addr(last_octet: u8, port: u16) -> ExecutorAddr {
+    ExecutorAddr {
+        ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, last_octet)),
+        port,
     }
 }
 
-fn replacement_routing_table(number_of_shards: usize) -> RoutingTable {
-    let mut pod_states = BTreeMap::new();
-    pod_states.insert(
-        Pod {
-            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
-            port: 9012,
-        },
-        PodState {
-            pod_name: None,
-            assigned_shards: BTreeSet::from([ShardId::new(5), ShardId::new(6), ShardId::new(7)]),
-        },
-    );
-
-    RoutingTable {
-        number_of_shards,
-        pod_states,
+fn shard_state_with_executors(
+    number_of_shards: usize,
+    executors: &[(ExecutorId, ExecutorAddr, Option<&str>, &[i64])],
+) -> ShardLeaseState {
+    let mut shard_state = ShardLeaseState::new(number_of_shards);
+    for (executor_id, addr, pod_name, shard_ids) in executors {
+        shard_state.add_executor(
+            *executor_id,
+            *addr,
+            pod_name.map(str::to_string),
+            granted_at(),
+            LEASE_TTL,
+        );
+        for shard_id in *shard_ids {
+            shard_state.assign_shard(*executor_id, ShardId::new(*shard_id));
+        }
     }
+    shard_state
+        .bump_revision()
+        .expect("revision bump should succeed");
+    shard_state
+}
+
+fn sample_shard_state(number_of_shards: usize) -> ShardLeaseState {
+    let mut shard_state = shard_state_with_executors(
+        number_of_shards,
+        &[
+            (
+                executor(1),
+                addr(1, 9010),
+                Some("worker-executor-0"),
+                &[0, 1, 2],
+            ),
+            (executor(2), addr(2, 9011), None, &[3, 4]),
+        ],
+    );
+    // make sure a non-initial epoch and an orphaned shard survive the roundtrip too
+    shard_state.assign_shard(executor(2), ShardId::new(0));
+    shard_state.add_executor(executor(3), addr(3, 9012), None, granted_at(), LEASE_TTL);
+    shard_state.assign_shard(executor(3), ShardId::new(9));
+    shard_state.remove_executor(executor(3));
+    shard_state
+}
+
+fn replacement_shard_state(number_of_shards: usize) -> ShardLeaseState {
+    shard_state_with_executors(
+        number_of_shards,
+        &[(executor(3), addr(3, 9012), None, &[5, 6, 7])],
+    )
 }

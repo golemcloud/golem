@@ -40,7 +40,10 @@ pub use sharding::healthcheck::HealthCheck;
 pub use sharding::persistence::{DbRoutingTablePersistence, RoutingTablePersistence};
 pub use sharding::shard_management::ShardManagement;
 pub use sharding::worker_executor::WorkerExecutorService;
-pub use sharding::{PodState, RoutingTable, RoutingTableEntry};
+pub use sharding::{
+    ExecutorAddr, ExecutorAddrs, ExecutorId, ExecutorLease, ExecutorShards, ShardAssignmentEntry,
+    ShardEpoch, ShardLeaseRevision, ShardLeaseState,
+};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -69,6 +72,16 @@ pub async fn run(
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing shard manager");
+
+    anyhow::ensure!(
+        !shard_manager_config.shard_lease_duration.is_zero(),
+        "shard_lease_duration must be greater than zero"
+    );
+    anyhow::ensure!(
+        chrono::Duration::from_std(shard_manager_config.shard_lease_duration).is_ok(),
+        "shard_lease_duration {:?} is out of range",
+        shard_manager_config.shard_lease_duration
+    );
 
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
@@ -116,6 +129,7 @@ pub async fn run(
                     crate::sharding::persistence::DbRoutingTablePersistence::new(
                         pool.clone(),
                         shard_manager_config.number_of_shards,
+                        shard_manager_config.shard_lease_duration,
                     ),
                 );
                 let quota_repo = Arc::new(DbQuotaRepo::logged(pool));
@@ -129,6 +143,7 @@ pub async fn run(
                     crate::sharding::persistence::DbRoutingTablePersistence::new(
                         pool.clone(),
                         shard_manager_config.number_of_shards,
+                        shard_manager_config.shard_lease_duration,
                     ),
                 );
                 let quota_repo = Arc::new(DbQuotaRepo::logged(pool));
@@ -190,6 +205,7 @@ pub async fn run(
             worker_executors.clone(),
             health_check.clone(),
             shard_manager_config.rebalance_threshold,
+            shard_manager_config.shard_lease_duration,
             join_set,
         )
         .await?,
