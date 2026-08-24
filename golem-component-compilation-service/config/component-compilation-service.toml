@@ -10,6 +10,9 @@ root = "../data/blob_storage"
 
 [compile_worker]
 connect_timeout = "10s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
 max_message_size = 33554432
 
 [compile_worker.retries_on_unavailable]
@@ -125,6 +128,9 @@ without_time = false
 # 
 # [compile_worker]
 # connect_timeout = "10s"
+# http2_keep_alive_interval = "10s"
+# http2_keep_alive_timeout = "10s"
+# http2_keep_alive_while_idle = true
 # max_message_size = 33554432
 # 
 # [compile_worker.retries_on_unavailable]
