@@ -32,6 +32,7 @@ pub mod s12;
 pub mod s13;
 pub mod s3;
 pub mod s5;
+pub mod s7;
 pub mod s8;
 
 use crate::chaos::ScenarioConfig;
@@ -89,6 +90,9 @@ pub struct ScenarioOutcome {
     /// Present only for S3, which divides its agents around the executor the
     /// partition cuts off rather than around one that dies.
     pub isolation_selection: Option<crate::chaos::split::PodSplit>,
+    /// Present only for S7, which divides the agents whose state is being
+    /// reverted around the executor the kill is aimed at.
+    pub revert_selection: Option<crate::chaos::split::PodSplit>,
 }
 
 /// Assembles the archived result.
@@ -118,6 +122,8 @@ pub fn build_result(config: &ScenarioConfig, outcome: ScenarioOutcome) -> ChaosR
         promise_selection: outcome.promise_selection,
         isolation: config.isolation.clone(),
         isolation_selection: outcome.isolation_selection,
+        revert: config.revert.clone(),
+        revert_selection: outcome.revert_selection,
         retry_policy: config.retry_policy.clone(),
         scope: outcome.scope,
         summary: outcome.summary,

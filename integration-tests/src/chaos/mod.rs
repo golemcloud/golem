@@ -43,12 +43,14 @@ pub mod prep;
 pub mod probe;
 pub mod reachability;
 pub mod result;
+pub mod reverts;
 pub mod scenarios;
 pub mod scheduled;
 pub mod signal;
 pub mod split;
 pub mod steady;
 pub mod summary;
+pub mod truncation;
 pub mod waiters;
 pub mod wakeups;
 pub mod workload;
@@ -78,6 +80,8 @@ pub enum ScenarioCode {
     S11,
     /// Executor cut off from worker-service while it keeps its shards.
     S3,
+    /// Executor pod kill while agents are having their state reverted.
+    S7,
 }
 
 impl ScenarioCode {
@@ -91,16 +95,18 @@ impl ScenarioCode {
             ScenarioCode::S10 => "S10",
             ScenarioCode::S11 => "S11",
             ScenarioCode::S3 => "S3",
+            ScenarioCode::S7 => "S7",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 8] = [
+    pub const ALL: [ScenarioCode; 9] = [
         ScenarioCode::S1,
         ScenarioCode::S3,
         ScenarioCode::S5,
+        ScenarioCode::S7,
         ScenarioCode::S8,
         ScenarioCode::S10,
         ScenarioCode::S11,
@@ -474,6 +480,61 @@ impl IsolationConfig {
     }
 }
 
+/// Shape of the revert workload (GOL-371).
+///
+/// The sixth experiment shape, and the only one that asks the platform to
+/// *destroy* durable state on purpose. Every other scenario disturbs work that
+/// is trying to happen; this one disturbs work that is trying to be undone.
+///
+/// Each agent repeats a round: increment `increments_per_round` times, then
+/// revert the last `revert_invocations` of them. Both numbers are exact, and
+/// that is the point — the driver knows the counter's value before the revert
+/// from the last increment's own return value, so the value afterwards has
+/// exactly two legitimate answers and no band of doubt between them.
+///
+/// Reverting needs the worker stopped (`lock_stopped_worker` in
+/// `golem-worker-executor/src/worker/mod.rs`), so a revert is not one atomic
+/// instant but a stop, a commit and a status reattach. The truncation itself is
+/// a single oplog entry and cannot tear; the window worth killing into is the
+/// one around it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevertConfig {
+    /// Counter agents running rounds, split by shard ownership around the
+    /// executor the kill is aimed at. Also the resolution of the report: a
+    /// torn revert localises to one agent out of this many.
+    pub agents: u32,
+    /// Increments before each revert. Must be at least `revert_invocations`,
+    /// or the revert would reach back into an already-deleted oplog region and
+    /// the platform would refuse it — see `find_nth_invocation_from_end`.
+    pub increments_per_round: u32,
+    /// How many of those increments each revert takes back.
+    pub revert_invocations: u32,
+    /// Milliseconds an agent waits between rounds. The share of the population
+    /// standing mid-revert at any instant is roughly one round-step in
+    /// `increments_per_round + 1`, so this and the round length together decide
+    /// how much of the mechanism a kill can land in.
+    pub interval_millis: u64,
+    /// What recovering a reverted agent may cost, and the number the
+    /// resume delay is reported against. Recorded rather than asserted, like
+    /// every other budget in the suite.
+    pub recovery_budget_secs: u64,
+}
+
+impl RevertConfig {
+    pub fn interval(&self) -> Duration {
+        Duration::from_millis(self.interval_millis)
+    }
+    pub fn recovery_budget(&self) -> Duration {
+        Duration::from_secs(self.recovery_budget_secs)
+    }
+    /// What one completed round adds to a counter.
+    pub fn net_per_round(&self) -> u32 {
+        self.increments_per_round
+            .saturating_sub(self.revert_invocations)
+    }
+}
+
 /// One step of the executor scale schedule the workflow runs during the fault.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -555,6 +616,9 @@ pub struct ScenarioConfig {
     /// The reachability workload. Absent for scenarios that do not run one.
     #[serde(default)]
     pub isolation: Option<IsolationConfig>,
+    /// The revert workload. Absent for scenarios that do not run one.
+    #[serde(default)]
+    pub revert: Option<RevertConfig>,
     /// Shard-ownership oracle settings. Absent for scenarios that do not sample
     /// executor assignments.
     #[serde(default)]
@@ -636,6 +700,36 @@ impl ScenarioConfig {
                 self.code
             )
         })
+    }
+
+    /// The revert workload block. See [`Self::require_workload`].
+    pub fn require_revert(&self) -> anyhow::Result<&RevertConfig> {
+        let config = self.revert.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs a `revert` block in the suite YAML",
+                self.code
+            )
+        })?;
+        // Checked here rather than discovered mid-run: a revert reaching past
+        // its own round lands in an already-deleted oplog region and the
+        // platform refuses it, so every round would fail and the scenario would
+        // measure nothing.
+        if config.revert_invocations > config.increments_per_round {
+            anyhow::bail!(
+                "chaos scenario {}: revertInvocations ({}) exceeds incrementsPerRound ({}), \
+                 so every revert would reach into an already-deleted oplog region",
+                self.code,
+                config.revert_invocations,
+                config.increments_per_round
+            );
+        }
+        if config.revert_invocations == 0 {
+            anyhow::bail!(
+                "chaos scenario {}: revertInvocations is 0, so the scenario would revert nothing",
+                self.code
+            );
+        }
+        Ok(config)
     }
 
     /// The pinned workload block. See [`Self::require_workload`].
@@ -774,6 +868,7 @@ mod tests {
                 scheduled: None,
                 promise: None,
                 isolation: None,
+                revert: None,
                 ownership: None,
                 scale_during_fault: None,
                 retry_policy: RetryPolicy::default(),
@@ -784,6 +879,72 @@ mod tests {
         // ...unless the caller says an operator asked for it by name, which is
         // how a prototype scenario stays off for ordinary runs.
         assert!(suite.scenario(ScenarioCode::S12, true).is_ok());
+    }
+
+    fn revert_config(increments: u32, revert: u32) -> ScenarioConfig {
+        ScenarioConfig {
+            code: "S7".to_string(),
+            name: "executor-crash-during-revert".to_string(),
+            enabled: true,
+            fault: FaultConfig {
+                kind: "pod-kill".to_string(),
+                target: "worker-executor".to_string(),
+                mode: "one".to_string(),
+                target_count: None,
+                duration_secs: 60,
+            },
+            phases: PhaseConfig {
+                baseline_secs: 1,
+                fault_secs: 1,
+                recovery_secs: 1,
+            },
+            workload: None,
+            pinned: None,
+            scheduled: None,
+            promise: None,
+            isolation: None,
+            revert: Some(RevertConfig {
+                agents: 10,
+                increments_per_round: increments,
+                revert_invocations: revert,
+                interval_millis: 500,
+                recovery_budget_secs: 60,
+            }),
+            ownership: None,
+            scale_during_fault: None,
+            retry_policy: RetryPolicy::default(),
+            signal_timeout_secs: 1,
+        }
+    }
+
+    /// A revert reaching further back than its own round lands in the region an
+    /// earlier revert already deleted, and the platform refuses it outright.
+    /// Every round would fail and the run would measure nothing, so this is
+    /// caught before the maintenance window is spent rather than per round.
+    #[test]
+    fn a_revert_deeper_than_its_own_round_is_refused_before_the_run_starts() {
+        let error = revert_config(2, 3)
+            .require_revert()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("already-deleted oplog region"),
+            "the message has to say why, got: {error}"
+        );
+    }
+
+    /// Reverting nothing would leave a scenario that builds state up and takes
+    /// none of it back, which is S8 with extra steps.
+    #[test]
+    fn a_revert_of_nothing_is_refused() {
+        assert!(revert_config(4, 0).require_revert().is_err());
+    }
+
+    /// The boundary case is legal: a round may take back everything it added.
+    #[test]
+    fn a_revert_of_exactly_one_round_is_allowed() {
+        let config = revert_config(3, 3);
+        assert_eq!(config.require_revert().unwrap().net_per_round(), 0);
     }
 
     /// The retry defaults are load-bearing for correctness, not just for load.
@@ -847,6 +1008,7 @@ mod tests {
         assert_eq!(ScenarioCode::parse("s8"), Some(ScenarioCode::S8));
         assert_eq!(ScenarioCode::parse("s1"), Some(ScenarioCode::S1));
         assert_eq!(ScenarioCode::parse("s3"), Some(ScenarioCode::S3));
+        assert_eq!(ScenarioCode::parse("s7"), Some(ScenarioCode::S7));
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
@@ -881,6 +1043,9 @@ mod tests {
                 }
                 ScenarioCode::S3 => {
                     entry.require_isolation().unwrap();
+                }
+                ScenarioCode::S7 => {
+                    entry.require_revert().unwrap();
                 }
             }
         }

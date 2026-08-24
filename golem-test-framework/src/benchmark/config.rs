@@ -248,6 +248,8 @@ pub enum ChaosScenarioArg {
     S11,
     /// Executor cut off from worker-service while it keeps its shards.
     S3,
+    /// Executor pod kill while agents are having their state reverted.
+    S7,
 }
 
 /// Density subcommand action.

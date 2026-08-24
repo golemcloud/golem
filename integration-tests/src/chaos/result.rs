@@ -29,8 +29,8 @@ use crate::chaos::scheduled::ScheduledSelection;
 use crate::chaos::split::PodSplit;
 use crate::chaos::summary::{ChaosSummary, TerminationReason};
 use crate::chaos::{
-    FaultConfig, IsolationConfig, PinnedConfig, PromiseConfig, RetryPolicy, ScheduledConfig,
-    WorkloadConfig,
+    FaultConfig, IsolationConfig, PinnedConfig, PromiseConfig, RetryPolicy, RevertConfig,
+    ScheduledConfig, WorkloadConfig,
 };
 use chrono::{DateTime, Utc};
 use golem_test_framework::benchmark::RunMetadata;
@@ -162,6 +162,13 @@ pub struct ChaosResult {
     /// between the two groups, so a report without this cannot be re-checked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation_selection: Option<PodSplit>,
+    /// The revert workload the run was configured with, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revert: Option<RevertConfig>,
+    /// How the revert agents divided around the executor the kill was aimed at.
+    /// Present only for S7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revert_selection: Option<PodSplit>,
     pub retry_policy: RetryPolicy,
     pub scope: RunScope,
     pub summary: ChaosSummary,
@@ -235,6 +242,8 @@ mod tests {
             promise_selection: None,
             isolation: None,
             isolation_selection: None,
+            revert: None,
+            revert_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "env-1".to_string(),
@@ -333,6 +342,89 @@ mod tests {
         assert_eq!(parsed.scenario_code, "S11");
         assert!(parsed.summary.promise_wakeups.is_some());
         assert!(parsed.promise_selection.is_some());
+    }
+
+    /// The S7 shape. Same contract as the S3, S10 and S11 tests: the
+    /// investigation report in golem-cloud reads these fields by name.
+    #[test]
+    fn an_s7_result_carries_the_truncation_fields_the_investigation_report_reads() {
+        use crate::chaos::reverts::RevertRound;
+        use crate::chaos::split::{FaultWindow, PodSplit};
+        use crate::chaos::truncation::TruncationReport;
+
+        let now = Utc::now();
+        let agent = "chaos-s7-revert-0000".to_string();
+        let split = PodSplit {
+            pod_address: "10.0.1.1:9000".to_string(),
+            pod_ip: "10.0.1.1".to_string(),
+            on_pod: vec![agent.clone()],
+            elsewhere: Vec::new(),
+            targets_per_pod: std::collections::BTreeMap::new(),
+            number_of_shards: 1024,
+        };
+
+        let mut result = sample_result(TerminationReason::Completed);
+        result.scenario_code = "S7".to_string();
+        result.revert = Some(crate::chaos::RevertConfig {
+            agents: 200,
+            increments_per_round: 4,
+            revert_invocations: 2,
+            interval_millis: 500,
+            recovery_budget_secs: 60,
+        });
+        result.revert_selection = Some(split.clone());
+        result.summary = ChaosSummary::build(&[], Vec::new(), Vec::new(), Some(now))
+            .with_truncation(TruncationReport::build(
+                &[RevertRound {
+                    agent,
+                    round: 0,
+                    before_revert: Some(10),
+                    asked_to_revert: 2,
+                    outcome: crate::chaos::history::Outcome::Confirmed,
+                    submitted_at: now,
+                    completed_at: Some(now),
+                    observed_after: Some(8),
+                }],
+                &split,
+                Some(FaultWindow {
+                    injected_at: now,
+                    recovered_at: None,
+                }),
+                4,
+                2,
+            ));
+
+        let json = serde_json::to_value(&result).unwrap();
+        let truncation = &json["summary"]["truncation"];
+        for key in [
+            "incrementsPerRound",
+            "revertInvocations",
+            "roundsRecorded",
+            "revertsConfirmed",
+            "revertsIndeterminate",
+            "revertsRejected",
+            "appliedExactly",
+            "indeterminateThatApplied",
+            "indeterminateThatDidNot",
+            "unjudgeable",
+            "unprobed",
+            "cells",
+            "caughtByTheKill",
+            "findings",
+            "findingsOmitted",
+        ] {
+            assert!(
+                !truncation[key].is_null(),
+                "summary.truncation.{key} is what the investigation report reads"
+            );
+        }
+        assert_eq!(json["revert"]["revertInvocations"], 2);
+        assert_eq!(json["revertSelection"]["podIp"], "10.0.1.1");
+
+        let parsed: ChaosResult = serde_json::from_str(&json.to_string()).unwrap();
+        assert_eq!(parsed.scenario_code, "S7");
+        assert!(parsed.summary.truncation.is_some());
+        assert!(parsed.revert_selection.is_some());
     }
 
     /// The S3 shape. Same contract as the S10 and S11 tests, for the same
@@ -745,6 +837,8 @@ mod sample_artifact {
             promise_selection: None,
             isolation: None,
             isolation_selection: None,
+            revert: None,
+            revert_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),
@@ -961,6 +1055,8 @@ mod sample_artifact {
             promise_selection: None,
             isolation: None,
             isolation_selection: None,
+            revert: None,
+            revert_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),

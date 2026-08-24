@@ -622,3 +622,81 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # S7 — executor pod kill during agent state revert (GOL-371).
+  #
+  # The only scenario that disturbs work the platform is trying to *undo*. Each
+  # agent builds its counter up with a run of increments and then asks for some
+  # of them back, over and over, while an executor is killed underneath.
+  #
+  # It is also the only read-back in the suite with no band of doubt in it. The
+  # last increment of a round returns the counter's value, so the driver knows
+  # exactly what the agent was worth before the revert and exactly how many
+  # invocations it asked to take back. Afterwards there are two legal values and
+  # nothing between them, which is why S7's findings fail the run outright.
+  #
+  # Like S8, S10, S11 and S3 the driver names the pod and keeps driving the
+  # agents on the other executor as a control group.
+  - code: S7
+    name: executor-crash-during-revert
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # The workflow narrows the selector to the pod the driver named; `one`
+      # stays as the belt-and-braces bound, as in every other pinned scenario.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Long enough for cold starts to settle, so the kill lands on a population
+      # that has been cycling rounds steadily rather than one still arriving.
+      baselineSecs: 180
+      # Covers the kill, the reschedule, and the shard reassignment that has to
+      # happen before anything can revert an agent the dead executor owned.
+      faultSecs: 120
+      # Rounds continue throughout. Long enough that every agent runs several
+      # whole rounds after the kill, so a round disturbed by it is followed by
+      # ones that were not.
+      recoverySecs: 300
+
+    revert:
+      # 200 agents, split by shard ownership across the two executors. Also the
+      # resolution of the report: a torn revert localises to one agent out of
+      # two hundred.
+      agents: 200
+      # Four increments then a revert of two, so a completed round is worth +2.
+      #
+      # `revertInvocations` must not exceed `incrementsPerRound`: a revert that
+      # reached further back would land in the region an earlier revert already
+      # deleted, and the platform refuses that outright — every round would fail
+      # and the run would measure nothing. The driver checks this before
+      # starting rather than discovering it per round.
+      incrementsPerRound: 4
+      revertInvocations: 2
+      # Between rounds. With five operations per round this keeps roughly one
+      # agent in six mid-round at any instant, which is the population a kill
+      # has something to land in. It also has to leave the round long enough
+      # that the workflow's inject-and-verify path — signal poll (5s) plus
+      # `kubectl apply` plus waiting for `AllInjected` — does not fall entirely
+      # between two rounds.
+      intervalMillis: 500
+      # What recovering a reverted agent may cost. Recorded, not asserted: the
+      # floor is a shard reassignment plus the worker recovery that replays the
+      # oplog up to the revert, and how much more than that is acceptable is a
+      # judgement.
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      # Applies to the increments only. **The revert is never retried**, and
+      # that exception is load-bearing rather than an oversight: a revert has no
+      # idempotency key and is not idempotent — asking twice for "the last two
+      # invocations" takes back four. A retried revert that had actually landed
+      # would look exactly like the platform tearing a truncation, which is the
+      # finding this scenario exists to make. See `chaos/reverts.rs`.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

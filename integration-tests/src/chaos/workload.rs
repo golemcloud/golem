@@ -202,6 +202,20 @@ struct AttemptResult {
     class: Option<ErrorClass>,
 }
 
+/// What one operation ended up as.
+///
+/// Returned rather than only recorded because one scenario has to chain on it:
+/// [`crate::chaos::reverts`] judges a revert by the value the *next* increment
+/// reports, so it needs each operation's answer in hand rather than having to
+/// go looking for its own record in a history every other emitter is also
+/// appending to.
+#[derive(Debug, Clone, Copy)]
+pub struct OperationOutcome {
+    pub outcome: Outcome,
+    /// The value the operation returned, for the methods that return one.
+    pub value: Option<u32>,
+}
+
 /// Runs one operation with the configured bounded, same-key retry, and records
 /// it in the history.
 ///
@@ -217,7 +231,8 @@ pub(crate) async fn run_operation<F, Fut>(
     method: &str,
     key: String,
     invoke: F,
-) where
+) -> OperationOutcome
+where
     F: Fn(IdempotencyKey) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<Option<u32>>>,
 {
@@ -337,6 +352,44 @@ pub(crate) async fn run_operation<F, Fut>(
         error_class: last.class,
         attempt_log,
     });
+
+    OperationOutcome {
+        outcome,
+        value: last.value,
+    }
+}
+
+/// One `Counter.increment`, recorded under `stream`.
+///
+/// Split out of [`submit_one`] so [`crate::chaos::reverts`] can drive
+/// increments on its own stream through exactly the same retry rule and
+/// classification, rather than growing a second copy of them.
+pub(crate) async fn increment_counter(
+    ctx: &WorkloadContext,
+    stream: Stream,
+    agent: &str,
+    key: String,
+) -> OperationOutcome {
+    let parsed: ParsedAgentId = agent_id!(COUNTER_AGENT, agent.to_string());
+    let ctx2 = ctx.clone();
+    run_operation(ctx, stream, agent.to_string(), "increment", key, |k| {
+        let ctx = ctx2.clone();
+        let parsed = parsed.clone();
+        async move {
+            let value = ctx
+                .user
+                .invoke_and_await_agent_with_key(
+                    &ctx.counters,
+                    &parsed,
+                    &k,
+                    "increment",
+                    data_value!(),
+                )
+                .await?;
+            Ok(as_u32(value))
+        }
+    })
+    .await
 }
 
 /// Extracts a `u32` return value, if the agent returned one. Absent values are
@@ -496,6 +549,13 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
         // is blocked until its promise resolves.
         Stream::PromiseWait => {
             warn!("Chaos mixed workload cannot drive the waiter stream; see chaos::waiters");
+        }
+        // Driven by `crate::chaos::reverts`: a round is a run of increments
+        // followed by a revert that takes some of them back, and the value the
+        // *next* round's first increment returns is what says whether that
+        // revert landed. A shared rate cannot express that ordering.
+        Stream::Revert => {
+            warn!("Chaos mixed workload cannot drive the revert stream; see chaos::reverts");
         }
         Stream::Durable => {
             let agent = ctx.agent_name(Stream::Durable, index);

@@ -338,6 +338,16 @@ pub fn counter_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
     }
 }
 
+/// The counters component's revert agents, as S7 aims at them.
+pub fn revert_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
+    Subject {
+        scenario: "S7",
+        component: &ctx.counters,
+        agent_type: crate::chaos::workload::COUNTER_AGENT,
+        noun: "revert agents",
+    }
+}
+
 /// The promise component's waiters, as S11 aims at them.
 pub fn waiter_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
     Subject {

@@ -67,6 +67,17 @@ pub enum Stream {
     /// one known executor, so mixing them into the durable population would
     /// blur two different experiments.
     PinnedHttp,
+    /// `Counter.increment` rounds that are deliberately taken back again, and
+    /// the `revert` calls that take them (GOL-371).
+    ///
+    /// Distinct from [`Stream::Durable`] even though both land on `Counter`
+    /// agents, and for a reason that is not cosmetic: a reverted increment is
+    /// acknowledged work that the platform was then *asked* to forget, so the
+    /// generic read-back — which compares a counter against everything
+    /// confirmed against it — would report every one of them as lost. S7
+    /// computes each agent's exact expected value from its own round history
+    /// instead, which is strictly stronger than a range.
+    Revert,
     /// `PromiseWaiter.arm` / `wait` / the external completion that resolves it
     /// (GOL-377). Distinct from `Promise` even though both land on the promise
     /// component: that stream creates and resolves a promise in one breath with
@@ -85,6 +96,7 @@ impl Stream {
             Stream::Quota => "quota",
             Stream::PinnedHttp => "pinned-http",
             Stream::PromiseWait => "promise-wait",
+            Stream::Revert => "revert",
         }
     }
 
@@ -110,7 +122,7 @@ impl Stream {
         )
     }
 
-    pub const ALL: [Stream; 7] = [
+    pub const ALL: [Stream; 8] = [
         Stream::Durable,
         Stream::Ephemeral,
         Stream::Scheduled,
@@ -118,6 +130,7 @@ impl Stream {
         Stream::Quota,
         Stream::PinnedHttp,
         Stream::PromiseWait,
+        Stream::Revert,
     ];
 }
 

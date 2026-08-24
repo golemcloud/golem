@@ -53,6 +53,7 @@ use crate::chaos::history::{Outcome, Phase, Stream};
 use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::probe::KeyProbe;
 use crate::chaos::reachability::ReachabilityReport;
+use crate::chaos::truncation::TruncationReport;
 use crate::chaos::wakeups::WakeupReport;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -578,6 +579,10 @@ pub struct ChaosSummary {
     /// same reason as `scheduleFires`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reachability: Option<ReachabilityReport>,
+    /// The truncation account, for scenarios that revert agent state. Absent
+    /// for scenarios that do not, for the same reason as `scheduleFires`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncation: Option<TruncationReport>,
     /// Shard-ownership samples, in the order they were taken. Empty for
     /// scenarios that do not sample executor assignments.
     ///
@@ -710,6 +715,7 @@ impl ChaosSummary {
             schedule_fires: None,
             promise_wakeups: None,
             reachability: None,
+            truncation: None,
             ownership: Vec::new(),
             attention,
             notes: Vec::new(),
@@ -783,6 +789,20 @@ impl ChaosSummary {
         self
     }
 
+    /// Attaches the truncation account and hoists everything it wants a human
+    /// to see into [`Self::attention`].
+    ///
+    /// Same split as [`Self::with_schedule_fires`]. The line worth calling out
+    /// here is the inconclusive one: a kill that caught no revert in flight
+    /// proves nothing about crashing during a revert, and every clean number
+    /// underneath it describes reverts that completed either side of the fault.
+    pub fn with_truncation(mut self, report: TruncationReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.truncation = Some(report);
+        self
+    }
+
     /// Attaches the shard-ownership samples and hoists their findings into
     /// [`Self::attention`].
     ///
@@ -831,6 +851,12 @@ pub enum TerminationReason {
     /// owners is an agent whose state can fork, and there is no instant at
     /// which that is legitimate.
     ShardOwnershipViolated { findings: u64, first: String },
+    /// A revert landed somewhere other than the two values it was allowed to.
+    /// Asserted rather than reported, and the only read-back in the suite that
+    /// earns that: the driver knows the counter's value before the revert and
+    /// exactly how many invocations it asked to take back, so there is no band
+    /// of doubt around the answer. See [`crate::chaos::truncation`].
+    RevertTruncationViolated { findings: u64, first: String },
     /// A scheduled action the platform accepted never fired, fired twice, or
     /// fired after being refused. Asserted rather than reported: unlike a
     /// count-based read-back, each of these is a statement about one named
@@ -1127,7 +1153,18 @@ mod tests {
         let summary = ChaosSummary::build(&[], Vec::new(), Vec::new(), None);
         assert_eq!(
             summary.streams_without_readback,
-            vec![Stream::Ephemeral, Stream::Promise, Stream::PromiseWait]
+            // `Revert` is here for a different reason from the other three.
+            // Those keep no comparable durable state; a revert agent does, but
+            // some of its acknowledged work was deliberately taken back, so a
+            // generic counter comparison would report every reverted increment
+            // as lost. `crate::chaos::truncation` judges those agents exactly
+            // instead, which is strictly stronger.
+            vec![
+                Stream::Ephemeral,
+                Stream::Promise,
+                Stream::PromiseWait,
+                Stream::Revert
+            ]
         );
     }
 
