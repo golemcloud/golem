@@ -122,7 +122,67 @@ pub struct ThroughputCell {
     /// baseline to compare against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_of_baseline_percent: Option<f64>,
+    /// How long into this window the group waited before offering anything.
+    ///
+    /// The number that stops a small non-zero rate being read as residual
+    /// service. An emitter holds one operation at a time, so a group whose
+    /// executor is unreachable offers nothing at all until something finally
+    /// answers it: a during-fault cell can therefore show a handful of
+    /// confirmations that all arrived in the last seconds of the window, once
+    /// the fault was already coming down. `quietMs` next to `windowSecs` says
+    /// which of the two happened, and it needs no threshold to do it.
+    ///
+    /// `None` when the window has no fixed start, or when the group offered
+    /// nothing in it at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet_ms: Option<u64>,
     pub latency: LatencyStats,
+}
+
+/// The operations the fault landed in the middle of.
+///
+/// The population S3 actually disturbed, and the one number a reader wants
+/// first. It cannot be read off the cells: these operations were *submitted*
+/// before the cut, so every trace of them — their timeouts, their duration —
+/// is attributed to the `before-fault` row, which is the last place anyone
+/// looks for the damage.
+///
+/// The control group's entry is the comparison that makes it mean something,
+/// but read it on **duration**, not on count. How many operations a healthy
+/// group has in flight at any instant is its duty cycle — operation time over
+/// interval — so a group answering in 45ms on a one-second cadence has about
+/// one agent in twenty busy. A stalled group accumulates instead: every emitter
+/// ends up holding an operation that will not return, so its count climbs to
+/// the size of the group. A real run showed 113 of 113 against 3 of 87, and the
+/// gap between 47ms and 182 seconds is the finding, not the gap between 3 and
+/// 113.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaughtInFlight {
+    pub group: Group,
+    /// Operations submitted before the fault that were still running when it
+    /// landed.
+    pub operations: u64,
+    /// Distinct agents they belonged to. Equal to the group size when every
+    /// emitter was mid-operation, which is what one-in-flight-per-agent makes
+    /// the normal case.
+    pub agents: usize,
+    pub confirmed: u64,
+    pub rejected: u64,
+    pub indeterminate: u64,
+    /// Submission to final outcome, across every attempt.
+    pub duration: LatencyStats,
+    /// Attempts that hit the client's attempt timeout rather than answering.
+    pub attempts_timed_out: u64,
+    /// The most attempts any one of them needed.
+    ///
+    /// Load-bearing rather than trivia. An operation that stalled and then
+    /// answered on a later attempt was rescued by the caller's retry, not
+    /// returned by the platform: with retries off it would have ended
+    /// indeterminate. That distinction is invisible in the outcome alone.
+    pub max_attempts: u32,
+    /// How many were still unresolved when the fault was reported healed.
+    pub outlived_the_fault: u64,
 }
 
 /// The reachability account.
@@ -140,6 +200,10 @@ pub struct ReachabilityReport {
     pub control_floor_percent: f64,
     pub recovery_budget_ms: u64,
     pub cells: Vec<ThroughputCell>,
+    /// What the fault landed in the middle of, per group. Empty for a run that
+    /// never learned when the fault was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caught_in_flight: Vec<CaughtInFlight>,
     /// Per isolated agent, how long after the link was restored its first
     /// confirmed operation landed.
     pub recovery: LatencyStats,
@@ -159,6 +223,8 @@ pub struct ReachabilityReport {
 #[derive(Default)]
 struct Tally {
     agents: BTreeSet<String>,
+    /// Earliest submission in this cell, for [`ThroughputCell::quiet_ms`].
+    first_submitted: Option<DateTime<Utc>>,
     submitted: u64,
     confirmed: u64,
     rejected: u64,
@@ -197,6 +263,10 @@ impl ReachabilityReport {
             let tally = tallies.entry((group, window)).or_default();
 
             tally.agents.insert(record.agent.clone());
+            tally.first_submitted = Some(match tally.first_submitted {
+                Some(at) if at <= record.submitted_at => at,
+                _ => record.submitted_at,
+            });
             tally.submitted += 1;
             match record.outcome {
                 Outcome::Confirmed => {
@@ -206,15 +276,7 @@ impl ReachabilityReport {
                 Outcome::Rejected => tally.rejected += 1,
                 Outcome::Indeterminate => tally.indeterminate += 1,
             }
-            tally.attempts_timed_out += record
-                .attempt_log
-                .iter()
-                .filter(|a| {
-                    a.error
-                        .as_deref()
-                        .is_some_and(|e| e.contains("attempt timed out"))
-                })
-                .count() as u64;
+            tally.attempts_timed_out += timed_out(record);
 
             first_submitted = Some(match first_submitted {
                 Some(at) if at <= record.submitted_at => at,
@@ -243,6 +305,9 @@ impl ReachabilityReport {
             if *window == Window::BeforeFault {
                 baseline_rate.insert(*group, rate);
             }
+            let quiet_ms = window_start(*window, fault, first_submitted)
+                .zip(tally.first_submitted)
+                .map(|(start, first)| (first - start).num_milliseconds().max(0) as u64);
             cells.push(ThroughputCell {
                 group: *group,
                 window: *window,
@@ -255,6 +320,7 @@ impl ReachabilityReport {
                 window_secs: round2(secs),
                 confirmed_per_sec: round2(rate),
                 share_of_baseline_percent: None,
+                quiet_ms,
                 latency: LatencyStats::from_durations(tally.durations.clone()),
             });
         }
@@ -300,6 +366,53 @@ impl ReachabilityReport {
             }
         }
 
+        // ── What the fault landed in the middle of ──────────────────────────
+        //
+        // Computed from the whole history rather than from the cells, because
+        // the cells cannot answer it: these operations were submitted before
+        // the cut, so every trace of them sits in the `before-fault` row.
+        let mut caught_in_flight: Vec<CaughtInFlight> = Vec::new();
+        if let Some(window) = fault {
+            let mut by_group: BTreeMap<Group, Vec<&OperationRecord>> = BTreeMap::new();
+            for record in records.iter().filter(|r| r.stream == Stream::Durable) {
+                let Some(group) = split.group_of(&record.agent) else {
+                    continue;
+                };
+                let still_running = record
+                    .completed_at
+                    .is_none_or(|at| at >= window.injected_at);
+                if record.submitted_at < window.injected_at && still_running {
+                    by_group.entry(group).or_default().push(record);
+                }
+            }
+            for (group, caught) in by_group {
+                let agents: BTreeSet<&str> = caught.iter().map(|r| r.agent.as_str()).collect();
+                caught_in_flight.push(CaughtInFlight {
+                    group,
+                    operations: caught.len() as u64,
+                    agents: agents.len(),
+                    confirmed: count_of(&caught, Outcome::Confirmed),
+                    rejected: count_of(&caught, Outcome::Rejected),
+                    indeterminate: count_of(&caught, Outcome::Indeterminate),
+                    duration: LatencyStats::from_durations(
+                        caught.iter().map(|r| r.duration_ms).collect(),
+                    ),
+                    attempts_timed_out: caught.iter().map(|r| timed_out(r)).sum(),
+                    max_attempts: caught.iter().map(|r| r.attempts).max().unwrap_or(0),
+                    outlived_the_fault: caught
+                        .iter()
+                        .filter(|r| match (r.completed_at, window.recovered_at) {
+                            // Never finished at all, so it certainly outlived it.
+                            (None, _) => true,
+                            (Some(done), Some(healed)) => done >= healed,
+                            // No heal was ever reported; nothing can be said.
+                            (Some(_), None) => false,
+                        })
+                        .count() as u64,
+                });
+            }
+        }
+
         let mut report = ReachabilityReport {
             isolated_pod: split.pod_address.clone(),
             isolated_agents: split.on_pod.len(),
@@ -308,6 +421,7 @@ impl ReachabilityReport {
             control_floor_percent,
             recovery_budget_ms: recovery_budget.as_millis() as u64,
             cells,
+            caught_in_flight,
             recovery: LatencyStats::from_durations(gaps),
             recovery_over_budget: over_budget,
             agents_never_recovered,
@@ -406,6 +520,24 @@ impl ReachabilityReport {
                 self.records_outside_the_split
             ));
         }
+        // Work the fault caught and the run cannot account for. Not a finding —
+        // an indeterminate operation is doubt, not damage, and the read-back
+        // and exactly-once accounts are what resolve it — but the operator has
+        // to see it next to the clean cells rather than infer it from them.
+        for caught in &self.caught_in_flight {
+            let unresolved = caught.indeterminate + caught.rejected;
+            if unresolved > 0 {
+                lines.push(format!(
+                    "S3: {unresolved} of the {} operations the cut caught in flight on {} did \
+                     not confirm ({} indeterminate, {} rejected)",
+                    caught.operations,
+                    caught.group.as_str(),
+                    caught.indeterminate,
+                    caught.rejected
+                ));
+            }
+        }
+
         // Over budget is not a finding. How long a partition heal may take
         // before an agent is served again is a judgement, and the driver is not
         // the one to make it.
@@ -431,11 +563,30 @@ impl ReachabilityReport {
             self.isolated_agents, self.isolated_pod, self.reachable_agents
         )];
 
+        // The caught population first: it is what the fault actually disturbed,
+        // and nothing in the cells below points at it.
+        for caught in &self.caught_in_flight {
+            lines.push(format!(
+                "S3 {}: {} operations across {} agents were in flight when the cut landed — \
+                 p50 {}ms / p99 {}ms / worst {}ms, {} attempt(s) timed out, up to {} attempts \
+                 each, {} still unresolved at the heal",
+                caught.group.as_str(),
+                caught.operations,
+                caught.agents,
+                caught.duration.p50_ms,
+                caught.duration.p99_ms,
+                caught.duration.max_ms,
+                caught.attempts_timed_out,
+                caught.max_attempts,
+                caught.outlived_the_fault,
+            ));
+        }
+
         for group in [Group::OnPod, Group::Elsewhere] {
             for window in [Window::BeforeFault, Window::DuringFault, Window::AfterFault] {
                 if let Some(cell) = self.cell(group, window) {
                     lines.push(format!(
-                        "S3 {} {}: {:.2} confirmed/s{}, {} submitted, {} indeterminate, {} \
+                        "S3 {} {}: {:.2} confirmed/s{}, {} submitted{}, {} indeterminate, {} \
                          attempt(s) timed out, {} of {} agents active",
                         group.as_str(),
                         window.as_str(),
@@ -444,6 +595,18 @@ impl ReachabilityReport {
                             .map(|s| format!(" ({s:.1}% of baseline)"))
                             .unwrap_or_default(),
                         cell.submitted,
+                        // Silence is the reading that stops a small rate being
+                        // mistaken for residual service.
+                        cell.quiet_ms
+                            .filter(|_| cell.window_secs > 0.0)
+                            .map(|q| {
+                                format!(
+                                    ", first offered {:.1}s into a {:.1}s window",
+                                    q as f64 / 1000.0,
+                                    cell.window_secs
+                                )
+                            })
+                            .unwrap_or_default(),
                         cell.indeterminate,
                         cell.attempts_timed_out,
                         cell.agents_active,
@@ -465,6 +628,24 @@ impl ReachabilityReport {
             ));
         }
         lines
+    }
+}
+
+/// When a window began, for the windows that have a fixed start.
+///
+/// The fault's own boundaries come from the workflow's timestamps, which is
+/// what makes them comparable across runs. The baseline has no boundary of its
+/// own, so it starts at the first operation the run offered.
+fn window_start(
+    window: Window,
+    fault: Option<FaultWindow>,
+    first_submitted: Option<DateTime<Utc>>,
+) -> Option<DateTime<Utc>> {
+    match (window, fault) {
+        (Window::BeforeFault, Some(_)) => first_submitted,
+        (Window::DuringFault, Some(w)) => Some(w.injected_at),
+        (Window::AfterFault, Some(w)) => w.recovered_at,
+        _ => None,
     }
 }
 
@@ -505,6 +686,29 @@ fn window_secs(
             .unwrap_or(0.0),
         _ => 0.0,
     }
+}
+
+/// Operations of one outcome.
+fn count_of(records: &[&OperationRecord], outcome: Outcome) -> u64 {
+    records.iter().filter(|r| r.outcome == outcome).count() as u64
+}
+
+/// Attempts of one operation that hit the client's attempt timeout.
+///
+/// Matched on the message `crate::chaos::workload` writes for a timed-out
+/// attempt. A structured flag would be better, but the attempt log is an
+/// archived shape shared with every other scenario and this reads it without
+/// changing it.
+fn timed_out(record: &OperationRecord) -> u64 {
+    record
+        .attempt_log
+        .iter()
+        .filter(|a| {
+            a.error
+                .as_deref()
+                .is_some_and(|e| e.contains("attempt timed out"))
+        })
+        .count() as u64
 }
 
 fn round2(value: f64) -> f64 {
@@ -858,5 +1062,185 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("recovery budget"))
         );
+    }
+
+    /// An operation the cut landed in the middle of: submitted just before it,
+    /// still running when it landed, answered only once the link returned.
+    fn caught(agent: &str, timed_out_attempts: u32) -> OperationRecord {
+        let mut record = op(agent, -1, Outcome::Confirmed);
+        record.duration_ms = 178_000;
+        record.completed_at = Some(record.submitted_at + TimeDelta::milliseconds(178_000));
+        record.attempts = timed_out_attempts + 1;
+        record.attempt_log = (1..=timed_out_attempts)
+            .map(|attempt| AttemptRecord {
+                attempt,
+                started_at: record.submitted_at,
+                duration_ms: 120_000,
+                returned_value: None,
+                succeeded: false,
+                error_class: Some(ErrorClass::Transport),
+                error: Some("attempt timed out after 120s".to_string()),
+            })
+            .chain(std::iter::once(AttemptRecord {
+                attempt: timed_out_attempts + 1,
+                started_at: record.submitted_at,
+                duration_ms: 56_000,
+                returned_value: Some(1),
+                succeeded: true,
+                error_class: None,
+                error: None,
+            }))
+            .collect();
+        record
+    }
+
+    /// The population the fault actually disturbed, which no cell can show:
+    /// these were submitted before the cut, so their timeouts and their
+    /// duration are attributed to the `before-fault` row.
+    #[test]
+    fn the_operations_the_cut_caught_are_reported_apart_from_the_cells() {
+        let mut records = history(0, 180);
+        records.retain(|r| {
+            !(r.agent == ISOLATED
+                && r.submitted_at >= t0()
+                && r.submitted_at < t0() + TimeDelta::seconds(180))
+        });
+        records.push(caught(ISOLATED, 1));
+
+        let report = build(&records);
+        let caught = report
+            .caught_in_flight
+            .iter()
+            .find(|c| c.group == Group::OnPod)
+            .expect("the isolated group had an operation in flight");
+
+        assert_eq!(caught.operations, 1);
+        assert_eq!(caught.agents, 1);
+        assert_eq!(caught.confirmed, 1);
+        assert_eq!(caught.duration.max_ms, 178_000);
+        assert_eq!(caught.attempts_timed_out, 1);
+        // The retry is what landed it. With retries off it would have been
+        // indeterminate, and the outcome alone cannot say so.
+        assert_eq!(caught.max_attempts, 2);
+        // It answered before the heal was stamped, so it did not outlive it.
+        assert_eq!(caught.outlived_the_fault, 0);
+
+        assert!(
+            report
+                .note_lines()
+                .iter()
+                .any(|l| l.contains("were in flight when the cut landed")),
+            "the caught population has to be in front of the reader"
+        );
+    }
+
+    /// An operation still unanswered when the link came back is a different
+    /// statement from one that resolved inside the window, and the report has
+    /// to keep them apart.
+    #[test]
+    fn an_operation_still_running_at_the_heal_is_counted_as_outliving_it() {
+        let mut records = history(0, 180);
+        records.retain(|r| {
+            !(r.agent == ISOLATED
+                && r.submitted_at >= t0()
+                && r.submitted_at < t0() + TimeDelta::seconds(180))
+        });
+        let mut late = caught(ISOLATED, 1);
+        late.completed_at = Some(t0() + TimeDelta::seconds(200));
+        late.duration_ms = 201_000;
+        records.push(late);
+
+        let report = build(&records);
+        let caught = report
+            .caught_in_flight
+            .iter()
+            .find(|c| c.group == Group::OnPod)
+            .unwrap();
+        assert_eq!(caught.outlived_the_fault, 1);
+    }
+
+    /// The number that stops a small during-fault rate reading as residual
+    /// service. A real run showed 1.1% of baseline from operations that all
+    /// arrived in the last four seconds of a 182-second window, once the fault
+    /// was already coming down.
+    #[test]
+    fn a_group_silent_until_the_heal_reports_how_long_it_offered_nothing() {
+        let mut records = history(0, 180);
+        records.retain(|r| {
+            !(r.agent == ISOLATED
+                && r.submitted_at >= t0()
+                && r.submitted_at < t0() + TimeDelta::seconds(180))
+        });
+        // A late tail, exactly as the heal window produces.
+        for offset in 176..180 {
+            records.push(op(ISOLATED, offset, Outcome::Confirmed));
+        }
+
+        let report = build(&records);
+        let cell = report.cell(Group::OnPod, Window::DuringFault).unwrap();
+
+        assert_eq!(cell.submitted, 4);
+        assert_eq!(cell.quiet_ms, Some(176_000));
+        assert!(
+            cell.quiet_ms.unwrap() as f64 / 1000.0 > cell.window_secs * 0.9,
+            "silence has to dominate the window, not trail it"
+        );
+        // Measured from the window's own start, not from the run's first
+        // operation: the baseline began 300s earlier.
+        let baseline = report.cell(Group::OnPod, Window::BeforeFault).unwrap();
+        assert_eq!(baseline.quiet_ms, Some(0));
+
+        assert!(
+            report
+                .note_lines()
+                .iter()
+                .any(|l| l.contains("first offered 176.0s into a 180.0s window")),
+            "notes were {:?}",
+            report.note_lines()
+        );
+    }
+
+    /// Work the cut caught and the run cannot account for. Not a finding, but
+    /// it must sit next to the clean cells rather than be inferred from them.
+    #[test]
+    fn caught_work_that_never_confirmed_is_raised_to_the_operator() {
+        let mut records = history(0, 180);
+        records.retain(|r| {
+            !(r.agent == ISOLATED
+                && r.submitted_at >= t0()
+                && r.submitted_at < t0() + TimeDelta::seconds(180))
+        });
+        let mut lost = caught(ISOLATED, 2);
+        lost.outcome = Outcome::Indeterminate;
+        records.push(lost);
+
+        let report = build(&records);
+        assert!(
+            report
+                .attention_lines()
+                .iter()
+                .any(|l| l.contains("caught in flight") && l.contains("did not confirm")),
+            "attention was {:?}",
+            report.attention_lines()
+        );
+        // Still not a finding: doubt is not damage, and the exactly-once and
+        // read-back accounts are what resolve it.
+        assert!(report.findings.is_empty());
+    }
+
+    /// A run with no fault window cannot say what was in flight when the cut
+    /// landed, because it does not know when that was.
+    #[test]
+    fn a_run_without_a_fault_window_claims_nothing_was_caught() {
+        let report = ReachabilityReport::build(
+            &history(2, 180),
+            &split(),
+            None,
+            25.0,
+            75.0,
+            Duration::from_secs(60),
+        );
+        assert!(report.caught_in_flight.is_empty());
+        assert!(report.cells.iter().all(|c| c.quiet_ms.is_none()));
     }
 }
