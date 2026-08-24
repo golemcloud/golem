@@ -18,6 +18,7 @@ pub use agent::*;
 pub use agent_config::*;
 pub use agent_initiator::*;
 pub use agent_registry::*;
+pub use ambient_tool_rpc::*;
 pub use async_utils::*;
 pub use errors::*;
 pub use extended_agent_type::*;
@@ -31,8 +32,8 @@ pub use tool_impl::{OutputStream, new_tool_stdout};
 pub use tool_literal::*;
 pub use tool_refinement::*;
 pub use tool_registry::{
-    ToolInvokeFuture, ToolInvoker, get_all_tools, get_extended_tool_by_name, get_tool_by_name,
-    get_tool_invoker_by_name, register_tool, register_tool_invoker,
+    ToolInvokeFuture, ToolInvokeFutureFor, ToolInvoker, get_all_tools, get_extended_tool_by_name,
+    get_tool_by_name, get_tool_invoker_by_name, register_tool, register_tool_invoker,
 };
 pub use unstructured_binary::*;
 pub use unstructured_text::*;
@@ -50,6 +51,7 @@ mod agent_config;
 mod agent_impl;
 mod agent_initiator;
 mod agent_registry;
+pub mod ambient_tool_rpc;
 mod async_utils;
 mod errors;
 mod extended_agent_type;

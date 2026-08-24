@@ -38,7 +38,7 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
         #(#subtree_wrappers)*
 
         pub struct #client_ident {
-            rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc,
             root_tool_name: ::std::string::String,
             command_path: ::std::vec::Vec<::std::string::String>,
             schema_path: ::std::vec::Vec<::std::string::String>,
@@ -48,7 +48,7 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
         impl #client_ident {
             pub fn #constructor_ident() -> Self {
                 Self {
-                    rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::new(#tool_name),
+                    rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(#tool_name),
                     root_tool_name: #tool_name.to_string(),
                     command_path: ::std::vec::Vec::new(),
                     schema_path: ::std::vec::Vec::new(),
@@ -67,7 +67,7 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
                 inherited_prefix: ::std::vec::Vec<golem_rust::agentic::CanonicalInputValue>,
             ) -> Self {
                 Self {
-                    rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::new(&root_tool_name),
+                    rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&root_tool_name),
                     root_tool_name,
                     command_path,
                     schema_path,
@@ -217,7 +217,7 @@ fn synthesize_subtree_method(
             let mut __inherited_prefix = self.inherited_prefix.clone();
             #(#value_prefixes)*
             #wrapper_ident::<{ #child_omitted_tag }, #child_omitted_ty> {
-                rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::new(&self.root_tool_name),
+                rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&self.root_tool_name),
                 root_tool_name: self.root_tool_name.clone(),
                 command_path: __command_path,
                 schema_path: __schema_path,
@@ -307,7 +307,7 @@ fn synthesize_subtree_method_dynamic(
             let mut #inherited_prefix = self.inherited_prefix.clone();
             #value_prefixes
             #wrapper_ident::<{ #child_omitted_tag }, #child_omitted_ty> {
-                rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::new(&self.root_tool_name),
+                rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&self.root_tool_name),
                 root_tool_name: self.root_tool_name.clone(),
                 command_path: __command_path,
                 schema_path: __schema_path,
@@ -336,7 +336,7 @@ fn synthesize_subtree_wrapper(ir: &ToolDefinitionIr, cmd: &CommandIr) -> Option<
     };
     Some(quote! {
         pub struct #wrapper_ident<const __GOLEM_OMITTED_TAG: u64 = 0, __GOLEM_OMITTED = ()> {
-            rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc,
             root_tool_name: ::std::string::String,
             command_path: ::std::vec::Vec<::std::string::String>,
             schema_path: ::std::vec::Vec<::std::string::String>,

@@ -117,11 +117,13 @@ pub fn tool_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStrea
     };
     item_trait.items.push(subtree_paths_item);
 
-    let invoker_item = match syn::parse2::<TraitItem>(synthesize_tool_invoker(&ir)) {
-        Ok(item) => item,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    item_trait.items.push(invoker_item);
+    for invoker in synthesize_tool_invokers(&ir) {
+        let invoker_item = match syn::parse2::<TraitItem>(invoker) {
+            Ok(item) => item,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        item_trait.items.push(invoker_item);
+    }
 
     let command_kinds = tool_command_kinds(&ir);
     item_trait.items.extend(command_kinds);
@@ -315,18 +317,130 @@ fn tool_subtree_paths(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream> {
         .collect()
 }
 
-fn synthesize_tool_invoker(ir: &ToolDefinitionIr) -> proc_macro2::TokenStream {
+fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream; 4] {
     let invoke_arms = synthesize_invoke_arms(ir);
-    quote! {
+    let decode_ident = fresh_tool_trait_method_ident(ir, "__tool_decode_invocation");
+    let instance_ident = fresh_tool_trait_method_ident(ir, "__tool_invoke_on");
+    let decoded_ident = fresh_tool_trait_method_ident(ir, "__tool_invoke_decoded");
+    let entry = quote! {
         #[doc(hidden)]
         fn __tool_invoke(
             __command_path: ::std::vec::Vec<::std::string::String>,
             __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
-            mut __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
+            __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
             __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
         ) -> golem_rust::agentic::ToolInvokeFuture
         where
             Self: Sized + 'static,
+        {
+            ::std::boxed::Box::pin(async move {
+                let (__tool, __command_index, __input_graph, __input_fields) =
+                    Self::#decode_ident(&__command_path, __input)?;
+                if ::std::mem::size_of::<Self>() != 0 {
+                    return ::std::result::Result::Err(
+                        golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
+                            "guest tool invocation requires a zero-sized implementation type".to_string()
+                        )
+                    );
+                }
+                let __impl: &'static Self = unsafe {
+                    &*::std::ptr::NonNull::<Self>::dangling().as_ptr()
+                };
+                __impl
+                    .#decoded_ident(
+                        __command_path,
+                        __tool,
+                        __command_index,
+                        __input_graph,
+                        __input_fields,
+                        __stdin,
+                        __principal,
+                    )
+                    .await
+            })
+        }
+    };
+
+    let decode = quote! {
+        #[doc(hidden)]
+        fn #decode_ident(
+            __command_path: &[::std::string::String],
+            __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
+        ) -> ::std::result::Result<
+            (
+                golem_rust::agentic::ExtendedToolType,
+                usize,
+                golem_rust::SchemaGraph,
+                ::std::vec::Vec<golem_rust::agentic::CanonicalInputValue>,
+            ),
+            golem_rust::golem_agentic::exports::golem::tool::guest::ToolError,
+        >
+        where
+            Self: Sized,
+        {
+            let __tool = Self::__tool_descriptor();
+            let __command_index = __tool.command_index_by_path(__command_path).ok_or_else(|| {
+                golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidCommandPath(
+                    __command_path.to_vec()
+                )
+            })?;
+            let __input = golem_rust::decode_typed_schema_value_owned(__input)
+                .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(__err.to_string()))?;
+            let (__input_graph, __input_value) = __input.into_parts();
+            let __input_fields = __tool.decode_canonical_input_record(__command_index, __input_value)
+                .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(__err.to_string()))?;
+            ::std::result::Result::Ok((
+                __tool,
+                __command_index,
+                __input_graph,
+                __input_fields,
+            ))
+        }
+    };
+
+    let instance = quote! {
+        #[doc(hidden)]
+        fn #instance_ident<'a>(
+            &'a self,
+            __command_path: ::std::vec::Vec<::std::string::String>,
+            __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
+            __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
+            __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
+        ) -> golem_rust::agentic::ToolInvokeFutureFor<'a>
+        where
+            Self: Sized + 'a,
+        {
+            ::std::boxed::Box::pin(async move {
+                let (__tool, __command_index, __input_graph, __input_fields) =
+                    Self::#decode_ident(&__command_path, __input)?;
+                self.#decoded_ident(
+                    __command_path,
+                    __tool,
+                    __command_index,
+                    __input_graph,
+                    __input_fields,
+                    __stdin,
+                    __principal,
+                )
+                .await
+            })
+        }
+    };
+
+    let decoded = quote! {
+        #[doc(hidden)]
+        fn #decoded_ident<'a>(
+            &'a self,
+            __command_path: ::std::vec::Vec<::std::string::String>,
+            __tool: golem_rust::agentic::ExtendedToolType,
+            __command_index: usize,
+            __input_graph: golem_rust::SchemaGraph,
+            mut __input_fields: ::std::vec::Vec<golem_rust::agentic::CanonicalInputValue>,
+            mut __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
+            __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
+        ) -> golem_rust::agentic::ToolInvokeFutureFor<'a>
+        where
+            Self: Sized + 'a,
         {
             ::std::boxed::Box::pin(async move {
                 fn __encode_success_value<T: golem_rust::IntoSchema + ?Sized>(
@@ -373,26 +487,7 @@ fn synthesize_tool_invoker(ir: &ToolDefinitionIr) -> proc_macro2::TokenStream {
                     )
                 }
 
-                let __tool = Self::__tool_descriptor();
-                let __command_index = __tool.command_index_by_path(&__command_path).ok_or_else(|| {
-                    golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidCommandPath(
-                        __command_path.clone()
-                    )
-                })?;
-                let __input = golem_rust::decode_typed_schema_value(&__input)
-                    .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(__err.to_string()))?;
-                let __input_fields = __tool.decode_canonical_input_record(__command_index, __input.value().clone())
-                    .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(__err.to_string()))?;
-                if ::std::mem::size_of::<Self>() != 0 {
-                    return ::std::result::Result::Err(
-                        golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
-                            "guest tool invocation requires a zero-sized implementation type".to_string()
-                        )
-                    );
-                }
-                let __impl: &Self = unsafe {
-                    &*::std::ptr::NonNull::<Self>::dangling().as_ptr()
-                };
+                let __impl = self;
 
                 #(#invoke_arms)*
 
@@ -414,8 +509,8 @@ fn synthesize_tool_invoker(ir: &ToolDefinitionIr) -> proc_macro2::TokenStream {
                                 .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(__err.to_string()))?;
                             let mut __subtool_record_fields = ::std::vec::Vec::new();
                             for __field in __subtool_fields.into_iter() {
-                                let __value = __input_fields.iter()
-                                    .find(|__input_field| {
+                                let __value_index = __input_fields.iter()
+                                    .position(|__input_field| {
                                         __input_field.name == __field.name
                                             || __input_field.aliases.iter().any(|__alias| __alias == &__field.name)
                                             || __field.aliases.iter().any(|__alias| {
@@ -428,6 +523,7 @@ fn synthesize_tool_invoker(ir: &ToolDefinitionIr) -> proc_macro2::TokenStream {
                                             format!("missing canonical tool input field `{}`", __field.name)
                                         )
                                     })?;
+                                let __value = __input_fields.remove(__value_index);
                                 if __value.schema != __field.schema {
                                     return ::std::result::Result::Err(
                                         golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
@@ -435,18 +531,23 @@ fn synthesize_tool_invoker(ir: &ToolDefinitionIr) -> proc_macro2::TokenStream {
                                         )
                                     );
                                 }
-                                __subtool_record_fields.push(__value.value.clone());
+                                __subtool_record_fields.push(__value.value);
                             }
                             golem_rust::TypedSchemaValue::new(
                                 __subtool_model.record_schema,
                                 golem_rust::SchemaValue::Record { fields: __subtool_record_fields },
                             )
                         } else {
-                            __input
+                            golem_rust::TypedSchemaValue::new(
+                                __input_graph,
+                                golem_rust::SchemaValue::Record {
+                                    fields: __input_fields.into_iter().map(|__field| __field.value).collect(),
+                                },
+                            )
                         };
                         return __subtool_invoker(
                             __subtool_path,
-                            golem_rust::encode_typed_schema_value(&__subtool_input)
+                            golem_rust::encode_typed_schema_value_owned(__subtool_input)
                                 .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(__err.to_string()))?,
                             __stdin,
                             __principal,
@@ -459,7 +560,22 @@ fn synthesize_tool_invoker(ir: &ToolDefinitionIr) -> proc_macro2::TokenStream {
                 )
             })
         }
+    };
+
+    [entry, decode, instance, decoded]
+}
+
+fn fresh_tool_trait_method_ident(ir: &ToolDefinitionIr, preferred: &str) -> syn::Ident {
+    let occupied = ir
+        .commands
+        .iter()
+        .map(|command| command.method_ident.unraw().to_string())
+        .collect::<BTreeSet<_>>();
+    let mut candidate = preferred.to_string();
+    while occupied.contains(&candidate) {
+        candidate.push('_');
     }
+    format_ident!("{candidate}")
 }
 
 fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream> {
@@ -508,13 +624,14 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
                 } else {
                     quote! {
                         let #ident = {
-                            let __field = __input_fields.iter()
-                                .find(|__field| __field.name == #value_name)
+                            let __field_index = __input_fields.iter()
+                                .position(|__field| __field.name == #value_name)
                                 .ok_or_else(|| {
                                     golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
                                         format!("missing canonical tool input field `{}`", #value_name)
                                     )
                                 })?;
+                            let __field = __input_fields.remove(__field_index);
                             <#ty as golem_rust::FromSchema>::from_value(&__field.value)
                                 .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(__err.to_string()))?
                         };
@@ -967,6 +1084,31 @@ mod tests {
     fn non_string_version_is_error() {
         let err = version("version = 3").unwrap_err();
         assert!(err.to_string().contains("string literal"));
+    }
+
+    #[test]
+    fn generated_dispatch_helpers_avoid_authored_method_names() {
+        let definition = ir(r#"
+            pub trait T {
+                fn __tool_decode_invocation(&self);
+                fn __tool_invoke_on(&self);
+                fn __tool_invoke_decoded(&self);
+            }
+        "#)
+        .unwrap();
+
+        assert_eq!(
+            fresh_tool_trait_method_ident(&definition, "__tool_decode_invocation").to_string(),
+            "__tool_decode_invocation_"
+        );
+        assert_eq!(
+            fresh_tool_trait_method_ident(&definition, "__tool_invoke_on").to_string(),
+            "__tool_invoke_on_"
+        );
+        assert_eq!(
+            fresh_tool_trait_method_ident(&definition, "__tool_invoke_decoded").to_string(),
+            "__tool_invoke_decoded_"
+        );
     }
 
     #[test]

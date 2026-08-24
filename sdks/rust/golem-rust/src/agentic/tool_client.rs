@@ -17,6 +17,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use crate::TypedSchemaValue;
+use crate::agentic::AmbientToolRpc;
 use crate::agentic::InputStream;
 use crate::bindings::golem::tool::host::RpcError as WitRpcError;
 use crate::bindings::golem::tool::host::{self, ToolRpc as HostToolRpc};
@@ -193,6 +194,19 @@ impl ToolRpcClient for HostToolRpc {
         stdin: Option<InputStream>,
     ) -> Result<host::InvocationResult, WitRpcError> {
         self.invoke_and_await(command_path.to_vec(), input, stdin)
+            .await
+    }
+}
+
+impl ToolRpcClient for AmbientToolRpc {
+    async fn invoke_and_await_tool(
+        &self,
+        command_path: &[String],
+        input: crate::schema::wit::wire::TypedSchemaValue,
+        stdin: Option<InputStream>,
+    ) -> Result<host::InvocationResult, WitRpcError> {
+        self.inner
+            .invoke_and_await(command_path.to_vec(), input, stdin)
             .await
     }
 }

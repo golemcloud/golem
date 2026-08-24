@@ -907,6 +907,45 @@ mod tests {
         assert_eq!(value, "default:alice");
     }
 
+    #[tool_definition]
+    trait StatefulInstanceRoundTrip {
+        fn stateful_instance_round_trip(&self, suffix: String) -> String;
+    }
+
+    struct StatefulInstanceRoundTripImpl {
+        prefix: String,
+    }
+
+    #[tool_implementation]
+    impl StatefulInstanceRoundTrip for StatefulInstanceRoundTripImpl {
+        fn stateful_instance_round_trip(&self, suffix: String) -> String {
+            format!("{}:{suffix}", self.prefix)
+        }
+    }
+
+    #[test]
+    async fn generated_instance_invoker_dispatches_on_borrowed_state() {
+        let tool =
+            <StatefulInstanceRoundTripImpl as StatefulInstanceRoundTrip>::__tool_descriptor();
+        let input = encoded_input(
+            &tool,
+            &[],
+            vec![golem_rust::SchemaValue::String("value".to_string())],
+        );
+        let instance = StatefulInstanceRoundTripImpl {
+            prefix: "state".to_string(),
+        };
+
+        let result = instance
+            .__tool_invoke_on(vec![], input, None, anonymous_principal())
+            .await
+            .expect("instance invocation succeeds");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "state:value");
+    }
+
     #[test]
     fn stdout_tool_result_shape_compiles() {
         let output = cargo_check_tool_crate(
@@ -2064,8 +2103,18 @@ mod golem_rust {
     pub mod agentic {
         pub use golem_rust_actual::agentic::*;
 
+        pub mod ambient_tool_rpc {
+            pub struct AmbientToolRpc;
+
+            impl AmbientToolRpc {
+                pub fn new(_name: &str) -> Self {
+                    Self
+                }
+            }
+        }
+
         pub async fn invoke_and_await_infallible(
-            _rpc: &crate::golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            _rpc: &ambient_tool_rpc::AmbientToolRpc,
             _command_path: &[String],
             input: &crate::golem_rust::TypedSchemaValue,
             _stdin: Option<crate::golem_rust::agentic::InputStream>,
@@ -2184,8 +2233,18 @@ mod golem_rust {
     pub mod agentic {
         pub use golem_rust_actual::agentic::*;
 
+        pub mod ambient_tool_rpc {
+            pub struct AmbientToolRpc;
+
+            impl AmbientToolRpc {
+                pub fn new(_name: &str) -> Self {
+                    Self
+                }
+            }
+        }
+
         pub async fn invoke_and_await_infallible(
-            _rpc: &crate::golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            _rpc: &ambient_tool_rpc::AmbientToolRpc,
             _command_path: &[String],
             input: &crate::golem_rust::TypedSchemaValue,
             _stdin: Option<crate::golem_rust::agentic::InputStream>,

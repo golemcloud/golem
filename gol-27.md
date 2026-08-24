@@ -14,7 +14,7 @@ Updated continuously while executing this plan on 2026-08-24.
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | WIT and owned values | Complete — Oracle reviewed |
-| 2 | Backend-neutral generation | Not started |
+| 2 | Backend-neutral generation | Complete — Oracle reviewed |
 | 3 | Generated middleware surface | Not started |
 | 4 | Authoring macros | Not started |
 | 5 | Guest boundary | Not started |
@@ -27,6 +27,12 @@ Progress log:
 - The canonical pure world is named `tool-middleware` rather than `tool-middleware-guest`: WIT resolves package-level interface/world references by name, so giving both the world and exported interface the same name makes `export tool-middleware-guest` resolve to the world and fails parsing. The exported ABI remains `golem:tool/tool-middleware-guest@0.1.0` as required.
 - Phase 1 verification passed: WIT synchronization, `golem-rust` build, 299 default `golem-schema` library tests, and 4 dedicated guest-feature tests for nested secret/quota forwarding, duplicate-handle rejection, second-transfer rejection, and malformed aliased wire nodes. The dedicated target is included in `cargo make unit-tests` so CI executes it. `cargo make check-wit` will become clean once the synchronized copies are committed, because that task intentionally reports any uncommitted generated WIT delta.
 - Phase 1 Oracle review found the initial guest-feature integration target was not part of normal CI. The review finding was fixed by wiring it into `unit-tests`; the Oracle follow-up confirmed there are no remaining phase 1 blockers and that the cargo-make task follows repository conventions.
+- Phase 1 was committed as `04094f061`; `cargo make check-wit` then passed with no synchronized-copy drift.
+- Started phase 2 by mapping the existing generated ambient client, leaf invoker, canonical input, subtree projection, custom-error, and stream result paths that must be shared with an underlying-resource backend.
+- Phase 2 now routes generated ambient clients through the SDK-owned `AmbientToolRpc` backend instead of an export-world `ToolRpc`. Existing callers that pass the agentic-world resource to public client helpers remain source-compatible.
+- Leaf dispatch is split into shared owned decode, borrowed-instance dispatch, and decoded call stages. The static guest entry preserves its prior zero-sized implementation contract and validation order, while middleware generation can reuse the instance path without a dangling reference. Canonical record and subtree forwarding now move decoded fields and use the owned typed encoder rather than cloning the complete value tree.
+- Phase 2 verification passed: both SDK crates build, all 98 macro tests pass, all 157 existing-plus-instance `tool` tests pass, all 9 canonical tool tests pass, and Rust formatting is clean.
+- Phase 2 Oracle review found no correctness, compatibility, ownership, or phase-boundary blockers and recommended landing the phase.
 
 ## Outcome
 
