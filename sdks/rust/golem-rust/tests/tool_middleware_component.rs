@@ -188,6 +188,16 @@ fn check_fixture(fixture: &Path, target: &Path, package: &str) {
 }
 
 fn build_component(fixture: &Path, target: &Path, package: &str) -> PathBuf {
+    let clean = cargo(
+        fixture,
+        target,
+        ["clean", "-p", package, "--target", "wasm32-wasip2"],
+    );
+    assert_success(
+        &clean,
+        &format!("cleaning fixture package `{package}` before building"),
+    );
+
     let output = cargo(
         fixture,
         target,
