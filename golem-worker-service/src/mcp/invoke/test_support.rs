@@ -514,7 +514,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
         _: i32,
         _: Option<::prost_types::Timestamp>,
-        _: Option<IdempotencyKey>,
+        _: IdempotencyKey,
         _: Option<InvocationContext>,
         _: EnvironmentId,
         _: AccountId,

@@ -228,7 +228,7 @@ pub trait WorkerClient: Send + Sync {
         method_parameters: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
-        idempotency_key: Option<IdempotencyKey>,
+        idempotency_key: IdempotencyKey,
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
@@ -1294,7 +1294,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         method_parameters: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
-        idempotency_key: Option<IdempotencyKey>,
+        idempotency_key: IdempotencyKey,
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
@@ -1302,28 +1302,34 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         principal: golem_api_grpc::proto::golem::component::Principal,
     ) -> WorkerResult<AgentInvocationOutput> {
         let agent_id = agent_id.clone();
-        let agent_id_clone = agent_id.clone();
+
+        // Built once here, cloned per attempt below. `call_worker_executor`
+        // retries on InvalidShardId and on transport failure, and every attempt
+        // has to be the same request as the first: `invoke_agent_internal` mints
+        // its own idempotency key for a request that arrives without one, so an
+        // attempt that differed here would have the new owner run work that had
+        // already run. Constructing this inside the retry closure is how that
+        // goes wrong, so it does not happen inside the retry closure.
+        let request = workerexecutor::v1::InvokeAgentRequest {
+            agent_id: Some(agent_id.clone().into()),
+            method_name,
+            method_parameters,
+            mode,
+            schedule_at,
+            idempotency_key: Some(idempotency_key.into()),
+            component_owner_account_id: Some(account_id.into()),
+            environment_id: Some(environment_id.into()),
+            auth_ctx: Some(auth_ctx.into()),
+            context: invocation_context,
+            principal: Some(principal),
+        };
 
         let result = self
             .call_worker_executor(
                 agent_id.clone(),
                 "invoke_agent",
                 move |worker_executor_client| {
-                    Box::pin(worker_executor_client.invoke_agent(
-                        workerexecutor::v1::InvokeAgentRequest {
-                            agent_id: Some(agent_id_clone.clone().into()),
-                            method_name: method_name.clone(),
-                            method_parameters: method_parameters.clone(),
-                            mode,
-                            schedule_at,
-                            idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                            component_owner_account_id: Some(account_id.into()),
-                            environment_id: Some(environment_id.into()),
-                            auth_ctx: Some(auth_ctx.clone().into()),
-                            context: invocation_context.clone(),
-                            principal: Some(principal.clone()),
-                        },
-                    ))
+                    Box::pin(worker_executor_client.invoke_agent(request.clone()))
                 },
                 |response| match response.into_inner() {
                     workerexecutor::v1::InvokeAgentResponse {

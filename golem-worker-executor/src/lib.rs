@@ -190,6 +190,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Arc::new(crate::services::shard_manager::GrpcShardManagerService::new(shard_manager_client))
     }
 
+    /// Overridable so a test can watch or fake shard ownership. Everything that
+    /// gates on ownership goes through this one service, including the periodic
+    /// re-check a caller parked in `Worker::wait_for_invocation_result` runs.
+    fn create_shard_service(&self) -> Arc<dyn ShardService> {
+        Arc::new(ShardServiceDefault::new())
+    }
+
     fn create_quota_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
@@ -739,7 +746,7 @@ pub async fn create_worker_executor_impl<
     );
     let golem_config = Arc::new(golem_config);
 
-    let shard_service = Arc::new(ShardServiceDefault::new());
+    let shard_service = bootstrap.create_shard_service();
 
     let mut oplog_archives: Vec<Arc<dyn OplogArchiveService>> = Vec::new();
     for idx in 1..golem_config.oplog.indexed_storage_layers {
