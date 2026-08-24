@@ -15,6 +15,15 @@
 #[cfg(test)]
 test_r::enable!();
 
+#[cfg(all(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware",
+    not(feature = "export_golem_agentic_tool_middleware")
+))]
+compile_error!(
+    "`export_golem_agentic` and `export_golem_tool_middleware` cannot be enabled together; use `export_golem_agentic_tool_middleware`"
+);
+
 pub use uuid::Uuid;
 pub use wasip3;
 
@@ -237,7 +246,13 @@ pub mod save_snapshot {
     pub use __export_golem_rust_save_snapshot_impl as export_save_snapshot;
 }
 
-#[cfg(feature = "export_golem_agentic")]
+#[cfg(all(
+    any(
+        feature = "export_golem_agentic",
+        feature = "export_golem_tool_middleware"
+    ),
+    not(feature = "export_golem_agentic_tool_middleware")
+))]
 pub mod golem_agentic {
     use wit_bindgen::generate;
 
@@ -284,10 +299,92 @@ pub mod golem_agentic {
     pub use __export_golem_agentic_impl as export_golem_agentic;
 }
 
-#[cfg(feature = "export_golem_agentic")]
+#[cfg(all(
+    feature = "export_golem_tool_middleware",
+    not(feature = "export_golem_agentic_tool_middleware")
+))]
+pub mod golem_tool_middleware {
+    use wit_bindgen::generate;
+
+    generate!({
+        path: "wit",
+        world: "golem-tool-middleware",
+        async: [
+            "export:golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
+        ],
+        generate_all,
+        generate_unused_types: true,
+        pub_export_macro: true,
+        with: {
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:agent/common@2.0.0": crate::golem_agentic::golem::agent::common,
+            "golem:tool/common@0.1.0": crate::golem_agentic::golem::tool::common,
+        }
+    });
+
+    pub use __export_golem_tool_middleware_impl as export_golem_tool_middleware;
+}
+
+#[cfg(feature = "export_golem_agentic_tool_middleware")]
+pub mod golem_agentic_tool_middleware {
+    use wit_bindgen::generate;
+
+    generate!({
+        path: "wit",
+        world: "golem-agentic-tool-middleware",
+        async: [
+            "export:golem:agent/guest@2.0.0#initialize",
+            "export:golem:agent/guest@2.0.0#invoke",
+            "export:golem:tool/guest@0.1.0#invoke",
+            "export:golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
+        ],
+        generate_all,
+        generate_unused_types: true,
+        pub_export_macro: true,
+        with: {
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
+            "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
+
+            "golem:api/host@1.5.0": crate::bindings::golem::api::host,
+            "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
+            "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
+            "golem:api/context@1.5.0": crate::bindings::golem::api::context,
+            "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
+            "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
+            "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
+            "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
+            "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
+            "wasi:blobstore/blobstore": crate::bindings::wasi::blobstore::blobstore,
+            "wasi:blobstore/container": crate::bindings::wasi::blobstore::container,
+            "wasi:blobstore/types": crate::bindings::wasi::blobstore::types,
+            "wasi:keyvalue/eventual-batch@0.1.0": crate::bindings::wasi::keyvalue::eventual_batch,
+            "wasi:keyvalue/eventual@0.1.0": crate::bindings::wasi::keyvalue::eventual,
+            "wasi:keyvalue/types@0.1.0": crate::bindings::wasi::keyvalue::types,
+            "wasi:keyvalue/wasi-keyvalue-error@0.1.0": crate::bindings::wasi::keyvalue::wasi_keyvalue_error,
+            "wasi:logging/logging": crate::bindings::wasi::logging::logging,
+            "wasi:config/store@0.2.0-draft": crate::bindings::wasi::config::store,
+        }
+    });
+
+    pub use __export_golem_agentic_tool_middleware_impl as export_golem_agentic_tool_middleware;
+}
+
+#[cfg(feature = "export_golem_agentic_tool_middleware")]
+pub use golem_agentic_tool_middleware as golem_agentic;
+
+#[cfg(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
 pub use ctor;
 
-#[cfg(feature = "export_golem_agentic")]
+#[cfg(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
 pub use async_trait;
 
 #[cfg(feature = "export_golem_agentic")]
@@ -341,7 +438,10 @@ pub mod oplog_processor {
     pub use __export_golem_rust_oplog_processor_impl as export_oplog_processor;
 }
 
-#[cfg(feature = "export_golem_agentic")]
+#[cfg(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
 pub mod agentic;
 
 #[cfg(feature = "durability")]

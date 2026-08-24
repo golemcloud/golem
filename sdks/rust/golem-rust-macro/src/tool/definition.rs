@@ -24,11 +24,15 @@ use crate::tool::arg::parse_arg;
 use crate::tool::command::{CommandAttr, parse_command_into};
 use crate::tool::constraint::parse_constraint;
 use crate::tool::doc::parse_doc_full;
-use crate::tool::helpers::{SeenKeys, to_kebab_case};
+use crate::tool::helpers::{
+    SeenKeys, fresh_internal_ident, normalize_sdk_paths_in_item_trait, resolve_generated_sdk_paths,
+    to_kebab_case,
+};
 use crate::tool::ir::{ArgIr, ArgPlacement, CommandIr, ParamIr, ToolDefinitionIr};
 use crate::tool::result::parse_result;
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
+use proc_macro2::Span;
+use quote::{ToTokens, format_ident, quote};
 use std::collections::BTreeSet;
 use syn::ext::IdentExt;
 use syn::spanned::Spanned;
@@ -39,8 +43,36 @@ use syn::{
 
 const HELPER_ATTRS: [&str; 5] = ["arg", "command", "constraint", "result", "example"];
 
-pub fn tool_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
+pub fn tool_definition_impl(
+    attrs: TokenStream,
+    item: TokenStream,
+    golem_rust: &syn::Ident,
+) -> TokenStream {
     let mut item_trait = syn::parse_macro_input!(item as ItemTrait);
+    let canonical_golem_rust = syn::Ident::new("golem_rust", Span::call_site());
+    let preserved_golem_rust = fresh_internal_ident(
+        &item_trait.to_token_stream(),
+        &format!(
+            "__golem_preserved_golem_rust_identifier_for_{}",
+            item_trait.ident
+        ),
+        item_trait.ident.span(),
+    );
+    let mut ir_item_trait = item_trait.clone();
+    normalize_sdk_paths_in_item_trait(
+        &mut ir_item_trait,
+        golem_rust,
+        &canonical_golem_rust,
+        &preserved_golem_rust,
+    );
+    let resolve_sdk = |tokens| {
+        resolve_generated_sdk_paths(
+            tokens,
+            golem_rust,
+            &canonical_golem_rust,
+            &preserved_golem_rust,
+        )
+    };
 
     let version = match parse_version(attrs.into()) {
         Ok(v) => v,
@@ -49,7 +81,7 @@ pub fn tool_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStrea
 
     // Building the IR validates every tool authoring attribute and surfaces
     // parse errors at compile time.
-    let ir = match build_tool_definition_ir(&item_trait, version) {
+    let ir = match build_tool_definition_ir(&ir_item_trait, version) {
         Ok(ir) => ir,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -59,18 +91,19 @@ pub fn tool_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStrea
     // so a parent tool's `#[command(subtree = path::Child)]` can reach it
     // through the child trait's module path without a concrete `Self`.
     let descriptor_fn = match crate::tool::descriptor::synthesize_descriptor_fn(&ir) {
-        Ok(tokens) => tokens,
+        Ok(tokens) => resolve_sdk(tokens),
         Err(err) => return err.to_compile_error().into(),
     };
-    let client = crate::tool::client::synthesize_client(&ir);
-    let middleware_surface = crate::tool::middleware_surface::synthesize_middleware_surface(&ir);
+    let client = resolve_sdk(crate::tool::client::synthesize_client(&ir));
+    let middleware_surface =
+        resolve_sdk(crate::tool::middleware_surface::synthesize_middleware_surface(&ir));
     let descriptor_fn_ident = crate::tool::descriptor::descriptor_fn_ident(&ir.trait_ident);
 
     strip_helper_attrs(&mut item_trait);
 
     // A hidden default method delegating to the free descriptor function, so the
     // `#[tool_implementation]` registration ctor can call it through the trait.
-    let descriptor_item: TraitItem = syn::parse_quote! {
+    let descriptor_item = quote! {
         #[doc(hidden)]
         fn __tool_descriptor() -> golem_rust::agentic::ExtendedToolType
         where
@@ -79,6 +112,10 @@ pub fn tool_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStrea
             #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
                 .expect("tool descriptor build failed")
         }
+    };
+    let descriptor_item = match syn::parse2::<TraitItem>(resolve_sdk(descriptor_item)) {
+        Ok(item) => item,
+        Err(error) => return error.into_compile_error().into(),
     };
     item_trait.items.push(descriptor_item);
 
@@ -119,15 +156,21 @@ pub fn tool_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStrea
     item_trait.items.push(subtree_paths_item);
 
     for invoker in synthesize_tool_invokers(&ir) {
-        let invoker_item = match syn::parse2::<TraitItem>(invoker) {
+        let invoker_item = match syn::parse2::<TraitItem>(resolve_sdk(invoker)) {
             Ok(item) => item,
             Err(err) => return err.to_compile_error().into(),
         };
         item_trait.items.push(invoker_item);
     }
 
-    let command_kinds = tool_command_kinds(&ir);
-    item_trait.items.extend(command_kinds);
+    for command_kind in tool_command_kinds(&ir) {
+        let command_kind =
+            match syn::parse2::<TraitItem>(resolve_sdk(command_kind.into_token_stream())) {
+                Ok(item) => item,
+                Err(error) => return error.into_compile_error().into(),
+            };
+        item_trait.items.push(command_kind);
+    }
 
     let annotation_item: TraitItem = syn::parse_quote! {
         #[doc(hidden)]
@@ -1112,6 +1155,86 @@ mod tests {
         assert_eq!(
             fresh_tool_trait_method_ident(&definition, "__tool_invoke_decoded").to_string(),
             "__tool_invoke_decoded_"
+        );
+    }
+
+    #[test]
+    fn renamed_sdk_normalization_preserves_helper_attribute_identifiers_and_paths() {
+        let resolved = proc_macro2::Ident::new("sdk_alias", Span::call_site());
+        let canonical = proc_macro2::Ident::new("golem_rust", Span::call_site());
+        let preserved = proc_macro2::Ident::new("__preserved_golem_rust", Span::call_site());
+        let mut item: ItemTrait = syn::parse_quote! {
+            trait Example {
+                #[arg(golem_rust = "global")]
+                fn run(&self, golem_rust: bool);
+
+                #[command(subtree = golem_rust::Child)]
+                fn child(&self) -> ChildMarker;
+            }
+        };
+
+        normalize_sdk_paths_in_item_trait(&mut item, &resolved, &canonical, &preserved);
+        let definition = build_tool_definition_ir(&item, None).unwrap();
+        assert_eq!(
+            definition.commands[0].args[0].param.to_string(),
+            preserved.to_string()
+        );
+        assert_eq!(
+            definition.commands[0].params[0].ident.to_string(),
+            preserved.to_string()
+        );
+        assert_eq!(
+            definition.commands[1]
+                .subtree
+                .as_ref()
+                .unwrap()
+                .path
+                .segments[0]
+                .ident
+                .to_string(),
+            preserved.to_string()
+        );
+
+        let descriptor = crate::tool::descriptor::synthesize_descriptor_fn(&definition).unwrap();
+        let client = crate::tool::client::synthesize_client(&definition);
+        let middleware =
+            crate::tool::middleware_surface::synthesize_middleware_surface(&definition);
+        let emitted = resolve_generated_sdk_paths(
+            quote::quote! {
+                #item
+                #descriptor
+                #client
+                #middleware
+            },
+            &resolved,
+            &canonical,
+            &preserved,
+        )
+        .to_string();
+        assert!(emitted.contains("arg (golem_rust = \"global\")"));
+        assert!(emitted.contains("fn run (& self , golem_rust : bool)"));
+        assert!(emitted.contains("command (subtree = golem_rust :: Child)"));
+        assert!(emitted.contains("\"golem-rust\""));
+        assert!(!emitted.contains("__preserved_golem_rust"));
+    }
+
+    #[test]
+    fn sdk_path_normalization_keeps_canonical_principal_auto_injected() {
+        let resolved = proc_macro2::Ident::new("golem_rust", Span::call_site());
+        let canonical = proc_macro2::Ident::new("golem_rust", Span::call_site());
+        let preserved = proc_macro2::Ident::new("__preserved_golem_rust", Span::call_site());
+        let mut item: ItemTrait = syn::parse_quote! {
+            trait Example {
+                fn run(&self, principal: golem_rust::tool::Principal, value: String);
+            }
+        };
+
+        normalize_sdk_paths_in_item_trait(&mut item, &resolved, &canonical, &preserved);
+        let definition = build_tool_definition_ir(&item, None).unwrap();
+
+        assert!(
+            crate::tool::client::is_principal_type(&definition.commands[0].params[0].ty),
+            "the SDK Principal parameter must remain classified as auto-injected after path normalization"
         );
     }
 

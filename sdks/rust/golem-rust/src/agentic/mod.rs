@@ -16,6 +16,8 @@ pub use crate::golem_agentic::golem::agent::common::Principal;
 pub type InputStream = wit_bindgen::StreamReader<u8>;
 pub use agent::*;
 pub use agent_config::*;
+#[cfg(feature = "export_golem_agentic_tool_middleware")]
+pub(crate) use agent_impl::Component;
 pub use agent_initiator::*;
 pub use agent_registry::*;
 pub use ambient_tool_rpc::*;
@@ -48,6 +50,7 @@ pub struct EphemeralInvocationResult<T> {
 
 mod agent;
 mod agent_config;
+#[cfg(feature = "export_golem_agentic")]
 mod agent_impl;
 mod agent_initiator;
 mod agent_registry;

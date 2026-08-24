@@ -14,9 +14,262 @@
 
 //! Small literal-extraction helpers shared by the tool attribute parsers.
 
+use proc_macro2::{Group, Ident, Span, TokenStream, TokenTree};
 use std::collections::BTreeSet;
 use syn::spanned::Spanned;
+use syn::visit_mut::VisitMut;
 use syn::{Error, Expr, ExprArray, ExprLit, Lit, Token};
+
+pub fn replace_ident(tokens: TokenStream, from: &Ident, to: &Ident) -> TokenStream {
+    tokens
+        .into_iter()
+        .map(|token| match token {
+            TokenTree::Group(group) => {
+                let mut replacement =
+                    Group::new(group.delimiter(), replace_ident(group.stream(), from, to));
+                replacement.set_span(group.span());
+                TokenTree::Group(replacement)
+            }
+            TokenTree::Ident(ident) if identifiers_match(&ident, from) => {
+                TokenTree::Ident(to.clone())
+            }
+            token => token,
+        })
+        .collect()
+}
+
+pub fn fresh_internal_ident(tokens: &TokenStream, preferred: &str, span: Span) -> Ident {
+    let mut candidate = preferred.to_string();
+    let mut suffix = 0;
+    while contains_marker(tokens.clone(), &candidate) {
+        suffix += 1;
+        candidate = format!("{preferred}_{suffix}");
+    }
+    Ident::new(&candidate, span)
+}
+
+fn contains_marker(tokens: TokenStream, marker: &str) -> bool {
+    let spellings = marker_spellings(marker);
+    tokens.into_iter().any(|token| match token {
+        TokenTree::Group(group) => contains_marker(group.stream(), marker),
+        TokenTree::Ident(ident) => spellings
+            .iter()
+            .any(|spelling| ident.to_string().contains(spelling)),
+        TokenTree::Literal(literal) => {
+            let lexical = literal.to_string();
+            let semantic = match syn::parse_str::<syn::Lit>(&lexical) {
+                Ok(syn::Lit::Str(value)) => value.value(),
+                _ => lexical,
+            };
+            spellings.iter().any(|spelling| semantic.contains(spelling))
+        }
+        TokenTree::Punct(_) => false,
+    })
+}
+
+fn identifiers_match(left: &Ident, right: &Ident) -> bool {
+    if left == right {
+        return true;
+    }
+    let left = left.to_string();
+    let right = right.to_string();
+    left.strip_prefix("r#").unwrap_or(&left) == right.strip_prefix("r#").unwrap_or(&right)
+}
+
+pub fn normalize_sdk_paths_in_item_trait(
+    item: &mut syn::ItemTrait,
+    resolved: &Ident,
+    canonical: &Ident,
+    preserved_canonical: &Ident,
+) {
+    if identifiers_match(resolved, canonical) {
+        return;
+    }
+    CanonicalIdentProtector {
+        canonical,
+        preserved_canonical,
+    }
+    .visit_item_trait_mut(item);
+    SdkPathNormalizer {
+        resolved,
+        canonical,
+    }
+    .visit_item_trait_mut(item);
+}
+
+pub fn normalize_sdk_paths_in_derive_input(
+    item: &mut syn::DeriveInput,
+    resolved: &Ident,
+    canonical: &Ident,
+    preserved_canonical: &Ident,
+) {
+    if identifiers_match(resolved, canonical) {
+        return;
+    }
+    CanonicalIdentProtector {
+        canonical,
+        preserved_canonical,
+    }
+    .visit_derive_input_mut(item);
+    SdkPathNormalizer {
+        resolved,
+        canonical,
+    }
+    .visit_derive_input_mut(item);
+}
+
+pub fn resolve_generated_sdk_paths(
+    tokens: TokenStream,
+    resolved: &Ident,
+    canonical: &Ident,
+    preserved_canonical: &Ident,
+) -> TokenStream {
+    let tokens = replace_ident(tokens, canonical, resolved);
+    restore_internal_marker(tokens, preserved_canonical, canonical)
+}
+
+fn restore_internal_marker(
+    tokens: TokenStream,
+    preserved: &Ident,
+    canonical: &Ident,
+) -> TokenStream {
+    let preserved = preserved.to_string();
+    let canonical = canonical.to_string();
+    let replacements = marker_replacements(&preserved, &canonical);
+
+    restore_markers(tokens, &replacements)
+}
+
+fn restore_markers(tokens: TokenStream, replacements: &[(String, String)]) -> TokenStream {
+    tokens
+        .into_iter()
+        .map(|token| match token {
+            TokenTree::Group(group) => {
+                let mut replacement = Group::new(
+                    group.delimiter(),
+                    restore_markers(group.stream(), replacements),
+                );
+                replacement.set_span(group.span());
+                TokenTree::Group(replacement)
+            }
+            TokenTree::Ident(ident) => {
+                let original = ident.to_string();
+                let text = restore_marker_text(original.clone(), replacements);
+                if text == original {
+                    TokenTree::Ident(ident)
+                } else {
+                    let mut replacement = if let Some(raw) = text.strip_prefix("r#") {
+                        Ident::new_raw(raw, ident.span())
+                    } else {
+                        Ident::new(&text, ident.span())
+                    };
+                    replacement.set_span(ident.span());
+                    TokenTree::Ident(replacement)
+                }
+            }
+            TokenTree::Literal(literal) => {
+                let Ok(syn::Lit::Str(value)) = syn::parse_str::<syn::Lit>(&literal.to_string())
+                else {
+                    return TokenTree::Literal(literal);
+                };
+                let original = value.value();
+                let restored = restore_marker_text(original.clone(), replacements);
+                if restored == original {
+                    TokenTree::Literal(literal)
+                } else {
+                    let mut replacement = proc_macro2::Literal::string(&restored);
+                    replacement.set_span(literal.span());
+                    TokenTree::Literal(replacement)
+                }
+            }
+            TokenTree::Punct(punct) => TokenTree::Punct(punct),
+        })
+        .collect()
+}
+
+fn restore_marker_text(mut text: String, replacements: &[(String, String)]) -> String {
+    for (from, to) in replacements {
+        text = text.replace(from, to);
+    }
+    text
+}
+
+fn marker_spellings(marker: &str) -> Vec<String> {
+    let mut spellings = vec![
+        marker.to_string(),
+        marker.to_lowercase(),
+        to_kebab_case(marker),
+        to_pascal_case(marker),
+    ];
+    spellings.sort_by_key(|spelling| std::cmp::Reverse(spelling.len()));
+    spellings.dedup();
+    spellings
+}
+
+fn marker_replacements(preserved: &str, canonical: &str) -> Vec<(String, String)> {
+    let mut replacements = vec![
+        (preserved.to_string(), canonical.to_string()),
+        (preserved.to_lowercase(), canonical.to_lowercase()),
+        (to_kebab_case(preserved), to_kebab_case(canonical)),
+        (to_pascal_case(preserved), to_pascal_case(canonical)),
+    ];
+    replacements.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
+    replacements.dedup_by(|left, right| left.0 == right.0);
+    replacements
+}
+
+fn to_pascal_case(input: &str) -> String {
+    let mut output = String::new();
+    let mut capitalize = true;
+    for character in input.chars() {
+        if character == '_' || character == '-' {
+            capitalize = true;
+        } else if capitalize {
+            output.extend(character.to_uppercase());
+            capitalize = false;
+        } else {
+            output.push(character);
+        }
+    }
+    output
+}
+
+struct SdkPathNormalizer<'a> {
+    resolved: &'a Ident,
+    canonical: &'a Ident,
+}
+
+struct CanonicalIdentProtector<'a> {
+    canonical: &'a Ident,
+    preserved_canonical: &'a Ident,
+}
+
+impl VisitMut for CanonicalIdentProtector<'_> {
+    fn visit_ident_mut(&mut self, ident: &mut Ident) {
+        if identifiers_match(ident, self.canonical) {
+            *ident = self.preserved_canonical.clone();
+        }
+    }
+
+    fn visit_token_stream_mut(&mut self, tokens: &mut TokenStream) {
+        *tokens = replace_ident(tokens.clone(), self.canonical, self.preserved_canonical);
+    }
+}
+
+impl VisitMut for SdkPathNormalizer<'_> {
+    fn visit_path_mut(&mut self, path: &mut syn::Path) {
+        syn::visit_mut::visit_path_mut(self, path);
+        if self.resolved == self.canonical {
+            return;
+        }
+        let Some(first) = path.segments.first_mut() else {
+            return;
+        };
+        if first.ident == *self.resolved {
+            first.ident = self.canonical.clone();
+        }
+    }
+}
 
 /// Tracks the keyword keys seen within a single helper attribute so that a
 /// repeated key produces a clean compile error instead of silently keeping the
@@ -203,7 +456,12 @@ pub fn to_kebab_case(ident: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::to_kebab_case;
+    use super::{
+        fresh_internal_ident, normalize_sdk_paths_in_item_trait, replace_ident,
+        resolve_generated_sdk_paths, to_kebab_case,
+    };
+    use proc_macro2::{Ident, Span};
+    use quote::quote;
 
     #[test]
     fn kebab_cases() {
@@ -214,5 +472,106 @@ mod tests {
         assert_eq!(to_kebab_case("parseHTML"), "parse-html");
         assert_eq!(to_kebab_case("remote"), "remote");
         assert_eq!(to_kebab_case("log2"), "log2");
+    }
+
+    #[test]
+    fn replaces_sdk_identifiers_inside_nested_generated_tokens() {
+        let from = Ident::new("golem_rust", Span::call_site());
+        let to = Ident::new("sdk_alias", Span::call_site());
+        let replaced = replace_ident(
+            quote! {
+                fn generated(value: golem_rust::TypedSchemaValue) {
+                    let _ = golem_rust::tool::ToolInvokeError::InvalidInput("x".to_string());
+                }
+            },
+            &from,
+            &to,
+        )
+        .to_string();
+
+        assert!(replaced.contains("sdk_alias :: TypedSchemaValue"));
+        assert!(replaced.contains("sdk_alias :: tool :: ToolInvokeError"));
+        assert!(!replaced.contains("golem_rust"));
+    }
+
+    #[test]
+    fn sdk_path_normalization_preserves_authored_names_and_local_canonical_paths() {
+        let resolved = Ident::new("sdk_alias", Span::call_site());
+        let canonical = Ident::new("golem_rust", Span::call_site());
+        let preserved = Ident::new("__preserved_golem_rust", Span::call_site());
+        let mut item: syn::ItemTrait = syn::parse_quote! {
+            trait Example {
+                fn sdk_alias(
+                    &self,
+                    principal: sdk_alias::tool::Principal,
+                    payload: golem_rust::Payload,
+                );
+
+                fn golem_rust(&self, golem_rust: String);
+            }
+        };
+
+        normalize_sdk_paths_in_item_trait(&mut item, &resolved, &canonical, &preserved);
+        let normalized = quote! { #item }.to_string();
+        assert!(normalized.contains("fn sdk_alias"));
+        assert!(normalized.contains("principal : golem_rust :: tool :: Principal"));
+        assert!(normalized.contains("payload : __preserved_golem_rust :: Payload"));
+        assert!(normalized.contains("fn __preserved_golem_rust"));
+        assert!(normalized.contains("__preserved_golem_rust : String"));
+
+        let emitted =
+            resolve_generated_sdk_paths(quote! { #item }, &resolved, &canonical, &preserved)
+                .to_string();
+        assert!(emitted.contains("principal : sdk_alias :: tool :: Principal"));
+        assert!(emitted.contains("payload : golem_rust :: Payload"));
+        assert!(emitted.contains("fn golem_rust"));
+        assert!(emitted.contains("golem_rust : String"));
+    }
+
+    #[test]
+    fn internal_identifier_is_fresh_against_authored_tokens() {
+        let tokens = quote! {
+            fn __golem_preserved() {
+                let __golem_preserved_ = 1;
+                let GolemPreserved1 = 2;
+            }
+        };
+        assert_eq!(
+            fresh_internal_ident(&tokens, "__golem_preserved", proc_macro2::Span::call_site())
+                .to_string(),
+            "__golem_preserved_2"
+        );
+    }
+
+    #[test]
+    fn escaped_authored_marker_literal_is_not_restored() {
+        let tokens: proc_macro2::TokenStream = r#"
+            const AUTHORED: &str =
+                "__golem_preserved_golem_rust_identifier_for_\u{45}xample";
+        "#
+        .parse()
+        .unwrap();
+        let preferred = "__golem_preserved_golem_rust_identifier_for_Example";
+        let preserved = fresh_internal_ident(&tokens, preferred, proc_macro2::Span::call_site());
+        assert_eq!(preserved.to_string(), format!("{preferred}_1"));
+
+        let resolved = resolve_generated_sdk_paths(
+            tokens,
+            &Ident::new("sdk_alias", Span::call_site()),
+            &Ident::new("golem_rust", Span::call_site()),
+            &preserved,
+        );
+        let file = syn::parse2::<syn::File>(resolved).unwrap();
+        let syn::Item::Const(item) = &file.items[0] else {
+            panic!("expected authored const item");
+        };
+        let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(value),
+            ..
+        }) = item.expr.as_ref()
+        else {
+            panic!("expected authored string literal");
+        };
+        assert_eq!(value.value(), preferred);
     }
 }

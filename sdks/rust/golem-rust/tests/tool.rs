@@ -701,6 +701,121 @@ mod tests {
     }
 
     #[test]
+    fn bug_finder_monomorphic_middleware_authoring_macro_compiles() {
+        let output = cargo_check_tool_crate(
+            "monomorphic-middleware-authoring-compiles",
+            r#"
+use golem_rust::{tool_definition, tool_middleware};
+
+#[tool_definition]
+trait Echo {
+    fn echo(&self, value: String) -> String;
+}
+
+struct Policy;
+
+impl Policy {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[tool_middleware(name = "policy", constructor = Policy::new)]
+impl EchoMiddleware for Policy {
+    async fn echo(
+        &self,
+        underlying: &mut EchoUnderlying,
+        value: String,
+    ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
+        underlying.echo(value).await
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a valid monomorphic middleware must compile:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn bug_finder_universal_middleware_authoring_macro_compiles() {
+        let output = cargo_check_tool_crate(
+            "universal-middleware-authoring-compiles",
+            r#"
+use golem_rust::{universal_tool_middleware, TypedSchemaValue};
+use golem_rust::tool::{
+    InputStream, InvocationResult, Principal, Tool, ToolInvokeError, UnderlyingTool,
+};
+
+#[universal_tool_middleware(name = "audit")]
+async fn audit(
+    _tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    _principal: Principal,
+    mut underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+    underlying.invoke(command_path, input, stdin).await
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a valid universal middleware must compile:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn pure_middleware_feature_compiles_generated_definition_and_authoring_surfaces() {
+        let output = cargo_tool_crate_with_dependency(
+            "pure-middleware-generated-surfaces",
+            "pure-middleware-generated-surfaces",
+            r#"
+use golem_rust::{tool_definition, tool_middleware};
+
+#[tool_definition]
+trait Echo {
+    fn echo(&self, value: String) -> String;
+}
+
+struct Policy;
+
+impl Policy {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[tool_middleware(name = "pure-policy", constructor = Policy::new)]
+impl EchoMiddleware for Policy {
+    async fn echo(
+        &self,
+        underlying: &mut EchoUnderlying,
+        value: String,
+    ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
+        underlying.echo(value).await
+    }
+}
+"#,
+            "check",
+            "golem-rust = { path = PATH, features = [\"export_golem_tool_middleware\"] }",
+        );
+
+        assert!(
+            output.status.success(),
+            "the pure middleware feature must compile generated descriptors, clients, proxies, and authoring adapters:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn multilevel_subtree_suppresses_inherited_globals_at_depth() {
         let tool = __golem_tool_descriptor_for_Outer(&mut ToolBuildCtx::new())
             .expect("outer descriptor builds");
@@ -2296,7 +2411,7 @@ fn check_standalone_child_keeps_full_signature() {
 
     #[test]
     fn client_duplicate_canonical_name_preserves_last_staged_value() {
-        let output = cargo_test_tool_crate_with_renamed_sdk(
+        let output = cargo_test_tool_crate_with_fake_sdk(
             "client-duplicate-canonical-name-last-wins",
             r#"
 use std::cell::RefCell;
@@ -2367,7 +2482,7 @@ mod golem_rust {
     }
 }
 
-use golem_rust::tool_definition;
+pub use golem_rust::*;
 
 #[tool_definition]
 trait MultiAliasClientInput {
@@ -2426,7 +2541,7 @@ fn duplicate_canonical_param_uses_last_staged_value() {
 
     #[test]
     fn client_duplicate_canonical_name_preserves_last_staged_value_after_prior_removal() {
-        let output = cargo_test_tool_crate_with_renamed_sdk(
+        let output = cargo_test_tool_crate_with_fake_sdk(
             "client-duplicate-canonical-name-last-wins-after-prior-removal",
             r#"
 use std::cell::RefCell;
@@ -2497,7 +2612,7 @@ mod golem_rust {
     }
 }
 
-use golem_rust::tool_definition;
+pub use golem_rust::*;
 
 #[tool_definition]
 trait SwapRemoveLastWins {
@@ -7359,9 +7474,10 @@ impl BadTool for BadToolImpl {
         cargo_tool_crate(name, source, "test")
     }
 
-    fn cargo_test_tool_crate_with_renamed_sdk(name: &str, source: &str) -> std::process::Output {
+    fn cargo_test_tool_crate_with_fake_sdk(name: &str, source: &str) -> std::process::Output {
         cargo_tool_crate_with_dependency(
             name,
+            "golem-rust",
             source,
             "test",
             "golem-rust-actual = { package = \"golem-rust\", path = PATH, features = [\"export_golem_agentic\"] }",
@@ -7371,6 +7487,7 @@ impl BadTool for BadToolImpl {
     fn cargo_tool_crate(name: &str, source: &str, command: &str) -> std::process::Output {
         cargo_tool_crate_with_dependency(
             name,
+            name,
             source,
             command,
             "golem-rust = { path = PATH, features = [\"export_golem_agentic\"] }",
@@ -7379,10 +7496,16 @@ impl BadTool for BadToolImpl {
 
     fn cargo_tool_crate_with_dependency(
         name: &str,
+        package_name: &str,
         source: &str,
         command: &str,
         dependency_template: &str,
     ) -> std::process::Output {
+        let package_version = if package_name == "golem-rust" {
+            "0.0.1"
+        } else {
+            "0.0.0"
+        };
         let root = std::env::temp_dir().join(format!(
             "golem-rust-tool-{name}-{}-{}",
             std::process::id(),
@@ -7400,8 +7523,8 @@ impl BadTool for BadToolImpl {
             format!(
                 r#"
 [package]
-name = "{name}"
-version = "0.0.0"
+name = "{package_name}"
+version = "{package_version}"
 edition = "2024"
 
 [dependencies]

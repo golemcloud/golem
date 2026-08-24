@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::golem::tool::common as wire;
+use super::wire;
 use crate::schema::FromSchema;
 use crate::schema::tool::{Doc, Tool};
 use crate::{TypedSchemaValue, decode_typed_schema_value_owned, encode_typed_schema_value_owned};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-#[cfg(test)]
 use std::future::Future;
-#[cfg(test)]
 use std::pin::Pin;
 
 /// Readable byte stream used for tool stdin and stdout.
@@ -31,6 +29,13 @@ pub struct InvocationResult {
     pub result: Option<TypedSchemaValue>,
     pub stdout: Option<InputStream>,
 }
+
+#[doc(hidden)]
+pub type ToolMiddlewareInvokeFutureFor<'a> =
+    Pin<Box<dyn Future<Output = Result<InvocationResult, ToolInvokeError<TypedSchemaValue>>> + 'a>>;
+
+#[doc(hidden)]
+pub type ToolMiddlewareInvokeFuture = ToolMiddlewareInvokeFutureFor<'static>;
 
 /// SDK-owned middleware metadata.
 #[derive(Clone, Debug, PartialEq)]
@@ -127,7 +132,7 @@ enum UnderlyingToolInner {
 }
 
 #[cfg(test)]
-type FakeInvoke = Box<
+pub(crate) type FakeInvoke = Box<
     dyn FnMut(
         Vec<String>,
         crate::schema::wit::wire::TypedSchemaValue,
@@ -146,7 +151,7 @@ impl UnderlyingTool {
     }
 
     #[cfg(test)]
-    fn from_fake(invoke: FakeInvoke) -> Self {
+    pub(crate) fn from_fake(invoke: FakeInvoke) -> Self {
         Self {
             inner: UnderlyingToolInner::Fake(invoke),
         }
