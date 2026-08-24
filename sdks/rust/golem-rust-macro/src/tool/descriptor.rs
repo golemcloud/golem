@@ -2367,7 +2367,7 @@ fn is_auto_injected_principal_type(ty: &Type) -> bool {
     let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
     matches!(
         segments.as_slice(),
-        ["golem_rust", "agentic", "Principal"]
+        ["golem_rust", "agentic" | "tool", "Principal"]
             | [
                 "golem_rust",
                 "golem_agentic",

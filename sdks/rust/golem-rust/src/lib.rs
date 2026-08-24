@@ -136,7 +136,7 @@ pub mod bindings {
         }
 
         pub mod agent {
-            pub use crate::raw_bindings::golem::agent::host;
+            pub use crate::raw_bindings::golem::agent::{common, host};
         }
 
         pub mod permissions {
@@ -146,7 +146,7 @@ pub mod bindings {
         }
 
         pub mod tool {
-            pub use crate::raw_bindings::golem::tool::host;
+            pub use crate::raw_bindings::golem::tool::{common, host};
         }
 
         pub use crate::raw_bindings::golem::{rdbms, websocket};
@@ -356,6 +356,7 @@ pub use json::*;
 mod checkpoint;
 pub mod quota;
 pub mod secrets;
+pub mod tool;
 mod transaction;
 
 use std::future::Future;

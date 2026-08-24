@@ -15,7 +15,7 @@ Updated continuously while executing this plan on 2026-08-24.
 | --- | --- | --- |
 | 1 | WIT and owned values | Complete — Oracle reviewed |
 | 2 | Backend-neutral generation | Complete — Oracle reviewed |
-| 3 | Generated middleware surface | Not started |
+| 3 | Generated middleware surface | Complete — Oracle reviewed |
 | 4 | Authoring macros | Not started |
 | 5 | Guest boundary | Not started |
 | 6 | Acceptance coverage | Not started |
@@ -33,6 +33,15 @@ Progress log:
 - Leaf dispatch is split into shared owned decode, borrowed-instance dispatch, and decoded call stages. The static guest entry preserves its prior zero-sized implementation contract and validation order, while middleware generation can reuse the instance path without a dangling reference. Canonical record and subtree forwarding now move decoded fields and use the owned typed encoder rather than cloning the complete value tree.
 - Phase 2 verification passed: both SDK crates build, all 98 macro tests pass, all 157 existing-plus-instance `tool` tests pass, all 9 canonical tool tests pass, and Rust formatting is clean.
 - Phase 2 Oracle review found no correctness, compatibility, ownership, or phase-boundary blockers and recommended landing the phase.
+- Phase 2 was committed as `330bed2db`; phase 3 started with the shared runtime error/resource model and generated typed middleware projections.
+- Phase 3 now has the SDK-owned middleware metadata, invocation result, exact six-arm `ToolInvokeError<E>`, and non-`Clone` mutable `UnderlyingTool` wrapper. The wrapper owns input/stdin/result/stdout transfer, decodes only custom errors, and preserves all five protocol errors exactly.
+- `#[tool_definition]` now emits visibility-matched `<Trait>Underlying` and `<Trait>Middleware<U = ...>` surfaces, including recursive flattened subtree leaves, inherited-global/alias omission, caller-side stream projection, native descriptor factories, and direct-versus-flattened collision diagnostics. Auto-injected `Principal` remains visible to a typed middleware method when the authored tool trait requests it, while generated underlying methods omit it so middleware cannot replace the runtime-bound principal.
+- The shared authoring layer exposes SDK-owned native tool metadata and common principal/tool resource bindings independently of a middleware export world. The existing complete tool test target compiles with all generated middleware surfaces enabled.
+- Phase 3 cross-crate validation passed with a public nested-subtree definition crate consumed by a separate middleware crate. The consumer implemented the generated flattened `ParentMiddleware` trait and invoked the generated `ParentUnderlying` proxy without a leaf implementation or registry entry in the definition crate.
+- Phase 3 verification passed: both SDK crates build, all 101 macro tests pass, all 158 tool tests pass, all 9 canonical tool tests pass, the 6 focused middleware runtime tests pass, Rust formatting is clean, and targeted `-D warnings` Clippy checks pass for the macro crate, SDK library, and tool test. The broader all-target Clippy command reaches an unrelated pre-existing `unused_must_use` failure in `tests/agent.rs:507`.
+- The initial phase 3 Oracle review found two blockers: `golem_rust::tool::Principal` was not recognized as the auto-injected principal path, and generated middleware/proxy bindings could collide with legal authored parameter names. The SDK principal re-export now uses the active guest world's nominal principal type, all three principal recognizers accept the shared path, and every generated middleware/proxy binding is freshened against the complete projected parameter set.
+- The first Oracle follow-up confirmed the principal fix and the ordinary-identifier collision fix, then found that raw identifiers such as `r#underlying` still bypassed the freshness comparison. Freshening now normalizes projected identifiers with `IdentExt::unraw()`, and compile-shape coverage exercises both ordinary and raw forms of every generated binding's preferred name. The focused macro and tool checks pass after the correction. The final Oracle follow-up confirmed that the raw-identifier hole is closed and that phase 3 has no remaining blocker.
+- Phase 3 bug-finder review found the same raw-identifier normalization requirement in direct-versus-flattened method collision diagnostics. Flattened path construction and direct-name comparison now normalize raw identifiers, while direct raw command identifiers are preserved in generated method signatures. The retained regression test passes, and the bug-finder follow-up found no new defects.
 
 ## Outcome
 

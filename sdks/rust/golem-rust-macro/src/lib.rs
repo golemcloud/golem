@@ -100,6 +100,15 @@ pub fn derive_tool_error(input: TokenStream) -> TokenStream {
     tool::derive_tool_error_impl(input)
 }
 
+#[doc(hidden)]
+#[proc_macro]
+pub fn __golem_emit_tool_middleware_leaf(input: TokenStream) -> TokenStream {
+    match tool::middleware_surface::emit_tool_middleware_leaf(input.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
 // Helper attributes consumed by `#[tool_definition]`. A correct use sits on a
 // method inside a `#[tool_definition]` trait, where the outer macro strips it
 // before it ever reaches the compiler. Registering them as real proc-macro

@@ -12,24 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Tool authoring macros (`#[tool_definition]`, `#[tool_implementation]`,
-//! `#[derive(ToolError)]`) and the attribute IR they parse into.
+#[cfg(feature = "export_golem_agentic")]
+pub use crate::agentic::Principal;
+pub use crate::schema::tool::Tool;
+pub use tool_middleware::{
+    InputStream, InvocationResult, MonomorphicToolMiddlewareScope, ToolInvokeError, ToolMiddleware,
+    ToolMiddlewareScope, UnderlyingTool, decode_result_empty, decode_result_stdout_only,
+    decode_result_value, decode_result_with_stdout,
+};
 
-pub use definition::tool_definition_impl;
-pub use implementation::tool_implementation_impl;
-pub use tool_error::derive_tool_error_impl;
+mod tool_middleware;
 
-mod arg;
-mod client;
-mod command;
-mod constraint;
-mod definition;
-mod descriptor;
-mod doc;
-mod helpers;
-mod implementation;
-pub mod ir;
-pub(crate) mod middleware_surface;
-mod result;
-mod synthesis;
-mod tool_error;
+#[doc(hidden)]
+pub trait ToolUnderlying: Sized {
+    fn __golem_from_underlying(underlying: UnderlyingTool) -> Self;
+
+    fn __golem_tool_descriptor() -> Tool;
+}

@@ -63,6 +63,7 @@ pub fn tool_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStrea
         Err(err) => return err.to_compile_error().into(),
     };
     let client = crate::tool::client::synthesize_client(&ir);
+    let middleware_surface = crate::tool::middleware_surface::synthesize_middleware_surface(&ir);
     let descriptor_fn_ident = crate::tool::descriptor::descriptor_fn_ident(&ir.trait_ident);
 
     strip_helper_attrs(&mut item_trait);
@@ -141,6 +142,8 @@ pub fn tool_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStrea
         #descriptor_fn
 
         #client
+
+        #middleware_surface
     }
     .into()
 }
@@ -755,7 +758,7 @@ fn is_auto_injected_principal_type(ty: &Type) -> bool {
     let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
     matches!(
         segments.as_slice(),
-        ["golem_rust", "agentic", "Principal"]
+        ["golem_rust", "agentic" | "tool", "Principal"]
             | [
                 "golem_rust",
                 "golem_agentic",
@@ -800,7 +803,7 @@ fn is_unit(ty: &Type) -> bool {
 }
 
 /// Parses a `#[tool_definition]` trait and its authoring attributes into IR.
-pub fn build_tool_definition_ir(
+pub(crate) fn build_tool_definition_ir(
     item_trait: &ItemTrait,
     version: Option<String>,
 ) -> Result<ToolDefinitionIr, Error> {
@@ -814,6 +817,7 @@ pub fn build_tool_definition_ir(
     }
 
     Ok(ToolDefinitionIr {
+        visibility: item_trait.vis.clone(),
         trait_ident: item_trait.ident.clone(),
         version,
         doc: parse_doc_full(&item_trait.attrs)?,

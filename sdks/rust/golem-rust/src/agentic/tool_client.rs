@@ -23,6 +23,8 @@ use crate::bindings::golem::tool::host::RpcError as WitRpcError;
 use crate::bindings::golem::tool::host::{self, ToolRpc as HostToolRpc};
 use crate::schema::{FromSchema, FromSchemaError};
 
+pub use crate::tool::InvocationResult;
+
 /// RPC-level failures reported while invoking a remote tool.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RpcError {
@@ -89,12 +91,6 @@ impl<E: Error + 'static> Error for ToolError<E> {
             ToolError::Tool(error) => Some(error),
         }
     }
-}
-
-/// Decoded successful result of `tool-rpc.invoke-and-await`.
-pub struct InvocationResult {
-    pub result: Option<TypedSchemaValue>,
-    pub stdout: Option<InputStream>,
 }
 
 /// Decodes an invocation result declared to carry both a value and a stdout
