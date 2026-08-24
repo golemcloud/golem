@@ -1716,7 +1716,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -4984,7 +4984,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -5019,7 +5019,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core",
 ]
 
 [[package]]
@@ -7886,9 +7886,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.38.4"
+version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
  "memchr",
 ]
@@ -7906,7 +7906,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.43",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -7945,7 +7945,7 @@ dependencies = [
  "cfg_aliases 0.2.2",
  "libc",
  "once_cell",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -10057,7 +10057,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -10085,8 +10085,7 @@ dependencies = [
 [[package]]
 name = "test-r"
 version = "3.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6a37b0a7d3976dccffa7df6aae2dba4127093484ec6376b658d6902e2b44d9f"
+source = "git+https://github.com/vigoo/test-r?rev=d4367ce4c55ac39cac85ee6fa4410ee1b0449177#d4367ce4c55ac39cac85ee6fa4410ee1b0449177"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -10097,8 +10096,7 @@ dependencies = [
 [[package]]
 name = "test-r-core"
 version = "11.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42f1fc242d348bea66fb6204811b77d55a726cf043db4e256c8a6e78c6d62a7a"
+source = "git+https://github.com/vigoo/test-r?rev=d4367ce4c55ac39cac85ee6fa4410ee1b0449177#d4367ce4c55ac39cac85ee6fa4410ee1b0449177"
 dependencies = [
  "anstream",
  "anstyle",
@@ -10113,7 +10111,7 @@ dependencies = [
  "interprocess",
  "libc",
  "parking_lot",
- "quick-xml 0.38.4",
+ "quick-xml 0.41.0",
  "rand 0.10.2",
  "serde_json",
  "tokio",
@@ -10125,8 +10123,7 @@ dependencies = [
 [[package]]
 name = "test-r-macro"
 version = "1.4.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c63874a7c31d8c0dba68e6dcc8809470dfb54002407b90831ea1cf86dca167f"
+source = "git+https://github.com/vigoo/test-r?rev=d4367ce4c55ac39cac85ee6fa4410ee1b0449177#d4367ce4c55ac39cac85ee6fa4410ee1b0449177"
 dependencies = [
  "darling 0.21.3",
  "humantime",
@@ -12137,7 +12134,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -12161,7 +12158,7 @@ version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12342cb4d8e3b046f3d80effd474a7a02447231330ef77d71daa6fbc40681143"
 dependencies = [
- "windows-core 0.57.0",
+ "windows-core",
  "windows-targets 0.52.6",
 ]
 
@@ -12171,23 +12168,10 @@ version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2ed2439a290666cd67ecce2b0ffaad89c2a56b976b736e6ece670297897832d"
 dependencies = [
- "windows-implement 0.57.0",
- "windows-interface 0.57.0",
+ "windows-implement",
+ "windows-interface",
  "windows-result 0.1.2",
  "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-core"
-version = "0.62.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
-dependencies = [
- "windows-implement 0.60.2",
- "windows-interface 0.59.3",
- "windows-link",
- "windows-result 0.4.1",
- "windows-strings",
 ]
 
 [[package]]
@@ -12202,32 +12186,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-implement"
-version = "0.60.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "windows-interface"
 version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29bee4b38ea3cde66011baa44dba677c432a78593e202392d1e9070cf2a7fca7"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "windows-interface"
-version = "0.59.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
 dependencies = [
  "proc-macro2",
  "quote",

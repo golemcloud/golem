@@ -164,10 +164,10 @@ final class HostApiExplorerImpl(@unused private val name: String) extends HostAp
   private def exploreRdbmsSync(): String = {
     val sb = new StringBuilder
 
-    val pgResult = golem.host.Rdbms.Postgres.open("postgresql://invalid:5432/test")
+    val pgResult = golem.host.Rdbms.Postgres.open("pg://user:password@localhost:3506")
     sb.append(s"Rdbms.Postgres.open() = ${pgResult.left.map(_.getClass.getSimpleName)}\n")
 
-    val myResult = golem.host.Rdbms.Mysql.open("mysql://invalid:3306/test")
+    val myResult = golem.host.Rdbms.Mysql.open("msql://user:password@localhost:3506")
     sb.append(s"Rdbms.Mysql.open() = ${myResult.left.map(_.getClass.getSimpleName)}\n")
 
     sb.toString()

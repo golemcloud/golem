@@ -4202,13 +4202,6 @@ async fn assert_environment_observes_revocation_at_the_next_host_boundary(
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .without_default_host_permissions("Environment")
-        .update_agent_provision_config("Environment", |config| {
-            config
-                .initial_permissions
-                .lower_bound
-                .positive
-                .push(env_permission("GOLEM_AGENT_ID"));
-        })
         .store()
         .await?;
     let agent = agent_id!(
@@ -4301,13 +4294,6 @@ async fn assert_environment_replay_uses_the_recorded_filtered_result(
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .without_default_host_permissions("Environment")
-        .update_agent_provision_config("Environment", |config| {
-            config
-                .initial_permissions
-                .lower_bound
-                .positive
-                .push(env_permission("GOLEM_AGENT_ID"));
-        })
         .store()
         .await?;
     let agent = agent_id!(

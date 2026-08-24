@@ -31,6 +31,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::application::{Application, ApplicationId};
+use golem_common::model::card::parse_polymorphic_permission;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
@@ -902,13 +903,16 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
-    /// Starts an agent type without default host permissions.
+    /// Starts an agent type without default host permissions except the SDK bootstrap identity.
     pub fn without_default_host_permissions(mut self, agent_type: &str) -> Self {
         self.agent_type_provision_configs.insert(
             AgentTypeName(agent_type.to_string()),
             AgentTypeProvisionConfigCreation {
                 initial_permissions: AgentTypeInitialPermissions::from_patterns(
-                    Vec::new(),
+                    vec![
+                        parse_polymorphic_permission("env(?agent) @ * : read : GOLEM_AGENT_ID")
+                            .expect("valid SDK bootstrap identity permission"),
+                    ],
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
