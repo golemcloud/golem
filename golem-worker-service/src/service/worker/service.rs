@@ -786,6 +786,15 @@ impl WorkerService {
             )
             .await?;
 
+        // One key for the whole logical invocation, never one per attempt.
+        // `call_worker_executor` retries on InvalidShardId and on transport
+        // failures, and `invoke_agent_internal` mints a fresh key for any
+        // request that arrives without one. So a keyless invocation that got
+        // retried used to reach its new owner looking like work nobody had
+        // started, and run a second time. The client below takes a required
+        // key so that cannot be expressed again.
+        let idempotency_key = idempotency_key.unwrap_or_else(IdempotencyKey::fresh);
+
         self.worker_client
             .invoke_agent(
                 agent_id,
@@ -1367,6 +1376,7 @@ mod tests {
     struct RecordingWorkerClient {
         created_agent_ids: Mutex<Vec<AgentId>>,
         invoked_agent_ids: Mutex<Vec<AgentId>>,
+        invoked_idempotency_keys: Mutex<Vec<IdempotencyKey>>,
         invocation_output: AgentInvocationOutput,
     }
 
@@ -1375,12 +1385,17 @@ mod tests {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
                 invoked_agent_ids: Mutex::new(Vec::new()),
+                invoked_idempotency_keys: Mutex::new(Vec::new()),
                 invocation_output,
             }
         }
 
         fn created_agent_id(&self) -> AgentId {
             self.created_agent_ids.lock().unwrap()[0].clone()
+        }
+
+        fn invoked_idempotency_key(&self) -> IdempotencyKey {
+            self.invoked_idempotency_keys.lock().unwrap()[0].clone()
         }
 
         fn invoked_agent_id(&self) -> AgentId {
@@ -1594,7 +1609,7 @@ mod tests {
             _: Option<golem_api_grpc::proto::golem::component::UntypedDataValue>,
             _: i32,
             _: Option<::prost_types::Timestamp>,
-            _: Option<IdempotencyKey>,
+            idempotency_key: IdempotencyKey,
             _: Option<InvocationContext>,
             _: EnvironmentId,
             _: AccountId,
@@ -1605,6 +1620,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(agent_id.clone());
+            self.invoked_idempotency_keys
+                .lock()
+                .unwrap()
+                .push(idempotency_key);
             Ok(self.invocation_output.clone())
         }
 
@@ -1852,6 +1871,79 @@ mod tests {
         );
         assert_eq!(response.agent_id, harness.worker_client.invoked_agent_id());
         assert!(phantom_id(&response.agent_id).is_some());
+    }
+
+    /// A keyless invocation is given a key, and never a shared one.
+    ///
+    /// `call_worker_executor` retries on `InvalidShardId` and on transport
+    /// failure, re-sending the request as it stands, and `invoke_agent_internal`
+    /// mints a fresh key for any request that arrives without one. So a keyless
+    /// invocation that got retried used to look like work nobody had started and
+    /// run a second time on its new owner. `WorkerClient::invoke_agent` no longer
+    /// accepts an absent key, so the decision happens once, here, above the retry
+    /// loop.
+    ///
+    /// What this checks is that a key is always minted and that unrelated
+    /// invocations never share one. That every *attempt* of a single invocation
+    /// carries the same key is structural rather than covered here: the key is
+    /// bound before the retry closure is built and the closure only clones the
+    /// request. `RecordingWorkerClient` stands above `call_worker_executor`, so
+    /// no test at this seam can see a second attempt at all.
+    ///
+    /// Both REST invocation modes go through the same mint and both are checked,
+    /// since a mint that covered only `Await` would look correct from one call.
+    #[test]
+    async fn keyless_invocations_are_each_given_their_own_key() {
+        let harness = RestHarness::new(AgentMode::Durable);
+
+        // Twice per mode, not once each: a mint that handed every request of one
+        // mode the same constant would still look fine across two different
+        // modes, and only collides with itself.
+        for mode in [AgentInvocationMode::Await, AgentInvocationMode::Schedule] {
+            for _ in 0..2 {
+                let mut request = harness.invoke_request();
+                request.mode = mode.clone();
+                harness
+                    .worker_service
+                    .invoke_agent_rest(request, AuthCtx::system())
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let keys = harness
+            .worker_client
+            .invoked_idempotency_keys
+            .lock()
+            .unwrap()
+            .clone();
+
+        assert_eq!(keys.len(), 4);
+        let distinct: BTreeSet<&str> = keys.iter().map(|key| key.value.as_str()).collect();
+        assert_eq!(
+            distinct.len(),
+            4,
+            "unrelated invocations must not be handed the same key, or one would \
+             join another instead of running: {keys:?}"
+        );
+    }
+
+    /// Minting only ever fills a gap. A key the caller chose is left alone.
+    #[test]
+    async fn a_supplied_idempotency_key_reaches_the_executor_unchanged() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let chosen = IdempotencyKey::fresh();
+
+        let mut request = harness.invoke_request();
+        request.idempotency_key = Some(chosen.clone());
+
+        harness
+            .worker_service
+            .invoke_agent_rest(request, AuthCtx::system())
+            .await
+            .unwrap();
+
+        assert_eq!(harness.worker_client.invoked_idempotency_key(), chosen);
     }
 
     #[test]
