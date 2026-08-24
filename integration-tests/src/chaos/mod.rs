@@ -18,8 +18,10 @@
 //! Cloud-mode Golem while a bounded fault is injected, then reports what
 //! happened. The suite's shape follows density: the workflow drives one scenario
 //! per invocation, each scenario is independently selectable through a YAML
-//! `enabled` flag, and results are archived to S3 per scenario so an interrupted
-//! run resumes rather than restarts.
+//! `enabled` flag, and results are archived to the `golem-bench-results` bucket
+//! per scenario so an interrupted run resumes rather than restarts.
+//!
+//! `S3` in this module always means the scenario code, never the bucket.
 //!
 //! Two boundaries define this module:
 //!

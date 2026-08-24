@@ -20,7 +20,8 @@
 //!
 //! The buildspec runs prep exactly once at suite start (against a freshly-wiped
 //! cluster) and writes the resulting [`PrepManifest`] to a file that is
-//! uploaded to S3 and passed to every per-cell invocation via
+//! uploaded to the `golem-bench-results` bucket and passed to every per-cell
+//! invocation via
 //! `--prep-manifest`. The manifest carries the account token and all component
 //! IDs so per-cell invocations need no by-name lookup and no re-tokenization —
 //! this is also the resume mechanism: a resumed run reloads the same manifest.

@@ -867,7 +867,7 @@ async fn run_density(
 
             // Emit the cell result as a single-result suite so the JSON shape
             // matches cloud-perf (BenchmarkSuiteResultCollection), and the
-            // buildspec can upload it directly to S3.
+            // buildspec can upload it directly to golem-bench-results.
             let mut suite_result = BenchmarkSuiteResult::new(&format!("density-{section}"));
             suite_result.add(result);
             if let Some(run_id) = cloud_bench_run_id() {
