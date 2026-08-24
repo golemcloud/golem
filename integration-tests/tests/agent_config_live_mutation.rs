@@ -23,7 +23,7 @@ use golem_test_framework::config::{
     WorkerExecutorClusterControlStub,
 };
 use std::sync::Arc;
-use test_r::{define_matrix_dimension, matrix_suite, tag_suite, test, test_dep};
+use test_r::{define_matrix_dimension, matrix_suite, tag, tag_suite, test, test_dep};
 
 test_r::enable!();
 
@@ -197,14 +197,32 @@ pub fn tracing() -> Tracing {
 // worker subprocess receives both the descriptor-reconstructed
 // `EnvBasedTestDependencies` and a `WorkerExecutorClusterControlStub` for the same
 // parent-held owner, and the two views agree about the underlying
-// parent-owned Redis instance.
+// parent-owned Redis instance. Both views are tagged explicitly so dependency
+// selection cannot pair a matrix-selected descriptor with the default owner.
 //
 // Runs in <1s and only exercises the RPC channel, so it's safe to
 // keep in this binary alongside the heavier agent-config live-mutation
 // suites.
 #[test]
-async fn redis_control_round_trip(
-    #[dimension(db)] deps: &EnvBasedTestDependencies,
+#[tag(db_postgres)]
+async fn redis_control_round_trip_postgres(
+    #[tagged_as("postgres")] deps: &EnvBasedTestDependencies,
+    #[tagged_as("postgres")] redis_control: &WorkerExecutorClusterControlStub,
+) {
+    assert_redis_control_round_trip(deps, redis_control).await;
+}
+
+#[test]
+#[tag(db_sqlite)]
+async fn redis_control_round_trip_sqlite(
+    #[tagged_as("sqlite")] deps: &EnvBasedTestDependencies,
+    #[tagged_as("sqlite")] redis_control: &WorkerExecutorClusterControlStub,
+) {
+    assert_redis_control_round_trip(deps, redis_control).await;
+}
+
+async fn assert_redis_control_round_trip(
+    deps: &EnvBasedTestDependencies,
     redis_control: &WorkerExecutorClusterControlStub,
 ) {
     // Parent-owned Redis must be reachable from a worker via the
