@@ -125,6 +125,12 @@ mod tests {
     use crate::tool::InvocationResult;
     use test_r::test;
 
+    #[cfg(all(feature = "export_golem_agentic", feature = "macro"))]
+    #[allow(dead_code)]
+    mod acceptance_tests {
+        include!("tool_middleware_registry/tests/acceptance_tests.rs");
+    }
+
     fn universal(name: &str) -> ToolMiddleware {
         ToolMiddleware {
             name: name.to_string(),

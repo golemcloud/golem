@@ -32,6 +32,11 @@ harness = false
 name = "schema_reexport"
 harness = false
 
+[[test]]
+name = "tool_middleware_component"
+harness = false
+required-features = ["export_golem_agentic"]
+
 [[bench]]
 name = "agent_registry_bench"
 harness = false

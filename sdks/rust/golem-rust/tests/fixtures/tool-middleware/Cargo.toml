@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+    "definition",
+    "pure-middleware",
+    "ordinary-component",
+    "combined-component",
+    "all-wasi-compatible-features-component",
+    "all-sdk-features-native",
+    "compile-fail",
+]

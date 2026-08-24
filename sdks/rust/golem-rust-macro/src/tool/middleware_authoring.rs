@@ -223,6 +223,16 @@ fn expand_tool_middleware(
     let descriptor_ident =
         format_ident!("__golem_tool_middleware_descriptor_{trait_name}_{suffix:016x}");
     let invoker_ident = format_ident!("__golem_tool_middleware_invoke_{trait_name}_{suffix:016x}");
+    let constructor_trait_ident =
+        format_ident!("__GolemToolMiddlewareConstructor_{trait_name}_{suffix:016x}");
+    let constructor_result_trait_ident =
+        format_ident!("__GolemToolMiddlewareConstructorResult_{trait_name}_{suffix:016x}");
+    let assert_constructor_ident = format_ident!(
+        "__golem_tool_middleware_constructor_must_be_synchronous_infallible_zero_argument_and_return_self_{trait_name}_{suffix:016x}"
+    );
+    let assert_constructor_result_ident = format_ident!(
+        "__golem_tool_middleware_constructor_must_be_synchronous_infallible_zero_argument_and_return_self_result_{trait_name}_{suffix:016x}"
+    );
     let register_ident =
         format_ident!("__golem_register_tool_middleware_{trait_name}_{suffix:016x}");
 
@@ -234,6 +244,49 @@ fn expand_tool_middleware(
 
     Ok(quote! {
         #item_impl
+
+        #[doc(hidden)]
+        #[allow(non_camel_case_types)]
+        #[diagnostic::on_unimplemented(
+            message = "tool middleware `constructor` must be synchronous, infallible, zero-argument, and return the middleware implementation type (`fn() -> Self`)"
+        )]
+        trait #constructor_trait_ident<Output> {}
+
+        impl<Constructor, Output> #constructor_trait_ident<Output> for Constructor
+        where
+            Constructor: ::std::ops::FnOnce() -> Output,
+        {}
+
+        #[doc(hidden)]
+        fn #assert_constructor_ident<Output, Constructor>(constructor: Constructor) -> Constructor
+        where
+            Constructor: #constructor_trait_ident<Output>,
+        {
+            constructor
+        }
+
+        #[doc(hidden)]
+        #[allow(non_camel_case_types)]
+        #[diagnostic::on_unimplemented(
+            message = "tool middleware `constructor` must be synchronous, infallible, zero-argument, and return the middleware implementation type (`fn() -> Self`)"
+        )]
+        trait #constructor_result_trait_ident<Expected> {
+            fn into_expected(self) -> Expected;
+        }
+
+        impl<Expected> #constructor_result_trait_ident<Expected> for Expected {
+            fn into_expected(self) -> Expected {
+                self
+            }
+        }
+
+        #[doc(hidden)]
+        fn #assert_constructor_result_ident<Expected, Actual>(actual: Actual) -> Expected
+        where
+            Actual: #constructor_result_trait_ident<Expected>,
+        {
+            <Actual as #constructor_result_trait_ident<Expected>>::into_expected(actual)
+        }
 
         #[doc(hidden)]
         fn #descriptor_ident() -> #golem_rust::tool::ToolMiddleware {
@@ -267,8 +320,8 @@ fn expand_tool_middleware(
             underlying: #golem_rust::tool::UnderlyingTool,
         ) -> #golem_rust::tool::ToolMiddlewareInvokeFuture {
             ::std::boxed::Box::pin(async move {
-                let constructor: fn() -> #self_ty = #constructor;
-                let middleware = constructor();
+                let constructor = #assert_constructor_ident::<_, _>(#constructor);
+                let middleware = #assert_constructor_result_ident::<#self_ty, _>(constructor());
                 <#self_ty as #trait_path>::__golem_invoke_tool_middleware(
                     &middleware,
                     command_path,
@@ -632,7 +685,10 @@ mod tests {
 
         syn::parse2::<syn::File>(expanded.clone()).unwrap();
         let text = expanded.to_string();
-        assert!(text.contains("fn () -> PathPolicy = PathPolicy :: new"));
+        assert!(text.contains("Constructor : :: std :: ops :: FnOnce () -> Output"));
+        assert!(text.contains("constructor_must_be_synchronous_infallible_zero_argument"));
+        assert!(text.contains("< PathPolicy , _ > (constructor ())"));
+        assert!(text.contains("constructor` must be synchronous, infallible, zero-argument"));
         assert!(text.contains("__golem_tool_middleware_annotation"));
         assert!(text.contains("ToolMiddlewareScope :: Monomorphic"));
     }
