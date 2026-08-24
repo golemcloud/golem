@@ -333,6 +333,19 @@ pub fn decode_typed(wire_typed: &wire::TypedSchemaValue) -> Result<TypedSchemaVa
     Ok(TypedSchemaValue::new(graph, value))
 }
 
+/// Decode a typed value on a guest while consuming its wire representation.
+///
+/// Unlike [`decode_typed`], this entry point permits owned affine resources and
+/// moves each reachable handle into the returned value exactly once.
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub fn decode_typed_owned(
+    wire_typed: wire::TypedSchemaValue,
+) -> Result<TypedSchemaValue, DecodeError> {
+    let graph = decode_graph(&wire_typed.graph)?;
+    let value = decode_value(wire_typed.value)?;
+    Ok(TypedSchemaValue::new(graph, value))
+}
+
 struct GraphCtx<'a> {
     wire: &'a wire::SchemaGraph,
 }

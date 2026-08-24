@@ -50,6 +50,11 @@ pub use encode::{
     EncodeError, GraphEncoder, encode_graph, encode_metadata, encode_typed, encode_value,
 };
 
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub use decode::decode_typed_owned;
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub use encode::encode_typed_owned;
+
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use decode::{
     decode_typed_rejecting_permission_card_with, decode_typed_rejecting_quota_with,

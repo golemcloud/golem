@@ -62,6 +62,18 @@ pub fn decode_typed_schema_value(
     schema::wit::decode_typed(value)
 }
 
+pub fn encode_typed_schema_value_owned(
+    value: TypedSchemaValue,
+) -> Result<schema::wit::wire::TypedSchemaValue, schema::wit::EncodeError> {
+    schema::wit::encode_typed_owned(value)
+}
+
+pub fn decode_typed_schema_value_owned(
+    value: schema::wit::wire::TypedSchemaValue,
+) -> Result<TypedSchemaValue, schema::wit::DecodeError> {
+    schema::wit::decode_typed_owned(value)
+}
+
 // Compatibility shim for the `wasi:clocks` types the Golem WIT interfaces reference
 // (`wasi:clocks/system-clock@0.3.0.{instant}` and
 // `wasi:clocks/types@0.3.0.{duration}`). The `with:` remaps in every
