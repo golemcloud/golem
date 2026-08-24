@@ -14,18 +14,20 @@
 
 use crate::error::worker_executor::WorkerExecutorError;
 use crate::metrics::storage::{
-    record_compilation_cache_bytes_written, record_compilation_cache_objects_written,
+    record_compilation_cache_bytes_written, record_compilation_cache_get,
+    record_compilation_cache_objects_written,
 };
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::wasmtime_config::wasmtime_artifact_fingerprint;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::time::Instant;
-use tracing::{debug, info_span};
+use tracing::{debug, info_span, warn};
 use wasmtime::Engine;
 use wasmtime::component::Component;
 
@@ -109,8 +111,106 @@ impl DefaultCompiledComponentService {
         Self { blob_storage }
     }
 
-    fn key(component_id: ComponentId, component_revision: ComponentRevision) -> PathBuf {
+    fn key(
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+        artifact_fingerprint: &str,
+    ) -> PathBuf {
+        Path::new(&component_id.to_string())
+            .join(component_revision.to_string())
+            .join(format!("{artifact_fingerprint}.cwasm"))
+    }
+
+    fn legacy_key(component_id: ComponentId, component_revision: ComponentRevision) -> PathBuf {
         Path::new(&component_id.to_string()).join(format!("{component_revision}.cwasm"))
+    }
+
+    async fn get_at_key(
+        &self,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+        engine: &Engine,
+        artifact_fingerprint: &str,
+        key_format: &'static str,
+        key: &Path,
+    ) -> Result<Option<Component>, WorkerExecutorError> {
+        let environment_id_string = environment_id.to_string();
+        let bytes = match self
+            .blob_storage
+            .get_raw(
+                "compiled_component",
+                "get",
+                BlobStorageNamespace::CompilationCache { environment_id },
+                key,
+            )
+            .await
+        {
+            Ok(None) => {
+                record_compilation_cache_get(
+                    &environment_id_string,
+                    artifact_fingerprint,
+                    key_format,
+                    "miss",
+                );
+                return Ok(None);
+            }
+            Ok(Some(bytes)) => bytes,
+            Err(err) => {
+                record_compilation_cache_get(
+                    &environment_id_string,
+                    artifact_fingerprint,
+                    key_format,
+                    "read_error",
+                );
+                return Err(WorkerExecutorError::component_download_failed(
+                    component_id,
+                    component_revision,
+                    format!("Could not download compiled component: {err}"),
+                ));
+            }
+        };
+
+        let start = Instant::now();
+        let span = info_span!(
+            "Loading precompiled WASM component",
+            artifact_fingerprint,
+            key_format
+        );
+        let _enter = span.enter();
+
+        let component = match unsafe { Component::deserialize(engine, &bytes) } {
+            Ok(component) => component,
+            Err(err) => {
+                record_compilation_cache_get(
+                    &environment_id_string,
+                    artifact_fingerprint,
+                    key_format,
+                    "deserialize_error",
+                );
+                return Err(WorkerExecutorError::component_download_failed(
+                    component_id,
+                    component_revision,
+                    format!("Could not deserialize compiled component: {err}"),
+                ));
+            }
+        };
+
+        record_compilation_cache_get(
+            &environment_id_string,
+            artifact_fingerprint,
+            key_format,
+            "hit",
+        );
+        debug!(
+            component_id = %component_id,
+            artifact_fingerprint,
+            key_format,
+            load_time_ms = start.elapsed().as_millis(),
+            "Loaded precompiled component"
+        );
+
+        Ok(Some(component))
     }
 }
 
@@ -123,51 +223,49 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         component_revision: ComponentRevision,
         engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError> {
-        match self
-            .blob_storage
-            .get_raw(
-                "compiled_component",
-                "get",
-                BlobStorageNamespace::CompilationCache { environment_id },
-                &Self::key(component_id, component_revision),
-            )
-            .await
-        {
-            Ok(None) => Ok(None),
-            Ok(Some(bytes)) => {
-                let start = Instant::now();
-                let component = {
-                    let span = info_span!("Loading precompiled WASM component");
-                    let _enter = span.enter();
-
-                    let component = unsafe {
-                        Component::deserialize(engine, &bytes).map_err(|err| {
-                            WorkerExecutorError::component_download_failed(
-                                component_id,
-                                component_revision,
-                                format!("Could not deserialize compiled component: {err}"),
-                            )
-                        })?
-                    };
-                    let end = Instant::now();
-
-                    let load_time = end.duration_since(start);
-                    debug!(
-                        "Loaded precompiled image for {} in {}ms",
-                        component_id,
-                        load_time.as_millis(),
-                    );
-                    component
-                };
-
-                Ok(Some(component))
-            }
-            Err(err) => Err(WorkerExecutorError::component_download_failed(
+        let artifact_fingerprint = wasmtime_artifact_fingerprint(engine);
+        if let Some(component) = self
+            .get_at_key(
+                environment_id,
                 component_id,
                 component_revision,
-                format!("Could not download compiled component: {err}"),
-            )),
+                engine,
+                &artifact_fingerprint,
+                "fingerprinted",
+                &Self::key(component_id, component_revision, &artifact_fingerprint),
+            )
+            .await?
+        {
+            return Ok(Some(component));
         }
+
+        let legacy_component = self
+            .get_at_key(
+                environment_id,
+                component_id,
+                component_revision,
+                engine,
+                &artifact_fingerprint,
+                "legacy",
+                &Self::legacy_key(component_id, component_revision),
+            )
+            .await?;
+
+        if let Some(component) = &legacy_component
+            && let Err(error) = self
+                .put(environment_id, component_id, component_revision, component)
+                .await
+        {
+            warn!(
+                component_id = %component_id,
+                component_revision = %component_revision,
+                artifact_fingerprint,
+                error = %error,
+                "Failed to promote legacy compiled component"
+            );
+        }
+
+        Ok(legacy_component)
     }
 
     async fn put(
@@ -177,6 +275,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         component_revision: ComponentRevision,
         component: &Component,
     ) -> Result<(), WorkerExecutorError> {
+        let artifact_fingerprint = wasmtime_artifact_fingerprint(component.engine());
         let bytes = component
             .serialize()
             .expect("Could not serialize component");
@@ -187,7 +286,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                 "compiled_component",
                 "put",
                 BlobStorageNamespace::CompilationCache { environment_id },
-                &Self::key(component_id, component_revision),
+                &Self::key(component_id, component_revision, &artifact_fingerprint),
                 &bytes,
             )
             .await
@@ -240,6 +339,228 @@ impl CompiledComponentService for CompiledComponentServiceDisabled {
         _component_revision: ComponentRevision,
         _component: &Component,
     ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::blob::memory::InMemoryBlobStorage;
+    use golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache;
+    use test_r::test;
+    use wasmtime::OptLevel;
+
+    fn engine(opt_level: OptLevel) -> anyhow::Result<Engine> {
+        let mut config = create_wasmtime_config_without_fs_cache();
+        config.cranelift_opt_level(opt_level);
+        Ok(Engine::new(&config)?)
+    }
+
+    fn namespace(environment_id: EnvironmentId) -> BlobStorageNamespace {
+        BlobStorageNamespace::CompilationCache { environment_id }
+    }
+
+    #[test]
+    async fn writes_fingerprinted_artifacts_without_writing_legacy_key() -> anyhow::Result<()> {
+        let blob_storage = Arc::new(InMemoryBlobStorage::new());
+        let service = DefaultCompiledComponentService::new(blob_storage.clone());
+        let engine = engine(OptLevel::Speed)?;
+        let component = Component::new(&engine, b"(component)")?;
+        let environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        let component_revision = ComponentRevision::INITIAL;
+        let artifact_fingerprint = wasmtime_artifact_fingerprint(&engine);
+
+        service
+            .put(environment_id, component_id, component_revision, &component)
+            .await?;
+
+        assert!(
+            blob_storage
+                .get_raw(
+                    "test",
+                    "get",
+                    namespace(environment_id),
+                    &DefaultCompiledComponentService::key(
+                        component_id,
+                        component_revision,
+                        &artifact_fingerprint,
+                    ),
+                )
+                .await?
+                .is_some()
+        );
+        assert!(
+            blob_storage
+                .get_raw(
+                    "test",
+                    "get",
+                    namespace(environment_id),
+                    &DefaultCompiledComponentService::legacy_key(component_id, component_revision,),
+                )
+                .await?
+                .is_none()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    async fn legacy_reads_are_promoted_to_fingerprinted_key() -> anyhow::Result<()> {
+        let blob_storage = Arc::new(InMemoryBlobStorage::new());
+        let service = DefaultCompiledComponentService::new(blob_storage.clone());
+        let engine = engine(OptLevel::Speed)?;
+        let component = Component::new(&engine, b"(component)")?;
+        let environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        let component_revision = ComponentRevision::INITIAL;
+        let legacy_key =
+            DefaultCompiledComponentService::legacy_key(component_id, component_revision);
+
+        blob_storage
+            .put_raw(
+                "test",
+                "put",
+                namespace(environment_id),
+                &legacy_key,
+                &component.serialize()?,
+            )
+            .await?;
+
+        assert!(
+            service
+                .get(environment_id, component_id, component_revision, &engine,)
+                .await?
+                .is_some()
+        );
+
+        let artifact_fingerprint = wasmtime_artifact_fingerprint(&engine);
+        assert!(
+            blob_storage
+                .get_raw(
+                    "test",
+                    "get",
+                    namespace(environment_id),
+                    &DefaultCompiledComponentService::key(
+                        component_id,
+                        component_revision,
+                        &artifact_fingerprint,
+                    ),
+                )
+                .await?
+                .is_some()
+        );
+        assert!(
+            blob_storage
+                .get_raw("test", "get", namespace(environment_id), &legacy_key,)
+                .await?
+                .is_some()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    async fn incompatible_engine_artifacts_are_not_cross_read_and_can_coexist() -> anyhow::Result<()>
+    {
+        let blob_storage = Arc::new(InMemoryBlobStorage::new());
+        let service = DefaultCompiledComponentService::new(blob_storage.clone());
+        let unoptimized_engine = engine(OptLevel::None)?;
+        let optimized_engine = engine(OptLevel::Speed)?;
+        let environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        let component_revision = ComponentRevision::INITIAL;
+
+        let unoptimized_component = Component::new(&unoptimized_engine, b"(component)")?;
+        service
+            .put(
+                environment_id,
+                component_id,
+                component_revision,
+                &unoptimized_component,
+            )
+            .await?;
+
+        assert!(
+            service
+                .get(
+                    environment_id,
+                    component_id,
+                    component_revision,
+                    &optimized_engine,
+                )
+                .await?
+                .is_none()
+        );
+
+        let optimized_component = Component::new(&optimized_engine, b"(component)")?;
+        service
+            .put(
+                environment_id,
+                component_id,
+                component_revision,
+                &optimized_component,
+            )
+            .await?;
+
+        let unoptimized_fingerprint = wasmtime_artifact_fingerprint(&unoptimized_engine);
+        let optimized_fingerprint = wasmtime_artifact_fingerprint(&optimized_engine);
+        assert_ne!(unoptimized_fingerprint, optimized_fingerprint);
+
+        for artifact_fingerprint in [unoptimized_fingerprint, optimized_fingerprint] {
+            assert!(
+                blob_storage
+                    .get_raw(
+                        "test",
+                        "get",
+                        namespace(environment_id),
+                        &DefaultCompiledComponentService::key(
+                            component_id,
+                            component_revision,
+                            &artifact_fingerprint,
+                        ),
+                    )
+                    .await?
+                    .is_some()
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    async fn compilation_cache_remains_isolated_by_environment() -> anyhow::Result<()> {
+        let blob_storage = Arc::new(InMemoryBlobStorage::new());
+        let service = DefaultCompiledComponentService::new(blob_storage);
+        let engine = engine(OptLevel::Speed)?;
+        let component = Component::new(&engine, b"(component)")?;
+        let source_environment_id = EnvironmentId::new();
+        let other_environment_id = EnvironmentId::new();
+        let component_id = ComponentId::new();
+        let component_revision = ComponentRevision::INITIAL;
+
+        service
+            .put(
+                source_environment_id,
+                component_id,
+                component_revision,
+                &component,
+            )
+            .await?;
+
+        assert!(
+            service
+                .get(
+                    other_environment_id,
+                    component_id,
+                    component_revision,
+                    &engine,
+                )
+                .await?
+                .is_none()
+        );
+
         Ok(())
     }
 }
