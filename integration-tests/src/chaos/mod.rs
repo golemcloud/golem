@@ -39,11 +39,13 @@ pub mod ownership;
 pub mod pinned;
 pub mod prep;
 pub mod probe;
+pub mod reachability;
 pub mod result;
 pub mod scenarios;
 pub mod scheduled;
 pub mod signal;
 pub mod split;
+pub mod steady;
 pub mod summary;
 pub mod waiters;
 pub mod wakeups;
@@ -72,6 +74,8 @@ pub enum ScenarioCode {
     S10,
     /// Executor pod kill while agents are suspended on promises being completed.
     S11,
+    /// Executor cut off from worker-service while it keeps its shards.
+    S3,
 }
 
 impl ScenarioCode {
@@ -84,14 +88,16 @@ impl ScenarioCode {
             ScenarioCode::S13 => "S13",
             ScenarioCode::S10 => "S10",
             ScenarioCode::S11 => "S11",
+            ScenarioCode::S3 => "S3",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 7] = [
+    pub const ALL: [ScenarioCode; 8] = [
         ScenarioCode::S1,
+        ScenarioCode::S3,
         ScenarioCode::S5,
         ScenarioCode::S8,
         ScenarioCode::S10,
@@ -403,6 +409,69 @@ impl PromiseConfig {
     }
 }
 
+/// Shape of the reachability workload (GOL-370).
+///
+/// The fifth experiment shape, and the only one where nothing about the
+/// platform is broken at all. [`PinnedConfig`] asks what happens to operations
+/// running on a pod that dies; this one asks what happens to operations bound
+/// for a pod that is perfectly healthy and simply cannot be reached from the
+/// tier that routes to it. The executor keeps its shards for the whole fault,
+/// because the link it needs in order to keep them — to the shard-manager — is
+/// not the one that was cut.
+///
+/// Every agent gets its own emitter holding at most one operation, rather than
+/// the shared per-stream budget [`WorkloadConfig`] drives. That is load-bearing
+/// here and not a style choice: the stall this scenario induces is bounded by
+/// *which executor owns the agent*, not by which stream it belongs to, so a
+/// shared budget would be drained by the isolated half and would stop the
+/// reachable half submitting too. The run would then report the control group
+/// degrading, and the cause would be the driver.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IsolationConfig {
+    /// Durable counter agents, split by shard ownership into the ones the
+    /// isolated executor holds and the ones it does not. Also the resolution of
+    /// the report: a finding localises to one agent out of this many.
+    pub agents: u32,
+    /// Milliseconds between one agent's operations, measured from the end of
+    /// the previous one. The offered rate is `agents / interval`, and an agent
+    /// whose operation is stalled offers nothing at all — which is the signal,
+    /// not a gap in it.
+    pub interval_millis: u64,
+    /// The most of its own baseline throughput the isolated group may keep
+    /// during the fault, as a percentage, for the partition to count as
+    /// observed.
+    ///
+    /// A run above this line did not cut the executor off, whatever the fault
+    /// status says, and every other number in the report is then a measurement
+    /// of an undisturbed cluster. That is reported as inconclusive rather than
+    /// clean: a healthy-looking result from a fault that never landed is the
+    /// worst artifact this suite can produce.
+    pub isolated_ceiling_percent: f64,
+    /// The least of its own baseline throughput the control group must keep
+    /// during the fault, as a percentage.
+    ///
+    /// The sharpest thing S3 can find. The agents on the reachable executor
+    /// have nothing to do with the partition, so a drop here is collateral
+    /// damage from how worker-service handles an unreachable pod — its routing
+    /// table is one process-wide entry, and every stalled caller invalidating it
+    /// costs every other caller a shard-manager round trip.
+    pub control_floor_percent: f64,
+    /// What resuming an isolated agent may cost once the link is back, and the
+    /// number the recovery gap is reported against. Recorded rather than
+    /// asserted, like every other budget in the suite.
+    pub recovery_budget_secs: u64,
+}
+
+impl IsolationConfig {
+    pub fn interval(&self) -> Duration {
+        Duration::from_millis(self.interval_millis)
+    }
+    pub fn recovery_budget(&self) -> Duration {
+        Duration::from_secs(self.recovery_budget_secs)
+    }
+}
+
 /// One step of the executor scale schedule the workflow runs during the fault.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -481,6 +550,9 @@ pub struct ScenarioConfig {
     /// The suspended-waiter workload. Absent for scenarios that do not run one.
     #[serde(default)]
     pub promise: Option<PromiseConfig>,
+    /// The reachability workload. Absent for scenarios that do not run one.
+    #[serde(default)]
+    pub isolation: Option<IsolationConfig>,
     /// Shard-ownership oracle settings. Absent for scenarios that do not sample
     /// executor assignments.
     #[serde(default)]
@@ -549,6 +621,16 @@ impl ScenarioConfig {
         self.promise.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "chaos scenario {} needs a `promise` block in the suite YAML",
+                self.code
+            )
+        })
+    }
+
+    /// The reachability workload block. See [`Self::require_workload`].
+    pub fn require_isolation(&self) -> anyhow::Result<&IsolationConfig> {
+        self.isolation.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs an `isolation` block in the suite YAML",
                 self.code
             )
         })
@@ -689,6 +771,7 @@ mod tests {
                 pinned: None,
                 scheduled: None,
                 promise: None,
+                isolation: None,
                 ownership: None,
                 scale_during_fault: None,
                 retry_policy: RetryPolicy::default(),
@@ -761,6 +844,7 @@ mod tests {
         assert_eq!(ScenarioCode::parse("S12"), Some(ScenarioCode::S12));
         assert_eq!(ScenarioCode::parse("s8"), Some(ScenarioCode::S8));
         assert_eq!(ScenarioCode::parse("s1"), Some(ScenarioCode::S1));
+        assert_eq!(ScenarioCode::parse("s3"), Some(ScenarioCode::S3));
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
@@ -792,6 +876,9 @@ mod tests {
                 }
                 ScenarioCode::S11 => {
                     entry.require_promise().unwrap();
+                }
+                ScenarioCode::S3 => {
+                    entry.require_isolation().unwrap();
                 }
             }
         }

@@ -529,3 +529,96 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # S3 — executor / worker-service network partition (GOL-370).
+  #
+  # The only fault in the suite the platform never learns about. S1 cuts the
+  # shard-manager off from an executor and the cluster reacts: health checks are
+  # missed and the shards move. S3 cuts the link worker-service uses, leaves the
+  # shard-manager link alone, and so the executor keeps its shards and stays in
+  # the routing table. worker-service is told, correctly, that this pod owns
+  # those agents, and keeps trying to reach a pod it cannot reach. There is no
+  # route around it, because as far as the platform is concerned nothing is
+  # wrong.
+  #
+  # Like S8, S10 and S11 the driver names the pod rather than letting Chaos Mesh
+  # pick one, and keeps driving the agents on the other executor as the control
+  # group. That control group is where the interesting finding would be: a
+  # partition it is not part of should cost it nothing.
+  - code: S3
+    name: executor-worker-service-partition
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # The workflow narrows the selector to the pod the driver named; `one`
+      # stays as the belt-and-braces bound, exactly as in S8, S10 and S11.
+      #
+      # Only the executor side is pinned. The other side of the cut is every
+      # worker-service replica, selected by label — a partition from two of the
+      # three would leave the agents reachable through the third and the run
+      # would measure nothing.
+      mode: one
+      durationSecs: 180
+
+    phases:
+      # Long enough for cold starts and route warm-up to settle, so the cut
+      # lands on a population that has been cycling steadily.
+      baselineSecs: 300
+      # Has to comfortably exceed the caller's 120s attempt timeout, or no
+      # operation would ever reach the timeout inside the window and the
+      # pending-then-timeout behaviour the scenario exists to show would fall
+      # outside it. 180s leaves room for the first attempt to time out, the
+      # one permitted retry to go out, and that retry to still be waiting when
+      # the link comes back.
+      faultSecs: 180
+      # Every isolated agent has to get several whole operations after the heal,
+      # so one that recovered slowly is distinguishable from one that never did.
+      recoverySecs: 420
+
+    isolation:
+      # 200 agents, split by shard ownership across the two executors, so ~100
+      # end up isolated and ~100 are the control group. Also the resolution of
+      # the report: a lost agent localises to one out of two hundred.
+      agents: 200
+      # One operation per agent per second, so ~200 ops/s offered while
+      # everything is reachable. Higher than the other scenarios' 100/s because
+      # half of it stops the moment the fault lands: the number that has to be
+      # large is the *control* group's, since a collateral-damage finding is a
+      # percentage change in its throughput and a small sample cannot show one.
+      intervalMillis: 1000
+      # The most of its baseline the isolated group may keep for the partition
+      # to count as observed. Not zero: an operation submitted late in the fault
+      # window can still be waiting when the link returns, and then confirms.
+      # At this cadence that is a handful against a baseline of hundreds, so
+      # anything near 25% means the cut did not take hold.
+      isolatedCeilingPercent: 25
+      # The least of its baseline the control group must keep. Below this,
+      # serving an unreachable executor cost the agents that had nothing to do
+      # with it — the sharpest finding this scenario can produce.
+      #
+      # 75% rather than 95%: worker-service invalidates one process-wide routing
+      # table entry on every failed call, so some shared cost is expected by
+      # construction. `invalidation_min_delay` bounds it to twice a second,
+      # which should keep it far above this line.
+      controlFloorPercent: 75
+      # What being served again may cost an isolated agent once the link is
+      # back. Recorded, not asserted: nothing has to be recovered here — no
+      # shard moves and no worker restarts — so this is really a measure of how
+      # long worker-service's own retry loop takes to notice, and how long that
+      # may be is a judgement.
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      # Identical to the others and load-bearing for the same reason, with one
+      # consequence specific to S3: the retry is what turns a single 120s stall
+      # into a second attempt under the same key. If the link heals in between,
+      # that retry succeeds against work the first attempt may already have
+      # started — which is exactly the case the exactly-once probe is here to
+      # rule on.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

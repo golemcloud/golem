@@ -52,6 +52,7 @@ use crate::chaos::fires::ScheduleFireReport;
 use crate::chaos::history::{Outcome, Phase, Stream};
 use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::probe::KeyProbe;
+use crate::chaos::reachability::ReachabilityReport;
 use crate::chaos::wakeups::WakeupReport;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -572,6 +573,11 @@ pub struct ChaosSummary {
     /// not, for the same reason as `scheduleFires`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub promise_wakeups: Option<WakeupReport>,
+    /// The reachability account, for scenarios that cut one executor off from
+    /// the tier that routes to it. Absent for scenarios that do not, for the
+    /// same reason as `scheduleFires`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reachability: Option<ReachabilityReport>,
     /// Shard-ownership samples, in the order they were taken. Empty for
     /// scenarios that do not sample executor assignments.
     ///
@@ -703,6 +709,7 @@ impl ChaosSummary {
             exactly_once: None,
             schedule_fires: None,
             promise_wakeups: None,
+            reachability: None,
             ownership: Vec::new(),
             attention,
             notes: Vec::new(),
@@ -759,6 +766,20 @@ impl ChaosSummary {
         self.attention.extend(report.attention_lines());
         self.notes.extend(report.note_lines());
         self.promise_wakeups = Some(report);
+        self
+    }
+
+    /// Attaches the reachability account and hoists everything it wants a human
+    /// to see into [`Self::attention`].
+    ///
+    /// Same split as [`Self::with_schedule_fires`]. The one line worth calling
+    /// out is the inconclusive case: a partition that never cut the executor off
+    /// produces a report full of healthy numbers, and that has to read as
+    /// "this run tested nothing" rather than as a pass.
+    pub fn with_reachability(mut self, report: ReachabilityReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.reachability = Some(report);
         self
     }
 

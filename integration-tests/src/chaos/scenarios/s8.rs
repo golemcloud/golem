@@ -154,6 +154,7 @@ pub async fn run(
                     pinned_selection: selection.clone(),
                     scheduled_selection: None,
                     promise_selection: None,
+                    isolation_selection: None,
                 },
             );
             write_outputs(&result, &history, outputs)?;

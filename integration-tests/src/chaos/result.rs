@@ -29,7 +29,8 @@ use crate::chaos::scheduled::ScheduledSelection;
 use crate::chaos::split::PodSplit;
 use crate::chaos::summary::{ChaosSummary, TerminationReason};
 use crate::chaos::{
-    FaultConfig, PinnedConfig, PromiseConfig, RetryPolicy, ScheduledConfig, WorkloadConfig,
+    FaultConfig, IsolationConfig, PinnedConfig, PromiseConfig, RetryPolicy, ScheduledConfig,
+    WorkloadConfig,
 };
 use chrono::{DateTime, Utc};
 use golem_test_framework::benchmark::RunMetadata;
@@ -152,6 +153,15 @@ pub struct ChaosResult {
     /// population from the control group.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub promise_selection: Option<PodSplit>,
+    /// The reachability workload the run was configured with, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<IsolationConfig>,
+    /// How the agents divided around the executor the partition cut off.
+    /// Present only for S3. Load-bearing for the same reason as
+    /// `promiseSelection`, and for one more: S3's whole verdict is a comparison
+    /// between the two groups, so a report without this cannot be re-checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation_selection: Option<PodSplit>,
     pub retry_policy: RetryPolicy,
     pub scope: RunScope,
     pub summary: ChaosSummary,
@@ -223,6 +233,8 @@ mod tests {
             scheduled_selection: None,
             promise: None,
             promise_selection: None,
+            isolation: None,
+            isolation_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "env-1".to_string(),
@@ -321,6 +333,79 @@ mod tests {
         assert_eq!(parsed.scenario_code, "S11");
         assert!(parsed.summary.promise_wakeups.is_some());
         assert!(parsed.promise_selection.is_some());
+    }
+
+    /// The S3 shape. Same contract as the S10 and S11 tests, for the same
+    /// reason: `ci-scripts/chaos-investigation-report.py` in golem-cloud reads
+    /// these by name, and the two repositories cannot be changed atomically.
+    #[test]
+    fn an_s3_result_carries_the_reachability_fields_the_investigation_report_reads() {
+        use crate::chaos::reachability::ReachabilityReport;
+        use crate::chaos::split::{FaultWindow, PodSplit};
+
+        let now = Utc::now();
+        let split = PodSplit {
+            pod_address: "10.0.1.1:9000".to_string(),
+            pod_ip: "10.0.1.1".to_string(),
+            on_pod: vec!["chaos-s3-durable-0000".to_string()],
+            elsewhere: vec!["chaos-s3-durable-0001".to_string()],
+            targets_per_pod: std::collections::BTreeMap::new(),
+            number_of_shards: 1024,
+        };
+
+        let mut result = sample_result(TerminationReason::Completed);
+        result.scenario_code = "S3".to_string();
+        result.isolation = Some(crate::chaos::IsolationConfig {
+            agents: 200,
+            interval_millis: 1000,
+            isolated_ceiling_percent: 25.0,
+            control_floor_percent: 75.0,
+            recovery_budget_secs: 60,
+        });
+        result.isolation_selection = Some(split.clone());
+        result.summary = ChaosSummary::build(&[], Vec::new(), Vec::new(), Some(now))
+            .with_reachability(ReachabilityReport::build(
+                &[],
+                &split,
+                Some(FaultWindow {
+                    injected_at: now,
+                    recovered_at: Some(now + chrono::Duration::seconds(180)),
+                }),
+                25.0,
+                75.0,
+                std::time::Duration::from_secs(60),
+            ));
+
+        let json = serde_json::to_value(&result).unwrap();
+        let reachability = &json["summary"]["reachability"];
+        for key in [
+            "isolatedPod",
+            "isolatedAgents",
+            "reachableAgents",
+            "isolatedCeilingPercent",
+            "controlFloorPercent",
+            "recoveryBudgetMs",
+            "cells",
+            "recovery",
+            "recoveryOverBudget",
+            "agentsNeverRecovered",
+            "recordsOutsideTheSplit",
+            "findings",
+            "findingsOmitted",
+        ] {
+            assert!(
+                !reachability[key].is_null(),
+                "summary.reachability.{key} is what the investigation report reads"
+            );
+        }
+        assert_eq!(json["isolation"]["controlFloorPercent"], 75.0);
+        assert_eq!(json["isolationSelection"]["podIp"], "10.0.1.1");
+
+        // And it still round-trips, so an archived S3 result stays readable.
+        let parsed: ChaosResult = serde_json::from_str(&json.to_string()).unwrap();
+        assert_eq!(parsed.scenario_code, "S3");
+        assert!(parsed.summary.reachability.is_some());
+        assert!(parsed.isolation_selection.is_some());
     }
 
     /// The S10 shape, whose report is read by a script in another repository.
@@ -658,6 +743,8 @@ mod sample_artifact {
             scheduled_selection: None,
             promise: None,
             promise_selection: None,
+            isolation: None,
+            isolation_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),
@@ -872,6 +959,8 @@ mod sample_artifact {
             }),
             promise: None,
             promise_selection: None,
+            isolation: None,
+            isolation_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),

@@ -63,7 +63,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
 /// Agent type names exported by the counters component.
-const COUNTER_AGENT: &str = "Counter";
+pub(crate) const COUNTER_AGENT: &str = "Counter";
 const EPHEMERAL_COUNTER_AGENT: &str = "EphemeralCounter";
 pub(crate) const SCHEDULE_EMITTER_AGENT: &str = "ScheduleEmitter";
 pub(crate) const SCHEDULE_COUNTER_AGENT: &str = "ScheduleCounter";

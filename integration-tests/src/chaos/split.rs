@@ -158,7 +158,8 @@ impl PodSplit {
 }
 
 /// Which side of the kill an agent was on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Group {
     /// Owned by the executor the fault was aimed at.
     OnPod,
@@ -320,6 +321,20 @@ pub fn schedule_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
         component: &ctx.counters,
         agent_type: crate::chaos::workload::SCHEDULE_COUNTER_AGENT,
         noun: "schedule targets",
+    }
+}
+
+/// The counters component's durable agents, as S3 aims at them.
+///
+/// The same agent type the mixed workload's durable stream drives, because it
+/// is the same population: S3's emitters exist to pace it per agent, not to
+/// invent a new kind of agent.
+pub fn counter_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
+    Subject {
+        scenario: "S3",
+        component: &ctx.counters,
+        agent_type: crate::chaos::workload::COUNTER_AGENT,
+        noun: "counter agents",
     }
 }
 

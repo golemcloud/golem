@@ -246,6 +246,8 @@ pub enum ChaosScenarioArg {
     S10,
     /// Executor pod kill while agents are suspended on promises being completed.
     S11,
+    /// Executor cut off from worker-service while it keeps its shards.
+    S3,
 }
 
 /// Density subcommand action.

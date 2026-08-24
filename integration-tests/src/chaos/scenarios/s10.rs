@@ -223,6 +223,7 @@ pub async fn run(
                     pinned_selection: None,
                     scheduled_selection: selection.clone(),
                     promise_selection: None,
+                    isolation_selection: None,
                 },
             );
             write_outputs(&result, &history, outputs)?;
