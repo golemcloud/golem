@@ -2326,6 +2326,10 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
+        golem_worker_executor::durable_host::tool::add_common_to_linker(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
         golem_worker_executor::preview2::golem::permissions::types::add_to_linker::<
             _,
             HasSelf<DurableWorkerCtx<Context>>,

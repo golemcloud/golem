@@ -653,6 +653,9 @@ jobs:
           rust-targets: 'wasm32-wasip2'
           cache-prefix-key: 'v2-golem-rust'
           install-cargo-make: 'false'
+          install-cargo-binstall: 'true'
+      - name: Install wasm-tools
+        run: cargo binstall --force --locked wasm-tools@1.248.0
       - name: Check formatting
         run: cargo fmt -- --check
         working-directory: sdks/rust
