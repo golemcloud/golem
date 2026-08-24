@@ -85,6 +85,53 @@ async fn go_counter_survives_restart(
     Ok(())
 }
 
+/// Wall-clock durability: a `time.Now()` reading recorded in a live invocation is
+/// reproduced from the oplog when that invocation is replayed after an executor
+/// restart — not re-read as the current time. The agent stores each reading in
+/// durable state; after a restart, `first-time` replays the original `record-time`
+/// invocation, so the first reading must be unchanged.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn go_wall_clock_replayed_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("ClockAgent", "go-clock-1");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+
+    let recorded = executor
+        .invoke_and_await_agent(&component, &agent_id, "record-time", data_value!())
+        .await?
+        .into_typed::<i64>()?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Restart: reading first-time replays the record-time invocation, whose
+    // time.Now() must reproduce the recorded value from the oplog.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let first = executor
+        .invoke_and_await_agent(&component, &agent_id, "first-time", data_value!())
+        .await?
+        .into_typed::<i64>()?;
+    drop(executor);
+
+    assert_eq!(first, recorded);
+    Ok(())
+}
+
 /// A durable outbound HTTP call made in the first invocation is served from the
 /// oplog after a restart rather than re-fetched: the external counter advances
 /// once per *live* call, so the second invocation sees "1-b", not "2-b".

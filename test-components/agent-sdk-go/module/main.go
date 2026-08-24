@@ -5,6 +5,7 @@
 package main
 
 import (
+	_ "agent-sdk-go/agents/clock/impl"
 	_ "agent-sdk-go/agents/configecho/impl"
 	_ "agent-sdk-go/agents/counter/impl"
 	_ "agent-sdk-go/agents/httpcall/impl"
