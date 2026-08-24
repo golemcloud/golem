@@ -89,7 +89,7 @@ impl GetRoutingTablePersistence for PostgresRoutingTablePersistence {
             .await
             .expect("Cannot create postgres pool");
 
-        Arc::new(DbRoutingTablePersistence::new(pool, 16, LEASE_TTL))
+        Arc::new(DbRoutingTablePersistence::new(pool, 16))
     }
 }
 
@@ -130,7 +130,7 @@ impl GetRoutingTablePersistence for SqliteRoutingTablePersistence {
             .await
             .expect("Cannot create sqlite pool");
 
-        Arc::new(DbRoutingTablePersistence::new(pool, 16, LEASE_TTL))
+        Arc::new(DbRoutingTablePersistence::new(pool, 16))
     }
 }
 

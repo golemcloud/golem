@@ -129,7 +129,6 @@ pub async fn run(
                     crate::sharding::persistence::DbRoutingTablePersistence::new(
                         pool.clone(),
                         shard_manager_config.number_of_shards,
-                        shard_manager_config.shard_lease_duration,
                     ),
                 );
                 let quota_repo = Arc::new(DbQuotaRepo::logged(pool));
@@ -143,7 +142,6 @@ pub async fn run(
                     crate::sharding::persistence::DbRoutingTablePersistence::new(
                         pool.clone(),
                         shard_manager_config.number_of_shards,
-                        shard_manager_config.shard_lease_duration,
                     ),
                 );
                 let quota_repo = Arc::new(DbQuotaRepo::logged(pool));
