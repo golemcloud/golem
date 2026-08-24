@@ -3320,6 +3320,7 @@ async fn remaining_host_facing_permission_classes_allow_their_backends(
         })
         .try_update_agent_provision_config("GolemHostApi", |config| {
             for grant in [
+                "agent(?agent) @ * : view : *",
                 "config(?agent) @ * : read : private",
                 "oplog(?agent) @ * : read : *",
                 "tool(?env/*/*) @ * : invoke : *",

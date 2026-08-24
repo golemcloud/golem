@@ -301,7 +301,9 @@ impl FileSystem for FileSystemImpl {
             )
             .map_err(|e| format!("{e:?}"))?;
         let stream: OutputStream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
-        stream.write_zeroes(len).map_err(|e| format!("{e:?}"))
+        stream
+            .blocking_write_zeroes_and_flush(len)
+            .map_err(|e| format!("{e:?}"))
     }
 
     fn stream_to_stdout(&self, len: u64) -> Result<(), String> {

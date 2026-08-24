@@ -905,14 +905,19 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
 
     /// Starts an agent type without default host permissions except the SDK bootstrap identity.
     pub fn without_default_host_permissions(mut self, agent_type: &str) -> Self {
+        let recipient = RecipientPattern::Account {
+            account: self.dsl.account_email(),
+        };
+        let bootstrap_identity = parse_polymorphic_permission(&format!(
+            "env(?agent) @ {} : read : GOLEM_AGENT_ID",
+            recipient.render()
+        ))
+        .expect("valid SDK bootstrap identity permission");
         self.agent_type_provision_configs.insert(
             AgentTypeName(agent_type.to_string()),
             AgentTypeProvisionConfigCreation {
                 initial_permissions: AgentTypeInitialPermissions::from_patterns(
-                    vec![
-                        parse_polymorphic_permission("env(?agent) @ * : read : GOLEM_AGENT_ID")
-                            .expect("valid SDK bootstrap identity permission"),
-                    ],
+                    vec![bootstrap_identity],
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
