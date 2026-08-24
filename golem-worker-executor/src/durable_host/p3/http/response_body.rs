@@ -47,7 +47,7 @@ use golem_common::model::oplog::payload::types::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult,
+    HostResponseP3HttpClientConsumeBodyResult, OplogIndex,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::HeaderMap;
@@ -56,12 +56,13 @@ use http_body_util::combinators::UnsyncBoxBody;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 use wasmtime::component::{
     Access, Accessor, AccessorTask, Destination, FutureProducer, FutureReader, Resource,
-    StreamProducer, StreamReader, StreamResult,
+    StreamProducer, StreamReader, StreamResult, TerminalConsumption,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi_http::FieldMap;
@@ -95,6 +96,8 @@ pub(crate) struct OpenP3HttpResponseState {
     /// an empty placeholder body: the first live body read must re-issue the
     /// recorded request (via `resend`) to obtain a real body.
     pub(crate) body_is_placeholder: bool,
+    /// Custom durable invocation that owns the send and every later body/trailer continuation.
+    pub(super) observational_owner: Option<OplogIndex>,
 }
 
 /// The send's `outgoing-http-request` invocation-context span together with
@@ -202,6 +205,117 @@ pub(super) enum HttpTrailersResolution {
         message: String,
         trap_context: DurableCallTrapContext,
     },
+}
+
+enum HttpTrailersDeliveryState {
+    Awaiting,
+    Armed(CompletionDelivery),
+    Observed(Option<TerminalConsumption>),
+    Done,
+}
+
+struct HttpTrailersDelivery {
+    state: Mutex<HttpTrailersDeliveryState>,
+}
+
+impl HttpTrailersDelivery {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(HttpTrailersDeliveryState::Awaiting),
+        })
+    }
+
+    fn arm(&self, delivery: CompletionDelivery) {
+        let observed = {
+            let mut state = self.state.lock().expect("trailers delivery lock poisoned");
+            match &*state {
+                HttpTrailersDeliveryState::Awaiting => {
+                    *state = HttpTrailersDeliveryState::Armed(delivery);
+                    return;
+                }
+                HttpTrailersDeliveryState::Observed(observed) => {
+                    let observed = *observed;
+                    *state = HttpTrailersDeliveryState::Done;
+                    observed
+                }
+                HttpTrailersDeliveryState::Armed(_) | HttpTrailersDeliveryState::Done => {
+                    unreachable!("trailers delivery is armed exactly once")
+                }
+            }
+        };
+        Self::settle(delivery, observed);
+    }
+
+    fn observe(&self, consumption: TerminalConsumption) {
+        let delivery = {
+            let mut state = self.state.lock().expect("trailers delivery lock poisoned");
+            match std::mem::replace(&mut *state, HttpTrailersDeliveryState::Done) {
+                HttpTrailersDeliveryState::Awaiting => {
+                    *state = HttpTrailersDeliveryState::Observed(Some(consumption));
+                    return;
+                }
+                HttpTrailersDeliveryState::Armed(delivery) => delivery,
+                HttpTrailersDeliveryState::Observed(_) | HttpTrailersDeliveryState::Done => {
+                    unreachable!("trailers terminal observer is invoked at most once")
+                }
+            }
+        };
+        Self::settle(delivery, Some(consumption));
+    }
+
+    fn abandon(&self) {
+        let delivery = {
+            let mut state = self.state.lock().expect("trailers delivery lock poisoned");
+            match std::mem::replace(&mut *state, HttpTrailersDeliveryState::Done) {
+                HttpTrailersDeliveryState::Awaiting => {
+                    *state = HttpTrailersDeliveryState::Observed(None);
+                    return;
+                }
+                HttpTrailersDeliveryState::Armed(delivery) => delivery,
+                HttpTrailersDeliveryState::Observed(_) | HttpTrailersDeliveryState::Done => return,
+            }
+        };
+        delivery.suppress();
+    }
+
+    fn settle(delivery: CompletionDelivery, consumption: Option<TerminalConsumption>) {
+        match consumption {
+            Some(TerminalConsumption::Delivered) => delivery.delivered(),
+            Some(TerminalConsumption::NotDelivered) => drop(delivery),
+            Some(TerminalConsumption::Superseded) => {
+                tracing::error!("consume-body trailers terminal observer was superseded");
+                delivery.suppress();
+            }
+            None => delivery.suppress(),
+        }
+    }
+}
+
+struct HttpTrailersDeliveryGuard {
+    delivery: Arc<HttpTrailersDelivery>,
+    observed: bool,
+}
+
+impl HttpTrailersDeliveryGuard {
+    fn new(delivery: Arc<HttpTrailersDelivery>) -> Self {
+        Self {
+            delivery,
+            observed: false,
+        }
+    }
+
+    fn observe(mut self, consumption: TerminalConsumption) {
+        self.observed = true;
+        self.delivery.observe(consumption);
+    }
+}
+
+impl Drop for HttpTrailersDeliveryGuard {
+    fn drop(&mut self) {
+        if !self.observed {
+            self.delivery.abandon();
+        }
+    }
 }
 
 /// Body stream returned to the guest from `consume-body`.
@@ -742,6 +856,7 @@ pub(super) struct HttpConsumeBodyTask<Ctx> {
     body: UnsyncBoxBody<Bytes, ErrorCode>,
     demand_rx: mpsc::Receiver<HttpBodyDemand>,
     trailers_tx: oneshot::Sender<HttpTrailersResolution>,
+    trailers_delivery: Arc<HttpTrailersDelivery>,
     /// Open-response state of the send that produced this response (its
     /// `outgoing-http-request` span, retry properties, and — for a replayed
     /// response — the send rebuild info), taken over from the response
@@ -758,6 +873,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
         body: UnsyncBoxBody<Bytes, ErrorCode>,
         demand_rx: mpsc::Receiver<HttpBodyDemand>,
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
+        trailers_delivery: Arc<HttpTrailersDelivery>,
         response_state: Option<OpenP3HttpResponseState>,
         activity: TailActivity,
     ) -> Self {
@@ -765,6 +881,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
             body,
             demand_rx,
             trailers_tx,
+            trailers_delivery,
             response_state,
             activity,
             _phantom: PhantomData,
@@ -782,26 +899,34 @@ where
             mut body,
             mut demand_rx,
             trailers_tx,
+            trailers_delivery,
             response_state,
             activity,
             ..
         } = self;
 
-        let (response_span, retry_properties, resume_context, resend, mut pending_reissue) =
-            match response_state {
-                Some(state) => {
-                    let mut properties = RetryContext::http(&state.method, &state.uri);
-                    apply_method_idempotence(&mut properties, state.is_idempotent);
-                    (
-                        Some(state.span),
-                        Some(properties),
-                        Some((state.method, state.uri, state.is_idempotent)),
-                        state.resend,
-                        state.body_is_placeholder,
-                    )
-                }
-                None => (None, None, None, None, false),
-            };
+        let (
+            response_span,
+            retry_properties,
+            resume_context,
+            resend,
+            mut pending_reissue,
+            observational_owner,
+        ) = match response_state {
+            Some(state) => {
+                let mut properties = RetryContext::http(&state.method, &state.uri);
+                apply_method_idempotence(&mut properties, state.is_idempotent);
+                (
+                    Some(state.span),
+                    Some(properties),
+                    Some((state.method, state.uri, state.is_idempotent)),
+                    state.resend,
+                    state.body_is_placeholder,
+                    state.observational_owner,
+                )
+            }
+            None => (None, None, None, None, false, None),
+        };
         // Keeps the re-issued request's I/O task alive while its body is read;
         // dropped (aborting the task) when this task finishes. Never read —
         // it exists only for its drop timing.
@@ -837,6 +962,8 @@ where
                         .as_ref()
                         .map(|span| format!("consume-body:{}", span.send_start_index)),
                     request_identity: None,
+                    parent_start_index: None,
+                    observational_owner,
                 },
                 async |_| Ok(HostRequestNoInput {}),
             )
@@ -877,12 +1004,20 @@ where
                 None => break,
             };
 
-            let mut child =
-                match CallHandle::<P3HttpClientConsumeBodyChunk, NotCancellable>::start_access(
+            let mut child = match CallHandle::<
+                P3HttpClientConsumeBodyChunk,
+                NotCancellable,
+            >::start_access_with_options(
                     accessor,
                     durable_worker_ctx::<Ctx, U>,
-                    HostRequestNoInput {},
                     DurableFunctionType::WriteRemoteBatched(Some(parent_begin)),
+                    AccessClaimOptions {
+                        scope_discriminator: None,
+                        request_identity: None,
+                        parent_start_index: None,
+                        observational_owner,
+                    },
+                    async |_| Ok(HostRequestNoInput {}),
                 )
                 .await
                 {
@@ -1096,7 +1231,11 @@ where
                     // The same worker-state and idempotence gates as the send's
                     // own inline-retry loop (live, not snapshotting, persistence
                     // on, no atomic region, idempotence predicate).
-                    if !inline_retry_eligible_for_method::<Ctx, U>(accessor, &resend.request.method)
+                    if observational_owner.is_some()
+                        || !inline_retry_eligible_for_method::<Ctx, U>(
+                            accessor,
+                            &resend.request.method,
+                        )
                     {
                         break;
                     }
@@ -1475,11 +1614,10 @@ where
         // exists only for the crash/drop contract (task dropped without
         // finishing), handled by the call handle's drop machinery.
         //
-        // The trailers send below is the real guest-facing delivery boundary,
-        // so the terminal is recorded through the deferred-delivery API: a
-        // closed trailers receiver after the persisted `End` records a
-        // `CompletionDiscarded` marker instead of replay redelivering the
-        // outcome.
+        // The trailers future's terminal-consumption observer is the real guest-facing delivery
+        // boundary, so the terminal is recorded through the deferred-delivery API. Dropping the
+        // future after the persisted `End` records a `CompletionDiscarded` marker instead of
+        // replay redelivering the outcome.
         //
         // Capture the parent scope's trap context first (it is a pure function of
         // the scope and survives the handle being consumed below) so every
@@ -1589,6 +1727,12 @@ where
             // pending, and park at the delivery boundary until the
             // deterministic guest drops the receiver at the same point it
             // did live.
+            // A cancelling body cannot finish dropping its trailers receiver
+            // until its stream cancellation is acknowledged. The discard is
+            // already durable on replay, so acknowledge before waiting for it.
+            if let Some(ack) = cancel_ack.take() {
+                let _ = ack.send(());
+            }
             let mut trailers_tx = trailers_tx;
             activity.park(trailers_tx.closed()).await;
             drop(trailers_tx);
@@ -1599,23 +1743,14 @@ where
                     parent_trap_context,
                 ))
             })?;
+            trailers_delivery.arm(delivery);
             match trailers_tx.send(HttpTrailersResolution::Outcome(outcome)) {
-                Ok(()) => delivery.delivered(),
-                Err(_) => {
-                    // The guest dropped the trailers future after the terminal
-                    // was persisted: the completion is silently discarded, so
-                    // record the marker before acknowledging any cancellation
-                    // (the task itself holds a `TailActivity`, and `discarded`
-                    // hands a torn wait to the drain queue, so the marker stays
-                    // settlement-accounted either way).
-                    if let Err(error) = delivery.discarded().await {
-                        return Err(wasmtime::Error::from_anyhow(
-                            mark_durable_call_trap_context(
-                                anyhow::Error::from(error),
-                                parent_trap_context,
-                            ),
-                        ));
-                    }
+                Ok(()) => {}
+                // The terminal observer has already settled the delivery token if the guest
+                // dropped the future, or suppressed it if the future disappeared during a trap.
+                Err(HttpTrailersResolution::Outcome(_)) => {}
+                Err(HttpTrailersResolution::Trap { .. }) => {
+                    unreachable!("the sent trailers resolution is an outcome")
                 }
             }
         }
@@ -1699,6 +1834,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         // producer keeps at most one demand in flight at a time.
         let (demand_tx, demand_rx) = mpsc::channel(1);
         let (trailers_tx, trailers_rx) = oneshot::channel();
+        let trailers_delivery = HttpTrailersDelivery::new();
 
         // Build both guest-facing handles before spawning the durable task. The
         // task appends the `consume-body` `Start`; the guest cannot poll either
@@ -1706,7 +1842,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         // committing a `Start` with no terminal (orphaned `Start`) if a later
         // handle construction fails.
         let mut stream = StreamReader::new(&mut store, DurableHttpBodyProducer::new(demand_tx))?;
-        let trailers = match FutureReader::new(
+        let mut trailers = match FutureReader::new(
             &mut store,
             HttpTrailersFutureProducer::<Ctx, U>::new(trailers_rx),
         ) {
@@ -1716,6 +1852,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
                 return Err(err);
             }
         };
+        let delivery_guard = HttpTrailersDeliveryGuard::new(trailers_delivery.clone());
+        if let Err(err) = trailers.register_terminal_observer(&mut store, move |consumption| {
+            delivery_guard.observe(consumption);
+        }) {
+            let _ = trailers.close(store.as_context_mut());
+            let _ = stream.close(store.as_context_mut());
+            return Err(err);
+        }
 
         let activity = {
             let mut store_ctx = store.as_context_mut();
@@ -1727,6 +1871,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
             body,
             demand_rx,
             trailers_tx,
+            trailers_delivery,
             response_state,
             activity,
         ));
@@ -1785,6 +1930,8 @@ mod tests {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: None,
                 function_name: HostFunctionName::P3HttpClientConsumeBody,
+                invocation_id: None,
+                observational_owner: None,
                 request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                     HostRequestNoInput {},
                 )))),
@@ -1796,6 +1943,8 @@ mod tests {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: Some(OplogIndex::from_u64(1)),
                 function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
+                invocation_id: None,
+                observational_owner: None,
                 request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                     HostRequestNoInput {},
                 )))),
@@ -1821,8 +1970,8 @@ mod tests {
         child_start
     }
 
-    /// A successful live transfer must deliver the chunk to the guest, consume the token as
-    /// delivered (no marker append), and advance the delivered-byte count by the chunk length.
+    /// A successful live transfer must deliver the chunk to the guest, record the child's
+    /// `CompletionDelivered` marker, and advance the delivered-byte count by the chunk length.
     #[test]
     #[timeout("10s")]
     async fn transfer_data_chunk_delivers_live_chunk_and_advances_bytes() {
@@ -1856,9 +2005,23 @@ mod tests {
         }
         assert_eq!(
             oplog.entry_count(),
-            seeded_entries,
-            "a delivered chunk must not append a marker"
+            seeded_entries + 1,
+            "a delivered chunk must append exactly one marker"
         );
+        let markers = oplog
+            .entries()
+            .into_iter()
+            .filter(|entry| matches!(entry, OplogEntry::CompletionDelivered { .. }))
+            .collect::<Vec<_>>();
+        match markers.as_slice() {
+            [OplogEntry::CompletionDelivered { start_index, .. }] => {
+                assert_eq!(
+                    *start_index, child_start,
+                    "the marker must reference the delivered child's Start"
+                );
+            }
+            other => panic!("expected exactly one CompletionDelivered marker, got {other:?}"),
+        }
     }
 
     /// The vanished-demand-receiver regression at the unit level: the child's `End(Data)` is

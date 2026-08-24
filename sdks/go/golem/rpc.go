@@ -43,6 +43,14 @@ import (
 // in the method's output instead. To degrade gracefully on a non-critical call
 // (rare), wrap it and recover the [RemoteCallError].
 
+// noScopeCard is the permission scope card sent with every outgoing invocation.
+// The Go SDK does not yet expose permission scoping, so calls carry no card
+// (None) — behaviorally identical to before permission cards were introduced.
+// TODO: expose PermissionCard on the client API (tracked follow-up).
+func noScopeCard() witTypes.Option[*types.PermissionCard] {
+	return witTypes.None[*types.PermissionCard]()
+}
+
 // Call invokes the method and waits for its result, panicking on an infra failure.
 //
 // This maps to the synchronous `invoke-and-await` import, so it blocks the whole
@@ -56,7 +64,7 @@ func (m MethodDef[Id, In, Out]) Call(c Client[Id], in In) Out {
 	if err != nil {
 		panic(err)
 	}
-	res := c.rpc.InvokeAndAwait(m.name, tree)
+	res := c.rpc.InvokeAndAwait(m.name, tree, noScopeCard())
 	if res.IsErr() {
 		panic(rpcErrorToGo(c.agentID, m.name, res.Err()))
 	}
@@ -78,7 +86,7 @@ func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) InvocationID {
 	if err != nil {
 		panic(err)
 	}
-	res := c.rpc.Invoke(m.name, tree)
+	res := c.rpc.Invoke(m.name, tree, noScopeCard())
 	if res.IsErr() {
 		panic(rpcErrorToGo(c.agentID, m.name, res.Err()))
 	}
@@ -95,7 +103,11 @@ func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) *Sch
 	if err != nil {
 		panic(err)
 	}
-	receipt := c.rpc.ScheduleCancelableInvocation(instantFrom(at), m.name, tree)
+	res := c.rpc.ScheduleCancelableInvocation(instantFrom(at), m.name, tree, noScopeCard())
+	if res.IsErr() {
+		panic(rpcErrorToGo(c.agentID, m.name, res.Err()))
+	}
+	receipt := res.Ok()
 	return &ScheduledInvocation{
 		ID:    invocationIDFrom(receipt.Metadata),
 		token: receipt.CancellationToken,
@@ -121,7 +133,7 @@ func (m MethodDef[Id, In, Out]) CallAsync(c Client[Id], in In) *Future[Out] {
 	if err != nil {
 		panic(err)
 	}
-	inv := c.rpc.AsyncInvokeAndAwait(m.name, tree)
+	inv := c.rpc.AsyncInvokeAndAwait(m.name, tree, noScopeCard())
 	return &Future[Out]{
 		ID:     invocationIDFrom(inv.Metadata),
 		fut:    inv.Future,

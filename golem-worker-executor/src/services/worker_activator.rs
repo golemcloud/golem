@@ -217,7 +217,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         owned_agent_id: &OwnedAgentId,
     ) -> Option<AgentFingerprint> {
         self.all
-            .active_workers()
+            .active_agents()
             .try_get(owned_agent_id)
             .await
             .map(|worker| worker.get_initial_worker_metadata().fingerprint)

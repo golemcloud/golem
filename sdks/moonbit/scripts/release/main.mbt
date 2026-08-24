@@ -94,8 +94,7 @@ fn prepare_release(sdk_version : String, tools_version : String) -> Unit raise {
 ///|
 fn revert_to_dev() -> Unit raise {
   println("==> Reverting to development mode...")
-  let workspace_dep =
-    "\"golemcloud/golem_sdk\": \"\{dev_sdk_version}\""
+  let workspace_dep = "\"golemcloud/golem_sdk\": \"\{dev_sdk_version}\""
   // 1. moon.mod.json — compute new content
   let mod_json = @fs.read_file_to_string(mod_json_path)
   let mut m = replace_sdk_dep(mod_json, workspace_dep)

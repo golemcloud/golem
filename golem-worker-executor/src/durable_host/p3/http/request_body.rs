@@ -15,7 +15,9 @@
 use super::serialization::{
     deserialize_error_code, deserialize_headers, serialize_error_code, serialize_headers,
 };
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, LeaveIncompleteOnDrop};
+use crate::durable_host::concurrent::{
+    AccessClaimOptions, CallHandle, CallReplayOutcome, LeaveIncompleteOnDrop,
+};
 use crate::durable_host::durability::{DurableCallTrapContext, mark_durable_call_trap_context};
 use crate::durable_host::p3::{
     DurableP3, durable_worker_ctx, observe_function_call_store, wasi_http_view,
@@ -86,9 +88,8 @@ const REQUEST_BODY_RESEND_CACHE_BYTES: usize = 256 * 1024;
 /// Only the oplog index of each recorded frame is kept in memory — never the
 /// bytes — so resending an arbitrarily large body needs bounded memory. A
 /// terminal frame (`End` or `Error`) is always recorded, including for
-/// bodiless sends. While persistence is off (`PersistNothing`) or a snapshot
-/// is being taken, recording is skipped: the body still streams, but only an
-/// unpulled body can be resent.
+/// bodiless sends. While a snapshot is being taken, recording is skipped: the
+/// body still streams, but only an unpulled body can be resent.
 #[derive(Clone)]
 pub(super) struct DurableRequestBody {
     oplog: Arc<dyn Oplog>,
@@ -783,9 +784,12 @@ impl HttpBody for DurableRequestBodyView {
             }
             match &state.terminal {
                 Some(RequestBodyTerminal::Error(error)) => {
-                    return Poll::Ready(Some(Err(error.clone())));
+                    let error = error.clone();
+                    return Poll::Ready(Some(Err(error)));
                 }
-                Some(RequestBodyTerminal::End) => return Poll::Ready(None),
+                Some(RequestBodyTerminal::End) => {
+                    return Poll::Ready(None);
+                }
                 None => {}
             }
             if !this.live_claimed {
@@ -1044,6 +1048,7 @@ pub(super) fn deserialize_transmission_result(
 pub(super) fn start_transmission_recording<Ctx, U>(
     store: &Accessor<U, DurableP3<Ctx>>,
     pending: Option<PendingHttpRequestBodyTransmission>,
+    observational_owner: Option<OplogIndex>,
 ) where
     Ctx: WorkerCtx,
     U: Send + 'static,
@@ -1055,7 +1060,9 @@ pub(super) fn start_transmission_recording<Ctx, U>(
                 .activity()
         });
         store.spawn(HttpRequestBodyTransmissionTask::<Ctx>::new(
-            pending, activity,
+            pending,
+            observational_owner,
+            activity,
         ));
     }
 }
@@ -1113,16 +1120,22 @@ pub(super) struct HttpRequestBodyTransmissionTask<Ctx> {
     raw_rx: oneshot::Receiver<Result<(), ErrorCode>>,
     resolution_tx: oneshot::Sender<HttpTransmissionResolution>,
     demand_rx: oneshot::Receiver<()>,
+    observational_owner: Option<OplogIndex>,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
 
 impl<Ctx> HttpRequestBodyTransmissionTask<Ctx> {
-    fn new(pending: PendingHttpRequestBodyTransmission, activity: TailActivity) -> Self {
+    fn new(
+        pending: PendingHttpRequestBodyTransmission,
+        observational_owner: Option<OplogIndex>,
+        activity: TailActivity,
+    ) -> Self {
         Self {
             raw_rx: pending.raw_rx,
             resolution_tx: pending.resolution_tx,
             demand_rx: pending.demand_rx,
+            observational_owner,
             activity,
             _phantom: PhantomData,
         }
@@ -1139,6 +1152,7 @@ where
             raw_rx,
             resolution_tx,
             demand_rx,
+            observational_owner,
             activity,
             ..
         } = self;
@@ -1158,11 +1172,17 @@ where
         let mut handle = match CallHandle::<
             P3HttpClientRequestBodyTransmission,
             LeaveIncompleteOnDrop,
-        >::start_access(
+        >::start_access_with_options(
             accessor,
             durable_worker_ctx::<Ctx, U>,
-            HostRequestNoInput {},
             DurableFunctionType::ReadRemote,
+            AccessClaimOptions {
+                scope_discriminator: None,
+                request_identity: None,
+                parent_start_index: None,
+                observational_owner,
+            },
+            async |_| Ok(HostRequestNoInput {}),
         )
         .await
         {
@@ -1683,7 +1703,7 @@ mod tests {
         assert_eq!(error_count, 1);
     }
 
-    /// With recording disabled (`PersistNothing` / snapshotting), the body
+    /// With recording disabled during snapshotting, the body
     /// must still stream but write no oplog entries, and a pulled non-empty
     /// body must not claim to be replayable.
     #[test]

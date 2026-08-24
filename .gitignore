@@ -26,6 +26,7 @@ test-components/c-1/c_api*
 test-components/csharp-1/bin/
 test-components/csharp-1/obj/
 test-components/python-1/__pycache__/
+integration-tests/benchmark_suites/__pycache__/
 test-components/tinygo-wasi*/tinygo_wasi/
 golem-client/openapi/
 logs
@@ -40,6 +41,7 @@ proptest-regressions/
 
 # locally kept custom dev files
 /.local/
+/tmp/
 
 # IDEs
 .idea/

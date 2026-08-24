@@ -32,7 +32,7 @@ use golem_common::model::oplog::types::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse,
-    HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, PersistenceLevel,
+    HostResponseHttpFutureTrailersGet, HostResponseHttpResponse,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::{HeaderName, HeaderValue};
@@ -891,7 +891,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
 
         let handle = self_.rep();
         let durable_execution_state = self.durable_execution_state();
-        if durable_execution_state.is_live || self.state.snapshotting_mode.is_some() {
+        if durable_execution_state.is_live || self.state.snapshotting_mode {
             let request_state = self
                 .state
                 .open_http_requests
@@ -1205,11 +1205,6 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             }
 
             response
-        } else if durable_execution_state.persistence_level == PersistenceLevel::PersistNothing {
-            Err(WorkerExecutorError::runtime(
-                "Trying to replay an http request in a PersistNothing block",
-            )
-            .into())
         } else {
             // Propagate WorkerExecutorError via `?` (From) so the downcast
             // survives the wasmtime::Error chain — TrapType::from_error
@@ -1534,7 +1529,7 @@ async fn persist_http_response<Ctx: WorkerCtx>(
     serializable_response: &SerializableHttpResponse,
     begin_index: golem_common::model::oplog::OplogIndex,
 ) {
-    if ctx.state.snapshotting_mode.is_none() {
+    if !ctx.state.snapshotting_mode {
         ctx.append_completed_child_call(
             HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
             &HostRequest::HttpRequest(request),

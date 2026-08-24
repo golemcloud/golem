@@ -111,12 +111,14 @@ impl InternalWorkerEvent {
         match self {
             Self::StdOut { timestamp, bytes } => Some(OplogEntry::Log {
                 timestamp: *timestamp,
+                parent_start_index: None,
                 level: oplog::LogLevel::Stdout,
                 context: String::new(),
                 message: String::from_utf8_lossy(bytes).to_string(),
             }),
             Self::StdErr { timestamp, bytes } => Some(OplogEntry::Log {
                 timestamp: *timestamp,
+                parent_start_index: None,
                 level: oplog::LogLevel::Stderr,
                 context: String::new(),
                 message: String::from_utf8_lossy(bytes).to_string(),
@@ -128,6 +130,7 @@ impl InternalWorkerEvent {
                 message,
             } => Some(OplogEntry::Log {
                 timestamp: *timestamp,
+                parent_start_index: None,
                 level: match level {
                     LogLevel::Trace => oplog::LogLevel::Trace,
                     LogLevel::Debug => oplog::LogLevel::Debug,

@@ -21,6 +21,7 @@ use crate::model::oplog::{
 };
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{AgentId, AgentMetadata, AgentStatus, RdbmsPoolKey, ScheduleId};
+use crate::schema::TypedSchemaValue;
 use crate::schema::conversion::{FromSchemaError, SchemaBuilder, value_kind};
 use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
@@ -92,6 +93,22 @@ pub enum SecretRevealError {
     Unavailable(String),
     VersionNotFound(u64),
     Internal(String),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum PermissionCardRevokeError {
+    AlreadyRevoked(String),
+    CardRevoked(String),
+    NotPermitted(String),
 }
 
 #[derive(
@@ -2182,6 +2199,55 @@ pub enum SerializableRpcError {
     Denied { details: String },
     NotFound { details: String },
     RemoteInternalError { details: String },
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableToolError {
+    InvalidToolName(String),
+    InvalidCommandPath(Vec<String>),
+    InvalidInput(String),
+    ConstraintViolation(String),
+    InvalidResult(String),
+    CustomError(Box<TypedSchemaValue>),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableToolRpcError {
+    ProtocolError(String),
+    Denied(String),
+    NotFound(String),
+    RemoteInternalError(String),
+    RemoteToolError(Box<SerializableToolError>),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableToolInvocationResult {
+    pub result: Option<TypedSchemaValue>,
+    pub stdout: Option<Vec<u8>>,
 }
 
 #[derive(

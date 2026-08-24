@@ -41,7 +41,7 @@ use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::UpdateDescription;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
-    OplogPayload, PersistenceLevel, ScopeScanState, host_functions::HostFunctionName,
+    OplogPayload, ScopeScanState, host_functions::HostFunctionName,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{RetryProperties, Timestamp};
@@ -54,9 +54,10 @@ use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, HasData, TerminalConsumption};
 
 use crate::durable_host::durability::{
-    ClassifiedHostError, DurabilityHost, DurableCallTrapContext, DurableCallTrapError,
-    DurableExecutionState, HostFailureKind, InFunctionRetryController, InFunctionRetryHost,
-    InternalRetryResult, TaskRetryContext, TerminalCallError, mark_durable_call_trap_context,
+    ClassifiedHostError, CustomBeginLifecycle, CustomInvocationContext, CustomInvocationScope,
+    DurabilityHost, DurableCallTrapContext, DurableCallTrapError, DurableExecutionState,
+    HostFailureKind, InFunctionRetryController, InFunctionRetryHost, InternalRetryResult,
+    TaskRetryContext, TerminalCallError, mark_durable_call_trap_context,
     try_trigger_host_trap_retry,
 };
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};

@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+packages=(
+    build-essential
+    clang
+    cmake
+    curl
+    docker.io
+    jq
+    libssl-dev
+    lld
+    pkg-config
+    protobuf-compiler
+    redis-server
+    xz-utils
+)
+
+missing_packages=()
+for package in "${packages[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'ok installed'; then
+        missing_packages+=("$package")
+    fi
+done
+
+if ((${#missing_packages[@]})); then
+    sudo apt-get update
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_packages[@]}"
+fi
+
+if ! command -v rustup >/dev/null 2>&1; then
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+fi
+export PATH="$HOME/.cargo/bin:$PATH"
+
+rustup update stable --no-self-update
+rustup default stable
+rustup component add clippy rustfmt
+rustup target add wasm32-wasip1 wasm32-wasip2
+
+if ! command -v cargo-binstall >/dev/null 2>&1; then
+    curl --proto '=https' --tlsv1.2 -sSfL \
+        https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+fi
+
+if ! cargo make --version 2>/dev/null | grep -q 'cargo-make 0.37.24'; then
+    cargo install --force --locked cargo-make --version 0.37.24
+fi
+
+node_version="24.19.0"
+node_home="/opt/node24"
+if [[ ! -x "$node_home/bin/node" ]] || [[ "$($node_home/bin/node --version)" != "v$node_version" ]]; then
+    node_archive="$(mktemp)"
+    curl -sSfL \
+        "https://nodejs.org/dist/v${node_version}/node-v${node_version}-linux-x64.tar.xz" \
+        -o "$node_archive"
+    sudo rm -rf "$node_home" "/opt/node-v${node_version}-linux-x64"
+    sudo tar xJf "$node_archive" -C /opt
+    sudo mv "/opt/node-v${node_version}-linux-x64" "$node_home"
+    rm -f "$node_archive"
+fi
+export PATH="$node_home/bin:$PATH"
+
+if ! pnpm --version 2>/dev/null | grep -q '^11\.22\.0$'; then
+    sudo "$node_home/bin/npm" install --global pnpm@11.22.0
+fi
+
+if [[ ! -f /opt/wasi-sdk/VERSION ]] || ! grep -q '^25\.0$' /opt/wasi-sdk/VERSION; then
+    wasi_archive="$(mktemp)"
+    curl -sSfL \
+        https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-25/wasi-sdk-25.0-x86_64-linux.tar.gz \
+        -o "$wasi_archive"
+    sudo rm -rf /opt/wasi-sdk /opt/wasi-sdk-25.0-x86_64-linux
+    sudo tar xzf "$wasi_archive" -C /opt
+    sudo mv /opt/wasi-sdk-25.0-x86_64-linux /opt/wasi-sdk
+    rm -f "$wasi_archive"
+fi
+
+if ! wasm-rquickjs --version 2>/dev/null | grep -q '0.4.1'; then
+    cargo binstall --force --locked wasm-rquickjs-cli@0.4.1
+fi
+
+if ! cargo component --version 2>/dev/null | grep -q '0.21.1'; then
+    cargo binstall --force cargo-component@0.21.1
+fi
+
+profile_marker="# Golem Amp orb toolchain"
+touch "$HOME/.bash_profile"
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile"; then
+    cat >> "$HOME/.bash_profile" <<'EOF'
+
+# Golem Amp orb toolchain
+export PATH="/opt/node24/bin:$HOME/.cargo/bin:$PATH"
+export WASI_SDK_VERSION=25
+export WASI_SDK_PATH=/opt/wasi-sdk
+export WASM_RQUICKJS_VERSION=0.4.1
+EOF
+fi
+
+amp orb services ensure

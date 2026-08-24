@@ -437,7 +437,8 @@ fn check_type(
         | SchemaType::String { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
-        | SchemaType::QuotaToken { .. } => {}
+        | SchemaType::QuotaToken { .. }
+        | SchemaType::PermissionCard { .. } => {}
     }
 }
 

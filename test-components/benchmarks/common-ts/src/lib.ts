@@ -1,5 +1,3 @@
-import { withPersistenceLevel, type PersistenceLevel } from "@golemcloud/golem-ts-sdk"
-
 export function cpuIntensive(length: number): number {
     const a: number[][] = Array(length).fill(0).map(() => Array(length).fill(1));
     const b: number[][] = Array(length).fill(0).map(() => Array(length).fill(2));
@@ -32,15 +30,11 @@ export function largeInput(input: Uint8Array): number {
     return input.length;
 }
 
-export function oplogHeavy(length: number, persistenceOn: boolean): number {
-    const level: PersistenceLevel = persistenceOn ? { tag: "smart" } : { tag: "persist-nothing" };
-    return withPersistenceLevel(level, () => {
-
-        let result = 0;
-        for (let i = 0; i < length; i++) {
-            const value = Math.random();
-            result ^= value;
-        }
-        return result;
-    });
+export function oplogHeavy(length: number): number {
+    let result = 0;
+    for (let i = 0; i < length; i++) {
+        const value = Math.random();
+        result ^= value;
+    }
+    return result;
 }

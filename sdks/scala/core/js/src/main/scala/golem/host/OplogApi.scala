@@ -16,7 +16,7 @@
 
 package golem.host
 
-import golem.HostApi
+import golem.{HostApi, Uuid}
 import golem.host.js._
 import golem.host.js.schema.JsTypedSchemaValue
 import golem.runtime.rpc.host.AgentHostApi
@@ -72,6 +72,8 @@ object OplogApi {
     timestamp: ContextApi.DateTime,
     parentStartIndex: Option[OplogIndex],
     functionName: String,
+    invocationId: Option[Uuid],
+    observationalOwner: Option[OplogIndex],
     request: Option[TypedSchemaValue],
     wrappedFunctionType: DurabilityApi.DurableFunctionType
   )
@@ -87,6 +89,16 @@ object OplogApi {
     timestamp: ContextApi.DateTime,
     startIndex: OplogIndex,
     partial: Option[TypedSchemaValue]
+  )
+
+  final case class CompletionDiscardedParameters(
+    timestamp: ContextApi.DateTime,
+    startIndex: OplogIndex
+  )
+
+  final case class CompletionDeliveredParameters(
+    timestamp: ContextApi.DateTime,
+    startIndex: OplogIndex
   )
 
   final case class LocalSpanData(
@@ -303,11 +315,6 @@ object OplogApi {
     value: ContextApi.AttributeValue
   )
 
-  final case class ChangePersistenceLevelParameters(
-    timestamp: ContextApi.DateTime,
-    persistenceLevel: HostApi.PersistenceLevel
-  )
-
   final case class BeginRemoteTransactionParameters(
     timestamp: ContextApi.DateTime,
     transactionId: String
@@ -435,9 +442,6 @@ object OplogApi {
     final case class SetSpanAttribute(params: SetSpanAttributeParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
-    final case class ChangePersistenceLevel(params: ChangePersistenceLevelParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
     final case class BeginRemoteTransaction(params: BeginRemoteTransactionParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
@@ -468,6 +472,12 @@ object OplogApi {
     final case class Cancelled(params: CancelledParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class CompletionDiscarded(params: CompletionDiscardedParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
+    final case class CompletionDelivered(params: CompletionDeliveredParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
 
     // --- Parsing ---
 
@@ -476,10 +486,18 @@ object OplogApi {
       val tag   = entry.tag
       def v     = entry.asInstanceOf[JsPublicOplogEntryWithValue].value
       tag match {
-        case "create"                                  => Create(parseCreateParameters(v.asInstanceOf[JsCreateParameters]))
-        case "start"                                   => Start(parseStartParameters(v.asInstanceOf[JsStartParameters]))
-        case "end"                                     => End(parseEndParameters(v.asInstanceOf[JsEndParameters]))
-        case "cancelled"                               => Cancelled(parseCancelledParameters(v.asInstanceOf[JsCancelledParameters]))
+        case "create"               => Create(parseCreateParameters(v.asInstanceOf[JsCreateParameters]))
+        case "start"                => Start(parseStartParameters(v.asInstanceOf[JsStartParameters]))
+        case "end"                  => End(parseEndParameters(v.asInstanceOf[JsEndParameters]))
+        case "cancelled"            => Cancelled(parseCancelledParameters(v.asInstanceOf[JsCancelledParameters]))
+        case "completion-discarded" =>
+          CompletionDiscarded(
+            parseCompletionDiscardedParameters(v.asInstanceOf[JsCompletionDiscardedParameters])
+          )
+        case "completion-delivered" =>
+          CompletionDelivered(
+            parseCompletionDeliveredParameters(v.asInstanceOf[JsCompletionDeliveredParameters])
+          )
         case "host-call" | "imported-function-invoked" =>
           HostCall(parseHostCallParameters(v.asInstanceOf[JsHostCallParameters]))
         case "agent-invocation-started" | "exported-function-invoked" =>
@@ -537,10 +555,6 @@ object OplogApi {
         case "finish-span"        => FinishSpan(parseFinishSpanParameters(v.asInstanceOf[JsFinishSpanParameters]))
         case "set-span-attribute" =>
           SetSpanAttribute(parseSetSpanAttributeParameters(v.asInstanceOf[JsSetSpanAttributeParameters]))
-        case "change-persistence-level" =>
-          ChangePersistenceLevel(
-            parseChangePersistenceLevelParameters(v.asInstanceOf[JsChangePersistenceLevelParameters])
-          )
         case "begin-remote-transaction" =>
           BeginRemoteTransaction(
             parseBeginRemoteTransactionParameters(v.asInstanceOf[JsBeginRemoteTransactionParameters])
@@ -632,6 +646,9 @@ object OplogApi {
       timestamp = parseDateTime(raw.timestamp),
       parentStartIndex = raw.parentStartIndex.toOption.map(index => BigInt(index.toString)),
       functionName = raw.functionName,
+      invocationId =
+        raw.invocationId.toOption.map(id => Uuid(BigInt(id.highBits.toString), BigInt(id.lowBits.toString))),
+      observationalOwner = raw.observationalOwner.toOption.map(index => BigInt(index.toString)),
       request = raw.request.toOption.map(typedFromJs),
       wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
     )
@@ -649,6 +666,22 @@ object OplogApi {
       timestamp = parseDateTime(raw.timestamp),
       startIndex = BigInt(raw.startIndex.toString),
       partial = raw.partial.toOption.map(typedFromJs)
+    )
+
+  private def parseCompletionDiscardedParameters(
+    raw: JsCompletionDiscardedParameters
+  ): CompletionDiscardedParameters =
+    CompletionDiscardedParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      startIndex = BigInt(raw.startIndex.toString)
+    )
+
+  private def parseCompletionDeliveredParameters(
+    raw: JsCompletionDeliveredParameters
+  ): CompletionDeliveredParameters =
+    CompletionDeliveredParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      startIndex = BigInt(raw.startIndex.toString)
     )
 
   private def parseSpanData(raw: JsSpanData): SpanData =
@@ -975,14 +1008,6 @@ object OplogApi {
       spanId = raw.spanId,
       key = raw.key,
       value = ContextApi.AttributeValue.fromJs(raw.value)
-    )
-
-  private def parseChangePersistenceLevelParameters(
-    raw: JsChangePersistenceLevelParameters
-  ): ChangePersistenceLevelParameters =
-    ChangePersistenceLevelParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      persistenceLevel = HostApi.PersistenceLevel.fromTag(raw.persistenceLevel.tag)
     )
 
   private def parseBeginRemoteTransactionParameters(

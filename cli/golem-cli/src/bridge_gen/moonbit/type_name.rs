@@ -121,6 +121,7 @@ impl TypeName for MoonBitTypeName {
             | SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
             | SchemaType::Future { .. }
             | SchemaType::Stream { .. } => false,
         }

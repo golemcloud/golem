@@ -80,13 +80,15 @@ sealed trait JsHostCallParameters extends js.Object {
   def durableFunctionType: JsWrappedFunctionType = js.native
 }
 
-// --- Start / End / Cancelled durable host-call markers ---
+// --- Durable host-call markers ---
 
 @js.native
 sealed trait JsStartParameters extends js.Object {
   def timestamp: JsDatetime                      = js.native
   def parentStartIndex: js.UndefOr[js.BigInt]    = js.native
   def functionName: String                       = js.native
+  def invocationId: js.UndefOr[JsUuid]           = js.native
+  def observationalOwner: js.UndefOr[js.BigInt]  = js.native
   def request: js.UndefOr[JsTypedSchemaValue]    = js.native
   def durableFunctionType: JsWrappedFunctionType = js.native
 }
@@ -104,6 +106,18 @@ sealed trait JsCancelledParameters extends js.Object {
   def timestamp: JsDatetime                   = js.native
   def startIndex: js.BigInt                   = js.native
   def partial: js.UndefOr[JsTypedSchemaValue] = js.native
+}
+
+@js.native
+sealed trait JsCompletionDiscardedParameters extends js.Object {
+  def timestamp: JsDatetime = js.native
+  def startIndex: js.BigInt = js.native
+}
+
+@js.native
+sealed trait JsCompletionDeliveredParameters extends js.Object {
+  def timestamp: JsDatetime = js.native
+  def startIndex: js.BigInt = js.native
 }
 
 // --- SpanData  –  tagged union ---
@@ -495,14 +509,6 @@ sealed trait JsSetSpanAttributeParameters extends js.Object {
   def spanId: String          = js.native
   def key: String             = js.native
   def value: JsAttributeValue = js.native
-}
-
-// --- ChangePersistenceLevelParameters ---
-
-@js.native
-sealed trait JsChangePersistenceLevelParameters extends js.Object {
-  def timestamp: JsDatetime                = js.native
-  def persistenceLevel: JsPersistenceLevel = js.native
 }
 
 // --- BeginRemoteTransactionParameters ---

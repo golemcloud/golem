@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::authorization::targets::http_target;
 use crate::durable_host::durability::InFunctionRetryHost;
 use crate::durable_host::http::inline_retry::{
     InlineRetryPhase, is_http_inline_retry_eligible, spawn_http_request_with_retry,
@@ -202,6 +203,33 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         options: Option<Resource<types::RequestOptions>>,
     ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
         self.observe_function_call("http::outgoing_handler", "handle");
+
+        // Replay restores the recorded HTTP operation and must not construct or evaluate a
+        // permission target. Live admission inspects only the request head and precedes quotas,
+        // durability, body ownership changes, and dispatch.
+        if self.state.is_live() {
+            let host_request = self.table().get(&request)?;
+            let scheme = match host_request.scheme.as_ref().unwrap_or(&Scheme::Https) {
+                Scheme::Http => "http",
+                Scheme::Https => "https",
+                Scheme::Other(_) => return Err(types::ErrorCode::HttpRequestDenied.into()),
+            };
+            let uri = format!(
+                "{}://{}{}",
+                scheme,
+                host_request.authority.as_deref().unwrap_or(""),
+                host_request.path_with_query.as_deref().unwrap_or("/")
+            );
+            let target = http_target(&uri)
+                .map_err(|_| types::ErrorCode::HttpRequestDenied)?
+                .permission;
+            match self.authorize_live_permission(&target).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => {
+                    return Err(types::ErrorCode::HttpRequestDenied.into());
+                }
+            }
+        }
 
         // Trap immediately if the invocation is restricted to read-only side effects.
         // This must run before any durability machinery so that no oplog entry is written

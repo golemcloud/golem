@@ -134,6 +134,7 @@ export function matchesSchemaType(
       );
     case 'secret':
     case 'quota-token':
+    case 'permission-card':
     case 'variant':
       return value !== null && typeof value === 'object';
     default:

@@ -87,6 +87,16 @@ object ValueValidationSpec extends ZIOSpecDefault {
     test("numeric below min is rejected") {
       val ty = SchemaType(U32Type(NumericRestrictions(min = Some(NumericBound.Unsigned(1))).normalize));
       assertTrue(validate(ty, U32Value(0)).left.exists(_.exists(_.isInstanceOf[NumericOutOfRange])))
+    },
+    test("permission-card values match only permission-card schema types") {
+      val handle   = GuestPermissionCardHandle.fromRaw("card-1")
+      val value    = PermissionCardHandle(handle)
+      val cardType = SchemaType(PermissionCardType(PermissionCardSpec(polymorphic = true)))
+
+      assertTrue(
+        validate(cardType, value).isRight,
+        validate(t.string, value).left.exists(_.exists(_.isInstanceOf[ShapeMismatch]))
+      )
     }
   )
 }

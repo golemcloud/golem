@@ -17,9 +17,9 @@ use assert2::assert;
 use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    AccountResourcePattern, AccountTokenResourcePattern, AccountTokenVerb, AccountVerb,
-    ClassPermissionPattern, ClassPermissionTarget, PermissionPattern, PermissionTarget,
-    SystemResourcePattern, SystemVerb,
+    AccountResourcePattern, AccountTokenResourcePattern, AccountTokenVerb, AccountVerb, CardId,
+    ClassPermissionPattern, ClassPermissionTarget, DelegationCard, PermissionPattern,
+    PermissionTarget, SystemResourcePattern, SystemVerb,
 };
 use test_r::test;
 
@@ -34,6 +34,7 @@ fn mk_user_ctx(roles: &[AccountRole], plan_id: PlanId, account_id: AccountId) ->
         account_plan_id: plan_id,
         account_roles: roles.iter().cloned().collect(),
         effective_surface: empty_effective_surface(),
+        delegation_surface: None,
     })
 }
 
@@ -128,9 +129,50 @@ fn system_auth_cannot_validate_card_derivation() {
     let ctx = AuthCtx::System;
 
     assert!(matches!(
-        ctx.effective_surface_for_card_derivation("test"),
+        ctx.delegation_surface_for_card_derivation("test"),
         Err(super::AuthorizationError::AuthContextHasNoCards(_))
     ));
+}
+
+#[test]
+fn auth_without_delegation_surface_cannot_validate_card_derivation() {
+    let ctx = mk_user_ctx(&[], PlanId::new(), AccountId::new());
+
+    assert!(matches!(
+        ctx.delegation_surface_for_card_derivation("test"),
+        Err(super::AuthorizationError::AuthContextHasNoCards(_))
+    ));
+
+    let encoded: golem_api_grpc::proto::golem::auth::AuthCtx = ctx.clone().into();
+    let decoded = AuthCtx::try_from(encoded).unwrap();
+    assert!(decoded == ctx);
+}
+
+#[test]
+fn auth_context_protobuf_preserves_delegation_surface() {
+    let account_id = AccountId::new();
+    let delegation_surface = DelegationSurface {
+        cards: vec![DelegationCard {
+            source_card_id: Some(CardId::new()),
+            lower_positive: vec![report_grant(RecipientPattern::Any)],
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+        }],
+    };
+    let ctx = AuthCtx::User(UserAuthCtx {
+        account_id,
+        account_email: account_email(account_id),
+        account_plan_id: PlanId::new(),
+        account_roles: BTreeSet::new(),
+        effective_surface: empty_effective_surface(),
+        delegation_surface: Some(delegation_surface),
+    });
+
+    let encoded: golem_api_grpc::proto::golem::auth::AuthCtx = ctx.clone().into();
+    let decoded = AuthCtx::try_from(encoded).unwrap();
+
+    assert!(decoded == ctx);
 }
 
 #[test]
@@ -146,6 +188,7 @@ fn user_with_effective_surface_can_authorize_permission() {
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
+        delegation_surface: None,
     });
 
     assert!(ctx.authorize_permission(&target).is_ok());
@@ -173,6 +216,7 @@ fn user_with_effective_surface_can_authorize_account_token_permission() {
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
+        delegation_surface: None,
     });
 
     assert!(ctx.authorize_permission(&target).is_ok());
@@ -195,6 +239,7 @@ fn effective_surface_account_token_grant_for_different_holder_does_not_authorize
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
+        delegation_surface: None,
     });
 
     assert!(ctx.authorize_permission(&target).is_err());
@@ -216,6 +261,7 @@ fn effective_surface_account_token_target_ignores_recipient_after_holder_filteri
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
+        delegation_surface: None,
     });
 
     assert!(ctx.authorize_permission(&target).is_ok());
@@ -236,6 +282,7 @@ fn effective_surface_account_token_grant_does_not_authorize_different_owner_targ
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
+        delegation_surface: None,
     });
     let requested = account_token_target(AccountId::new());
 
@@ -266,6 +313,7 @@ fn user_with_effective_surface_can_authorize_account_permission() {
         account_plan_id: PlanId::new(),
         account_roles: BTreeSet::new(),
         effective_surface: effective_surface_for_account(account_id, vec![grant]),
+        delegation_surface: None,
     });
 
     assert!(ctx.authorize_permission(&target).is_ok());

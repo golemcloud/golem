@@ -29,6 +29,7 @@ pub enum AgentResourcePattern {
     OplogIndex(u64),
     InvocationId(AgentInvocationIdPattern),
     PluginName(AgentPluginName),
+    Empty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -67,7 +68,9 @@ impl AgentResourcePattern {
 
 impl ResourcePattern for AgentResourcePattern {
     fn parse_resource(resource: &str) -> Result<Self, CardParseError> {
-        if resource == "*" {
+        if resource.is_empty() {
+            Ok(AgentResourcePattern::Empty)
+        } else if resource == "*" {
             Ok(AgentResourcePattern::Any)
         } else if let Ok(index) = resource.parse::<u64>() {
             Ok(AgentResourcePattern::OplogIndex(index))
@@ -92,6 +95,7 @@ impl ResourcePattern for AgentResourcePattern {
             (Self::OplogIndex(a), Self::OplogIndex(b)) => a == b,
             (Self::InvocationId(a), Self::InvocationId(b)) => a == b,
             (Self::PluginName(a), Self::PluginName(b)) => a == b,
+            (Self::Empty, Self::Empty) => true,
             _ => false,
         }
     }
@@ -110,7 +114,6 @@ pub enum AgentVerb {
     CancelInvocation,
     ActivatePlugin,
     DeactivatePlugin,
-    Debug,
 }
 impl VerbPattern for AgentVerb {
     fn parse_verb(verb: &str) -> Option<Self> {
@@ -126,7 +129,6 @@ impl VerbPattern for AgentVerb {
             "cancel-invocation" => Some(Self::CancelInvocation),
             "activate-plugin" => Some(Self::ActivatePlugin),
             "deactivate-plugin" => Some(Self::DeactivatePlugin),
-            "debug" => Some(Self::Debug),
             _ => None,
         }
     }
@@ -141,6 +143,84 @@ impl PermissionClass for AgentClass {
     type Owner = AgentOwnerPattern;
     type Resource = AgentResourcePattern;
     const NAME: &'static str = "agent";
+
+    fn parse_resource(
+        verb: Option<Self::Verb>,
+        resource: &str,
+    ) -> Result<Self::Resource, CardParseError> {
+        let invalid = || CardParseError::InvalidResource {
+            class: Self::NAME.to_string(),
+            resource: resource.to_string(),
+        };
+        match verb {
+            Some(AgentVerb::Invoke) => {
+                if resource == "*" {
+                    Ok(AgentResourcePattern::Any)
+                } else {
+                    AgentMethodName::parse(resource)
+                        .map(AgentResourcePattern::Method)
+                        .map_err(|_| invalid())
+                }
+            }
+            Some(AgentVerb::View) => {
+                if resource.is_empty() {
+                    Ok(AgentResourcePattern::Empty)
+                } else if resource == "*" {
+                    Ok(AgentResourcePattern::Any)
+                } else {
+                    AgentMethodName::parse(resource)
+                        .map(AgentResourcePattern::Method)
+                        .map_err(|_| invalid())
+                }
+            }
+            Some(
+                AgentVerb::Delete
+                | AgentVerb::Interrupt
+                | AgentVerb::Resume
+                | AgentVerb::UpdateRevision
+                | AgentVerb::Fork,
+            ) => resource
+                .is_empty()
+                .then_some(AgentResourcePattern::Empty)
+                .ok_or_else(invalid),
+            Some(AgentVerb::Revert) => {
+                if resource == "*" {
+                    Ok(AgentResourcePattern::Any)
+                } else {
+                    resource
+                        .parse::<u64>()
+                        .map(AgentResourcePattern::OplogIndex)
+                        .map_err(|_| invalid())
+                }
+            }
+            Some(AgentVerb::CancelInvocation) => {
+                if resource == "*" {
+                    Ok(AgentResourcePattern::Any)
+                } else if let Ok(id) = Uuid::parse_str(resource) {
+                    Ok(AgentResourcePattern::InvocationId(
+                        AgentInvocationIdPattern::Uuid(id),
+                    ))
+                } else {
+                    parse_agent_identifier(resource)
+                        .map(AgentInvocationIdentifier)
+                        .map(AgentInvocationIdPattern::Identifier)
+                        .map(AgentResourcePattern::InvocationId)
+                        .map_err(|_| invalid())
+                }
+            }
+            Some(AgentVerb::ActivatePlugin | AgentVerb::DeactivatePlugin) => {
+                if resource == "*" {
+                    Ok(AgentResourcePattern::Any)
+                } else {
+                    parse_agent_identifier(resource)
+                        .map(AgentPluginName)
+                        .map(AgentResourcePattern::PluginName)
+                        .map_err(|_| invalid())
+                }
+            }
+            None => AgentResourcePattern::parse_resource(resource),
+        }
+    }
 
     fn into_permission(pattern: ClassPermissionPattern<Self>) -> PermissionPattern {
         PermissionPattern::Agent(pattern)

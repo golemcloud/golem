@@ -20,12 +20,13 @@ use desert_rust::BinaryCodec;
 use futures::future::{BoxFuture, Shared};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::agent::AgentMode;
+use golem_common::model::card::InvocationWalletPin;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
-    PayloadId, PersistenceLevel, RawOplogPayload, UpdateDescription,
+    PayloadId, RawOplogPayload, UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
@@ -523,9 +524,6 @@ pub trait Oplog: Any + Debug + Send + Sync {
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
     ) -> Result<OrderedOplogStart, String>;
 
-    /// Switched to a different persistence level. This can be used as an optimization hint in the implementations.
-    async fn switch_persistence_level(&self, mode: PersistenceLevel);
-
     /// Atomically appends a `Start` entry and a second entry (its `End` or
     /// `Cancelled`) that references the `Start`'s `OplogIndex`.
     ///
@@ -689,6 +687,8 @@ pub trait OplogOps: Oplog {
             timestamp: now,
             parent_start_index,
             function_name,
+            invocation_id: None,
+            observational_owner: None,
             request: Some(request_payload),
             durable_function_type: function_type,
         };
@@ -709,7 +709,18 @@ pub trait OplogOps: Oplog {
     async fn add_agent_invocation_started(
         &self,
         invocation: AgentInvocation,
+        wallet_pin: InvocationWalletPin,
     ) -> Result<OplogEntry, String> {
+        self.add_agent_invocation_started_with_index(invocation, wallet_pin)
+            .await
+            .map(|(_, entry)| entry)
+    }
+
+    async fn add_agent_invocation_started_with_index(
+        &self,
+        invocation: AgentInvocation,
+        wallet_pin: InvocationWalletPin,
+    ) -> Result<(OplogIndex, OplogEntry), String> {
         let (idempotency_key, invocation_payload, ctx) = invocation.into_parts();
         let payload = self.upload_payload(&invocation_payload).await?;
         let trace_id = ctx.trace_id.clone();
@@ -722,9 +733,10 @@ pub trait OplogOps: Oplog {
             trace_id,
             trace_states,
             invocation_context,
+            wallet_pin: Some(wallet_pin),
         };
-        self.add(entry.clone()).await;
-        Ok(entry)
+        let index = self.add(entry.clone()).await;
+        Ok((index, entry))
     }
 
     async fn add_agent_invocation_finished(

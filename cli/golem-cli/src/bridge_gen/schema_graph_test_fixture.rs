@@ -10,9 +10,9 @@ use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use golem_common::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, NumericBound,
-    NumericRestrictions, PathDirection, PathKind, PathSpec, QuantitySpec, QuantityValue,
-    QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec,
-    UrlRestrictions, VariantCaseType,
+    NumericRestrictions, PathDirection, PathKind, PathSpec, PermissionCardSpec, QuantitySpec,
+    QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions,
+    UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
 };
 
 pub fn realistic_schema_graph() -> SchemaGraph {
@@ -281,6 +281,10 @@ pub fn exhaustive_schema_graph() -> SchemaGraph {
                 SchemaType::quota_token(QuotaTokenSpec {
                     resource_name: Some(escaped.into()),
                 }),
+            ),
+            field(
+                "permission-card",
+                SchemaType::permission_card(PermissionCardSpec { polymorphic: true }),
             ),
             field("future", SchemaType::future(Some(SchemaType::string()))),
             field("stream", SchemaType::stream(None)),

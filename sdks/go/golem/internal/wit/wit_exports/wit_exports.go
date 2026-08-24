@@ -6,7 +6,7 @@
 //     golem:api@1.5.0
 //     golem:agent@2.0.0
 //     golem:rdbms@1.5.0
-//     golem:durability@1.5.0
+//     golem:durability@1.6.0
 //     golem:quota@1.5.0
 //     golem:secrets@0.1.0
 //     wasi:filesystem@0.3.0
@@ -20,6 +20,7 @@
 //     golem:websocket@1.5.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
+//     golem:permissions@0.1.0
 //     golem:tool@0.1.0
 //     wasi:io@0.2.6
 //     wasi:clocks@0.2.6
@@ -381,6 +382,10 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 
 				variant19 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
+			case 33:
+
+				variant19 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+
 			default:
 				panic("unreachable")
 			}
@@ -498,21 +503,20 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 		}
 		witRuntime.Unpin()
 		result39 := export_golem_agent_guest.Initialize(value, golem_core_types.SchemaValueTree{result20, *(*int32)(unsafe.Add(unsafe.Pointer(arg0), (4 * 4)))}, variant38)
-		var option207 int32
 		var option208 int32
-		var option209 uintptr
-		var option210 uint32
-		var option211 uintptr
-		var option212 uint32
-		var option213 int32
-		var option214 uintptr
-		var option215 uint32
-		var option216 int32
+		var option209 int32
+		var option210 uintptr
+		var option211 uint32
+		var option212 uintptr
+		var option213 uint32
+		var option214 int32
+		var option215 uintptr
+		var option216 uint32
+		var option217 int32
 		switch result39.Tag() {
 		case witTypes.ResultOk:
 
-			option207 = int32(0)
-			option208 = 0
+			option208 = int32(0)
 			option209 = 0
 			option210 = 0
 			option211 = 0
@@ -521,85 +525,86 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 			option214 = 0
 			option215 = 0
 			option216 = 0
+			option217 = 0
 		case witTypes.ResultErr:
 			payload := result39.Err()
-			var variant198 int32
-			var variant199 uintptr
-			var variant200 uint32
-			var variant201 uintptr
-			var variant202 uint32
-			var variant203 int32
-			var variant204 uintptr
-			var variant205 uint32
-			var variant206 int32
+			var variant199 int32
+			var variant200 uintptr
+			var variant201 uint32
+			var variant202 uintptr
+			var variant203 uint32
+			var variant204 int32
+			var variant205 uintptr
+			var variant206 uint32
+			var variant207 int32
 			switch payload.Tag() {
 			case golem_agent_common.AgentErrorInvalidInput:
 				payload := payload.InvalidInput()
 				utf8 := unsafe.Pointer(unsafe.StringData(payload))
 				pinner.Pin(utf8)
 
-				variant198 = int32(0)
-				variant199 = uintptr(utf8)
-				variant200 = uint32(len(payload))
-				variant201 = 0
+				variant199 = int32(0)
+				variant200 = uintptr(utf8)
+				variant201 = uint32(len(payload))
 				variant202 = 0
 				variant203 = 0
 				variant204 = 0
 				variant205 = 0
 				variant206 = 0
+				variant207 = 0
 
 			case golem_agent_common.AgentErrorInvalidMethod:
 				payload := payload.InvalidMethod()
 				utf840 := unsafe.Pointer(unsafe.StringData(payload))
 				pinner.Pin(utf840)
 
-				variant198 = int32(1)
-				variant199 = uintptr(utf840)
-				variant200 = uint32(len(payload))
-				variant201 = 0
+				variant199 = int32(1)
+				variant200 = uintptr(utf840)
+				variant201 = uint32(len(payload))
 				variant202 = 0
 				variant203 = 0
 				variant204 = 0
 				variant205 = 0
 				variant206 = 0
+				variant207 = 0
 
 			case golem_agent_common.AgentErrorInvalidType:
 				payload := payload.InvalidType()
 				utf841 := unsafe.Pointer(unsafe.StringData(payload))
 				pinner.Pin(utf841)
 
-				variant198 = int32(2)
-				variant199 = uintptr(utf841)
-				variant200 = uint32(len(payload))
-				variant201 = 0
+				variant199 = int32(2)
+				variant200 = uintptr(utf841)
+				variant201 = uint32(len(payload))
 				variant202 = 0
 				variant203 = 0
 				variant204 = 0
 				variant205 = 0
 				variant206 = 0
+				variant207 = 0
 
 			case golem_agent_common.AgentErrorInvalidAgentId:
 				payload := payload.InvalidAgentId()
 				utf842 := unsafe.Pointer(unsafe.StringData(payload))
 				pinner.Pin(utf842)
 
-				variant198 = int32(3)
-				variant199 = uintptr(utf842)
-				variant200 = uint32(len(payload))
-				variant201 = 0
+				variant199 = int32(3)
+				variant200 = uintptr(utf842)
+				variant201 = uint32(len(payload))
 				variant202 = 0
 				variant203 = 0
 				variant204 = 0
 				variant205 = 0
 				variant206 = 0
+				variant207 = 0
 
 			case golem_agent_common.AgentErrorCustomError:
 				payload := payload.CustomError()
-				slice159 := ((payload).Graph).TypeNodes
-				length161 := uint32(len(slice159))
-				result160 := witRuntime.Allocate(pinner, uintptr(length161*(56+22*4)), 8)
-				for index, element := range slice159 {
-					base := unsafe.Add(result160, index*(56+22*4))
+				slice160 := ((payload).Graph).TypeNodes
+				length162 := uint32(len(slice160))
+				result161 := witRuntime.Allocate(pinner, uintptr(length162*(56+22*4)), 8)
+				for index, element := range slice160 {
+					base := unsafe.Add(result161, index*(56+22*4))
 
 					switch (element).Body.Tag() {
 					case golem_core_types.SchemaTypeBodyRefType:
@@ -2460,9 +2465,20 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 							panic("unreachable")
 						}
 
+					case golem_core_types.SchemaTypeBodyPermissionCardType:
+						payload := (element).Body.PermissionCardType()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+						var result148 int32
+						if (payload).Polymorphic {
+							result148 = 1
+						} else {
+							result148 = 0
+						}
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result148)
+
 					case golem_core_types.SchemaTypeBodyFutureType:
 						payload := (element).Body.FutureType()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -2479,7 +2495,7 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 
 					case golem_core_types.SchemaTypeBodyStreamType:
 						payload := (element).Body.StreamType()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -2505,42 +2521,42 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Doc.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 8*4))) = int8(int32(1))
-						utf8148 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8148)
+						utf8149 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8149)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8148)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8149)))
 
 					default:
 						panic("unreachable")
 					}
-					slice150 := ((element).Metadata).Aliases
-					length152 := uint32(len(slice150))
-					result151 := witRuntime.Allocate(pinner, uintptr(length152*(2*4)), 4)
-					for index, element := range slice150 {
-						base := unsafe.Add(result151, index*(2*4))
-						utf8149 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8149)
+					slice151 := ((element).Metadata).Aliases
+					length153 := uint32(len(slice151))
+					result152 := witRuntime.Allocate(pinner, uintptr(length153*(2*4)), 4)
+					for index, element := range slice151 {
+						base := unsafe.Add(result152, index*(2*4))
+						utf8150 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8150)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8149)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8150)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length152)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result151)))
-					slice154 := ((element).Metadata).Examples
-					length156 := uint32(len(slice154))
-					result155 := witRuntime.Allocate(pinner, uintptr(length156*(2*4)), 4)
-					for index, element := range slice154 {
-						base := unsafe.Add(result155, index*(2*4))
-						utf8153 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8153)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length153)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result152)))
+					slice155 := ((element).Metadata).Examples
+					length157 := uint32(len(slice155))
+					result156 := witRuntime.Allocate(pinner, uintptr(length157*(2*4)), 4)
+					for index, element := range slice155 {
+						base := unsafe.Add(result156, index*(2*4))
+						utf8154 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8154)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8153)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8154)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length156)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result155)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length157)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result156)))
 
 					switch ((element).Metadata).Deprecated.Tag() {
 					case witTypes.OptionNone:
@@ -2549,10 +2565,10 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Deprecated.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 15*4))) = int8(int32(1))
-						utf8157 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8157)
+						utf8158 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8158)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8157)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8158)))
 
 					default:
 						panic("unreachable")
@@ -2582,10 +2598,10 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 						case golem_core_types.RoleOther:
 							payload := payload.Other()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 19*4))) = int8(int32(3))
-							utf8158 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8158)
+							utf8159 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8159)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8158)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8159)))
 
 						default:
 							panic("unreachable")
@@ -2597,15 +2613,15 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 
 				}
 
-				slice164 := ((payload).Graph).Defs
-				length166 := uint32(len(slice164))
-				result165 := witRuntime.Allocate(pinner, uintptr(length166*(6*4)), 4)
-				for index, element := range slice164 {
-					base := unsafe.Add(result165, index*(6*4))
-					utf8162 := unsafe.Pointer(unsafe.StringData((element).Id))
-					pinner.Pin(utf8162)
+				slice165 := ((payload).Graph).Defs
+				length167 := uint32(len(slice165))
+				result166 := witRuntime.Allocate(pinner, uintptr(length167*(6*4)), 4)
+				for index, element := range slice165 {
+					base := unsafe.Add(result166, index*(6*4))
+					utf8163 := unsafe.Pointer(unsafe.StringData((element).Id))
+					pinner.Pin(utf8163)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Id)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8162)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8163)))
 
 					switch (element).Name.Tag() {
 					case witTypes.OptionNone:
@@ -2614,10 +2630,10 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 					case witTypes.OptionSome:
 						payload := (element).Name.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(1))
-						utf8163 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8163)
+						utf8164 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8164)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8163)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8164)))
 
 					default:
 						panic("unreachable")
@@ -2626,23 +2642,23 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 
 				}
 
-				slice195 := ((payload).Value).ValueNodes
-				length197 := uint32(len(slice195))
-				result196 := witRuntime.Allocate(pinner, uintptr(length197*(16+4*4)), 8)
-				for index, element := range slice195 {
-					base := unsafe.Add(result196, index*(16+4*4))
+				slice196 := ((payload).Value).ValueNodes
+				length198 := uint32(len(slice196))
+				result197 := witRuntime.Allocate(pinner, uintptr(length198*(16+4*4)), 8)
+				for index, element := range slice196 {
+					base := unsafe.Add(result197, index*(16+4*4))
 
 					switch element.Tag() {
 					case golem_core_types.SchemaValueNodeBoolValue:
 						payload := element.BoolValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-						var result167 int32
+						var result168 int32
 						if payload {
-							result167 = 1
+							result168 = 1
 						} else {
-							result167 = 0
+							result168 = 0
 						}
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result167)
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result168)
 
 					case golem_core_types.SchemaValueNodeS8Value:
 						payload := element.S8Value()
@@ -2702,25 +2718,25 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 					case golem_core_types.SchemaValueNodeStringValue:
 						payload := element.StringValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
-						utf8168 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8168)
+						utf8169 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8169)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8168)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8169)))
 
 					case golem_core_types.SchemaValueNodeRecordValue:
 						payload := element.RecordValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(13))
-						slice169 := payload
-						length171 := uint32(len(slice169))
-						result170 := witRuntime.Allocate(pinner, uintptr(length171*4), 4)
-						for index, element := range slice169 {
-							base := unsafe.Add(result170, index*4)
+						slice170 := payload
+						length172 := uint32(len(slice170))
+						result171 := witRuntime.Allocate(pinner, uintptr(length172*4), 4)
+						for index, element := range slice170 {
+							base := unsafe.Add(result171, index*4)
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length171)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result170)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length172)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result171)))
 
 					case golem_core_types.SchemaValueNodeVariantValue:
 						payload := element.VariantValue()
@@ -2748,84 +2764,84 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 					case golem_core_types.SchemaValueNodeFlagsValue:
 						payload := element.FlagsValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-						slice173 := payload
-						length175 := uint32(len(slice173))
-						result174 := witRuntime.Allocate(pinner, uintptr(length175*1), 1)
-						for index, element := range slice173 {
-							base := unsafe.Add(result174, index*1)
-							var result172 int32
+						slice174 := payload
+						length176 := uint32(len(slice174))
+						result175 := witRuntime.Allocate(pinner, uintptr(length176*1), 1)
+						for index, element := range slice174 {
+							base := unsafe.Add(result175, index*1)
+							var result173 int32
 							if element {
-								result172 = 1
+								result173 = 1
 							} else {
-								result172 = 0
+								result173 = 0
 							}
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result172)
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result173)
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length175)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result174)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length176)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result175)))
 
 					case golem_core_types.SchemaValueNodeTupleValue:
 						payload := element.TupleValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
-						slice176 := payload
-						length178 := uint32(len(slice176))
-						result177 := witRuntime.Allocate(pinner, uintptr(length178*4), 4)
-						for index, element := range slice176 {
-							base := unsafe.Add(result177, index*4)
+						slice177 := payload
+						length179 := uint32(len(slice177))
+						result178 := witRuntime.Allocate(pinner, uintptr(length179*4), 4)
+						for index, element := range slice177 {
+							base := unsafe.Add(result178, index*4)
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length178)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result177)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length179)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result178)))
 
 					case golem_core_types.SchemaValueNodeListValue:
 						payload := element.ListValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
-						slice179 := payload
-						length181 := uint32(len(slice179))
-						result180 := witRuntime.Allocate(pinner, uintptr(length181*4), 4)
-						for index, element := range slice179 {
-							base := unsafe.Add(result180, index*4)
+						slice180 := payload
+						length182 := uint32(len(slice180))
+						result181 := witRuntime.Allocate(pinner, uintptr(length182*4), 4)
+						for index, element := range slice180 {
+							base := unsafe.Add(result181, index*4)
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length181)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result180)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length182)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result181)))
 
 					case golem_core_types.SchemaValueNodeFixedListValue:
 						payload := element.FixedListValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(19))
-						slice182 := payload
-						length184 := uint32(len(slice182))
-						result183 := witRuntime.Allocate(pinner, uintptr(length184*4), 4)
-						for index, element := range slice182 {
-							base := unsafe.Add(result183, index*4)
+						slice183 := payload
+						length185 := uint32(len(slice183))
+						result184 := witRuntime.Allocate(pinner, uintptr(length185*4), 4)
+						for index, element := range slice183 {
+							base := unsafe.Add(result184, index*4)
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length184)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result183)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length185)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result184)))
 
 					case golem_core_types.SchemaValueNodeMapValue:
 						payload := element.MapValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(20))
-						slice185 := payload
-						length187 := uint32(len(slice185))
-						result186 := witRuntime.Allocate(pinner, uintptr(length187*8), 4)
-						for index, element := range slice185 {
-							base := unsafe.Add(result186, index*8)
+						slice186 := payload
+						length188 := uint32(len(slice186))
+						result187 := witRuntime.Allocate(pinner, uintptr(length188*8), 4)
+						for index, element := range slice186 {
+							base := unsafe.Add(result187, index*8)
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = (element).Key
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 4)) = (element).Value
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length187)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result186)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length188)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result187)))
 
 					case golem_core_types.SchemaValueNodeOptionValue:
 						payload := element.OptionValue()
@@ -2890,10 +2906,10 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 					case golem_core_types.SchemaValueNodeTextValue:
 						payload := element.TextValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(23))
-						utf8188 := unsafe.Pointer(unsafe.StringData((payload).Text))
-						pinner.Pin(utf8188)
+						utf8189 := unsafe.Pointer(unsafe.StringData((payload).Text))
+						pinner.Pin(utf8189)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Text)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8188)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8189)))
 
 						switch (payload).Language.Tag() {
 						case witTypes.OptionNone:
@@ -2902,10 +2918,10 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 						case witTypes.OptionSome:
 							payload := (payload).Language.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-							utf8189 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8189)
+							utf8190 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8190)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8189)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8190)))
 
 						default:
 							panic("unreachable")
@@ -2926,10 +2942,10 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 						case witTypes.OptionSome:
 							payload := (payload).MimeType.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-							utf8190 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8190)
+							utf8191 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8191)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8190)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8191)))
 
 						default:
 							panic("unreachable")
@@ -2938,18 +2954,18 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 					case golem_core_types.SchemaValueNodePathValue:
 						payload := element.PathValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(25))
-						utf8191 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8191)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8191)))
-
-					case golem_core_types.SchemaValueNodeUrlValue:
-						payload := element.UrlValue()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(26))
 						utf8192 := unsafe.Pointer(unsafe.StringData(payload))
 						pinner.Pin(utf8192)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8192)))
+
+					case golem_core_types.SchemaValueNodeUrlValue:
+						payload := element.UrlValue()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(26))
+						utf8193 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8193)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8193)))
 
 					case golem_core_types.SchemaValueNodeDatetimeValue:
 						payload := element.DatetimeValue()
@@ -2967,18 +2983,18 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 						*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
-						utf8193 := unsafe.Pointer(unsafe.StringData((payload).Unit))
-						pinner.Pin(utf8193)
+						utf8194 := unsafe.Pointer(unsafe.StringData((payload).Unit))
+						pinner.Pin(utf8194)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = uint32(uint32(len((payload).Unit)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4))) = uint32(uintptr(uintptr(utf8193)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4))) = uint32(uintptr(uintptr(utf8194)))
 
 					case golem_core_types.SchemaValueNodeUnionValue:
 						payload := element.UnionValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-						utf8194 := unsafe.Pointer(unsafe.StringData((payload).Tag))
-						pinner.Pin(utf8194)
+						utf8195 := unsafe.Pointer(unsafe.StringData((payload).Tag))
+						pinner.Pin(utf8195)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8194)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8195)))
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = (payload).Body
 
 					case golem_core_types.SchemaValueNodeSecretValue:
@@ -2991,28 +3007,32 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
+					case golem_core_types.SchemaValueNodePermissionCardHandle:
+						payload := element.PermissionCardHandle()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
+
 					default:
 						panic("unreachable")
 					}
 
 				}
 
-				variant198 = int32(4)
-				variant199 = uintptr(result160)
-				variant200 = length161
-				variant201 = uintptr(result165)
-				variant202 = length166
-				variant203 = ((payload).Graph).Root
-				variant204 = uintptr(result196)
-				variant205 = length197
-				variant206 = ((payload).Value).Root
+				variant199 = int32(4)
+				variant200 = uintptr(result161)
+				variant201 = length162
+				variant202 = uintptr(result166)
+				variant203 = length167
+				variant204 = ((payload).Graph).Root
+				variant205 = uintptr(result197)
+				variant206 = length198
+				variant207 = ((payload).Value).Root
 
 			default:
 				panic("unreachable")
 			}
 
-			option207 = int32(1)
-			option208 = variant198
+			option208 = int32(1)
 			option209 = variant199
 			option210 = variant200
 			option211 = variant201
@@ -3021,10 +3041,11 @@ func wasm_export_golem_agent_guest_initialize(arg0 uintptr) int32 {
 			option214 = variant204
 			option215 = variant205
 			option216 = variant206
+			option217 = variant207
 		default:
 			panic("unreachable")
 		}
-		wasm_export_task_return_golem_agent_guest_initialize(option207, option208, option209, option210, option211, option212, option213, option214, option215, option216)
+		wasm_export_task_return_golem_agent_guest_initialize(option208, option209, option210, option211, option212, option213, option214, option215, option216, option217)
 
 	}))
 }
@@ -3304,6 +3325,10 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 
 				variant19 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
+			case 33:
+
+				variant19 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+
 			default:
 				panic("unreachable")
 			}
@@ -3421,16 +3446,16 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 		}
 		witRuntime.Unpin()
 		result39 := export_golem_agent_guest.Invoke(value, golem_core_types.SchemaValueTree{result20, *(*int32)(unsafe.Add(unsafe.Pointer(arg0), (4 * 4)))}, variant38)
-		var option243 int32
 		var option244 int32
-		var option245 uintptr
-		var option246 uint32
-		var option247 uintptr
-		var option248 uint32
-		var option249 int32
-		var option250 uintptr
-		var option251 uint32
-		var option252 int32
+		var option245 int32
+		var option246 uintptr
+		var option247 uint32
+		var option248 uintptr
+		var option249 uint32
+		var option250 int32
+		var option251 uintptr
+		var option252 uint32
+		var option253 int32
 		switch result39.Tag() {
 		case witTypes.ResultOk:
 			payload := result39.Ok()
@@ -3812,6 +3837,11 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
+					case golem_core_types.SchemaValueNodePermissionCardHandle:
+						payload := element.PermissionCardHandle()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
+
 					default:
 						panic("unreachable")
 					}
@@ -3826,95 +3856,95 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 				panic("unreachable")
 			}
 
-			option243 = int32(0)
-			option244 = option68
-			option245 = option69
-			option246 = option70
-			option247 = uintptr(option71)
-			option248 = 0
+			option244 = int32(0)
+			option245 = option68
+			option246 = option69
+			option247 = option70
+			option248 = uintptr(option71)
 			option249 = 0
 			option250 = 0
 			option251 = 0
 			option252 = 0
+			option253 = 0
 		case witTypes.ResultErr:
 			payload := result39.Err()
-			var variant234 int32
-			var variant235 uintptr
-			var variant236 uint32
-			var variant237 uintptr
-			var variant238 uint32
-			var variant239 int32
-			var variant240 uintptr
-			var variant241 uint32
-			var variant242 int32
+			var variant235 int32
+			var variant236 uintptr
+			var variant237 uint32
+			var variant238 uintptr
+			var variant239 uint32
+			var variant240 int32
+			var variant241 uintptr
+			var variant242 uint32
+			var variant243 int32
 			switch payload.Tag() {
 			case golem_agent_common.AgentErrorInvalidInput:
 				payload := payload.InvalidInput()
 				utf872 := unsafe.Pointer(unsafe.StringData(payload))
 				pinner.Pin(utf872)
 
-				variant234 = int32(0)
-				variant235 = uintptr(utf872)
-				variant236 = uint32(len(payload))
-				variant237 = 0
+				variant235 = int32(0)
+				variant236 = uintptr(utf872)
+				variant237 = uint32(len(payload))
 				variant238 = 0
 				variant239 = 0
 				variant240 = 0
 				variant241 = 0
 				variant242 = 0
+				variant243 = 0
 
 			case golem_agent_common.AgentErrorInvalidMethod:
 				payload := payload.InvalidMethod()
 				utf873 := unsafe.Pointer(unsafe.StringData(payload))
 				pinner.Pin(utf873)
 
-				variant234 = int32(1)
-				variant235 = uintptr(utf873)
-				variant236 = uint32(len(payload))
-				variant237 = 0
+				variant235 = int32(1)
+				variant236 = uintptr(utf873)
+				variant237 = uint32(len(payload))
 				variant238 = 0
 				variant239 = 0
 				variant240 = 0
 				variant241 = 0
 				variant242 = 0
+				variant243 = 0
 
 			case golem_agent_common.AgentErrorInvalidType:
 				payload := payload.InvalidType()
 				utf874 := unsafe.Pointer(unsafe.StringData(payload))
 				pinner.Pin(utf874)
 
-				variant234 = int32(2)
-				variant235 = uintptr(utf874)
-				variant236 = uint32(len(payload))
-				variant237 = 0
+				variant235 = int32(2)
+				variant236 = uintptr(utf874)
+				variant237 = uint32(len(payload))
 				variant238 = 0
 				variant239 = 0
 				variant240 = 0
 				variant241 = 0
 				variant242 = 0
+				variant243 = 0
 
 			case golem_agent_common.AgentErrorInvalidAgentId:
 				payload := payload.InvalidAgentId()
 				utf875 := unsafe.Pointer(unsafe.StringData(payload))
 				pinner.Pin(utf875)
 
-				variant234 = int32(3)
-				variant235 = uintptr(utf875)
-				variant236 = uint32(len(payload))
-				variant237 = 0
+				variant235 = int32(3)
+				variant236 = uintptr(utf875)
+				variant237 = uint32(len(payload))
 				variant238 = 0
 				variant239 = 0
 				variant240 = 0
 				variant241 = 0
 				variant242 = 0
+				variant243 = 0
 
 			case golem_agent_common.AgentErrorCustomError:
 				payload := payload.CustomError()
-				slice194 := ((payload).Graph).TypeNodes
-				length196 := uint32(len(slice194))
-				result195 := witRuntime.Allocate(pinner, uintptr(length196*(56+22*4)), 8)
-				for index, element := range slice194 {
-					base := unsafe.Add(result195, index*(56+22*4))
+				slice195 := ((payload).Graph).TypeNodes
+				length197 := uint32(len(slice195))
+				result196 := witRuntime.Allocate(pinner, uintptr(length197*(56+22*4)), 8)
+				for index, element := range slice195 {
+					base := unsafe.Add(result196, index*(56+22*4))
 
 					switch (element).Body.Tag() {
 					case golem_core_types.SchemaTypeBodyRefType:
@@ -5775,9 +5805,20 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 							panic("unreachable")
 						}
 
+					case golem_core_types.SchemaTypeBodyPermissionCardType:
+						payload := (element).Body.PermissionCardType()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+						var result183 int32
+						if (payload).Polymorphic {
+							result183 = 1
+						} else {
+							result183 = 0
+						}
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result183)
+
 					case golem_core_types.SchemaTypeBodyFutureType:
 						payload := (element).Body.FutureType()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -5794,7 +5835,7 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 
 					case golem_core_types.SchemaTypeBodyStreamType:
 						payload := (element).Body.StreamType()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -5820,42 +5861,42 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Doc.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 8*4))) = int8(int32(1))
-						utf8183 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8183)
+						utf8184 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8184)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8183)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8184)))
 
 					default:
 						panic("unreachable")
 					}
-					slice185 := ((element).Metadata).Aliases
-					length187 := uint32(len(slice185))
-					result186 := witRuntime.Allocate(pinner, uintptr(length187*(2*4)), 4)
-					for index, element := range slice185 {
-						base := unsafe.Add(result186, index*(2*4))
-						utf8184 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8184)
+					slice186 := ((element).Metadata).Aliases
+					length188 := uint32(len(slice186))
+					result187 := witRuntime.Allocate(pinner, uintptr(length188*(2*4)), 4)
+					for index, element := range slice186 {
+						base := unsafe.Add(result187, index*(2*4))
+						utf8185 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8185)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8184)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8185)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length187)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result186)))
-					slice189 := ((element).Metadata).Examples
-					length191 := uint32(len(slice189))
-					result190 := witRuntime.Allocate(pinner, uintptr(length191*(2*4)), 4)
-					for index, element := range slice189 {
-						base := unsafe.Add(result190, index*(2*4))
-						utf8188 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8188)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length188)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result187)))
+					slice190 := ((element).Metadata).Examples
+					length192 := uint32(len(slice190))
+					result191 := witRuntime.Allocate(pinner, uintptr(length192*(2*4)), 4)
+					for index, element := range slice190 {
+						base := unsafe.Add(result191, index*(2*4))
+						utf8189 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8189)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8188)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8189)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length191)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result190)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length192)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result191)))
 
 					switch ((element).Metadata).Deprecated.Tag() {
 					case witTypes.OptionNone:
@@ -5864,10 +5905,10 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Deprecated.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 15*4))) = int8(int32(1))
-						utf8192 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8192)
+						utf8193 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8193)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8192)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8193)))
 
 					default:
 						panic("unreachable")
@@ -5897,10 +5938,10 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 						case golem_core_types.RoleOther:
 							payload := payload.Other()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 19*4))) = int8(int32(3))
-							utf8193 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8193)
+							utf8194 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8194)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8193)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8194)))
 
 						default:
 							panic("unreachable")
@@ -5912,15 +5953,15 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 
 				}
 
-				slice199 := ((payload).Graph).Defs
-				length201 := uint32(len(slice199))
-				result200 := witRuntime.Allocate(pinner, uintptr(length201*(6*4)), 4)
-				for index, element := range slice199 {
-					base := unsafe.Add(result200, index*(6*4))
-					utf8197 := unsafe.Pointer(unsafe.StringData((element).Id))
-					pinner.Pin(utf8197)
+				slice200 := ((payload).Graph).Defs
+				length202 := uint32(len(slice200))
+				result201 := witRuntime.Allocate(pinner, uintptr(length202*(6*4)), 4)
+				for index, element := range slice200 {
+					base := unsafe.Add(result201, index*(6*4))
+					utf8198 := unsafe.Pointer(unsafe.StringData((element).Id))
+					pinner.Pin(utf8198)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Id)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8197)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8198)))
 
 					switch (element).Name.Tag() {
 					case witTypes.OptionNone:
@@ -5929,10 +5970,10 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 					case witTypes.OptionSome:
 						payload := (element).Name.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(1))
-						utf8198 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8198)
+						utf8199 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8199)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8198)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8199)))
 
 					default:
 						panic("unreachable")
@@ -5941,23 +5982,23 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 
 				}
 
-				slice231 := ((payload).Value).ValueNodes
-				length233 := uint32(len(slice231))
-				result232 := witRuntime.Allocate(pinner, uintptr(length233*(16+4*4)), 8)
-				for index, element := range slice231 {
-					base := unsafe.Add(result232, index*(16+4*4))
+				slice232 := ((payload).Value).ValueNodes
+				length234 := uint32(len(slice232))
+				result233 := witRuntime.Allocate(pinner, uintptr(length234*(16+4*4)), 8)
+				for index, element := range slice232 {
+					base := unsafe.Add(result233, index*(16+4*4))
 
 					switch element.Tag() {
 					case golem_core_types.SchemaValueNodeBoolValue:
 						payload := element.BoolValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-						var result202 int32
+						var result203 int32
 						if payload {
-							result202 = 1
+							result203 = 1
 						} else {
-							result202 = 0
+							result203 = 0
 						}
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result202)
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result203)
 
 					case golem_core_types.SchemaValueNodeS8Value:
 						payload := element.S8Value()
@@ -6017,25 +6058,25 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 					case golem_core_types.SchemaValueNodeStringValue:
 						payload := element.StringValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
-						utf8203 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8203)
+						utf8204 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8204)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8203)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8204)))
 
 					case golem_core_types.SchemaValueNodeRecordValue:
 						payload := element.RecordValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(13))
-						slice204 := payload
-						length206 := uint32(len(slice204))
-						result205 := witRuntime.Allocate(pinner, uintptr(length206*4), 4)
-						for index, element := range slice204 {
-							base := unsafe.Add(result205, index*4)
+						slice205 := payload
+						length207 := uint32(len(slice205))
+						result206 := witRuntime.Allocate(pinner, uintptr(length207*4), 4)
+						for index, element := range slice205 {
+							base := unsafe.Add(result206, index*4)
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length206)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result205)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length207)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result206)))
 
 					case golem_core_types.SchemaValueNodeVariantValue:
 						payload := element.VariantValue()
@@ -6063,84 +6104,84 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 					case golem_core_types.SchemaValueNodeFlagsValue:
 						payload := element.FlagsValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-						slice208 := payload
-						length210 := uint32(len(slice208))
-						result209 := witRuntime.Allocate(pinner, uintptr(length210*1), 1)
-						for index, element := range slice208 {
-							base := unsafe.Add(result209, index*1)
-							var result207 int32
+						slice209 := payload
+						length211 := uint32(len(slice209))
+						result210 := witRuntime.Allocate(pinner, uintptr(length211*1), 1)
+						for index, element := range slice209 {
+							base := unsafe.Add(result210, index*1)
+							var result208 int32
 							if element {
-								result207 = 1
+								result208 = 1
 							} else {
-								result207 = 0
+								result208 = 0
 							}
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result207)
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result208)
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length210)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result209)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length211)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result210)))
 
 					case golem_core_types.SchemaValueNodeTupleValue:
 						payload := element.TupleValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
-						slice211 := payload
-						length213 := uint32(len(slice211))
-						result212 := witRuntime.Allocate(pinner, uintptr(length213*4), 4)
-						for index, element := range slice211 {
-							base := unsafe.Add(result212, index*4)
+						slice212 := payload
+						length214 := uint32(len(slice212))
+						result213 := witRuntime.Allocate(pinner, uintptr(length214*4), 4)
+						for index, element := range slice212 {
+							base := unsafe.Add(result213, index*4)
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length213)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result212)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length214)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result213)))
 
 					case golem_core_types.SchemaValueNodeListValue:
 						payload := element.ListValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
-						slice214 := payload
-						length216 := uint32(len(slice214))
-						result215 := witRuntime.Allocate(pinner, uintptr(length216*4), 4)
-						for index, element := range slice214 {
-							base := unsafe.Add(result215, index*4)
+						slice215 := payload
+						length217 := uint32(len(slice215))
+						result216 := witRuntime.Allocate(pinner, uintptr(length217*4), 4)
+						for index, element := range slice215 {
+							base := unsafe.Add(result216, index*4)
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length216)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result215)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length217)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result216)))
 
 					case golem_core_types.SchemaValueNodeFixedListValue:
 						payload := element.FixedListValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(19))
-						slice217 := payload
-						length219 := uint32(len(slice217))
-						result218 := witRuntime.Allocate(pinner, uintptr(length219*4), 4)
-						for index, element := range slice217 {
-							base := unsafe.Add(result218, index*4)
+						slice218 := payload
+						length220 := uint32(len(slice218))
+						result219 := witRuntime.Allocate(pinner, uintptr(length220*4), 4)
+						for index, element := range slice218 {
+							base := unsafe.Add(result219, index*4)
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length219)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result218)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length220)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result219)))
 
 					case golem_core_types.SchemaValueNodeMapValue:
 						payload := element.MapValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(20))
-						slice220 := payload
-						length222 := uint32(len(slice220))
-						result221 := witRuntime.Allocate(pinner, uintptr(length222*8), 4)
-						for index, element := range slice220 {
-							base := unsafe.Add(result221, index*8)
+						slice221 := payload
+						length223 := uint32(len(slice221))
+						result222 := witRuntime.Allocate(pinner, uintptr(length223*8), 4)
+						for index, element := range slice221 {
+							base := unsafe.Add(result222, index*8)
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = (element).Key
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 4)) = (element).Value
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length222)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result221)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length223)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result222)))
 
 					case golem_core_types.SchemaValueNodeOptionValue:
 						payload := element.OptionValue()
@@ -6205,10 +6246,10 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 					case golem_core_types.SchemaValueNodeTextValue:
 						payload := element.TextValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(23))
-						utf8223 := unsafe.Pointer(unsafe.StringData((payload).Text))
-						pinner.Pin(utf8223)
+						utf8224 := unsafe.Pointer(unsafe.StringData((payload).Text))
+						pinner.Pin(utf8224)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Text)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8223)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8224)))
 
 						switch (payload).Language.Tag() {
 						case witTypes.OptionNone:
@@ -6217,10 +6258,10 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 						case witTypes.OptionSome:
 							payload := (payload).Language.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-							utf8224 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8224)
+							utf8225 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8225)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8224)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8225)))
 
 						default:
 							panic("unreachable")
@@ -6229,10 +6270,10 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 					case golem_core_types.SchemaValueNodeBinaryValue:
 						payload := element.BinaryValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(24))
-						data225 := unsafe.Pointer(unsafe.SliceData((payload).Bytes))
-						pinner.Pin(data225)
+						data226 := unsafe.Pointer(unsafe.SliceData((payload).Bytes))
+						pinner.Pin(data226)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Bytes)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data225)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(data226)))
 
 						switch (payload).MimeType.Tag() {
 						case witTypes.OptionNone:
@@ -6241,10 +6282,10 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 						case witTypes.OptionSome:
 							payload := (payload).MimeType.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-							utf8226 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8226)
+							utf8227 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8227)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8226)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8227)))
 
 						default:
 							panic("unreachable")
@@ -6253,18 +6294,18 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 					case golem_core_types.SchemaValueNodePathValue:
 						payload := element.PathValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(25))
-						utf8227 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8227)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8227)))
-
-					case golem_core_types.SchemaValueNodeUrlValue:
-						payload := element.UrlValue()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(26))
 						utf8228 := unsafe.Pointer(unsafe.StringData(payload))
 						pinner.Pin(utf8228)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8228)))
+
+					case golem_core_types.SchemaValueNodeUrlValue:
+						payload := element.UrlValue()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(26))
+						utf8229 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8229)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8229)))
 
 					case golem_core_types.SchemaValueNodeDatetimeValue:
 						payload := element.DatetimeValue()
@@ -6282,18 +6323,18 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 						*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
-						utf8229 := unsafe.Pointer(unsafe.StringData((payload).Unit))
-						pinner.Pin(utf8229)
+						utf8230 := unsafe.Pointer(unsafe.StringData((payload).Unit))
+						pinner.Pin(utf8230)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = uint32(uint32(len((payload).Unit)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4))) = uint32(uintptr(uintptr(utf8229)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4))) = uint32(uintptr(uintptr(utf8230)))
 
 					case golem_core_types.SchemaValueNodeUnionValue:
 						payload := element.UnionValue()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-						utf8230 := unsafe.Pointer(unsafe.StringData((payload).Tag))
-						pinner.Pin(utf8230)
+						utf8231 := unsafe.Pointer(unsafe.StringData((payload).Tag))
+						pinner.Pin(utf8231)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8230)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8231)))
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = (payload).Body
 
 					case golem_core_types.SchemaValueNodeSecretValue:
@@ -6306,28 +6347,32 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
+					case golem_core_types.SchemaValueNodePermissionCardHandle:
+						payload := element.PermissionCardHandle()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
+
 					default:
 						panic("unreachable")
 					}
 
 				}
 
-				variant234 = int32(4)
-				variant235 = uintptr(result195)
-				variant236 = length196
-				variant237 = uintptr(result200)
-				variant238 = length201
-				variant239 = ((payload).Graph).Root
-				variant240 = uintptr(result232)
-				variant241 = length233
-				variant242 = ((payload).Value).Root
+				variant235 = int32(4)
+				variant236 = uintptr(result196)
+				variant237 = length197
+				variant238 = uintptr(result201)
+				variant239 = length202
+				variant240 = ((payload).Graph).Root
+				variant241 = uintptr(result233)
+				variant242 = length234
+				variant243 = ((payload).Value).Root
 
 			default:
 				panic("unreachable")
 			}
 
-			option243 = int32(1)
-			option244 = variant234
+			option244 = int32(1)
 			option245 = variant235
 			option246 = variant236
 			option247 = variant237
@@ -6336,10 +6381,11 @@ func wasm_export_golem_agent_guest_invoke(arg0 uintptr) int32 {
 			option250 = variant240
 			option251 = variant241
 			option252 = variant242
+			option253 = variant243
 		default:
 			panic("unreachable")
 		}
-		wasm_export_task_return_golem_agent_guest_invoke(option243, option244, option245, option246, option247, option248, option249, option250, option251, option252)
+		wasm_export_task_return_golem_agent_guest_invoke(option244, option245, option246, option247, option248, option249, option250, option251, option252, option253)
 
 	}))
 }
@@ -6369,11 +6415,11 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 	pinner.Pin(utf81)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (5 * 4))) = uint32(uint32(len((result).SourceLanguage)))
 	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (4 * 4))) = uint32(uintptr(uintptr(utf81)))
-	slice118 := ((result).Schema).TypeNodes
-	length120 := uint32(len(slice118))
-	result119 := witRuntime.Allocate(pinner, uintptr(length120*(56+22*4)), 8)
-	for index, element := range slice118 {
-		base := unsafe.Add(result119, index*(56+22*4))
+	slice119 := ((result).Schema).TypeNodes
+	length121 := uint32(len(slice119))
+	result120 := witRuntime.Allocate(pinner, uintptr(length121*(56+22*4)), 8)
+	for index, element := range slice119 {
+		base := unsafe.Add(result120, index*(56+22*4))
 
 		switch (element).Body.Tag() {
 		case golem_core_types.SchemaTypeBodyRefType:
@@ -8234,9 +8280,20 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				panic("unreachable")
 			}
 
+		case golem_core_types.SchemaTypeBodyPermissionCardType:
+			payload := (element).Body.PermissionCardType()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			var result107 int32
+			if (payload).Polymorphic {
+				result107 = 1
+			} else {
+				result107 = 0
+			}
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result107)
+
 		case golem_core_types.SchemaTypeBodyFutureType:
 			payload := (element).Body.FutureType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -8253,7 +8310,7 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 		case golem_core_types.SchemaTypeBodyStreamType:
 			payload := (element).Body.StreamType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -8279,42 +8336,42 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 		case witTypes.OptionSome:
 			payload := ((element).Metadata).Doc.Some()
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 8*4))) = int8(int32(1))
-			utf8107 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf8107)
+			utf8108 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf8108)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8107)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8108)))
 
 		default:
 			panic("unreachable")
 		}
-		slice109 := ((element).Metadata).Aliases
-		length111 := uint32(len(slice109))
-		result110 := witRuntime.Allocate(pinner, uintptr(length111*(2*4)), 4)
-		for index, element := range slice109 {
-			base := unsafe.Add(result110, index*(2*4))
-			utf8108 := unsafe.Pointer(unsafe.StringData(element))
-			pinner.Pin(utf8108)
+		slice110 := ((element).Metadata).Aliases
+		length112 := uint32(len(slice110))
+		result111 := witRuntime.Allocate(pinner, uintptr(length112*(2*4)), 4)
+		for index, element := range slice110 {
+			base := unsafe.Add(result111, index*(2*4))
+			utf8109 := unsafe.Pointer(unsafe.StringData(element))
+			pinner.Pin(utf8109)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8108)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8109)))
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length111)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result110)))
-		slice113 := ((element).Metadata).Examples
-		length115 := uint32(len(slice113))
-		result114 := witRuntime.Allocate(pinner, uintptr(length115*(2*4)), 4)
-		for index, element := range slice113 {
-			base := unsafe.Add(result114, index*(2*4))
-			utf8112 := unsafe.Pointer(unsafe.StringData(element))
-			pinner.Pin(utf8112)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length112)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result111)))
+		slice114 := ((element).Metadata).Examples
+		length116 := uint32(len(slice114))
+		result115 := witRuntime.Allocate(pinner, uintptr(length116*(2*4)), 4)
+		for index, element := range slice114 {
+			base := unsafe.Add(result115, index*(2*4))
+			utf8113 := unsafe.Pointer(unsafe.StringData(element))
+			pinner.Pin(utf8113)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8112)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8113)))
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length115)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result114)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length116)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result115)))
 
 		switch ((element).Metadata).Deprecated.Tag() {
 		case witTypes.OptionNone:
@@ -8323,10 +8380,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 		case witTypes.OptionSome:
 			payload := ((element).Metadata).Deprecated.Some()
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 15*4))) = int8(int32(1))
-			utf8116 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf8116)
+			utf8117 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf8117)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8116)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8117)))
 
 		default:
 			panic("unreachable")
@@ -8356,10 +8413,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case golem_core_types.RoleOther:
 				payload := payload.Other()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 19*4))) = int8(int32(3))
-				utf8117 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8117)
+				utf8118 := unsafe.Pointer(unsafe.StringData(payload))
+				pinner.Pin(utf8118)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8117)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8118)))
 
 			default:
 				panic("unreachable")
@@ -8371,17 +8428,17 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 	}
 
-	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (7 * 4))) = uint32(length120)
-	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (6 * 4))) = uint32(uintptr(uintptr(result119)))
-	slice123 := ((result).Schema).Defs
-	length125 := uint32(len(slice123))
-	result124 := witRuntime.Allocate(pinner, uintptr(length125*(6*4)), 4)
-	for index, element := range slice123 {
-		base := unsafe.Add(result124, index*(6*4))
-		utf8121 := unsafe.Pointer(unsafe.StringData((element).Id))
-		pinner.Pin(utf8121)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (7 * 4))) = uint32(length121)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (6 * 4))) = uint32(uintptr(uintptr(result120)))
+	slice124 := ((result).Schema).Defs
+	length126 := uint32(len(slice124))
+	result125 := witRuntime.Allocate(pinner, uintptr(length126*(6*4)), 4)
+	for index, element := range slice124 {
+		base := unsafe.Add(result125, index*(6*4))
+		utf8122 := unsafe.Pointer(unsafe.StringData((element).Id))
+		pinner.Pin(utf8122)
 		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Id)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8121)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8122)))
 
 		switch (element).Name.Tag() {
 		case witTypes.OptionNone:
@@ -8390,10 +8447,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 		case witTypes.OptionSome:
 			payload := (element).Name.Some()
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(1))
-			utf8122 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf8122)
+			utf8123 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf8123)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8122)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8123)))
 
 		default:
 			panic("unreachable")
@@ -8402,8 +8459,8 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 	}
 
-	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (9 * 4))) = uint32(length125)
-	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (8 * 4))) = uint32(uintptr(uintptr(result124)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (9 * 4))) = uint32(length126)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (8 * 4))) = uint32(uintptr(uintptr(result125)))
 	*(*int32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (10 * 4))) = ((result).Schema).Root
 
 	switch ((result).Constructor).Name.Tag() {
@@ -8413,18 +8470,18 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 	case witTypes.OptionSome:
 		payload := ((result).Constructor).Name.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), (11 * 4))) = int8(int32(1))
-		utf8126 := unsafe.Pointer(unsafe.StringData(payload))
-		pinner.Pin(utf8126)
+		utf8127 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8127)
 		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (13 * 4))) = uint32(uint32(len(payload)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (12 * 4))) = uint32(uintptr(uintptr(utf8126)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (12 * 4))) = uint32(uintptr(uintptr(utf8127)))
 
 	default:
 		panic("unreachable")
 	}
-	utf8127 := unsafe.Pointer(unsafe.StringData(((result).Constructor).Description))
-	pinner.Pin(utf8127)
+	utf8128 := unsafe.Pointer(unsafe.StringData(((result).Constructor).Description))
+	pinner.Pin(utf8128)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (15 * 4))) = uint32(uint32(len(((result).Constructor).Description)))
-	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (14 * 4))) = uint32(uintptr(uintptr(utf8127)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (14 * 4))) = uint32(uintptr(uintptr(utf8128)))
 
 	switch ((result).Constructor).PromptHint.Tag() {
 	case witTypes.OptionNone:
@@ -8433,10 +8490,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 	case witTypes.OptionSome:
 		payload := ((result).Constructor).PromptHint.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), (16 * 4))) = int8(int32(1))
-		utf8128 := unsafe.Pointer(unsafe.StringData(payload))
-		pinner.Pin(utf8128)
+		utf8129 := unsafe.Pointer(unsafe.StringData(payload))
+		pinner.Pin(utf8129)
 		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (18 * 4))) = uint32(uint32(len(payload)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (17 * 4))) = uint32(uintptr(uintptr(utf8128)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (17 * 4))) = uint32(uintptr(uintptr(utf8129)))
 
 	default:
 		panic("unreachable")
@@ -8446,15 +8503,15 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 	case golem_agent_common.InputSchemaParameters:
 		payload := ((result).Constructor).InputSchema.Parameters()
 		*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), (19 * 4))) = int8(int32(0))
-		slice141 := payload
-		length143 := uint32(len(slice141))
-		result142 := witRuntime.Allocate(pinner, uintptr(length143*(8+16*4)), 4)
-		for index, element := range slice141 {
-			base := unsafe.Add(result142, index*(8+16*4))
-			utf8129 := unsafe.Pointer(unsafe.StringData((element).Name))
-			pinner.Pin(utf8129)
+		slice142 := payload
+		length144 := uint32(len(slice142))
+		result143 := witRuntime.Allocate(pinner, uintptr(length144*(8+16*4)), 4)
+		for index, element := range slice142 {
+			base := unsafe.Add(result143, index*(8+16*4))
+			utf8130 := unsafe.Pointer(unsafe.StringData((element).Name))
+			pinner.Pin(utf8130)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8129)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8130)))
 
 			switch (element).Source.Tag() {
 			case golem_agent_common.FieldSourceUserSupplied:
@@ -8478,42 +8535,42 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case witTypes.OptionSome:
 				payload := ((element).Metadata).Doc.Some()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-				utf8130 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8130)
+				utf8131 := unsafe.Pointer(unsafe.StringData(payload))
+				pinner.Pin(utf8131)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8130)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8131)))
 
 			default:
 				panic("unreachable")
 			}
-			slice132 := ((element).Metadata).Aliases
-			length134 := uint32(len(slice132))
-			result133 := witRuntime.Allocate(pinner, uintptr(length134*(2*4)), 4)
-			for index, element := range slice132 {
-				base := unsafe.Add(result133, index*(2*4))
-				utf8131 := unsafe.Pointer(unsafe.StringData(element))
-				pinner.Pin(utf8131)
+			slice133 := ((element).Metadata).Aliases
+			length135 := uint32(len(slice133))
+			result134 := witRuntime.Allocate(pinner, uintptr(length135*(2*4)), 4)
+			for index, element := range slice133 {
+				base := unsafe.Add(result134, index*(2*4))
+				utf8132 := unsafe.Pointer(unsafe.StringData(element))
+				pinner.Pin(utf8132)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8131)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8132)))
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length134)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result133)))
-			slice136 := ((element).Metadata).Examples
-			length138 := uint32(len(slice136))
-			result137 := witRuntime.Allocate(pinner, uintptr(length138*(2*4)), 4)
-			for index, element := range slice136 {
-				base := unsafe.Add(result137, index*(2*4))
-				utf8135 := unsafe.Pointer(unsafe.StringData(element))
-				pinner.Pin(utf8135)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length135)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result134)))
+			slice137 := ((element).Metadata).Examples
+			length139 := uint32(len(slice137))
+			result138 := witRuntime.Allocate(pinner, uintptr(length139*(2*4)), 4)
+			for index, element := range slice137 {
+				base := unsafe.Add(result138, index*(2*4))
+				utf8136 := unsafe.Pointer(unsafe.StringData(element))
+				pinner.Pin(utf8136)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8135)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8136)))
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length138)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result137)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length139)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result138)))
 
 			switch ((element).Metadata).Deprecated.Tag() {
 			case witTypes.OptionNone:
@@ -8522,10 +8579,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case witTypes.OptionSome:
 				payload := ((element).Metadata).Deprecated.Some()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4))) = int8(int32(1))
-				utf8139 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8139)
+				utf8140 := unsafe.Pointer(unsafe.StringData(payload))
+				pinner.Pin(utf8140)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8139)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8140)))
 
 			default:
 				panic("unreachable")
@@ -8555,10 +8612,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case golem_core_types.RoleOther:
 					payload := payload.Other()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4))) = int8(int32(3))
-					utf8140 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8140)
+					utf8141 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8141)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8140)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8141)))
 
 				default:
 					panic("unreachable")
@@ -8570,30 +8627,30 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (21 * 4))) = uint32(length143)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (20 * 4))) = uint32(uintptr(uintptr(result142)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (21 * 4))) = uint32(length144)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (20 * 4))) = uint32(uintptr(uintptr(result143)))
 
 	default:
 		panic("unreachable")
 	}
-	slice188 := (result).Methods
-	length190 := uint32(len(slice188))
-	result189 := witRuntime.Allocate(pinner, uintptr(length190*(40+12*4)), 8)
-	for index, element := range slice188 {
-		base := unsafe.Add(result189, index*(40+12*4))
-		utf8144 := unsafe.Pointer(unsafe.StringData((element).Name))
-		pinner.Pin(utf8144)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8144)))
-		utf8145 := unsafe.Pointer(unsafe.StringData((element).Description))
+	slice189 := (result).Methods
+	length191 := uint32(len(slice189))
+	result190 := witRuntime.Allocate(pinner, uintptr(length191*(40+12*4)), 8)
+	for index, element := range slice189 {
+		base := unsafe.Add(result190, index*(40+12*4))
+		utf8145 := unsafe.Pointer(unsafe.StringData((element).Name))
 		pinner.Pin(utf8145)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8145)))
+		utf8146 := unsafe.Pointer(unsafe.StringData((element).Description))
+		pinner.Pin(utf8146)
 		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Description)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8145)))
-		slice168 := (element).HttpEndpoint
-		length170 := uint32(len(slice168))
-		result169 := witRuntime.Allocate(pinner, uintptr(length170*(12*4)), 4)
-		for index, element := range slice168 {
-			base := unsafe.Add(result169, index*(12*4))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8146)))
+		slice169 := (element).HttpEndpoint
+		length171 := uint32(len(slice169))
+		result170 := witRuntime.Allocate(pinner, uintptr(length171*(12*4)), 4)
+		for index, element := range slice169 {
+			base := unsafe.Add(result170, index*(12*4))
 
 			switch (element).HttpMethod.Tag() {
 			case golem_agent_common.HttpMethodGet:
@@ -8635,28 +8692,28 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case golem_agent_common.HttpMethodCustom:
 				payload := (element).HttpMethod.Custom()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
-				utf8146 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8146)
+				utf8147 := unsafe.Pointer(unsafe.StringData(payload))
+				pinner.Pin(utf8147)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8146)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8147)))
 
 			default:
 				panic("unreachable")
 			}
-			slice150 := (element).PathSuffix
-			length152 := uint32(len(slice150))
-			result151 := witRuntime.Allocate(pinner, uintptr(length152*(3*4)), 4)
-			for index, element := range slice150 {
-				base := unsafe.Add(result151, index*(3*4))
+			slice151 := (element).PathSuffix
+			length153 := uint32(len(slice151))
+			result152 := witRuntime.Allocate(pinner, uintptr(length153*(3*4)), 4)
+			for index, element := range slice151 {
+				base := unsafe.Add(result152, index*(3*4))
 
 				switch element.Tag() {
 				case golem_agent_common.PathSegmentLiteral:
 					payload := element.Literal()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-					utf8147 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8147)
+					utf8148 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8148)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8147)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8148)))
 
 				case golem_agent_common.PathSegmentSystemVariable:
 					payload := element.SystemVariable()
@@ -8666,18 +8723,18 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case golem_agent_common.PathSegmentPathVariable:
 					payload := element.PathVariable()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-					utf8148 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-					pinner.Pin(utf8148)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8148)))
-
-				case golem_agent_common.PathSegmentRemainingPathVariable:
-					payload := element.RemainingPathVariable()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
 					utf8149 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
 					pinner.Pin(utf8149)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8149)))
+
+				case golem_agent_common.PathSegmentRemainingPathVariable:
+					payload := element.RemainingPathVariable()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
+					utf8150 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+					pinner.Pin(utf8150)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8150)))
 
 				default:
 					panic("unreachable")
@@ -8685,44 +8742,44 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(length152)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(result151)))
-			slice155 := (element).HeaderVars
-			length157 := uint32(len(slice155))
-			result156 := witRuntime.Allocate(pinner, uintptr(length157*(4*4)), 4)
-			for index, element := range slice155 {
-				base := unsafe.Add(result156, index*(4*4))
-				utf8153 := unsafe.Pointer(unsafe.StringData((element).HeaderName))
-				pinner.Pin(utf8153)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).HeaderName)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8153)))
-				utf8154 := unsafe.Pointer(unsafe.StringData((element).VariableName))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(length153)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(result152)))
+			slice156 := (element).HeaderVars
+			length158 := uint32(len(slice156))
+			result157 := witRuntime.Allocate(pinner, uintptr(length158*(4*4)), 4)
+			for index, element := range slice156 {
+				base := unsafe.Add(result157, index*(4*4))
+				utf8154 := unsafe.Pointer(unsafe.StringData((element).HeaderName))
 				pinner.Pin(utf8154)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).HeaderName)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8154)))
+				utf8155 := unsafe.Pointer(unsafe.StringData((element).VariableName))
+				pinner.Pin(utf8155)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).VariableName)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8154)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8155)))
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(length157)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uintptr(uintptr(result156)))
-			slice160 := (element).QueryVars
-			length162 := uint32(len(slice160))
-			result161 := witRuntime.Allocate(pinner, uintptr(length162*(4*4)), 4)
-			for index, element := range slice160 {
-				base := unsafe.Add(result161, index*(4*4))
-				utf8158 := unsafe.Pointer(unsafe.StringData((element).QueryParamName))
-				pinner.Pin(utf8158)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).QueryParamName)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8158)))
-				utf8159 := unsafe.Pointer(unsafe.StringData((element).VariableName))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(length158)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uintptr(uintptr(result157)))
+			slice161 := (element).QueryVars
+			length163 := uint32(len(slice161))
+			result162 := witRuntime.Allocate(pinner, uintptr(length163*(4*4)), 4)
+			for index, element := range slice161 {
+				base := unsafe.Add(result162, index*(4*4))
+				utf8159 := unsafe.Pointer(unsafe.StringData((element).QueryParamName))
 				pinner.Pin(utf8159)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).QueryParamName)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8159)))
+				utf8160 := unsafe.Pointer(unsafe.StringData((element).VariableName))
+				pinner.Pin(utf8160)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).VariableName)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8159)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8160)))
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(length162)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(result161)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(length163)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(result162)))
 
 			switch (element).AuthDetails.Tag() {
 			case witTypes.OptionNone:
@@ -8731,36 +8788,36 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case witTypes.OptionSome:
 				payload := (element).AuthDetails.Some()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = int8(int32(1))
-				var result163 int32
+				var result164 int32
 				if (payload).Required {
-					result163 = 1
+					result164 = 1
 				} else {
-					result163 = 0
+					result164 = 0
 				}
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), (1 + 9*4))) = int8(result163)
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), (1 + 9*4))) = int8(result164)
 
 			default:
 				panic("unreachable")
 			}
-			slice165 := ((element).CorsOptions).AllowedPatterns
-			length167 := uint32(len(slice165))
-			result166 := witRuntime.Allocate(pinner, uintptr(length167*(2*4)), 4)
-			for index, element := range slice165 {
-				base := unsafe.Add(result166, index*(2*4))
-				utf8164 := unsafe.Pointer(unsafe.StringData(element))
-				pinner.Pin(utf8164)
+			slice166 := ((element).CorsOptions).AllowedPatterns
+			length168 := uint32(len(slice166))
+			result167 := witRuntime.Allocate(pinner, uintptr(length168*(2*4)), 4)
+			for index, element := range slice166 {
+				base := unsafe.Add(result167, index*(2*4))
+				utf8165 := unsafe.Pointer(unsafe.StringData(element))
+				pinner.Pin(utf8165)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8164)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8165)))
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length167)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result166)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length168)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result167)))
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(length170)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(result169)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(length171)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(result170)))
 
 		switch (element).PromptHint.Tag() {
 		case witTypes.OptionNone:
@@ -8769,10 +8826,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 		case witTypes.OptionSome:
 			payload := (element).PromptHint.Some()
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = int8(int32(1))
-			utf8171 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf8171)
+			utf8172 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf8172)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8171)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8172)))
 
 		default:
 			panic("unreachable")
@@ -8782,15 +8839,15 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 		case golem_agent_common.InputSchemaParameters:
 			payload := (element).InputSchema.Parameters()
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = int8(int32(0))
-			slice184 := payload
-			length186 := uint32(len(slice184))
-			result185 := witRuntime.Allocate(pinner, uintptr(length186*(8+16*4)), 4)
-			for index, element := range slice184 {
-				base := unsafe.Add(result185, index*(8+16*4))
-				utf8172 := unsafe.Pointer(unsafe.StringData((element).Name))
-				pinner.Pin(utf8172)
+			slice185 := payload
+			length187 := uint32(len(slice185))
+			result186 := witRuntime.Allocate(pinner, uintptr(length187*(8+16*4)), 4)
+			for index, element := range slice185 {
+				base := unsafe.Add(result186, index*(8+16*4))
+				utf8173 := unsafe.Pointer(unsafe.StringData((element).Name))
+				pinner.Pin(utf8173)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8172)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8173)))
 
 				switch (element).Source.Tag() {
 				case golem_agent_common.FieldSourceUserSupplied:
@@ -8814,42 +8871,42 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := ((element).Metadata).Doc.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-					utf8173 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8173)
+					utf8174 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8174)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8173)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8174)))
 
 				default:
 					panic("unreachable")
 				}
-				slice175 := ((element).Metadata).Aliases
-				length177 := uint32(len(slice175))
-				result176 := witRuntime.Allocate(pinner, uintptr(length177*(2*4)), 4)
-				for index, element := range slice175 {
-					base := unsafe.Add(result176, index*(2*4))
-					utf8174 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8174)
+				slice176 := ((element).Metadata).Aliases
+				length178 := uint32(len(slice176))
+				result177 := witRuntime.Allocate(pinner, uintptr(length178*(2*4)), 4)
+				for index, element := range slice176 {
+					base := unsafe.Add(result177, index*(2*4))
+					utf8175 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8175)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8174)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8175)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length177)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result176)))
-				slice179 := ((element).Metadata).Examples
-				length181 := uint32(len(slice179))
-				result180 := witRuntime.Allocate(pinner, uintptr(length181*(2*4)), 4)
-				for index, element := range slice179 {
-					base := unsafe.Add(result180, index*(2*4))
-					utf8178 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8178)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length178)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result177)))
+				slice180 := ((element).Metadata).Examples
+				length182 := uint32(len(slice180))
+				result181 := witRuntime.Allocate(pinner, uintptr(length182*(2*4)), 4)
+				for index, element := range slice180 {
+					base := unsafe.Add(result181, index*(2*4))
+					utf8179 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8179)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8178)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8179)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length181)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result180)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length182)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result181)))
 
 				switch ((element).Metadata).Deprecated.Tag() {
 				case witTypes.OptionNone:
@@ -8858,10 +8915,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := ((element).Metadata).Deprecated.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4))) = int8(int32(1))
-					utf8182 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8182)
+					utf8183 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8183)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8182)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8183)))
 
 				default:
 					panic("unreachable")
@@ -8891,10 +8948,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case golem_core_types.RoleOther:
 						payload := payload.Other()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4))) = int8(int32(3))
-						utf8183 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8183)
+						utf8184 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8184)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8183)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8184)))
 
 					default:
 						panic("unreachable")
@@ -8906,8 +8963,8 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length186)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result185)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length187)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result186)))
 
 		default:
 			panic("unreachable")
@@ -8952,13 +9009,13 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			default:
 				panic("unreachable")
 			}
-			var result187 int32
+			var result188 int32
 			if (payload).UsesPrincipal {
-				result187 = 1
+				result188 = 1
 			} else {
-				result187 = 0
+				result188 = 0
 			}
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4))) = int8(result187)
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4))) = int8(result188)
 
 		default:
 			panic("unreachable")
@@ -8966,17 +9023,17 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 	}
 
-	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (23 * 4))) = uint32(length190)
-	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (22 * 4))) = uint32(uintptr(uintptr(result189)))
-	slice384 := (result).Dependencies
-	length386 := uint32(len(slice384))
-	result385 := witRuntime.Allocate(pinner, uintptr(length386*(23*4)), 4)
-	for index, element := range slice384 {
-		base := unsafe.Add(result385, index*(23*4))
-		utf8191 := unsafe.Pointer(unsafe.StringData((element).TypeName))
-		pinner.Pin(utf8191)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (23 * 4))) = uint32(length191)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (22 * 4))) = uint32(uintptr(uintptr(result190)))
+	slice386 := (result).Dependencies
+	length388 := uint32(len(slice386))
+	result387 := witRuntime.Allocate(pinner, uintptr(length388*(23*4)), 4)
+	for index, element := range slice386 {
+		base := unsafe.Add(result387, index*(23*4))
+		utf8192 := unsafe.Pointer(unsafe.StringData((element).TypeName))
+		pinner.Pin(utf8192)
 		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).TypeName)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8191)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8192)))
 
 		switch (element).Description.Tag() {
 		case witTypes.OptionNone:
@@ -8985,19 +9042,19 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 		case witTypes.OptionSome:
 			payload := (element).Description.Some()
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(1))
-			utf8192 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf8192)
+			utf8193 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf8193)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8192)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8193)))
 
 		default:
 			panic("unreachable")
 		}
-		slice311 := ((element).Schema).TypeNodes
-		length313 := uint32(len(slice311))
-		result312 := witRuntime.Allocate(pinner, uintptr(length313*(56+22*4)), 8)
-		for index, element := range slice311 {
-			base := unsafe.Add(result312, index*(56+22*4))
+		slice313 := ((element).Schema).TypeNodes
+		length315 := uint32(len(slice313))
+		result314 := witRuntime.Allocate(pinner, uintptr(length315*(56+22*4)), 8)
+		for index, element := range slice313 {
+			base := unsafe.Add(result314, index*(56+22*4))
 
 			switch (element).Body.Tag() {
 			case golem_core_types.SchemaTypeBodyRefType:
@@ -9092,102 +9149,6 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case witTypes.OptionSome:
 						payload := (payload).Unit.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(1))
-						utf8193 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8193)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4))) = uint32(uintptr(uintptr(utf8193)))
-
-					default:
-						panic("unreachable")
-					}
-
-				default:
-					panic("unreachable")
-				}
-
-			case golem_core_types.SchemaTypeBodyS16Type:
-				payload := (element).Body.S16Type()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-
-				switch payload.Tag() {
-				case witTypes.OptionNone:
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(0))
-
-				case witTypes.OptionSome:
-					payload := payload.Some()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-
-					switch (payload).Min.Tag() {
-					case witTypes.OptionNone:
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(0))
-
-					case witTypes.OptionSome:
-						payload := (payload).Min.Some()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(1))
-
-						switch payload.Tag() {
-						case golem_core_types.NumericBoundSigned:
-							payload := payload.Signed()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(0))
-							*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = payload
-
-						case golem_core_types.NumericBoundUnsigned:
-							payload := payload.Unsigned()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(1))
-							*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
-
-						case golem_core_types.NumericBoundFloatBits:
-							payload := payload.FloatBits()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(2))
-							*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
-
-						default:
-							panic("unreachable")
-						}
-
-					default:
-						panic("unreachable")
-					}
-
-					switch (payload).Max.Tag() {
-					case witTypes.OptionNone:
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(0))
-
-					case witTypes.OptionSome:
-						payload := (payload).Max.Some()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(1))
-
-						switch payload.Tag() {
-						case golem_core_types.NumericBoundSigned:
-							payload := payload.Signed()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(0))
-							*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = payload
-
-						case golem_core_types.NumericBoundUnsigned:
-							payload := payload.Unsigned()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(1))
-							*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
-
-						case golem_core_types.NumericBoundFloatBits:
-							payload := payload.FloatBits()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(2))
-							*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
-
-						default:
-							panic("unreachable")
-						}
-
-					default:
-						panic("unreachable")
-					}
-
-					switch (payload).Unit.Tag() {
-					case witTypes.OptionNone:
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(0))
-
-					case witTypes.OptionSome:
-						payload := (payload).Unit.Some()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(1))
 						utf8194 := unsafe.Pointer(unsafe.StringData(payload))
 						pinner.Pin(utf8194)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = uint32(uint32(len(payload)))
@@ -9201,9 +9162,9 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					panic("unreachable")
 				}
 
-			case golem_core_types.SchemaTypeBodyS32Type:
-				payload := (element).Body.S32Type()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
+			case golem_core_types.SchemaTypeBodyS16Type:
+				payload := (element).Body.S16Type()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -9297,9 +9258,9 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					panic("unreachable")
 				}
 
-			case golem_core_types.SchemaTypeBodyS64Type:
-				payload := (element).Body.S64Type()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
+			case golem_core_types.SchemaTypeBodyS32Type:
+				payload := (element).Body.S32Type()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -9393,9 +9354,9 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					panic("unreachable")
 				}
 
-			case golem_core_types.SchemaTypeBodyU8Type:
-				payload := (element).Body.U8Type()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
+			case golem_core_types.SchemaTypeBodyS64Type:
+				payload := (element).Body.S64Type()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -9489,9 +9450,9 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					panic("unreachable")
 				}
 
-			case golem_core_types.SchemaTypeBodyU16Type:
-				payload := (element).Body.U16Type()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
+			case golem_core_types.SchemaTypeBodyU8Type:
+				payload := (element).Body.U8Type()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -9585,9 +9546,9 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					panic("unreachable")
 				}
 
-			case golem_core_types.SchemaTypeBodyU32Type:
-				payload := (element).Body.U32Type()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
+			case golem_core_types.SchemaTypeBodyU16Type:
+				payload := (element).Body.U16Type()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -9681,9 +9642,9 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					panic("unreachable")
 				}
 
-			case golem_core_types.SchemaTypeBodyU64Type:
-				payload := (element).Body.U64Type()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
+			case golem_core_types.SchemaTypeBodyU32Type:
+				payload := (element).Body.U32Type()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -9777,9 +9738,9 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					panic("unreachable")
 				}
 
-			case golem_core_types.SchemaTypeBodyF32Type:
-				payload := (element).Body.F32Type()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
+			case golem_core_types.SchemaTypeBodyU64Type:
+				payload := (element).Body.U64Type()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -9873,9 +9834,9 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					panic("unreachable")
 				}
 
-			case golem_core_types.SchemaTypeBodyF64Type:
-				payload := (element).Body.F64Type()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
+			case golem_core_types.SchemaTypeBodyF32Type:
+				payload := (element).Body.F32Type()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -9969,6 +9930,102 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					panic("unreachable")
 				}
 
+			case golem_core_types.SchemaTypeBodyF64Type:
+				payload := (element).Body.F64Type()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
+
+				switch payload.Tag() {
+				case witTypes.OptionNone:
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(0))
+
+				case witTypes.OptionSome:
+					payload := payload.Some()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
+
+					switch (payload).Min.Tag() {
+					case witTypes.OptionNone:
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(0))
+
+					case witTypes.OptionSome:
+						payload := (payload).Min.Some()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(1))
+
+						switch payload.Tag() {
+						case golem_core_types.NumericBoundSigned:
+							payload := payload.Signed()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(0))
+							*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = payload
+
+						case golem_core_types.NumericBoundUnsigned:
+							payload := payload.Unsigned()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(1))
+							*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
+
+						case golem_core_types.NumericBoundFloatBits:
+							payload := payload.FloatBits()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(2))
+							*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
+
+						default:
+							panic("unreachable")
+						}
+
+					default:
+						panic("unreachable")
+					}
+
+					switch (payload).Max.Tag() {
+					case witTypes.OptionNone:
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(0))
+
+					case witTypes.OptionSome:
+						payload := (payload).Max.Some()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(1))
+
+						switch payload.Tag() {
+						case golem_core_types.NumericBoundSigned:
+							payload := payload.Signed()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(0))
+							*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = payload
+
+						case golem_core_types.NumericBoundUnsigned:
+							payload := payload.Unsigned()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(1))
+							*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
+
+						case golem_core_types.NumericBoundFloatBits:
+							payload := payload.FloatBits()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(2))
+							*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
+
+						default:
+							panic("unreachable")
+						}
+
+					default:
+						panic("unreachable")
+					}
+
+					switch (payload).Unit.Tag() {
+					case witTypes.OptionNone:
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(0))
+
+					case witTypes.OptionSome:
+						payload := (payload).Unit.Some()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(1))
+						utf8203 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8203)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = uint32(uint32(len(payload)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4))) = uint32(uintptr(uintptr(utf8203)))
+
+					default:
+						panic("unreachable")
+					}
+
+				default:
+					panic("unreachable")
+				}
+
 			case golem_core_types.SchemaTypeBodyCharType:
 
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
@@ -9980,15 +10037,15 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case golem_core_types.SchemaTypeBodyRecordType:
 				payload := (element).Body.RecordType()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(14))
-				slice215 := payload
-				length217 := uint32(len(slice215))
-				result216 := witRuntime.Allocate(pinner, uintptr(length217*(17*4)), 4)
-				for index, element := range slice215 {
-					base := unsafe.Add(result216, index*(17*4))
-					utf8203 := unsafe.Pointer(unsafe.StringData((element).Name))
-					pinner.Pin(utf8203)
+				slice216 := payload
+				length218 := uint32(len(slice216))
+				result217 := witRuntime.Allocate(pinner, uintptr(length218*(17*4)), 4)
+				for index, element := range slice216 {
+					base := unsafe.Add(result217, index*(17*4))
+					utf8204 := unsafe.Pointer(unsafe.StringData((element).Name))
+					pinner.Pin(utf8204)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8203)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8204)))
 					*(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = (element).Body
 
 					switch ((element).Metadata).Doc.Tag() {
@@ -9998,42 +10055,42 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Doc.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(1))
-						utf8204 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8204)
+						utf8205 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8205)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8204)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8205)))
 
 					default:
 						panic("unreachable")
 					}
-					slice206 := ((element).Metadata).Aliases
-					length208 := uint32(len(slice206))
-					result207 := witRuntime.Allocate(pinner, uintptr(length208*(2*4)), 4)
-					for index, element := range slice206 {
-						base := unsafe.Add(result207, index*(2*4))
-						utf8205 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8205)
+					slice207 := ((element).Metadata).Aliases
+					length209 := uint32(len(slice207))
+					result208 := witRuntime.Allocate(pinner, uintptr(length209*(2*4)), 4)
+					for index, element := range slice207 {
+						base := unsafe.Add(result208, index*(2*4))
+						utf8206 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8206)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8205)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8206)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(length208)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(result207)))
-					slice210 := ((element).Metadata).Examples
-					length212 := uint32(len(slice210))
-					result211 := witRuntime.Allocate(pinner, uintptr(length212*(2*4)), 4)
-					for index, element := range slice210 {
-						base := unsafe.Add(result211, index*(2*4))
-						utf8209 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8209)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(length209)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(result208)))
+					slice211 := ((element).Metadata).Examples
+					length213 := uint32(len(slice211))
+					result212 := witRuntime.Allocate(pinner, uintptr(length213*(2*4)), 4)
+					for index, element := range slice211 {
+						base := unsafe.Add(result212, index*(2*4))
+						utf8210 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8210)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8209)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8210)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(length212)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(result211)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(length213)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(result212)))
 
 					switch ((element).Metadata).Deprecated.Tag() {
 					case witTypes.OptionNone:
@@ -10042,10 +10099,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Deprecated.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = int8(int32(1))
-						utf8213 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8213)
+						utf8214 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8214)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uintptr(uintptr(utf8213)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uintptr(uintptr(utf8214)))
 
 					default:
 						panic("unreachable")
@@ -10075,10 +10132,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 						case golem_core_types.RoleOther:
 							payload := payload.Other()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = int8(int32(3))
-							utf8214 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8214)
+							utf8215 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8215)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(uintptr(uintptr(utf8214)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(uintptr(uintptr(utf8215)))
 
 						default:
 							panic("unreachable")
@@ -10090,21 +10147,21 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length217)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result216)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length218)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result217)))
 
 			case golem_core_types.SchemaTypeBodyVariantType:
 				payload := (element).Body.VariantType()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(15))
-				slice230 := payload
-				length232 := uint32(len(slice230))
-				result231 := witRuntime.Allocate(pinner, uintptr(length232*(8+16*4)), 4)
-				for index, element := range slice230 {
-					base := unsafe.Add(result231, index*(8+16*4))
-					utf8218 := unsafe.Pointer(unsafe.StringData((element).Name))
-					pinner.Pin(utf8218)
+				slice231 := payload
+				length233 := uint32(len(slice231))
+				result232 := witRuntime.Allocate(pinner, uintptr(length233*(8+16*4)), 4)
+				for index, element := range slice231 {
+					base := unsafe.Add(result232, index*(8+16*4))
+					utf8219 := unsafe.Pointer(unsafe.StringData((element).Name))
+					pinner.Pin(utf8219)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8218)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8219)))
 
 					switch (element).Payload.Tag() {
 					case witTypes.OptionNone:
@@ -10126,42 +10183,42 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Doc.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-						utf8219 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8219)
+						utf8220 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8220)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8219)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8220)))
 
 					default:
 						panic("unreachable")
 					}
-					slice221 := ((element).Metadata).Aliases
-					length223 := uint32(len(slice221))
-					result222 := witRuntime.Allocate(pinner, uintptr(length223*(2*4)), 4)
-					for index, element := range slice221 {
-						base := unsafe.Add(result222, index*(2*4))
-						utf8220 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8220)
+					slice222 := ((element).Metadata).Aliases
+					length224 := uint32(len(slice222))
+					result223 := witRuntime.Allocate(pinner, uintptr(length224*(2*4)), 4)
+					for index, element := range slice222 {
+						base := unsafe.Add(result223, index*(2*4))
+						utf8221 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8221)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8220)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8221)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length223)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result222)))
-					slice225 := ((element).Metadata).Examples
-					length227 := uint32(len(slice225))
-					result226 := witRuntime.Allocate(pinner, uintptr(length227*(2*4)), 4)
-					for index, element := range slice225 {
-						base := unsafe.Add(result226, index*(2*4))
-						utf8224 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8224)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length224)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result223)))
+					slice226 := ((element).Metadata).Examples
+					length228 := uint32(len(slice226))
+					result227 := witRuntime.Allocate(pinner, uintptr(length228*(2*4)), 4)
+					for index, element := range slice226 {
+						base := unsafe.Add(result227, index*(2*4))
+						utf8225 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8225)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8224)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8225)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length227)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result226)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length228)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result227)))
 
 					switch ((element).Metadata).Deprecated.Tag() {
 					case witTypes.OptionNone:
@@ -10170,10 +10227,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Deprecated.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4))) = int8(int32(1))
-						utf8228 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8228)
+						utf8229 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8229)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8228)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8229)))
 
 					default:
 						panic("unreachable")
@@ -10203,10 +10260,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 						case golem_core_types.RoleOther:
 							payload := payload.Other()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4))) = int8(int32(3))
-							utf8229 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8229)
+							utf8230 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8230)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8229)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8230)))
 
 						default:
 							panic("unreachable")
@@ -10218,59 +10275,59 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length232)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result231)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length233)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result232)))
 
 			case golem_core_types.SchemaTypeBodyEnumType:
 				payload := (element).Body.EnumType()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-				slice234 := payload
-				length236 := uint32(len(slice234))
-				result235 := witRuntime.Allocate(pinner, uintptr(length236*(2*4)), 4)
-				for index, element := range slice234 {
-					base := unsafe.Add(result235, index*(2*4))
-					utf8233 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8233)
+				slice235 := payload
+				length237 := uint32(len(slice235))
+				result236 := witRuntime.Allocate(pinner, uintptr(length237*(2*4)), 4)
+				for index, element := range slice235 {
+					base := unsafe.Add(result236, index*(2*4))
+					utf8234 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8234)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8233)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8234)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length236)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result235)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length237)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result236)))
 
 			case golem_core_types.SchemaTypeBodyFlagsType:
 				payload := (element).Body.FlagsType()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
-				slice238 := payload
-				length240 := uint32(len(slice238))
-				result239 := witRuntime.Allocate(pinner, uintptr(length240*(2*4)), 4)
-				for index, element := range slice238 {
-					base := unsafe.Add(result239, index*(2*4))
-					utf8237 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8237)
+				slice239 := payload
+				length241 := uint32(len(slice239))
+				result240 := witRuntime.Allocate(pinner, uintptr(length241*(2*4)), 4)
+				for index, element := range slice239 {
+					base := unsafe.Add(result240, index*(2*4))
+					utf8238 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8238)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8237)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8238)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length240)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result239)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length241)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result240)))
 
 			case golem_core_types.SchemaTypeBodyTupleType:
 				payload := (element).Body.TupleType()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
-				slice241 := payload
-				length243 := uint32(len(slice241))
-				result242 := witRuntime.Allocate(pinner, uintptr(length243*4), 4)
-				for index, element := range slice241 {
-					base := unsafe.Add(result242, index*4)
+				slice242 := payload
+				length244 := uint32(len(slice242))
+				result243 := witRuntime.Allocate(pinner, uintptr(length244*4), 4)
+				for index, element := range slice242 {
+					base := unsafe.Add(result243, index*4)
 					*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length243)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result242)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length244)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result243)))
 
 			case golem_core_types.SchemaTypeBodyListType:
 				payload := (element).Body.ListType()
@@ -10335,20 +10392,20 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := (payload).Languages.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-					slice245 := payload
-					length247 := uint32(len(slice245))
-					result246 := witRuntime.Allocate(pinner, uintptr(length247*(2*4)), 4)
-					for index, element := range slice245 {
-						base := unsafe.Add(result246, index*(2*4))
-						utf8244 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8244)
+					slice246 := payload
+					length248 := uint32(len(slice246))
+					result247 := witRuntime.Allocate(pinner, uintptr(length248*(2*4)), 4)
+					for index, element := range slice246 {
+						base := unsafe.Add(result247, index*(2*4))
+						utf8245 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8245)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8244)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8245)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length247)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result246)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length248)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result247)))
 
 				default:
 					panic("unreachable")
@@ -10387,10 +10444,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := (payload).Regex.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4))) = int8(int32(1))
-					utf8248 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8248)
+					utf8249 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8249)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))) = uint32(uintptr(uintptr(utf8248)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))) = uint32(uintptr(uintptr(utf8249)))
 
 				default:
 					panic("unreachable")
@@ -10407,20 +10464,20 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := (payload).MimeTypes.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-					slice250 := payload
-					length252 := uint32(len(slice250))
-					result251 := witRuntime.Allocate(pinner, uintptr(length252*(2*4)), 4)
-					for index, element := range slice250 {
-						base := unsafe.Add(result251, index*(2*4))
-						utf8249 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8249)
+					slice251 := payload
+					length253 := uint32(len(slice251))
+					result252 := witRuntime.Allocate(pinner, uintptr(length253*(2*4)), 4)
+					for index, element := range slice251 {
+						base := unsafe.Add(result252, index*(2*4))
+						utf8250 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8250)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8249)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8250)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length252)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result251)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length253)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result252)))
 
 				default:
 					panic("unreachable")
@@ -10465,20 +10522,20 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := (payload).AllowedMimeTypes.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = int8(int32(1))
-					slice254 := payload
-					length256 := uint32(len(slice254))
-					result255 := witRuntime.Allocate(pinner, uintptr(length256*(2*4)), 4)
-					for index, element := range slice254 {
-						base := unsafe.Add(result255, index*(2*4))
-						utf8253 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8253)
+					slice255 := payload
+					length257 := uint32(len(slice255))
+					result256 := witRuntime.Allocate(pinner, uintptr(length257*(2*4)), 4)
+					for index, element := range slice255 {
+						base := unsafe.Add(result256, index*(2*4))
+						utf8254 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8254)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8253)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8254)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length256)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result255)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length257)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result256)))
 
 				default:
 					panic("unreachable")
@@ -10491,20 +10548,20 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := (payload).AllowedExtensions.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = int8(int32(1))
-					slice258 := payload
-					length260 := uint32(len(slice258))
-					result259 := witRuntime.Allocate(pinner, uintptr(length260*(2*4)), 4)
-					for index, element := range slice258 {
-						base := unsafe.Add(result259, index*(2*4))
-						utf8257 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8257)
+					slice259 := payload
+					length261 := uint32(len(slice259))
+					result260 := witRuntime.Allocate(pinner, uintptr(length261*(2*4)), 4)
+					for index, element := range slice259 {
+						base := unsafe.Add(result260, index*(2*4))
+						utf8258 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8258)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8257)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8258)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length260)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result259)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length261)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result260)))
 
 				default:
 					panic("unreachable")
@@ -10521,20 +10578,20 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := (payload).AllowedSchemes.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-					slice262 := payload
-					length264 := uint32(len(slice262))
-					result263 := witRuntime.Allocate(pinner, uintptr(length264*(2*4)), 4)
-					for index, element := range slice262 {
-						base := unsafe.Add(result263, index*(2*4))
-						utf8261 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8261)
+					slice263 := payload
+					length265 := uint32(len(slice263))
+					result264 := witRuntime.Allocate(pinner, uintptr(length265*(2*4)), 4)
+					for index, element := range slice263 {
+						base := unsafe.Add(result264, index*(2*4))
+						utf8262 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8262)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8261)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8262)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length264)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result263)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length265)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result264)))
 
 				default:
 					panic("unreachable")
@@ -10547,20 +10604,20 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := (payload).AllowedHosts.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = int8(int32(1))
-					slice266 := payload
-					length268 := uint32(len(slice266))
-					result267 := witRuntime.Allocate(pinner, uintptr(length268*(2*4)), 4)
-					for index, element := range slice266 {
-						base := unsafe.Add(result267, index*(2*4))
-						utf8265 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8265)
+					slice267 := payload
+					length269 := uint32(len(slice267))
+					result268 := witRuntime.Allocate(pinner, uintptr(length269*(2*4)), 4)
+					for index, element := range slice267 {
+						base := unsafe.Add(result268, index*(2*4))
+						utf8266 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8266)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8265)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8266)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(length268)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uintptr(uintptr(result267)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(length269)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uintptr(uintptr(result268)))
 
 				default:
 					panic("unreachable")
@@ -10577,24 +10634,24 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case golem_core_types.SchemaTypeBodyQuantityType:
 				payload := (element).Body.QuantityType()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-				utf8269 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
-				pinner.Pin(utf8269)
+				utf8270 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
+				pinner.Pin(utf8270)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).BaseUnit)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8269)))
-				slice271 := (payload).AllowedSuffixes
-				length273 := uint32(len(slice271))
-				result272 := witRuntime.Allocate(pinner, uintptr(length273*(2*4)), 4)
-				for index, element := range slice271 {
-					base := unsafe.Add(result272, index*(2*4))
-					utf8270 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8270)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8270)))
+				slice272 := (payload).AllowedSuffixes
+				length274 := uint32(len(slice272))
+				result273 := witRuntime.Allocate(pinner, uintptr(length274*(2*4)), 4)
+				for index, element := range slice272 {
+					base := unsafe.Add(result273, index*(2*4))
+					utf8271 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8271)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8270)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8271)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length273)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result272)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length274)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result273)))
 
 				switch (payload).Min.Tag() {
 				case witTypes.OptionNone:
@@ -10605,10 +10662,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = int8(int32(1))
 					*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))) = (payload).Mantissa
 					*(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))) = (payload).Scale
-					utf8274 := unsafe.Pointer(unsafe.StringData((payload).Unit))
-					pinner.Pin(utf8274)
+					utf8275 := unsafe.Pointer(unsafe.StringData((payload).Unit))
+					pinner.Pin(utf8275)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))) = uint32(uint32(len((payload).Unit)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))) = uint32(uintptr(uintptr(utf8274)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))) = uint32(uintptr(uintptr(utf8275)))
 
 				default:
 					panic("unreachable")
@@ -10623,10 +10680,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (32 + 6*4))) = int8(int32(1))
 					*(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))) = (payload).Mantissa
 					*(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))) = (payload).Scale
-					utf8275 := unsafe.Pointer(unsafe.StringData((payload).Unit))
-					pinner.Pin(utf8275)
+					utf8276 := unsafe.Pointer(unsafe.StringData((payload).Unit))
+					pinner.Pin(utf8276)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))) = uint32(uint32(len((payload).Unit)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4))) = uint32(uintptr(uintptr(utf8275)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4))) = uint32(uintptr(uintptr(utf8276)))
 
 				default:
 					panic("unreachable")
@@ -10635,57 +10692,57 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case golem_core_types.SchemaTypeBodyUnionType:
 				payload := (element).Body.UnionType()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
-				slice295 := (payload).Branches
-				length297 := uint32(len(slice295))
-				result296 := witRuntime.Allocate(pinner, uintptr(length297*(23*4)), 4)
-				for index, element := range slice295 {
-					base := unsafe.Add(result296, index*(23*4))
-					utf8276 := unsafe.Pointer(unsafe.StringData((element).Tag))
-					pinner.Pin(utf8276)
+				slice296 := (payload).Branches
+				length298 := uint32(len(slice296))
+				result297 := witRuntime.Allocate(pinner, uintptr(length298*(23*4)), 4)
+				for index, element := range slice296 {
+					base := unsafe.Add(result297, index*(23*4))
+					utf8277 := unsafe.Pointer(unsafe.StringData((element).Tag))
+					pinner.Pin(utf8277)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Tag)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8276)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8277)))
 					*(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = (element).Body
 
 					switch (element).Discriminator.Tag() {
 					case golem_core_types.DiscriminatorRulePrefix:
 						payload := (element).Discriminator.Prefix()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(0))
-						utf8277 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8277)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8277)))
-
-					case golem_core_types.DiscriminatorRuleSuffix:
-						payload := (element).Discriminator.Suffix()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(1))
 						utf8278 := unsafe.Pointer(unsafe.StringData(payload))
 						pinner.Pin(utf8278)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8278)))
 
-					case golem_core_types.DiscriminatorRuleContains:
-						payload := (element).Discriminator.Contains()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(2))
+					case golem_core_types.DiscriminatorRuleSuffix:
+						payload := (element).Discriminator.Suffix()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(1))
 						utf8279 := unsafe.Pointer(unsafe.StringData(payload))
 						pinner.Pin(utf8279)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8279)))
 
-					case golem_core_types.DiscriminatorRuleRegex:
-						payload := (element).Discriminator.Regex()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(3))
+					case golem_core_types.DiscriminatorRuleContains:
+						payload := (element).Discriminator.Contains()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(2))
 						utf8280 := unsafe.Pointer(unsafe.StringData(payload))
 						pinner.Pin(utf8280)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8280)))
 
+					case golem_core_types.DiscriminatorRuleRegex:
+						payload := (element).Discriminator.Regex()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(3))
+						utf8281 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8281)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8281)))
+
 					case golem_core_types.DiscriminatorRuleFieldEquals:
 						payload := (element).Discriminator.FieldEquals()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(4))
-						utf8281 := unsafe.Pointer(unsafe.StringData((payload).FieldName))
-						pinner.Pin(utf8281)
+						utf8282 := unsafe.Pointer(unsafe.StringData((payload).FieldName))
+						pinner.Pin(utf8282)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((payload).FieldName)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8281)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8282)))
 
 						switch (payload).Literal.Tag() {
 						case witTypes.OptionNone:
@@ -10694,10 +10751,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 						case witTypes.OptionSome:
 							payload := (payload).Literal.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = int8(int32(1))
-							utf8282 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8282)
+							utf8283 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8283)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8282)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8283)))
 
 						default:
 							panic("unreachable")
@@ -10706,10 +10763,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case golem_core_types.DiscriminatorRuleFieldAbsent:
 						payload := (element).Discriminator.FieldAbsent()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(5))
-						utf8283 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8283)
+						utf8284 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8284)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8283)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8284)))
 
 					default:
 						panic("unreachable")
@@ -10722,42 +10779,42 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Doc.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = int8(int32(1))
-						utf8284 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8284)
+						utf8285 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8285)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(utf8284)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(utf8285)))
 
 					default:
 						panic("unreachable")
 					}
-					slice286 := ((element).Metadata).Aliases
-					length288 := uint32(len(slice286))
-					result287 := witRuntime.Allocate(pinner, uintptr(length288*(2*4)), 4)
-					for index, element := range slice286 {
-						base := unsafe.Add(result287, index*(2*4))
-						utf8285 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8285)
+					slice287 := ((element).Metadata).Aliases
+					length289 := uint32(len(slice287))
+					result288 := witRuntime.Allocate(pinner, uintptr(length289*(2*4)), 4)
+					for index, element := range slice287 {
+						base := unsafe.Add(result288, index*(2*4))
+						utf8286 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8286)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8285)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8286)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))) = uint32(length288)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uintptr(uintptr(result287)))
-					slice290 := ((element).Metadata).Examples
-					length292 := uint32(len(slice290))
-					result291 := witRuntime.Allocate(pinner, uintptr(length292*(2*4)), 4)
-					for index, element := range slice290 {
-						base := unsafe.Add(result291, index*(2*4))
-						utf8289 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8289)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))) = uint32(length289)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uintptr(uintptr(result288)))
+					slice291 := ((element).Metadata).Examples
+					length293 := uint32(len(slice291))
+					result292 := witRuntime.Allocate(pinner, uintptr(length293*(2*4)), 4)
+					for index, element := range slice291 {
+						base := unsafe.Add(result292, index*(2*4))
+						utf8290 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8290)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8289)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8290)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(length292)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = uint32(uintptr(uintptr(result291)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(length293)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = uint32(uintptr(uintptr(result292)))
 
 					switch ((element).Metadata).Deprecated.Tag() {
 					case witTypes.OptionNone:
@@ -10766,10 +10823,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Deprecated.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (16 * 4))) = int8(int32(1))
-						utf8293 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8293)
+						utf8294 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8294)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4))) = uint32(uintptr(uintptr(utf8293)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4))) = uint32(uintptr(uintptr(utf8294)))
 
 					default:
 						panic("unreachable")
@@ -10799,10 +10856,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 						case golem_core_types.RoleOther:
 							payload := payload.Other()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (20 * 4))) = int8(int32(3))
-							utf8294 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8294)
+							utf8295 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8295)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))) = uint32(uintptr(uintptr(utf8294)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))) = uint32(uintptr(uintptr(utf8295)))
 
 						default:
 							panic("unreachable")
@@ -10814,8 +10871,8 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length297)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result296)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length298)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result297)))
 
 			case golem_core_types.SchemaTypeBodySecretType:
 				payload := (element).Body.SecretType()
@@ -10829,10 +10886,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := (payload).Category.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = int8(int32(1))
-					utf8298 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8298)
+					utf8299 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8299)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(utf8298)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(utf8299)))
 
 				default:
 					panic("unreachable")
@@ -10849,18 +10906,29 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := (payload).ResourceName.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-					utf8299 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8299)
+					utf8300 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8300)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(utf8299)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(utf8300)))
 
 				default:
 					panic("unreachable")
 				}
 
+			case golem_core_types.SchemaTypeBodyPermissionCardType:
+				payload := (element).Body.PermissionCardType()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+				var result301 int32
+				if (payload).Polymorphic {
+					result301 = 1
+				} else {
+					result301 = 0
+				}
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result301)
+
 			case golem_core_types.SchemaTypeBodyFutureType:
 				payload := (element).Body.FutureType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -10877,7 +10945,7 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 			case golem_core_types.SchemaTypeBodyStreamType:
 				payload := (element).Body.StreamType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -10903,42 +10971,42 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case witTypes.OptionSome:
 				payload := ((element).Metadata).Doc.Some()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 8*4))) = int8(int32(1))
-				utf8300 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8300)
+				utf8302 := unsafe.Pointer(unsafe.StringData(payload))
+				pinner.Pin(utf8302)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8300)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8302)))
 
 			default:
 				panic("unreachable")
 			}
-			slice302 := ((element).Metadata).Aliases
-			length304 := uint32(len(slice302))
-			result303 := witRuntime.Allocate(pinner, uintptr(length304*(2*4)), 4)
-			for index, element := range slice302 {
-				base := unsafe.Add(result303, index*(2*4))
-				utf8301 := unsafe.Pointer(unsafe.StringData(element))
-				pinner.Pin(utf8301)
+			slice304 := ((element).Metadata).Aliases
+			length306 := uint32(len(slice304))
+			result305 := witRuntime.Allocate(pinner, uintptr(length306*(2*4)), 4)
+			for index, element := range slice304 {
+				base := unsafe.Add(result305, index*(2*4))
+				utf8303 := unsafe.Pointer(unsafe.StringData(element))
+				pinner.Pin(utf8303)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8301)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8303)))
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length304)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result303)))
-			slice306 := ((element).Metadata).Examples
-			length308 := uint32(len(slice306))
-			result307 := witRuntime.Allocate(pinner, uintptr(length308*(2*4)), 4)
-			for index, element := range slice306 {
-				base := unsafe.Add(result307, index*(2*4))
-				utf8305 := unsafe.Pointer(unsafe.StringData(element))
-				pinner.Pin(utf8305)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length306)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result305)))
+			slice308 := ((element).Metadata).Examples
+			length310 := uint32(len(slice308))
+			result309 := witRuntime.Allocate(pinner, uintptr(length310*(2*4)), 4)
+			for index, element := range slice308 {
+				base := unsafe.Add(result309, index*(2*4))
+				utf8307 := unsafe.Pointer(unsafe.StringData(element))
+				pinner.Pin(utf8307)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8305)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8307)))
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length308)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result307)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length310)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result309)))
 
 			switch ((element).Metadata).Deprecated.Tag() {
 			case witTypes.OptionNone:
@@ -10947,10 +11015,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case witTypes.OptionSome:
 				payload := ((element).Metadata).Deprecated.Some()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 15*4))) = int8(int32(1))
-				utf8309 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8309)
+				utf8311 := unsafe.Pointer(unsafe.StringData(payload))
+				pinner.Pin(utf8311)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8309)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8311)))
 
 			default:
 				panic("unreachable")
@@ -10980,10 +11048,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case golem_core_types.RoleOther:
 					payload := payload.Other()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 19*4))) = int8(int32(3))
-					utf8310 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8310)
+					utf8312 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8312)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8310)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8312)))
 
 				default:
 					panic("unreachable")
@@ -10995,17 +11063,17 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(length313)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uintptr(uintptr(result312)))
-		slice316 := ((element).Schema).Defs
-		length318 := uint32(len(slice316))
-		result317 := witRuntime.Allocate(pinner, uintptr(length318*(6*4)), 4)
-		for index, element := range slice316 {
-			base := unsafe.Add(result317, index*(6*4))
-			utf8314 := unsafe.Pointer(unsafe.StringData((element).Id))
-			pinner.Pin(utf8314)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(length315)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uintptr(uintptr(result314)))
+		slice318 := ((element).Schema).Defs
+		length320 := uint32(len(slice318))
+		result319 := witRuntime.Allocate(pinner, uintptr(length320*(6*4)), 4)
+		for index, element := range slice318 {
+			base := unsafe.Add(result319, index*(6*4))
+			utf8316 := unsafe.Pointer(unsafe.StringData((element).Id))
+			pinner.Pin(utf8316)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Id)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8314)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8316)))
 
 			switch (element).Name.Tag() {
 			case witTypes.OptionNone:
@@ -11014,10 +11082,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case witTypes.OptionSome:
 				payload := (element).Name.Some()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(1))
-				utf8315 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8315)
+				utf8317 := unsafe.Pointer(unsafe.StringData(payload))
+				pinner.Pin(utf8317)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8315)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8317)))
 
 			default:
 				panic("unreachable")
@@ -11026,8 +11094,8 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(length318)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(result317)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(length320)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(result319)))
 		*(*int32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = ((element).Schema).Root
 
 		switch ((element).Constructor).Name.Tag() {
@@ -11037,18 +11105,18 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 		case witTypes.OptionSome:
 			payload := ((element).Constructor).Name.Some()
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = int8(int32(1))
-			utf8319 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf8319)
+			utf8321 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf8321)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uintptr(uintptr(utf8319)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uintptr(uintptr(utf8321)))
 
 		default:
 			panic("unreachable")
 		}
-		utf8320 := unsafe.Pointer(unsafe.StringData(((element).Constructor).Description))
-		pinner.Pin(utf8320)
+		utf8322 := unsafe.Pointer(unsafe.StringData(((element).Constructor).Description))
+		pinner.Pin(utf8322)
 		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = uint32(uint32(len(((element).Constructor).Description)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))) = uint32(uintptr(uintptr(utf8320)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))) = uint32(uintptr(uintptr(utf8322)))
 
 		switch ((element).Constructor).PromptHint.Tag() {
 		case witTypes.OptionNone:
@@ -11057,10 +11125,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 		case witTypes.OptionSome:
 			payload := ((element).Constructor).PromptHint.Some()
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = int8(int32(1))
-			utf8321 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf8321)
+			utf8323 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf8323)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))) = uint32(uintptr(uintptr(utf8321)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))) = uint32(uintptr(uintptr(utf8323)))
 
 		default:
 			panic("unreachable")
@@ -11070,15 +11138,15 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 		case golem_agent_common.InputSchemaParameters:
 			payload := ((element).Constructor).InputSchema.Parameters()
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), (18 * 4))) = int8(int32(0))
-			slice334 := payload
-			length336 := uint32(len(slice334))
-			result335 := witRuntime.Allocate(pinner, uintptr(length336*(8+16*4)), 4)
-			for index, element := range slice334 {
-				base := unsafe.Add(result335, index*(8+16*4))
-				utf8322 := unsafe.Pointer(unsafe.StringData((element).Name))
-				pinner.Pin(utf8322)
+			slice336 := payload
+			length338 := uint32(len(slice336))
+			result337 := witRuntime.Allocate(pinner, uintptr(length338*(8+16*4)), 4)
+			for index, element := range slice336 {
+				base := unsafe.Add(result337, index*(8+16*4))
+				utf8324 := unsafe.Pointer(unsafe.StringData((element).Name))
+				pinner.Pin(utf8324)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8322)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8324)))
 
 				switch (element).Source.Tag() {
 				case golem_agent_common.FieldSourceUserSupplied:
@@ -11102,42 +11170,42 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := ((element).Metadata).Doc.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-					utf8323 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8323)
+					utf8325 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8325)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8323)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8325)))
 
 				default:
 					panic("unreachable")
 				}
-				slice325 := ((element).Metadata).Aliases
-				length327 := uint32(len(slice325))
-				result326 := witRuntime.Allocate(pinner, uintptr(length327*(2*4)), 4)
-				for index, element := range slice325 {
-					base := unsafe.Add(result326, index*(2*4))
-					utf8324 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8324)
+				slice327 := ((element).Metadata).Aliases
+				length329 := uint32(len(slice327))
+				result328 := witRuntime.Allocate(pinner, uintptr(length329*(2*4)), 4)
+				for index, element := range slice327 {
+					base := unsafe.Add(result328, index*(2*4))
+					utf8326 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8326)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8324)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8326)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length327)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result326)))
-				slice329 := ((element).Metadata).Examples
-				length331 := uint32(len(slice329))
-				result330 := witRuntime.Allocate(pinner, uintptr(length331*(2*4)), 4)
-				for index, element := range slice329 {
-					base := unsafe.Add(result330, index*(2*4))
-					utf8328 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8328)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length329)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result328)))
+				slice331 := ((element).Metadata).Examples
+				length333 := uint32(len(slice331))
+				result332 := witRuntime.Allocate(pinner, uintptr(length333*(2*4)), 4)
+				for index, element := range slice331 {
+					base := unsafe.Add(result332, index*(2*4))
+					utf8330 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8330)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8328)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8330)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length331)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result330)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length333)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result332)))
 
 				switch ((element).Metadata).Deprecated.Tag() {
 				case witTypes.OptionNone:
@@ -11146,10 +11214,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := ((element).Metadata).Deprecated.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4))) = int8(int32(1))
-					utf8332 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8332)
+					utf8334 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8334)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8332)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8334)))
 
 				default:
 					panic("unreachable")
@@ -11179,10 +11247,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case golem_core_types.RoleOther:
 						payload := payload.Other()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4))) = int8(int32(3))
-						utf8333 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8333)
+						utf8335 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8335)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8333)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8335)))
 
 					default:
 						panic("unreachable")
@@ -11194,30 +11262,30 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4))) = uint32(length336)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 * 4))) = uint32(uintptr(uintptr(result335)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4))) = uint32(length338)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 * 4))) = uint32(uintptr(uintptr(result337)))
 
 		default:
 			panic("unreachable")
 		}
-		slice381 := (element).Methods
-		length383 := uint32(len(slice381))
-		result382 := witRuntime.Allocate(pinner, uintptr(length383*(40+12*4)), 8)
-		for index, element := range slice381 {
-			base := unsafe.Add(result382, index*(40+12*4))
-			utf8337 := unsafe.Pointer(unsafe.StringData((element).Name))
-			pinner.Pin(utf8337)
+		slice383 := (element).Methods
+		length385 := uint32(len(slice383))
+		result384 := witRuntime.Allocate(pinner, uintptr(length385*(40+12*4)), 8)
+		for index, element := range slice383 {
+			base := unsafe.Add(result384, index*(40+12*4))
+			utf8339 := unsafe.Pointer(unsafe.StringData((element).Name))
+			pinner.Pin(utf8339)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8337)))
-			utf8338 := unsafe.Pointer(unsafe.StringData((element).Description))
-			pinner.Pin(utf8338)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8339)))
+			utf8340 := unsafe.Pointer(unsafe.StringData((element).Description))
+			pinner.Pin(utf8340)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Description)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8338)))
-			slice361 := (element).HttpEndpoint
-			length363 := uint32(len(slice361))
-			result362 := witRuntime.Allocate(pinner, uintptr(length363*(12*4)), 4)
-			for index, element := range slice361 {
-				base := unsafe.Add(result362, index*(12*4))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8340)))
+			slice363 := (element).HttpEndpoint
+			length365 := uint32(len(slice363))
+			result364 := witRuntime.Allocate(pinner, uintptr(length365*(12*4)), 4)
+			for index, element := range slice363 {
+				base := unsafe.Add(result364, index*(12*4))
 
 				switch (element).HttpMethod.Tag() {
 				case golem_agent_common.HttpMethodGet:
@@ -11259,28 +11327,28 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case golem_agent_common.HttpMethodCustom:
 					payload := (element).HttpMethod.Custom()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
-					utf8339 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8339)
+					utf8341 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8341)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8339)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8341)))
 
 				default:
 					panic("unreachable")
 				}
-				slice343 := (element).PathSuffix
-				length345 := uint32(len(slice343))
-				result344 := witRuntime.Allocate(pinner, uintptr(length345*(3*4)), 4)
-				for index, element := range slice343 {
-					base := unsafe.Add(result344, index*(3*4))
+				slice345 := (element).PathSuffix
+				length347 := uint32(len(slice345))
+				result346 := witRuntime.Allocate(pinner, uintptr(length347*(3*4)), 4)
+				for index, element := range slice345 {
+					base := unsafe.Add(result346, index*(3*4))
 
 					switch element.Tag() {
 					case golem_agent_common.PathSegmentLiteral:
 						payload := element.Literal()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-						utf8340 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8340)
+						utf8342 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8342)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8340)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8342)))
 
 					case golem_agent_common.PathSegmentSystemVariable:
 						payload := element.SystemVariable()
@@ -11290,18 +11358,18 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case golem_agent_common.PathSegmentPathVariable:
 						payload := element.PathVariable()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-						utf8341 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-						pinner.Pin(utf8341)
+						utf8343 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+						pinner.Pin(utf8343)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8341)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8343)))
 
 					case golem_agent_common.PathSegmentRemainingPathVariable:
 						payload := element.RemainingPathVariable()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-						utf8342 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-						pinner.Pin(utf8342)
+						utf8344 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+						pinner.Pin(utf8344)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8342)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8344)))
 
 					default:
 						panic("unreachable")
@@ -11309,44 +11377,44 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(length345)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(result344)))
-				slice348 := (element).HeaderVars
-				length350 := uint32(len(slice348))
-				result349 := witRuntime.Allocate(pinner, uintptr(length350*(4*4)), 4)
-				for index, element := range slice348 {
-					base := unsafe.Add(result349, index*(4*4))
-					utf8346 := unsafe.Pointer(unsafe.StringData((element).HeaderName))
-					pinner.Pin(utf8346)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(length347)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(result346)))
+				slice350 := (element).HeaderVars
+				length352 := uint32(len(slice350))
+				result351 := witRuntime.Allocate(pinner, uintptr(length352*(4*4)), 4)
+				for index, element := range slice350 {
+					base := unsafe.Add(result351, index*(4*4))
+					utf8348 := unsafe.Pointer(unsafe.StringData((element).HeaderName))
+					pinner.Pin(utf8348)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).HeaderName)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8346)))
-					utf8347 := unsafe.Pointer(unsafe.StringData((element).VariableName))
-					pinner.Pin(utf8347)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8348)))
+					utf8349 := unsafe.Pointer(unsafe.StringData((element).VariableName))
+					pinner.Pin(utf8349)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).VariableName)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8347)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8349)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(length350)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uintptr(uintptr(result349)))
-				slice353 := (element).QueryVars
-				length355 := uint32(len(slice353))
-				result354 := witRuntime.Allocate(pinner, uintptr(length355*(4*4)), 4)
-				for index, element := range slice353 {
-					base := unsafe.Add(result354, index*(4*4))
-					utf8351 := unsafe.Pointer(unsafe.StringData((element).QueryParamName))
-					pinner.Pin(utf8351)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(length352)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uintptr(uintptr(result351)))
+				slice355 := (element).QueryVars
+				length357 := uint32(len(slice355))
+				result356 := witRuntime.Allocate(pinner, uintptr(length357*(4*4)), 4)
+				for index, element := range slice355 {
+					base := unsafe.Add(result356, index*(4*4))
+					utf8353 := unsafe.Pointer(unsafe.StringData((element).QueryParamName))
+					pinner.Pin(utf8353)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).QueryParamName)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8351)))
-					utf8352 := unsafe.Pointer(unsafe.StringData((element).VariableName))
-					pinner.Pin(utf8352)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8353)))
+					utf8354 := unsafe.Pointer(unsafe.StringData((element).VariableName))
+					pinner.Pin(utf8354)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).VariableName)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8352)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8354)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(length355)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(result354)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(length357)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(result356)))
 
 				switch (element).AuthDetails.Tag() {
 				case witTypes.OptionNone:
@@ -11355,36 +11423,36 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				case witTypes.OptionSome:
 					payload := (element).AuthDetails.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = int8(int32(1))
-					var result356 int32
+					var result358 int32
 					if (payload).Required {
-						result356 = 1
+						result358 = 1
 					} else {
-						result356 = 0
+						result358 = 0
 					}
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), (1 + 9*4))) = int8(result356)
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), (1 + 9*4))) = int8(result358)
 
 				default:
 					panic("unreachable")
 				}
-				slice358 := ((element).CorsOptions).AllowedPatterns
-				length360 := uint32(len(slice358))
-				result359 := witRuntime.Allocate(pinner, uintptr(length360*(2*4)), 4)
-				for index, element := range slice358 {
-					base := unsafe.Add(result359, index*(2*4))
-					utf8357 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8357)
+				slice360 := ((element).CorsOptions).AllowedPatterns
+				length362 := uint32(len(slice360))
+				result361 := witRuntime.Allocate(pinner, uintptr(length362*(2*4)), 4)
+				for index, element := range slice360 {
+					base := unsafe.Add(result361, index*(2*4))
+					utf8359 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8359)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8357)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8359)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length360)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result359)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length362)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result361)))
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(length363)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(result362)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(length365)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(result364)))
 
 			switch (element).PromptHint.Tag() {
 			case witTypes.OptionNone:
@@ -11393,10 +11461,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case witTypes.OptionSome:
 				payload := (element).PromptHint.Some()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = int8(int32(1))
-				utf8364 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8364)
+				utf8366 := unsafe.Pointer(unsafe.StringData(payload))
+				pinner.Pin(utf8366)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8364)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8366)))
 
 			default:
 				panic("unreachable")
@@ -11406,15 +11474,15 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case golem_agent_common.InputSchemaParameters:
 				payload := (element).InputSchema.Parameters()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = int8(int32(0))
-				slice377 := payload
-				length379 := uint32(len(slice377))
-				result378 := witRuntime.Allocate(pinner, uintptr(length379*(8+16*4)), 4)
-				for index, element := range slice377 {
-					base := unsafe.Add(result378, index*(8+16*4))
-					utf8365 := unsafe.Pointer(unsafe.StringData((element).Name))
-					pinner.Pin(utf8365)
+				slice379 := payload
+				length381 := uint32(len(slice379))
+				result380 := witRuntime.Allocate(pinner, uintptr(length381*(8+16*4)), 4)
+				for index, element := range slice379 {
+					base := unsafe.Add(result380, index*(8+16*4))
+					utf8367 := unsafe.Pointer(unsafe.StringData((element).Name))
+					pinner.Pin(utf8367)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8365)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8367)))
 
 					switch (element).Source.Tag() {
 					case golem_agent_common.FieldSourceUserSupplied:
@@ -11438,42 +11506,42 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Doc.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-						utf8366 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8366)
+						utf8368 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8368)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8366)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8368)))
 
 					default:
 						panic("unreachable")
 					}
-					slice368 := ((element).Metadata).Aliases
-					length370 := uint32(len(slice368))
-					result369 := witRuntime.Allocate(pinner, uintptr(length370*(2*4)), 4)
-					for index, element := range slice368 {
-						base := unsafe.Add(result369, index*(2*4))
-						utf8367 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8367)
+					slice370 := ((element).Metadata).Aliases
+					length372 := uint32(len(slice370))
+					result371 := witRuntime.Allocate(pinner, uintptr(length372*(2*4)), 4)
+					for index, element := range slice370 {
+						base := unsafe.Add(result371, index*(2*4))
+						utf8369 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8369)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8367)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8369)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length370)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result369)))
-					slice372 := ((element).Metadata).Examples
-					length374 := uint32(len(slice372))
-					result373 := witRuntime.Allocate(pinner, uintptr(length374*(2*4)), 4)
-					for index, element := range slice372 {
-						base := unsafe.Add(result373, index*(2*4))
-						utf8371 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8371)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length372)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result371)))
+					slice374 := ((element).Metadata).Examples
+					length376 := uint32(len(slice374))
+					result375 := witRuntime.Allocate(pinner, uintptr(length376*(2*4)), 4)
+					for index, element := range slice374 {
+						base := unsafe.Add(result375, index*(2*4))
+						utf8373 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8373)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8371)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8373)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length374)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result373)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length376)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result375)))
 
 					switch ((element).Metadata).Deprecated.Tag() {
 					case witTypes.OptionNone:
@@ -11482,10 +11550,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Deprecated.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4))) = int8(int32(1))
-						utf8375 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8375)
+						utf8377 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8377)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8375)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8377)))
 
 					default:
 						panic("unreachable")
@@ -11515,10 +11583,10 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 						case golem_core_types.RoleOther:
 							payload := payload.Other()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4))) = int8(int32(3))
-							utf8376 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8376)
+							utf8378 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8378)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8376)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8378)))
 
 						default:
 							panic("unreachable")
@@ -11530,8 +11598,8 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length379)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result378)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length381)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result380)))
 
 			default:
 				panic("unreachable")
@@ -11576,13 +11644,13 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 				default:
 					panic("unreachable")
 				}
-				var result380 int32
+				var result382 int32
 				if (payload).UsesPrincipal {
-					result380 = 1
+					result382 = 1
 				} else {
-					result380 = 0
+					result382 = 0
 				}
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4))) = int8(result380)
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4))) = int8(result382)
 
 			default:
 				panic("unreachable")
@@ -11590,13 +11658,13 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))) = uint32(length383)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))) = uint32(uintptr(uintptr(result382)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))) = uint32(length385)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))) = uint32(uintptr(uintptr(result384)))
 
 	}
 
-	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (25 * 4))) = uint32(length386)
-	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (24 * 4))) = uint32(uintptr(uintptr(result385)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (25 * 4))) = uint32(length388)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (24 * 4))) = uint32(uintptr(uintptr(result387)))
 	*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), (26 * 4))) = int8(int32((result).Mode))
 
 	switch (result).HttpMount.Tag() {
@@ -11606,20 +11674,20 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 	case witTypes.OptionSome:
 		payload := (result).HttpMount.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), (27 * 4))) = int8(int32(1))
-		slice390 := (payload).PathPrefix
-		length392 := uint32(len(slice390))
-		result391 := witRuntime.Allocate(pinner, uintptr(length392*(3*4)), 4)
-		for index, element := range slice390 {
-			base := unsafe.Add(result391, index*(3*4))
+		slice392 := (payload).PathPrefix
+		length394 := uint32(len(slice392))
+		result393 := witRuntime.Allocate(pinner, uintptr(length394*(3*4)), 4)
+		for index, element := range slice392 {
+			base := unsafe.Add(result393, index*(3*4))
 
 			switch element.Tag() {
 			case golem_agent_common.PathSegmentLiteral:
 				payload := element.Literal()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-				utf8387 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8387)
+				utf8389 := unsafe.Pointer(unsafe.StringData(payload))
+				pinner.Pin(utf8389)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8387)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8389)))
 
 			case golem_agent_common.PathSegmentSystemVariable:
 				payload := element.SystemVariable()
@@ -11629,18 +11697,18 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case golem_agent_common.PathSegmentPathVariable:
 				payload := element.PathVariable()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-				utf8388 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-				pinner.Pin(utf8388)
+				utf8390 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+				pinner.Pin(utf8390)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8388)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8390)))
 
 			case golem_agent_common.PathSegmentRemainingPathVariable:
 				payload := element.RemainingPathVariable()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-				utf8389 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-				pinner.Pin(utf8389)
+				utf8391 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+				pinner.Pin(utf8391)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8389)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8391)))
 
 			default:
 				panic("unreachable")
@@ -11648,8 +11716,8 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (29 * 4))) = uint32(length392)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (28 * 4))) = uint32(uintptr(uintptr(result391)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (29 * 4))) = uint32(length394)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (28 * 4))) = uint32(uintptr(uintptr(result393)))
 
 		switch (payload).AuthDetails.Tag() {
 		case witTypes.OptionNone:
@@ -11658,52 +11726,52 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 		case witTypes.OptionSome:
 			payload := (payload).AuthDetails.Some()
 			*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), (30 * 4))) = int8(int32(1))
-			var result393 int32
+			var result395 int32
 			if (payload).Required {
-				result393 = 1
+				result395 = 1
 			} else {
-				result393 = 0
+				result395 = 0
 			}
-			*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), (1 + 30*4))) = int8(result393)
+			*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), (1 + 30*4))) = int8(result395)
 
 		default:
 			panic("unreachable")
 		}
-		var result394 int32
+		var result396 int32
 		if (payload).PhantomAgent {
-			result394 = 1
+			result396 = 1
 		} else {
-			result394 = 0
+			result396 = 0
 		}
-		*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), (2 + 30*4))) = int8(result394)
-		slice396 := ((payload).CorsOptions).AllowedPatterns
-		length398 := uint32(len(slice396))
-		result397 := witRuntime.Allocate(pinner, uintptr(length398*(2*4)), 4)
-		for index, element := range slice396 {
-			base := unsafe.Add(result397, index*(2*4))
-			utf8395 := unsafe.Pointer(unsafe.StringData(element))
-			pinner.Pin(utf8395)
+		*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), (2 + 30*4))) = int8(result396)
+		slice398 := ((payload).CorsOptions).AllowedPatterns
+		length400 := uint32(len(slice398))
+		result399 := witRuntime.Allocate(pinner, uintptr(length400*(2*4)), 4)
+		for index, element := range slice398 {
+			base := unsafe.Add(result399, index*(2*4))
+			utf8397 := unsafe.Pointer(unsafe.StringData(element))
+			pinner.Pin(utf8397)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8395)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8397)))
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (32 * 4))) = uint32(length398)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (31 * 4))) = uint32(uintptr(uintptr(result397)))
-		slice402 := (payload).WebhookSuffix
-		length404 := uint32(len(slice402))
-		result403 := witRuntime.Allocate(pinner, uintptr(length404*(3*4)), 4)
-		for index, element := range slice402 {
-			base := unsafe.Add(result403, index*(3*4))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (32 * 4))) = uint32(length400)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (31 * 4))) = uint32(uintptr(uintptr(result399)))
+		slice404 := (payload).WebhookSuffix
+		length406 := uint32(len(slice404))
+		result405 := witRuntime.Allocate(pinner, uintptr(length406*(3*4)), 4)
+		for index, element := range slice404 {
+			base := unsafe.Add(result405, index*(3*4))
 
 			switch element.Tag() {
 			case golem_agent_common.PathSegmentLiteral:
 				payload := element.Literal()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-				utf8399 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8399)
+				utf8401 := unsafe.Pointer(unsafe.StringData(payload))
+				pinner.Pin(utf8401)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8399)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8401)))
 
 			case golem_agent_common.PathSegmentSystemVariable:
 				payload := element.SystemVariable()
@@ -11713,18 +11781,18 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 			case golem_agent_common.PathSegmentPathVariable:
 				payload := element.PathVariable()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-				utf8400 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-				pinner.Pin(utf8400)
+				utf8402 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+				pinner.Pin(utf8402)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8400)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8402)))
 
 			case golem_agent_common.PathSegmentRemainingPathVariable:
 				payload := element.RemainingPathVariable()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-				utf8401 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-				pinner.Pin(utf8401)
+				utf8403 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+				pinner.Pin(utf8403)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8401)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8403)))
 
 			default:
 				panic("unreachable")
@@ -11732,8 +11800,8 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (34 * 4))) = uint32(length404)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (33 * 4))) = uint32(uintptr(uintptr(result403)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (34 * 4))) = uint32(length406)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (33 * 4))) = uint32(uintptr(uintptr(result405)))
 
 	default:
 		panic("unreachable")
@@ -11770,32 +11838,32 @@ func wasm_export_golem_agent_guest_get_definition() uintptr {
 	default:
 		panic("unreachable")
 	}
-	slice409 := (result).Config
-	length411 := uint32(len(slice409))
-	result410 := witRuntime.Allocate(pinner, uintptr(length411*(4*4)), 4)
-	for index, element := range slice409 {
-		base := unsafe.Add(result410, index*(4*4))
+	slice411 := (result).Config
+	length413 := uint32(len(slice411))
+	result412 := witRuntime.Allocate(pinner, uintptr(length413*(4*4)), 4)
+	for index, element := range slice411 {
+		base := unsafe.Add(result412, index*(4*4))
 		*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32((element).Source))
-		slice406 := (element).Path
-		length408 := uint32(len(slice406))
-		result407 := witRuntime.Allocate(pinner, uintptr(length408*(2*4)), 4)
-		for index, element := range slice406 {
-			base := unsafe.Add(result407, index*(2*4))
-			utf8405 := unsafe.Pointer(unsafe.StringData(element))
-			pinner.Pin(utf8405)
+		slice408 := (element).Path
+		length410 := uint32(len(slice408))
+		result409 := witRuntime.Allocate(pinner, uintptr(length410*(2*4)), 4)
+		for index, element := range slice408 {
+			base := unsafe.Add(result409, index*(2*4))
+			utf8407 := unsafe.Pointer(unsafe.StringData(element))
+			pinner.Pin(utf8407)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8405)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8407)))
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(length408)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(result407)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(length410)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(result409)))
 		*(*int32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = (element).ValueType
 
 	}
 
-	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (32 + 35*4))) = uint32(length411)
-	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (32 + 34*4))) = uint32(uintptr(uintptr(result410)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (32 + 35*4))) = uint32(length413)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (32 + 34*4))) = uint32(uintptr(uintptr(result412)))
 	return exportReturnArea
 
 }
@@ -11815,11 +11883,11 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 	case witTypes.ResultOk:
 		payload := result.Ok()
 		*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), 0)) = int8(int32(0))
-		slice412 := payload
-		length414 := uint32(len(slice412))
-		result413 := witRuntime.Allocate(pinner, uintptr(length414*(32+36*4)), 8)
-		for index, element := range slice412 {
-			base := unsafe.Add(result413, index*(32+36*4))
+		slice414 := payload
+		length416 := uint32(len(slice414))
+		result415 := witRuntime.Allocate(pinner, uintptr(length416*(32+36*4)), 8)
+		for index, element := range slice414 {
+			base := unsafe.Add(result415, index*(32+36*4))
 			utf8 := unsafe.Pointer(unsafe.StringData((element).TypeName))
 			pinner.Pin(utf8)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).TypeName)))
@@ -11832,11 +11900,11 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 			pinner.Pin(utf81)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((element).SourceLanguage)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf81)))
-			slice118 := ((element).Schema).TypeNodes
-			length120 := uint32(len(slice118))
-			result119 := witRuntime.Allocate(pinner, uintptr(length120*(56+22*4)), 8)
-			for index, element := range slice118 {
-				base := unsafe.Add(result119, index*(56+22*4))
+			slice119 := ((element).Schema).TypeNodes
+			length121 := uint32(len(slice119))
+			result120 := witRuntime.Allocate(pinner, uintptr(length121*(56+22*4)), 8)
+			for index, element := range slice119 {
+				base := unsafe.Add(result120, index*(56+22*4))
 
 				switch (element).Body.Tag() {
 				case golem_core_types.SchemaTypeBodyRefType:
@@ -13697,9 +13765,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						panic("unreachable")
 					}
 
+				case golem_core_types.SchemaTypeBodyPermissionCardType:
+					payload := (element).Body.PermissionCardType()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+					var result107 int32
+					if (payload).Polymorphic {
+						result107 = 1
+					} else {
+						result107 = 0
+					}
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result107)
+
 				case golem_core_types.SchemaTypeBodyFutureType:
 					payload := (element).Body.FutureType()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 
 					switch payload.Tag() {
 					case witTypes.OptionNone:
@@ -13716,7 +13795,7 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 				case golem_core_types.SchemaTypeBodyStreamType:
 					payload := (element).Body.StreamType()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 					switch payload.Tag() {
 					case witTypes.OptionNone:
@@ -13742,42 +13821,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case witTypes.OptionSome:
 					payload := ((element).Metadata).Doc.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 8*4))) = int8(int32(1))
-					utf8107 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8107)
+					utf8108 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8108)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8107)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8108)))
 
 				default:
 					panic("unreachable")
 				}
-				slice109 := ((element).Metadata).Aliases
-				length111 := uint32(len(slice109))
-				result110 := witRuntime.Allocate(pinner, uintptr(length111*(2*4)), 4)
-				for index, element := range slice109 {
-					base := unsafe.Add(result110, index*(2*4))
-					utf8108 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8108)
+				slice110 := ((element).Metadata).Aliases
+				length112 := uint32(len(slice110))
+				result111 := witRuntime.Allocate(pinner, uintptr(length112*(2*4)), 4)
+				for index, element := range slice110 {
+					base := unsafe.Add(result111, index*(2*4))
+					utf8109 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8109)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8108)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8109)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length111)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result110)))
-				slice113 := ((element).Metadata).Examples
-				length115 := uint32(len(slice113))
-				result114 := witRuntime.Allocate(pinner, uintptr(length115*(2*4)), 4)
-				for index, element := range slice113 {
-					base := unsafe.Add(result114, index*(2*4))
-					utf8112 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8112)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length112)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result111)))
+				slice114 := ((element).Metadata).Examples
+				length116 := uint32(len(slice114))
+				result115 := witRuntime.Allocate(pinner, uintptr(length116*(2*4)), 4)
+				for index, element := range slice114 {
+					base := unsafe.Add(result115, index*(2*4))
+					utf8113 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8113)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8112)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8113)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length115)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result114)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length116)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result115)))
 
 				switch ((element).Metadata).Deprecated.Tag() {
 				case witTypes.OptionNone:
@@ -13786,10 +13865,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case witTypes.OptionSome:
 					payload := ((element).Metadata).Deprecated.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 15*4))) = int8(int32(1))
-					utf8116 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8116)
+					utf8117 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8117)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8116)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8117)))
 
 				default:
 					panic("unreachable")
@@ -13819,10 +13898,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case golem_core_types.RoleOther:
 						payload := payload.Other()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 19*4))) = int8(int32(3))
-						utf8117 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8117)
+						utf8118 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8118)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8117)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8118)))
 
 					default:
 						panic("unreachable")
@@ -13834,17 +13913,17 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(length120)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(result119)))
-			slice123 := ((element).Schema).Defs
-			length125 := uint32(len(slice123))
-			result124 := witRuntime.Allocate(pinner, uintptr(length125*(6*4)), 4)
-			for index, element := range slice123 {
-				base := unsafe.Add(result124, index*(6*4))
-				utf8121 := unsafe.Pointer(unsafe.StringData((element).Id))
-				pinner.Pin(utf8121)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(length121)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(result120)))
+			slice124 := ((element).Schema).Defs
+			length126 := uint32(len(slice124))
+			result125 := witRuntime.Allocate(pinner, uintptr(length126*(6*4)), 4)
+			for index, element := range slice124 {
+				base := unsafe.Add(result125, index*(6*4))
+				utf8122 := unsafe.Pointer(unsafe.StringData((element).Id))
+				pinner.Pin(utf8122)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Id)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8121)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8122)))
 
 				switch (element).Name.Tag() {
 				case witTypes.OptionNone:
@@ -13853,10 +13932,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case witTypes.OptionSome:
 					payload := (element).Name.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(1))
-					utf8122 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8122)
+					utf8123 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8123)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8122)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8123)))
 
 				default:
 					panic("unreachable")
@@ -13865,8 +13944,8 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(length125)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(result124)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(length126)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(result125)))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = ((element).Schema).Root
 
 			switch ((element).Constructor).Name.Tag() {
@@ -13876,18 +13955,18 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 			case witTypes.OptionSome:
 				payload := ((element).Constructor).Name.Some()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = int8(int32(1))
-				utf8126 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8126)
+				utf8127 := unsafe.Pointer(unsafe.StringData(payload))
+				pinner.Pin(utf8127)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uintptr(uintptr(utf8126)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uintptr(uintptr(utf8127)))
 
 			default:
 				panic("unreachable")
 			}
-			utf8127 := unsafe.Pointer(unsafe.StringData(((element).Constructor).Description))
-			pinner.Pin(utf8127)
+			utf8128 := unsafe.Pointer(unsafe.StringData(((element).Constructor).Description))
+			pinner.Pin(utf8128)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(uint32(len(((element).Constructor).Description)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = uint32(uintptr(uintptr(utf8127)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = uint32(uintptr(uintptr(utf8128)))
 
 			switch ((element).Constructor).PromptHint.Tag() {
 			case witTypes.OptionNone:
@@ -13896,10 +13975,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 			case witTypes.OptionSome:
 				payload := ((element).Constructor).PromptHint.Some()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (16 * 4))) = int8(int32(1))
-				utf8128 := unsafe.Pointer(unsafe.StringData(payload))
-				pinner.Pin(utf8128)
+				utf8129 := unsafe.Pointer(unsafe.StringData(payload))
+				pinner.Pin(utf8129)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))) = uint32(uint32(len(payload)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4))) = uint32(uintptr(uintptr(utf8128)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4))) = uint32(uintptr(uintptr(utf8129)))
 
 			default:
 				panic("unreachable")
@@ -13909,15 +13988,15 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 			case golem_agent_common.InputSchemaParameters:
 				payload := ((element).Constructor).InputSchema.Parameters()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (19 * 4))) = int8(int32(0))
-				slice141 := payload
-				length143 := uint32(len(slice141))
-				result142 := witRuntime.Allocate(pinner, uintptr(length143*(8+16*4)), 4)
-				for index, element := range slice141 {
-					base := unsafe.Add(result142, index*(8+16*4))
-					utf8129 := unsafe.Pointer(unsafe.StringData((element).Name))
-					pinner.Pin(utf8129)
+				slice142 := payload
+				length144 := uint32(len(slice142))
+				result143 := witRuntime.Allocate(pinner, uintptr(length144*(8+16*4)), 4)
+				for index, element := range slice142 {
+					base := unsafe.Add(result143, index*(8+16*4))
+					utf8130 := unsafe.Pointer(unsafe.StringData((element).Name))
+					pinner.Pin(utf8130)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8129)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8130)))
 
 					switch (element).Source.Tag() {
 					case golem_agent_common.FieldSourceUserSupplied:
@@ -13941,42 +14020,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Doc.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-						utf8130 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8130)
+						utf8131 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8131)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8130)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8131)))
 
 					default:
 						panic("unreachable")
 					}
-					slice132 := ((element).Metadata).Aliases
-					length134 := uint32(len(slice132))
-					result133 := witRuntime.Allocate(pinner, uintptr(length134*(2*4)), 4)
-					for index, element := range slice132 {
-						base := unsafe.Add(result133, index*(2*4))
-						utf8131 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8131)
+					slice133 := ((element).Metadata).Aliases
+					length135 := uint32(len(slice133))
+					result134 := witRuntime.Allocate(pinner, uintptr(length135*(2*4)), 4)
+					for index, element := range slice133 {
+						base := unsafe.Add(result134, index*(2*4))
+						utf8132 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8132)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8131)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8132)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length134)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result133)))
-					slice136 := ((element).Metadata).Examples
-					length138 := uint32(len(slice136))
-					result137 := witRuntime.Allocate(pinner, uintptr(length138*(2*4)), 4)
-					for index, element := range slice136 {
-						base := unsafe.Add(result137, index*(2*4))
-						utf8135 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8135)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length135)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result134)))
+					slice137 := ((element).Metadata).Examples
+					length139 := uint32(len(slice137))
+					result138 := witRuntime.Allocate(pinner, uintptr(length139*(2*4)), 4)
+					for index, element := range slice137 {
+						base := unsafe.Add(result138, index*(2*4))
+						utf8136 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8136)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8135)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8136)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length138)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result137)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length139)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result138)))
 
 					switch ((element).Metadata).Deprecated.Tag() {
 					case witTypes.OptionNone:
@@ -13985,10 +14064,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Deprecated.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4))) = int8(int32(1))
-						utf8139 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8139)
+						utf8140 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8140)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8139)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8140)))
 
 					default:
 						panic("unreachable")
@@ -14018,10 +14097,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case golem_core_types.RoleOther:
 							payload := payload.Other()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4))) = int8(int32(3))
-							utf8140 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8140)
+							utf8141 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8141)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8140)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8141)))
 
 						default:
 							panic("unreachable")
@@ -14033,30 +14112,30 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))) = uint32(length143)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4))) = uint32(uintptr(uintptr(result142)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))) = uint32(length144)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4))) = uint32(uintptr(uintptr(result143)))
 
 			default:
 				panic("unreachable")
 			}
-			slice188 := (element).Methods
-			length190 := uint32(len(slice188))
-			result189 := witRuntime.Allocate(pinner, uintptr(length190*(40+12*4)), 8)
-			for index, element := range slice188 {
-				base := unsafe.Add(result189, index*(40+12*4))
-				utf8144 := unsafe.Pointer(unsafe.StringData((element).Name))
-				pinner.Pin(utf8144)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8144)))
-				utf8145 := unsafe.Pointer(unsafe.StringData((element).Description))
+			slice189 := (element).Methods
+			length191 := uint32(len(slice189))
+			result190 := witRuntime.Allocate(pinner, uintptr(length191*(40+12*4)), 8)
+			for index, element := range slice189 {
+				base := unsafe.Add(result190, index*(40+12*4))
+				utf8145 := unsafe.Pointer(unsafe.StringData((element).Name))
 				pinner.Pin(utf8145)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8145)))
+				utf8146 := unsafe.Pointer(unsafe.StringData((element).Description))
+				pinner.Pin(utf8146)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Description)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8145)))
-				slice168 := (element).HttpEndpoint
-				length170 := uint32(len(slice168))
-				result169 := witRuntime.Allocate(pinner, uintptr(length170*(12*4)), 4)
-				for index, element := range slice168 {
-					base := unsafe.Add(result169, index*(12*4))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8146)))
+				slice169 := (element).HttpEndpoint
+				length171 := uint32(len(slice169))
+				result170 := witRuntime.Allocate(pinner, uintptr(length171*(12*4)), 4)
+				for index, element := range slice169 {
+					base := unsafe.Add(result170, index*(12*4))
 
 					switch (element).HttpMethod.Tag() {
 					case golem_agent_common.HttpMethodGet:
@@ -14098,28 +14177,28 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case golem_agent_common.HttpMethodCustom:
 						payload := (element).HttpMethod.Custom()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
-						utf8146 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8146)
+						utf8147 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8147)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8146)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8147)))
 
 					default:
 						panic("unreachable")
 					}
-					slice150 := (element).PathSuffix
-					length152 := uint32(len(slice150))
-					result151 := witRuntime.Allocate(pinner, uintptr(length152*(3*4)), 4)
-					for index, element := range slice150 {
-						base := unsafe.Add(result151, index*(3*4))
+					slice151 := (element).PathSuffix
+					length153 := uint32(len(slice151))
+					result152 := witRuntime.Allocate(pinner, uintptr(length153*(3*4)), 4)
+					for index, element := range slice151 {
+						base := unsafe.Add(result152, index*(3*4))
 
 						switch element.Tag() {
 						case golem_agent_common.PathSegmentLiteral:
 							payload := element.Literal()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-							utf8147 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8147)
+							utf8148 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8148)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8147)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8148)))
 
 						case golem_agent_common.PathSegmentSystemVariable:
 							payload := element.SystemVariable()
@@ -14129,18 +14208,18 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case golem_agent_common.PathSegmentPathVariable:
 							payload := element.PathVariable()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-							utf8148 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-							pinner.Pin(utf8148)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8148)))
-
-						case golem_agent_common.PathSegmentRemainingPathVariable:
-							payload := element.RemainingPathVariable()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
 							utf8149 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
 							pinner.Pin(utf8149)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8149)))
+
+						case golem_agent_common.PathSegmentRemainingPathVariable:
+							payload := element.RemainingPathVariable()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
+							utf8150 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+							pinner.Pin(utf8150)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8150)))
 
 						default:
 							panic("unreachable")
@@ -14148,44 +14227,44 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(length152)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(result151)))
-					slice155 := (element).HeaderVars
-					length157 := uint32(len(slice155))
-					result156 := witRuntime.Allocate(pinner, uintptr(length157*(4*4)), 4)
-					for index, element := range slice155 {
-						base := unsafe.Add(result156, index*(4*4))
-						utf8153 := unsafe.Pointer(unsafe.StringData((element).HeaderName))
-						pinner.Pin(utf8153)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).HeaderName)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8153)))
-						utf8154 := unsafe.Pointer(unsafe.StringData((element).VariableName))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(length153)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(result152)))
+					slice156 := (element).HeaderVars
+					length158 := uint32(len(slice156))
+					result157 := witRuntime.Allocate(pinner, uintptr(length158*(4*4)), 4)
+					for index, element := range slice156 {
+						base := unsafe.Add(result157, index*(4*4))
+						utf8154 := unsafe.Pointer(unsafe.StringData((element).HeaderName))
 						pinner.Pin(utf8154)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).HeaderName)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8154)))
+						utf8155 := unsafe.Pointer(unsafe.StringData((element).VariableName))
+						pinner.Pin(utf8155)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).VariableName)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8154)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8155)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(length157)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uintptr(uintptr(result156)))
-					slice160 := (element).QueryVars
-					length162 := uint32(len(slice160))
-					result161 := witRuntime.Allocate(pinner, uintptr(length162*(4*4)), 4)
-					for index, element := range slice160 {
-						base := unsafe.Add(result161, index*(4*4))
-						utf8158 := unsafe.Pointer(unsafe.StringData((element).QueryParamName))
-						pinner.Pin(utf8158)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).QueryParamName)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8158)))
-						utf8159 := unsafe.Pointer(unsafe.StringData((element).VariableName))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(length158)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uintptr(uintptr(result157)))
+					slice161 := (element).QueryVars
+					length163 := uint32(len(slice161))
+					result162 := witRuntime.Allocate(pinner, uintptr(length163*(4*4)), 4)
+					for index, element := range slice161 {
+						base := unsafe.Add(result162, index*(4*4))
+						utf8159 := unsafe.Pointer(unsafe.StringData((element).QueryParamName))
 						pinner.Pin(utf8159)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).QueryParamName)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8159)))
+						utf8160 := unsafe.Pointer(unsafe.StringData((element).VariableName))
+						pinner.Pin(utf8160)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).VariableName)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8159)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8160)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(length162)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(result161)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(length163)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(result162)))
 
 					switch (element).AuthDetails.Tag() {
 					case witTypes.OptionNone:
@@ -14194,36 +14273,36 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (element).AuthDetails.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = int8(int32(1))
-						var result163 int32
+						var result164 int32
 						if (payload).Required {
-							result163 = 1
+							result164 = 1
 						} else {
-							result163 = 0
+							result164 = 0
 						}
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), (1 + 9*4))) = int8(result163)
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), (1 + 9*4))) = int8(result164)
 
 					default:
 						panic("unreachable")
 					}
-					slice165 := ((element).CorsOptions).AllowedPatterns
-					length167 := uint32(len(slice165))
-					result166 := witRuntime.Allocate(pinner, uintptr(length167*(2*4)), 4)
-					for index, element := range slice165 {
-						base := unsafe.Add(result166, index*(2*4))
-						utf8164 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8164)
+					slice166 := ((element).CorsOptions).AllowedPatterns
+					length168 := uint32(len(slice166))
+					result167 := witRuntime.Allocate(pinner, uintptr(length168*(2*4)), 4)
+					for index, element := range slice166 {
+						base := unsafe.Add(result167, index*(2*4))
+						utf8165 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8165)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8164)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8165)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length167)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result166)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length168)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result167)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(length170)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(result169)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(length171)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(result170)))
 
 				switch (element).PromptHint.Tag() {
 				case witTypes.OptionNone:
@@ -14232,10 +14311,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case witTypes.OptionSome:
 					payload := (element).PromptHint.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = int8(int32(1))
-					utf8171 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8171)
+					utf8172 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8172)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8171)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8172)))
 
 				default:
 					panic("unreachable")
@@ -14245,15 +14324,15 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case golem_agent_common.InputSchemaParameters:
 					payload := (element).InputSchema.Parameters()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = int8(int32(0))
-					slice184 := payload
-					length186 := uint32(len(slice184))
-					result185 := witRuntime.Allocate(pinner, uintptr(length186*(8+16*4)), 4)
-					for index, element := range slice184 {
-						base := unsafe.Add(result185, index*(8+16*4))
-						utf8172 := unsafe.Pointer(unsafe.StringData((element).Name))
-						pinner.Pin(utf8172)
+					slice185 := payload
+					length187 := uint32(len(slice185))
+					result186 := witRuntime.Allocate(pinner, uintptr(length187*(8+16*4)), 4)
+					for index, element := range slice185 {
+						base := unsafe.Add(result186, index*(8+16*4))
+						utf8173 := unsafe.Pointer(unsafe.StringData((element).Name))
+						pinner.Pin(utf8173)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8172)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8173)))
 
 						switch (element).Source.Tag() {
 						case golem_agent_common.FieldSourceUserSupplied:
@@ -14277,42 +14356,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := ((element).Metadata).Doc.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-							utf8173 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8173)
+							utf8174 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8174)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8173)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8174)))
 
 						default:
 							panic("unreachable")
 						}
-						slice175 := ((element).Metadata).Aliases
-						length177 := uint32(len(slice175))
-						result176 := witRuntime.Allocate(pinner, uintptr(length177*(2*4)), 4)
-						for index, element := range slice175 {
-							base := unsafe.Add(result176, index*(2*4))
-							utf8174 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8174)
+						slice176 := ((element).Metadata).Aliases
+						length178 := uint32(len(slice176))
+						result177 := witRuntime.Allocate(pinner, uintptr(length178*(2*4)), 4)
+						for index, element := range slice176 {
+							base := unsafe.Add(result177, index*(2*4))
+							utf8175 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8175)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8174)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8175)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length177)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result176)))
-						slice179 := ((element).Metadata).Examples
-						length181 := uint32(len(slice179))
-						result180 := witRuntime.Allocate(pinner, uintptr(length181*(2*4)), 4)
-						for index, element := range slice179 {
-							base := unsafe.Add(result180, index*(2*4))
-							utf8178 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8178)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length178)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result177)))
+						slice180 := ((element).Metadata).Examples
+						length182 := uint32(len(slice180))
+						result181 := witRuntime.Allocate(pinner, uintptr(length182*(2*4)), 4)
+						for index, element := range slice180 {
+							base := unsafe.Add(result181, index*(2*4))
+							utf8179 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8179)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8178)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8179)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length181)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result180)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length182)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result181)))
 
 						switch ((element).Metadata).Deprecated.Tag() {
 						case witTypes.OptionNone:
@@ -14321,10 +14400,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := ((element).Metadata).Deprecated.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4))) = int8(int32(1))
-							utf8182 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8182)
+							utf8183 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8183)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8182)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8183)))
 
 						default:
 							panic("unreachable")
@@ -14354,10 +14433,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case golem_core_types.RoleOther:
 								payload := payload.Other()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4))) = int8(int32(3))
-								utf8183 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8183)
+								utf8184 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8184)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8183)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8184)))
 
 							default:
 								panic("unreachable")
@@ -14369,8 +14448,8 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length186)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result185)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length187)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result186)))
 
 				default:
 					panic("unreachable")
@@ -14415,13 +14494,13 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					default:
 						panic("unreachable")
 					}
-					var result187 int32
+					var result188 int32
 					if (payload).UsesPrincipal {
-						result187 = 1
+						result188 = 1
 					} else {
-						result187 = 0
+						result188 = 0
 					}
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4))) = int8(result187)
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4))) = int8(result188)
 
 				default:
 					panic("unreachable")
@@ -14429,17 +14508,17 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (23 * 4))) = uint32(length190)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))) = uint32(uintptr(uintptr(result189)))
-			slice384 := (element).Dependencies
-			length386 := uint32(len(slice384))
-			result385 := witRuntime.Allocate(pinner, uintptr(length386*(23*4)), 4)
-			for index, element := range slice384 {
-				base := unsafe.Add(result385, index*(23*4))
-				utf8191 := unsafe.Pointer(unsafe.StringData((element).TypeName))
-				pinner.Pin(utf8191)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (23 * 4))) = uint32(length191)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))) = uint32(uintptr(uintptr(result190)))
+			slice386 := (element).Dependencies
+			length388 := uint32(len(slice386))
+			result387 := witRuntime.Allocate(pinner, uintptr(length388*(23*4)), 4)
+			for index, element := range slice386 {
+				base := unsafe.Add(result387, index*(23*4))
+				utf8192 := unsafe.Pointer(unsafe.StringData((element).TypeName))
+				pinner.Pin(utf8192)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).TypeName)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8191)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8192)))
 
 				switch (element).Description.Tag() {
 				case witTypes.OptionNone:
@@ -14448,19 +14527,19 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case witTypes.OptionSome:
 					payload := (element).Description.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(1))
-					utf8192 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8192)
+					utf8193 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8193)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8192)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8193)))
 
 				default:
 					panic("unreachable")
 				}
-				slice311 := ((element).Schema).TypeNodes
-				length313 := uint32(len(slice311))
-				result312 := witRuntime.Allocate(pinner, uintptr(length313*(56+22*4)), 8)
-				for index, element := range slice311 {
-					base := unsafe.Add(result312, index*(56+22*4))
+				slice313 := ((element).Schema).TypeNodes
+				length315 := uint32(len(slice313))
+				result314 := witRuntime.Allocate(pinner, uintptr(length315*(56+22*4)), 8)
+				for index, element := range slice313 {
+					base := unsafe.Add(result314, index*(56+22*4))
 
 					switch (element).Body.Tag() {
 					case golem_core_types.SchemaTypeBodyRefType:
@@ -14555,102 +14634,6 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case witTypes.OptionSome:
 								payload := (payload).Unit.Some()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(1))
-								utf8193 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8193)
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4))) = uint32(uintptr(uintptr(utf8193)))
-
-							default:
-								panic("unreachable")
-							}
-
-						default:
-							panic("unreachable")
-						}
-
-					case golem_core_types.SchemaTypeBodyS16Type:
-						payload := (element).Body.S16Type()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-
-						switch payload.Tag() {
-						case witTypes.OptionNone:
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(0))
-
-						case witTypes.OptionSome:
-							payload := payload.Some()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-
-							switch (payload).Min.Tag() {
-							case witTypes.OptionNone:
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(0))
-
-							case witTypes.OptionSome:
-								payload := (payload).Min.Some()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(1))
-
-								switch payload.Tag() {
-								case golem_core_types.NumericBoundSigned:
-									payload := payload.Signed()
-									*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(0))
-									*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = payload
-
-								case golem_core_types.NumericBoundUnsigned:
-									payload := payload.Unsigned()
-									*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(1))
-									*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
-
-								case golem_core_types.NumericBoundFloatBits:
-									payload := payload.FloatBits()
-									*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(2))
-									*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
-
-								default:
-									panic("unreachable")
-								}
-
-							default:
-								panic("unreachable")
-							}
-
-							switch (payload).Max.Tag() {
-							case witTypes.OptionNone:
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(0))
-
-							case witTypes.OptionSome:
-								payload := (payload).Max.Some()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(1))
-
-								switch payload.Tag() {
-								case golem_core_types.NumericBoundSigned:
-									payload := payload.Signed()
-									*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(0))
-									*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = payload
-
-								case golem_core_types.NumericBoundUnsigned:
-									payload := payload.Unsigned()
-									*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(1))
-									*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
-
-								case golem_core_types.NumericBoundFloatBits:
-									payload := payload.FloatBits()
-									*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(2))
-									*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
-
-								default:
-									panic("unreachable")
-								}
-
-							default:
-								panic("unreachable")
-							}
-
-							switch (payload).Unit.Tag() {
-							case witTypes.OptionNone:
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(0))
-
-							case witTypes.OptionSome:
-								payload := (payload).Unit.Some()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(1))
 								utf8194 := unsafe.Pointer(unsafe.StringData(payload))
 								pinner.Pin(utf8194)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = uint32(uint32(len(payload)))
@@ -14664,9 +14647,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							panic("unreachable")
 						}
 
-					case golem_core_types.SchemaTypeBodyS32Type:
-						payload := (element).Body.S32Type()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
+					case golem_core_types.SchemaTypeBodyS16Type:
+						payload := (element).Body.S16Type()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -14760,9 +14743,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							panic("unreachable")
 						}
 
-					case golem_core_types.SchemaTypeBodyS64Type:
-						payload := (element).Body.S64Type()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
+					case golem_core_types.SchemaTypeBodyS32Type:
+						payload := (element).Body.S32Type()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -14856,9 +14839,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							panic("unreachable")
 						}
 
-					case golem_core_types.SchemaTypeBodyU8Type:
-						payload := (element).Body.U8Type()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
+					case golem_core_types.SchemaTypeBodyS64Type:
+						payload := (element).Body.S64Type()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -14952,9 +14935,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							panic("unreachable")
 						}
 
-					case golem_core_types.SchemaTypeBodyU16Type:
-						payload := (element).Body.U16Type()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
+					case golem_core_types.SchemaTypeBodyU8Type:
+						payload := (element).Body.U8Type()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -15048,9 +15031,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							panic("unreachable")
 						}
 
-					case golem_core_types.SchemaTypeBodyU32Type:
-						payload := (element).Body.U32Type()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
+					case golem_core_types.SchemaTypeBodyU16Type:
+						payload := (element).Body.U16Type()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -15144,9 +15127,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							panic("unreachable")
 						}
 
-					case golem_core_types.SchemaTypeBodyU64Type:
-						payload := (element).Body.U64Type()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
+					case golem_core_types.SchemaTypeBodyU32Type:
+						payload := (element).Body.U32Type()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -15240,9 +15223,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							panic("unreachable")
 						}
 
-					case golem_core_types.SchemaTypeBodyF32Type:
-						payload := (element).Body.F32Type()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
+					case golem_core_types.SchemaTypeBodyU64Type:
+						payload := (element).Body.U64Type()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -15336,9 +15319,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							panic("unreachable")
 						}
 
-					case golem_core_types.SchemaTypeBodyF64Type:
-						payload := (element).Body.F64Type()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
+					case golem_core_types.SchemaTypeBodyF32Type:
+						payload := (element).Body.F32Type()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -15432,6 +15415,102 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							panic("unreachable")
 						}
 
+					case golem_core_types.SchemaTypeBodyF64Type:
+						payload := (element).Body.F64Type()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
+
+						switch payload.Tag() {
+						case witTypes.OptionNone:
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(0))
+
+						case witTypes.OptionSome:
+							payload := payload.Some()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
+
+							switch (payload).Min.Tag() {
+							case witTypes.OptionNone:
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(0))
+
+							case witTypes.OptionSome:
+								payload := (payload).Min.Some()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(1))
+
+								switch payload.Tag() {
+								case golem_core_types.NumericBoundSigned:
+									payload := payload.Signed()
+									*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(0))
+									*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = payload
+
+								case golem_core_types.NumericBoundUnsigned:
+									payload := payload.Unsigned()
+									*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(1))
+									*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
+
+								case golem_core_types.NumericBoundFloatBits:
+									payload := payload.FloatBits()
+									*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(2))
+									*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
+
+								default:
+									panic("unreachable")
+								}
+
+							default:
+								panic("unreachable")
+							}
+
+							switch (payload).Max.Tag() {
+							case witTypes.OptionNone:
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(0))
+
+							case witTypes.OptionSome:
+								payload := (payload).Max.Some()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(1))
+
+								switch payload.Tag() {
+								case golem_core_types.NumericBoundSigned:
+									payload := payload.Signed()
+									*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(0))
+									*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = payload
+
+								case golem_core_types.NumericBoundUnsigned:
+									payload := payload.Unsigned()
+									*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(1))
+									*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
+
+								case golem_core_types.NumericBoundFloatBits:
+									payload := payload.FloatBits()
+									*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(2))
+									*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
+
+								default:
+									panic("unreachable")
+								}
+
+							default:
+								panic("unreachable")
+							}
+
+							switch (payload).Unit.Tag() {
+							case witTypes.OptionNone:
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(0))
+
+							case witTypes.OptionSome:
+								payload := (payload).Unit.Some()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(1))
+								utf8203 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8203)
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = uint32(uint32(len(payload)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4))) = uint32(uintptr(uintptr(utf8203)))
+
+							default:
+								panic("unreachable")
+							}
+
+						default:
+							panic("unreachable")
+						}
+
 					case golem_core_types.SchemaTypeBodyCharType:
 
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
@@ -15443,15 +15522,15 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case golem_core_types.SchemaTypeBodyRecordType:
 						payload := (element).Body.RecordType()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(14))
-						slice215 := payload
-						length217 := uint32(len(slice215))
-						result216 := witRuntime.Allocate(pinner, uintptr(length217*(17*4)), 4)
-						for index, element := range slice215 {
-							base := unsafe.Add(result216, index*(17*4))
-							utf8203 := unsafe.Pointer(unsafe.StringData((element).Name))
-							pinner.Pin(utf8203)
+						slice216 := payload
+						length218 := uint32(len(slice216))
+						result217 := witRuntime.Allocate(pinner, uintptr(length218*(17*4)), 4)
+						for index, element := range slice216 {
+							base := unsafe.Add(result217, index*(17*4))
+							utf8204 := unsafe.Pointer(unsafe.StringData((element).Name))
+							pinner.Pin(utf8204)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8203)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8204)))
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = (element).Body
 
 							switch ((element).Metadata).Doc.Tag() {
@@ -15461,42 +15540,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case witTypes.OptionSome:
 								payload := ((element).Metadata).Doc.Some()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(1))
-								utf8204 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8204)
+								utf8205 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8205)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8204)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8205)))
 
 							default:
 								panic("unreachable")
 							}
-							slice206 := ((element).Metadata).Aliases
-							length208 := uint32(len(slice206))
-							result207 := witRuntime.Allocate(pinner, uintptr(length208*(2*4)), 4)
-							for index, element := range slice206 {
-								base := unsafe.Add(result207, index*(2*4))
-								utf8205 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8205)
+							slice207 := ((element).Metadata).Aliases
+							length209 := uint32(len(slice207))
+							result208 := witRuntime.Allocate(pinner, uintptr(length209*(2*4)), 4)
+							for index, element := range slice207 {
+								base := unsafe.Add(result208, index*(2*4))
+								utf8206 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8206)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8205)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8206)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(length208)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(result207)))
-							slice210 := ((element).Metadata).Examples
-							length212 := uint32(len(slice210))
-							result211 := witRuntime.Allocate(pinner, uintptr(length212*(2*4)), 4)
-							for index, element := range slice210 {
-								base := unsafe.Add(result211, index*(2*4))
-								utf8209 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8209)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(length209)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(result208)))
+							slice211 := ((element).Metadata).Examples
+							length213 := uint32(len(slice211))
+							result212 := witRuntime.Allocate(pinner, uintptr(length213*(2*4)), 4)
+							for index, element := range slice211 {
+								base := unsafe.Add(result212, index*(2*4))
+								utf8210 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8210)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8209)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8210)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(length212)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(result211)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(length213)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(result212)))
 
 							switch ((element).Metadata).Deprecated.Tag() {
 							case witTypes.OptionNone:
@@ -15505,10 +15584,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case witTypes.OptionSome:
 								payload := ((element).Metadata).Deprecated.Some()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = int8(int32(1))
-								utf8213 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8213)
+								utf8214 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8214)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uintptr(uintptr(utf8213)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uintptr(uintptr(utf8214)))
 
 							default:
 								panic("unreachable")
@@ -15538,10 +15617,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 								case golem_core_types.RoleOther:
 									payload := payload.Other()
 									*(*int8)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = int8(int32(3))
-									utf8214 := unsafe.Pointer(unsafe.StringData(payload))
-									pinner.Pin(utf8214)
+									utf8215 := unsafe.Pointer(unsafe.StringData(payload))
+									pinner.Pin(utf8215)
 									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))) = uint32(uint32(len(payload)))
-									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(uintptr(uintptr(utf8214)))
+									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(uintptr(uintptr(utf8215)))
 
 								default:
 									panic("unreachable")
@@ -15553,21 +15632,21 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length217)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result216)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length218)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result217)))
 
 					case golem_core_types.SchemaTypeBodyVariantType:
 						payload := (element).Body.VariantType()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(15))
-						slice230 := payload
-						length232 := uint32(len(slice230))
-						result231 := witRuntime.Allocate(pinner, uintptr(length232*(8+16*4)), 4)
-						for index, element := range slice230 {
-							base := unsafe.Add(result231, index*(8+16*4))
-							utf8218 := unsafe.Pointer(unsafe.StringData((element).Name))
-							pinner.Pin(utf8218)
+						slice231 := payload
+						length233 := uint32(len(slice231))
+						result232 := witRuntime.Allocate(pinner, uintptr(length233*(8+16*4)), 4)
+						for index, element := range slice231 {
+							base := unsafe.Add(result232, index*(8+16*4))
+							utf8219 := unsafe.Pointer(unsafe.StringData((element).Name))
+							pinner.Pin(utf8219)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8218)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8219)))
 
 							switch (element).Payload.Tag() {
 							case witTypes.OptionNone:
@@ -15589,42 +15668,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case witTypes.OptionSome:
 								payload := ((element).Metadata).Doc.Some()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-								utf8219 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8219)
+								utf8220 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8220)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8219)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8220)))
 
 							default:
 								panic("unreachable")
 							}
-							slice221 := ((element).Metadata).Aliases
-							length223 := uint32(len(slice221))
-							result222 := witRuntime.Allocate(pinner, uintptr(length223*(2*4)), 4)
-							for index, element := range slice221 {
-								base := unsafe.Add(result222, index*(2*4))
-								utf8220 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8220)
+							slice222 := ((element).Metadata).Aliases
+							length224 := uint32(len(slice222))
+							result223 := witRuntime.Allocate(pinner, uintptr(length224*(2*4)), 4)
+							for index, element := range slice222 {
+								base := unsafe.Add(result223, index*(2*4))
+								utf8221 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8221)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8220)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8221)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length223)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result222)))
-							slice225 := ((element).Metadata).Examples
-							length227 := uint32(len(slice225))
-							result226 := witRuntime.Allocate(pinner, uintptr(length227*(2*4)), 4)
-							for index, element := range slice225 {
-								base := unsafe.Add(result226, index*(2*4))
-								utf8224 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8224)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length224)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result223)))
+							slice226 := ((element).Metadata).Examples
+							length228 := uint32(len(slice226))
+							result227 := witRuntime.Allocate(pinner, uintptr(length228*(2*4)), 4)
+							for index, element := range slice226 {
+								base := unsafe.Add(result227, index*(2*4))
+								utf8225 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8225)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8224)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8225)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length227)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result226)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length228)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result227)))
 
 							switch ((element).Metadata).Deprecated.Tag() {
 							case witTypes.OptionNone:
@@ -15633,10 +15712,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case witTypes.OptionSome:
 								payload := ((element).Metadata).Deprecated.Some()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4))) = int8(int32(1))
-								utf8228 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8228)
+								utf8229 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8229)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8228)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8229)))
 
 							default:
 								panic("unreachable")
@@ -15666,10 +15745,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 								case golem_core_types.RoleOther:
 									payload := payload.Other()
 									*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4))) = int8(int32(3))
-									utf8229 := unsafe.Pointer(unsafe.StringData(payload))
-									pinner.Pin(utf8229)
+									utf8230 := unsafe.Pointer(unsafe.StringData(payload))
+									pinner.Pin(utf8230)
 									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))) = uint32(uint32(len(payload)))
-									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8229)))
+									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8230)))
 
 								default:
 									panic("unreachable")
@@ -15681,59 +15760,59 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length232)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result231)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length233)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result232)))
 
 					case golem_core_types.SchemaTypeBodyEnumType:
 						payload := (element).Body.EnumType()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-						slice234 := payload
-						length236 := uint32(len(slice234))
-						result235 := witRuntime.Allocate(pinner, uintptr(length236*(2*4)), 4)
-						for index, element := range slice234 {
-							base := unsafe.Add(result235, index*(2*4))
-							utf8233 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8233)
+						slice235 := payload
+						length237 := uint32(len(slice235))
+						result236 := witRuntime.Allocate(pinner, uintptr(length237*(2*4)), 4)
+						for index, element := range slice235 {
+							base := unsafe.Add(result236, index*(2*4))
+							utf8234 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8234)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8233)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8234)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length236)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result235)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length237)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result236)))
 
 					case golem_core_types.SchemaTypeBodyFlagsType:
 						payload := (element).Body.FlagsType()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
-						slice238 := payload
-						length240 := uint32(len(slice238))
-						result239 := witRuntime.Allocate(pinner, uintptr(length240*(2*4)), 4)
-						for index, element := range slice238 {
-							base := unsafe.Add(result239, index*(2*4))
-							utf8237 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8237)
+						slice239 := payload
+						length241 := uint32(len(slice239))
+						result240 := witRuntime.Allocate(pinner, uintptr(length241*(2*4)), 4)
+						for index, element := range slice239 {
+							base := unsafe.Add(result240, index*(2*4))
+							utf8238 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8238)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8237)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8238)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length240)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result239)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length241)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result240)))
 
 					case golem_core_types.SchemaTypeBodyTupleType:
 						payload := (element).Body.TupleType()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
-						slice241 := payload
-						length243 := uint32(len(slice241))
-						result242 := witRuntime.Allocate(pinner, uintptr(length243*4), 4)
-						for index, element := range slice241 {
-							base := unsafe.Add(result242, index*4)
+						slice242 := payload
+						length244 := uint32(len(slice242))
+						result243 := witRuntime.Allocate(pinner, uintptr(length244*4), 4)
+						for index, element := range slice242 {
+							base := unsafe.Add(result243, index*4)
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length243)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result242)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length244)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result243)))
 
 					case golem_core_types.SchemaTypeBodyListType:
 						payload := (element).Body.ListType()
@@ -15798,20 +15877,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := (payload).Languages.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-							slice245 := payload
-							length247 := uint32(len(slice245))
-							result246 := witRuntime.Allocate(pinner, uintptr(length247*(2*4)), 4)
-							for index, element := range slice245 {
-								base := unsafe.Add(result246, index*(2*4))
-								utf8244 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8244)
+							slice246 := payload
+							length248 := uint32(len(slice246))
+							result247 := witRuntime.Allocate(pinner, uintptr(length248*(2*4)), 4)
+							for index, element := range slice246 {
+								base := unsafe.Add(result247, index*(2*4))
+								utf8245 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8245)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8244)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8245)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length247)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result246)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length248)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result247)))
 
 						default:
 							panic("unreachable")
@@ -15850,10 +15929,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := (payload).Regex.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4))) = int8(int32(1))
-							utf8248 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8248)
+							utf8249 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8249)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))) = uint32(uintptr(uintptr(utf8248)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))) = uint32(uintptr(uintptr(utf8249)))
 
 						default:
 							panic("unreachable")
@@ -15870,20 +15949,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := (payload).MimeTypes.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-							slice250 := payload
-							length252 := uint32(len(slice250))
-							result251 := witRuntime.Allocate(pinner, uintptr(length252*(2*4)), 4)
-							for index, element := range slice250 {
-								base := unsafe.Add(result251, index*(2*4))
-								utf8249 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8249)
+							slice251 := payload
+							length253 := uint32(len(slice251))
+							result252 := witRuntime.Allocate(pinner, uintptr(length253*(2*4)), 4)
+							for index, element := range slice251 {
+								base := unsafe.Add(result252, index*(2*4))
+								utf8250 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8250)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8249)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8250)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length252)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result251)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length253)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result252)))
 
 						default:
 							panic("unreachable")
@@ -15928,20 +16007,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := (payload).AllowedMimeTypes.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = int8(int32(1))
-							slice254 := payload
-							length256 := uint32(len(slice254))
-							result255 := witRuntime.Allocate(pinner, uintptr(length256*(2*4)), 4)
-							for index, element := range slice254 {
-								base := unsafe.Add(result255, index*(2*4))
-								utf8253 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8253)
+							slice255 := payload
+							length257 := uint32(len(slice255))
+							result256 := witRuntime.Allocate(pinner, uintptr(length257*(2*4)), 4)
+							for index, element := range slice255 {
+								base := unsafe.Add(result256, index*(2*4))
+								utf8254 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8254)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8253)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8254)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length256)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result255)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length257)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result256)))
 
 						default:
 							panic("unreachable")
@@ -15954,20 +16033,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := (payload).AllowedExtensions.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = int8(int32(1))
-							slice258 := payload
-							length260 := uint32(len(slice258))
-							result259 := witRuntime.Allocate(pinner, uintptr(length260*(2*4)), 4)
-							for index, element := range slice258 {
-								base := unsafe.Add(result259, index*(2*4))
-								utf8257 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8257)
+							slice259 := payload
+							length261 := uint32(len(slice259))
+							result260 := witRuntime.Allocate(pinner, uintptr(length261*(2*4)), 4)
+							for index, element := range slice259 {
+								base := unsafe.Add(result260, index*(2*4))
+								utf8258 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8258)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8257)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8258)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length260)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result259)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length261)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result260)))
 
 						default:
 							panic("unreachable")
@@ -15984,20 +16063,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := (payload).AllowedSchemes.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-							slice262 := payload
-							length264 := uint32(len(slice262))
-							result263 := witRuntime.Allocate(pinner, uintptr(length264*(2*4)), 4)
-							for index, element := range slice262 {
-								base := unsafe.Add(result263, index*(2*4))
-								utf8261 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8261)
+							slice263 := payload
+							length265 := uint32(len(slice263))
+							result264 := witRuntime.Allocate(pinner, uintptr(length265*(2*4)), 4)
+							for index, element := range slice263 {
+								base := unsafe.Add(result264, index*(2*4))
+								utf8262 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8262)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8261)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8262)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length264)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result263)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length265)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result264)))
 
 						default:
 							panic("unreachable")
@@ -16010,20 +16089,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := (payload).AllowedHosts.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = int8(int32(1))
-							slice266 := payload
-							length268 := uint32(len(slice266))
-							result267 := witRuntime.Allocate(pinner, uintptr(length268*(2*4)), 4)
-							for index, element := range slice266 {
-								base := unsafe.Add(result267, index*(2*4))
-								utf8265 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8265)
+							slice267 := payload
+							length269 := uint32(len(slice267))
+							result268 := witRuntime.Allocate(pinner, uintptr(length269*(2*4)), 4)
+							for index, element := range slice267 {
+								base := unsafe.Add(result268, index*(2*4))
+								utf8266 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8266)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8265)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8266)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(length268)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uintptr(uintptr(result267)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(length269)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uintptr(uintptr(result268)))
 
 						default:
 							panic("unreachable")
@@ -16040,24 +16119,24 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case golem_core_types.SchemaTypeBodyQuantityType:
 						payload := (element).Body.QuantityType()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-						utf8269 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
-						pinner.Pin(utf8269)
+						utf8270 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
+						pinner.Pin(utf8270)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).BaseUnit)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8269)))
-						slice271 := (payload).AllowedSuffixes
-						length273 := uint32(len(slice271))
-						result272 := witRuntime.Allocate(pinner, uintptr(length273*(2*4)), 4)
-						for index, element := range slice271 {
-							base := unsafe.Add(result272, index*(2*4))
-							utf8270 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8270)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8270)))
+						slice272 := (payload).AllowedSuffixes
+						length274 := uint32(len(slice272))
+						result273 := witRuntime.Allocate(pinner, uintptr(length274*(2*4)), 4)
+						for index, element := range slice272 {
+							base := unsafe.Add(result273, index*(2*4))
+							utf8271 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8271)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8270)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8271)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length273)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result272)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length274)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result273)))
 
 						switch (payload).Min.Tag() {
 						case witTypes.OptionNone:
@@ -16068,10 +16147,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = int8(int32(1))
 							*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))) = (payload).Mantissa
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))) = (payload).Scale
-							utf8274 := unsafe.Pointer(unsafe.StringData((payload).Unit))
-							pinner.Pin(utf8274)
+							utf8275 := unsafe.Pointer(unsafe.StringData((payload).Unit))
+							pinner.Pin(utf8275)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))) = uint32(uint32(len((payload).Unit)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))) = uint32(uintptr(uintptr(utf8274)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))) = uint32(uintptr(uintptr(utf8275)))
 
 						default:
 							panic("unreachable")
@@ -16086,10 +16165,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (32 + 6*4))) = int8(int32(1))
 							*(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))) = (payload).Mantissa
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))) = (payload).Scale
-							utf8275 := unsafe.Pointer(unsafe.StringData((payload).Unit))
-							pinner.Pin(utf8275)
+							utf8276 := unsafe.Pointer(unsafe.StringData((payload).Unit))
+							pinner.Pin(utf8276)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))) = uint32(uint32(len((payload).Unit)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4))) = uint32(uintptr(uintptr(utf8275)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4))) = uint32(uintptr(uintptr(utf8276)))
 
 						default:
 							panic("unreachable")
@@ -16098,57 +16177,57 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case golem_core_types.SchemaTypeBodyUnionType:
 						payload := (element).Body.UnionType()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
-						slice295 := (payload).Branches
-						length297 := uint32(len(slice295))
-						result296 := witRuntime.Allocate(pinner, uintptr(length297*(23*4)), 4)
-						for index, element := range slice295 {
-							base := unsafe.Add(result296, index*(23*4))
-							utf8276 := unsafe.Pointer(unsafe.StringData((element).Tag))
-							pinner.Pin(utf8276)
+						slice296 := (payload).Branches
+						length298 := uint32(len(slice296))
+						result297 := witRuntime.Allocate(pinner, uintptr(length298*(23*4)), 4)
+						for index, element := range slice296 {
+							base := unsafe.Add(result297, index*(23*4))
+							utf8277 := unsafe.Pointer(unsafe.StringData((element).Tag))
+							pinner.Pin(utf8277)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Tag)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8276)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8277)))
 							*(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = (element).Body
 
 							switch (element).Discriminator.Tag() {
 							case golem_core_types.DiscriminatorRulePrefix:
 								payload := (element).Discriminator.Prefix()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(0))
-								utf8277 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8277)
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8277)))
-
-							case golem_core_types.DiscriminatorRuleSuffix:
-								payload := (element).Discriminator.Suffix()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(1))
 								utf8278 := unsafe.Pointer(unsafe.StringData(payload))
 								pinner.Pin(utf8278)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8278)))
 
-							case golem_core_types.DiscriminatorRuleContains:
-								payload := (element).Discriminator.Contains()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(2))
+							case golem_core_types.DiscriminatorRuleSuffix:
+								payload := (element).Discriminator.Suffix()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(1))
 								utf8279 := unsafe.Pointer(unsafe.StringData(payload))
 								pinner.Pin(utf8279)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8279)))
 
-							case golem_core_types.DiscriminatorRuleRegex:
-								payload := (element).Discriminator.Regex()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(3))
+							case golem_core_types.DiscriminatorRuleContains:
+								payload := (element).Discriminator.Contains()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(2))
 								utf8280 := unsafe.Pointer(unsafe.StringData(payload))
 								pinner.Pin(utf8280)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8280)))
 
+							case golem_core_types.DiscriminatorRuleRegex:
+								payload := (element).Discriminator.Regex()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(3))
+								utf8281 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8281)
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8281)))
+
 							case golem_core_types.DiscriminatorRuleFieldEquals:
 								payload := (element).Discriminator.FieldEquals()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(4))
-								utf8281 := unsafe.Pointer(unsafe.StringData((payload).FieldName))
-								pinner.Pin(utf8281)
+								utf8282 := unsafe.Pointer(unsafe.StringData((payload).FieldName))
+								pinner.Pin(utf8282)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((payload).FieldName)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8281)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8282)))
 
 								switch (payload).Literal.Tag() {
 								case witTypes.OptionNone:
@@ -16157,10 +16236,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 								case witTypes.OptionSome:
 									payload := (payload).Literal.Some()
 									*(*int8)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = int8(int32(1))
-									utf8282 := unsafe.Pointer(unsafe.StringData(payload))
-									pinner.Pin(utf8282)
+									utf8283 := unsafe.Pointer(unsafe.StringData(payload))
+									pinner.Pin(utf8283)
 									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uint32(len(payload)))
-									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8282)))
+									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8283)))
 
 								default:
 									panic("unreachable")
@@ -16169,10 +16248,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case golem_core_types.DiscriminatorRuleFieldAbsent:
 								payload := (element).Discriminator.FieldAbsent()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(5))
-								utf8283 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8283)
+								utf8284 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8284)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8283)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8284)))
 
 							default:
 								panic("unreachable")
@@ -16185,42 +16264,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case witTypes.OptionSome:
 								payload := ((element).Metadata).Doc.Some()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = int8(int32(1))
-								utf8284 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8284)
+								utf8285 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8285)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(utf8284)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(utf8285)))
 
 							default:
 								panic("unreachable")
 							}
-							slice286 := ((element).Metadata).Aliases
-							length288 := uint32(len(slice286))
-							result287 := witRuntime.Allocate(pinner, uintptr(length288*(2*4)), 4)
-							for index, element := range slice286 {
-								base := unsafe.Add(result287, index*(2*4))
-								utf8285 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8285)
+							slice287 := ((element).Metadata).Aliases
+							length289 := uint32(len(slice287))
+							result288 := witRuntime.Allocate(pinner, uintptr(length289*(2*4)), 4)
+							for index, element := range slice287 {
+								base := unsafe.Add(result288, index*(2*4))
+								utf8286 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8286)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8285)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8286)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))) = uint32(length288)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uintptr(uintptr(result287)))
-							slice290 := ((element).Metadata).Examples
-							length292 := uint32(len(slice290))
-							result291 := witRuntime.Allocate(pinner, uintptr(length292*(2*4)), 4)
-							for index, element := range slice290 {
-								base := unsafe.Add(result291, index*(2*4))
-								utf8289 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8289)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))) = uint32(length289)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uintptr(uintptr(result288)))
+							slice291 := ((element).Metadata).Examples
+							length293 := uint32(len(slice291))
+							result292 := witRuntime.Allocate(pinner, uintptr(length293*(2*4)), 4)
+							for index, element := range slice291 {
+								base := unsafe.Add(result292, index*(2*4))
+								utf8290 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8290)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8289)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8290)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(length292)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = uint32(uintptr(uintptr(result291)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(length293)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = uint32(uintptr(uintptr(result292)))
 
 							switch ((element).Metadata).Deprecated.Tag() {
 							case witTypes.OptionNone:
@@ -16229,10 +16308,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case witTypes.OptionSome:
 								payload := ((element).Metadata).Deprecated.Some()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (16 * 4))) = int8(int32(1))
-								utf8293 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8293)
+								utf8294 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8294)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4))) = uint32(uintptr(uintptr(utf8293)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4))) = uint32(uintptr(uintptr(utf8294)))
 
 							default:
 								panic("unreachable")
@@ -16262,10 +16341,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 								case golem_core_types.RoleOther:
 									payload := payload.Other()
 									*(*int8)(unsafe.Add(unsafe.Pointer(base), (20 * 4))) = int8(int32(3))
-									utf8294 := unsafe.Pointer(unsafe.StringData(payload))
-									pinner.Pin(utf8294)
+									utf8295 := unsafe.Pointer(unsafe.StringData(payload))
+									pinner.Pin(utf8295)
 									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))) = uint32(uint32(len(payload)))
-									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))) = uint32(uintptr(uintptr(utf8294)))
+									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))) = uint32(uintptr(uintptr(utf8295)))
 
 								default:
 									panic("unreachable")
@@ -16277,8 +16356,8 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length297)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result296)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length298)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result297)))
 
 					case golem_core_types.SchemaTypeBodySecretType:
 						payload := (element).Body.SecretType()
@@ -16292,10 +16371,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := (payload).Category.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = int8(int32(1))
-							utf8298 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8298)
+							utf8299 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8299)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(utf8298)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(utf8299)))
 
 						default:
 							panic("unreachable")
@@ -16312,18 +16391,29 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := (payload).ResourceName.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-							utf8299 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8299)
+							utf8300 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8300)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(utf8299)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(utf8300)))
 
 						default:
 							panic("unreachable")
 						}
 
+					case golem_core_types.SchemaTypeBodyPermissionCardType:
+						payload := (element).Body.PermissionCardType()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+						var result301 int32
+						if (payload).Polymorphic {
+							result301 = 1
+						} else {
+							result301 = 0
+						}
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result301)
+
 					case golem_core_types.SchemaTypeBodyFutureType:
 						payload := (element).Body.FutureType()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -16340,7 +16430,7 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 					case golem_core_types.SchemaTypeBodyStreamType:
 						payload := (element).Body.StreamType()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 						switch payload.Tag() {
 						case witTypes.OptionNone:
@@ -16366,42 +16456,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Doc.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 8*4))) = int8(int32(1))
-						utf8300 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8300)
+						utf8302 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8302)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8300)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8302)))
 
 					default:
 						panic("unreachable")
 					}
-					slice302 := ((element).Metadata).Aliases
-					length304 := uint32(len(slice302))
-					result303 := witRuntime.Allocate(pinner, uintptr(length304*(2*4)), 4)
-					for index, element := range slice302 {
-						base := unsafe.Add(result303, index*(2*4))
-						utf8301 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8301)
+					slice304 := ((element).Metadata).Aliases
+					length306 := uint32(len(slice304))
+					result305 := witRuntime.Allocate(pinner, uintptr(length306*(2*4)), 4)
+					for index, element := range slice304 {
+						base := unsafe.Add(result305, index*(2*4))
+						utf8303 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8303)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8301)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8303)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length304)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result303)))
-					slice306 := ((element).Metadata).Examples
-					length308 := uint32(len(slice306))
-					result307 := witRuntime.Allocate(pinner, uintptr(length308*(2*4)), 4)
-					for index, element := range slice306 {
-						base := unsafe.Add(result307, index*(2*4))
-						utf8305 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8305)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length306)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result305)))
+					slice308 := ((element).Metadata).Examples
+					length310 := uint32(len(slice308))
+					result309 := witRuntime.Allocate(pinner, uintptr(length310*(2*4)), 4)
+					for index, element := range slice308 {
+						base := unsafe.Add(result309, index*(2*4))
+						utf8307 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8307)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8305)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8307)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length308)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result307)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length310)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result309)))
 
 					switch ((element).Metadata).Deprecated.Tag() {
 					case witTypes.OptionNone:
@@ -16410,10 +16500,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := ((element).Metadata).Deprecated.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 15*4))) = int8(int32(1))
-						utf8309 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8309)
+						utf8311 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8311)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8309)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8311)))
 
 					default:
 						panic("unreachable")
@@ -16443,10 +16533,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case golem_core_types.RoleOther:
 							payload := payload.Other()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 19*4))) = int8(int32(3))
-							utf8310 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8310)
+							utf8312 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8312)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8310)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8312)))
 
 						default:
 							panic("unreachable")
@@ -16458,17 +16548,17 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(length313)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uintptr(uintptr(result312)))
-				slice316 := ((element).Schema).Defs
-				length318 := uint32(len(slice316))
-				result317 := witRuntime.Allocate(pinner, uintptr(length318*(6*4)), 4)
-				for index, element := range slice316 {
-					base := unsafe.Add(result317, index*(6*4))
-					utf8314 := unsafe.Pointer(unsafe.StringData((element).Id))
-					pinner.Pin(utf8314)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(length315)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uintptr(uintptr(result314)))
+				slice318 := ((element).Schema).Defs
+				length320 := uint32(len(slice318))
+				result319 := witRuntime.Allocate(pinner, uintptr(length320*(6*4)), 4)
+				for index, element := range slice318 {
+					base := unsafe.Add(result319, index*(6*4))
+					utf8316 := unsafe.Pointer(unsafe.StringData((element).Id))
+					pinner.Pin(utf8316)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Id)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8314)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8316)))
 
 					switch (element).Name.Tag() {
 					case witTypes.OptionNone:
@@ -16477,10 +16567,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (element).Name.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(1))
-						utf8315 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8315)
+						utf8317 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8317)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8315)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8317)))
 
 					default:
 						panic("unreachable")
@@ -16489,8 +16579,8 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(length318)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(result317)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(length320)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(result319)))
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = ((element).Schema).Root
 
 				switch ((element).Constructor).Name.Tag() {
@@ -16500,18 +16590,18 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case witTypes.OptionSome:
 					payload := ((element).Constructor).Name.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = int8(int32(1))
-					utf8319 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8319)
+					utf8321 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8321)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uintptr(uintptr(utf8319)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uintptr(uintptr(utf8321)))
 
 				default:
 					panic("unreachable")
 				}
-				utf8320 := unsafe.Pointer(unsafe.StringData(((element).Constructor).Description))
-				pinner.Pin(utf8320)
+				utf8322 := unsafe.Pointer(unsafe.StringData(((element).Constructor).Description))
+				pinner.Pin(utf8322)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = uint32(uint32(len(((element).Constructor).Description)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))) = uint32(uintptr(uintptr(utf8320)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))) = uint32(uintptr(uintptr(utf8322)))
 
 				switch ((element).Constructor).PromptHint.Tag() {
 				case witTypes.OptionNone:
@@ -16520,10 +16610,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case witTypes.OptionSome:
 					payload := ((element).Constructor).PromptHint.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = int8(int32(1))
-					utf8321 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8321)
+					utf8323 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8323)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))) = uint32(uintptr(uintptr(utf8321)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))) = uint32(uintptr(uintptr(utf8323)))
 
 				default:
 					panic("unreachable")
@@ -16533,15 +16623,15 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case golem_agent_common.InputSchemaParameters:
 					payload := ((element).Constructor).InputSchema.Parameters()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (18 * 4))) = int8(int32(0))
-					slice334 := payload
-					length336 := uint32(len(slice334))
-					result335 := witRuntime.Allocate(pinner, uintptr(length336*(8+16*4)), 4)
-					for index, element := range slice334 {
-						base := unsafe.Add(result335, index*(8+16*4))
-						utf8322 := unsafe.Pointer(unsafe.StringData((element).Name))
-						pinner.Pin(utf8322)
+					slice336 := payload
+					length338 := uint32(len(slice336))
+					result337 := witRuntime.Allocate(pinner, uintptr(length338*(8+16*4)), 4)
+					for index, element := range slice336 {
+						base := unsafe.Add(result337, index*(8+16*4))
+						utf8324 := unsafe.Pointer(unsafe.StringData((element).Name))
+						pinner.Pin(utf8324)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8322)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8324)))
 
 						switch (element).Source.Tag() {
 						case golem_agent_common.FieldSourceUserSupplied:
@@ -16565,42 +16655,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := ((element).Metadata).Doc.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-							utf8323 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8323)
+							utf8325 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8325)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8323)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8325)))
 
 						default:
 							panic("unreachable")
 						}
-						slice325 := ((element).Metadata).Aliases
-						length327 := uint32(len(slice325))
-						result326 := witRuntime.Allocate(pinner, uintptr(length327*(2*4)), 4)
-						for index, element := range slice325 {
-							base := unsafe.Add(result326, index*(2*4))
-							utf8324 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8324)
+						slice327 := ((element).Metadata).Aliases
+						length329 := uint32(len(slice327))
+						result328 := witRuntime.Allocate(pinner, uintptr(length329*(2*4)), 4)
+						for index, element := range slice327 {
+							base := unsafe.Add(result328, index*(2*4))
+							utf8326 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8326)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8324)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8326)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length327)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result326)))
-						slice329 := ((element).Metadata).Examples
-						length331 := uint32(len(slice329))
-						result330 := witRuntime.Allocate(pinner, uintptr(length331*(2*4)), 4)
-						for index, element := range slice329 {
-							base := unsafe.Add(result330, index*(2*4))
-							utf8328 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8328)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length329)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result328)))
+						slice331 := ((element).Metadata).Examples
+						length333 := uint32(len(slice331))
+						result332 := witRuntime.Allocate(pinner, uintptr(length333*(2*4)), 4)
+						for index, element := range slice331 {
+							base := unsafe.Add(result332, index*(2*4))
+							utf8330 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8330)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8328)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8330)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length331)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result330)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length333)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result332)))
 
 						switch ((element).Metadata).Deprecated.Tag() {
 						case witTypes.OptionNone:
@@ -16609,10 +16699,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := ((element).Metadata).Deprecated.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4))) = int8(int32(1))
-							utf8332 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8332)
+							utf8334 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8334)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8332)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8334)))
 
 						default:
 							panic("unreachable")
@@ -16642,10 +16732,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case golem_core_types.RoleOther:
 								payload := payload.Other()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4))) = int8(int32(3))
-								utf8333 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8333)
+								utf8335 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8335)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8333)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8335)))
 
 							default:
 								panic("unreachable")
@@ -16657,30 +16747,30 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4))) = uint32(length336)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 * 4))) = uint32(uintptr(uintptr(result335)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4))) = uint32(length338)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 * 4))) = uint32(uintptr(uintptr(result337)))
 
 				default:
 					panic("unreachable")
 				}
-				slice381 := (element).Methods
-				length383 := uint32(len(slice381))
-				result382 := witRuntime.Allocate(pinner, uintptr(length383*(40+12*4)), 8)
-				for index, element := range slice381 {
-					base := unsafe.Add(result382, index*(40+12*4))
-					utf8337 := unsafe.Pointer(unsafe.StringData((element).Name))
-					pinner.Pin(utf8337)
+				slice383 := (element).Methods
+				length385 := uint32(len(slice383))
+				result384 := witRuntime.Allocate(pinner, uintptr(length385*(40+12*4)), 8)
+				for index, element := range slice383 {
+					base := unsafe.Add(result384, index*(40+12*4))
+					utf8339 := unsafe.Pointer(unsafe.StringData((element).Name))
+					pinner.Pin(utf8339)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8337)))
-					utf8338 := unsafe.Pointer(unsafe.StringData((element).Description))
-					pinner.Pin(utf8338)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8339)))
+					utf8340 := unsafe.Pointer(unsafe.StringData((element).Description))
+					pinner.Pin(utf8340)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).Description)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8338)))
-					slice361 := (element).HttpEndpoint
-					length363 := uint32(len(slice361))
-					result362 := witRuntime.Allocate(pinner, uintptr(length363*(12*4)), 4)
-					for index, element := range slice361 {
-						base := unsafe.Add(result362, index*(12*4))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8340)))
+					slice363 := (element).HttpEndpoint
+					length365 := uint32(len(slice363))
+					result364 := witRuntime.Allocate(pinner, uintptr(length365*(12*4)), 4)
+					for index, element := range slice363 {
+						base := unsafe.Add(result364, index*(12*4))
 
 						switch (element).HttpMethod.Tag() {
 						case golem_agent_common.HttpMethodGet:
@@ -16722,28 +16812,28 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case golem_agent_common.HttpMethodCustom:
 							payload := (element).HttpMethod.Custom()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
-							utf8339 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8339)
+							utf8341 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8341)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8339)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8341)))
 
 						default:
 							panic("unreachable")
 						}
-						slice343 := (element).PathSuffix
-						length345 := uint32(len(slice343))
-						result344 := witRuntime.Allocate(pinner, uintptr(length345*(3*4)), 4)
-						for index, element := range slice343 {
-							base := unsafe.Add(result344, index*(3*4))
+						slice345 := (element).PathSuffix
+						length347 := uint32(len(slice345))
+						result346 := witRuntime.Allocate(pinner, uintptr(length347*(3*4)), 4)
+						for index, element := range slice345 {
+							base := unsafe.Add(result346, index*(3*4))
 
 							switch element.Tag() {
 							case golem_agent_common.PathSegmentLiteral:
 								payload := element.Literal()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-								utf8340 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8340)
+								utf8342 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8342)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8340)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8342)))
 
 							case golem_agent_common.PathSegmentSystemVariable:
 								payload := element.SystemVariable()
@@ -16753,18 +16843,18 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case golem_agent_common.PathSegmentPathVariable:
 								payload := element.PathVariable()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-								utf8341 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-								pinner.Pin(utf8341)
+								utf8343 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+								pinner.Pin(utf8343)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8341)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8343)))
 
 							case golem_agent_common.PathSegmentRemainingPathVariable:
 								payload := element.RemainingPathVariable()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-								utf8342 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-								pinner.Pin(utf8342)
+								utf8344 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+								pinner.Pin(utf8344)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8342)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8344)))
 
 							default:
 								panic("unreachable")
@@ -16772,44 +16862,44 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(length345)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(result344)))
-						slice348 := (element).HeaderVars
-						length350 := uint32(len(slice348))
-						result349 := witRuntime.Allocate(pinner, uintptr(length350*(4*4)), 4)
-						for index, element := range slice348 {
-							base := unsafe.Add(result349, index*(4*4))
-							utf8346 := unsafe.Pointer(unsafe.StringData((element).HeaderName))
-							pinner.Pin(utf8346)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(length347)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(result346)))
+						slice350 := (element).HeaderVars
+						length352 := uint32(len(slice350))
+						result351 := witRuntime.Allocate(pinner, uintptr(length352*(4*4)), 4)
+						for index, element := range slice350 {
+							base := unsafe.Add(result351, index*(4*4))
+							utf8348 := unsafe.Pointer(unsafe.StringData((element).HeaderName))
+							pinner.Pin(utf8348)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).HeaderName)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8346)))
-							utf8347 := unsafe.Pointer(unsafe.StringData((element).VariableName))
-							pinner.Pin(utf8347)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8348)))
+							utf8349 := unsafe.Pointer(unsafe.StringData((element).VariableName))
+							pinner.Pin(utf8349)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).VariableName)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8347)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8349)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(length350)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uintptr(uintptr(result349)))
-						slice353 := (element).QueryVars
-						length355 := uint32(len(slice353))
-						result354 := witRuntime.Allocate(pinner, uintptr(length355*(4*4)), 4)
-						for index, element := range slice353 {
-							base := unsafe.Add(result354, index*(4*4))
-							utf8351 := unsafe.Pointer(unsafe.StringData((element).QueryParamName))
-							pinner.Pin(utf8351)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(length352)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uintptr(uintptr(result351)))
+						slice355 := (element).QueryVars
+						length357 := uint32(len(slice355))
+						result356 := witRuntime.Allocate(pinner, uintptr(length357*(4*4)), 4)
+						for index, element := range slice355 {
+							base := unsafe.Add(result356, index*(4*4))
+							utf8353 := unsafe.Pointer(unsafe.StringData((element).QueryParamName))
+							pinner.Pin(utf8353)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).QueryParamName)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8351)))
-							utf8352 := unsafe.Pointer(unsafe.StringData((element).VariableName))
-							pinner.Pin(utf8352)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8353)))
+							utf8354 := unsafe.Pointer(unsafe.StringData((element).VariableName))
+							pinner.Pin(utf8354)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uint32(len((element).VariableName)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8352)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uintptr(uintptr(utf8354)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(length355)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(result354)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(length357)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(result356)))
 
 						switch (element).AuthDetails.Tag() {
 						case witTypes.OptionNone:
@@ -16818,36 +16908,36 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := (element).AuthDetails.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = int8(int32(1))
-							var result356 int32
+							var result358 int32
 							if (payload).Required {
-								result356 = 1
+								result358 = 1
 							} else {
-								result356 = 0
+								result358 = 0
 							}
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), (1 + 9*4))) = int8(result356)
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (1 + 9*4))) = int8(result358)
 
 						default:
 							panic("unreachable")
 						}
-						slice358 := ((element).CorsOptions).AllowedPatterns
-						length360 := uint32(len(slice358))
-						result359 := witRuntime.Allocate(pinner, uintptr(length360*(2*4)), 4)
-						for index, element := range slice358 {
-							base := unsafe.Add(result359, index*(2*4))
-							utf8357 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8357)
+						slice360 := ((element).CorsOptions).AllowedPatterns
+						length362 := uint32(len(slice360))
+						result361 := witRuntime.Allocate(pinner, uintptr(length362*(2*4)), 4)
+						for index, element := range slice360 {
+							base := unsafe.Add(result361, index*(2*4))
+							utf8359 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8359)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8357)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8359)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length360)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result359)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length362)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result361)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(length363)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(result362)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(length365)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(result364)))
 
 					switch (element).PromptHint.Tag() {
 					case witTypes.OptionNone:
@@ -16856,10 +16946,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (element).PromptHint.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = int8(int32(1))
-						utf8364 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8364)
+						utf8366 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8366)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8364)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8366)))
 
 					default:
 						panic("unreachable")
@@ -16869,15 +16959,15 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case golem_agent_common.InputSchemaParameters:
 						payload := (element).InputSchema.Parameters()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = int8(int32(0))
-						slice377 := payload
-						length379 := uint32(len(slice377))
-						result378 := witRuntime.Allocate(pinner, uintptr(length379*(8+16*4)), 4)
-						for index, element := range slice377 {
-							base := unsafe.Add(result378, index*(8+16*4))
-							utf8365 := unsafe.Pointer(unsafe.StringData((element).Name))
-							pinner.Pin(utf8365)
+						slice379 := payload
+						length381 := uint32(len(slice379))
+						result380 := witRuntime.Allocate(pinner, uintptr(length381*(8+16*4)), 4)
+						for index, element := range slice379 {
+							base := unsafe.Add(result380, index*(8+16*4))
+							utf8367 := unsafe.Pointer(unsafe.StringData((element).Name))
+							pinner.Pin(utf8367)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8365)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8367)))
 
 							switch (element).Source.Tag() {
 							case golem_agent_common.FieldSourceUserSupplied:
@@ -16901,42 +16991,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case witTypes.OptionSome:
 								payload := ((element).Metadata).Doc.Some()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-								utf8366 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8366)
+								utf8368 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8368)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8366)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8368)))
 
 							default:
 								panic("unreachable")
 							}
-							slice368 := ((element).Metadata).Aliases
-							length370 := uint32(len(slice368))
-							result369 := witRuntime.Allocate(pinner, uintptr(length370*(2*4)), 4)
-							for index, element := range slice368 {
-								base := unsafe.Add(result369, index*(2*4))
-								utf8367 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8367)
+							slice370 := ((element).Metadata).Aliases
+							length372 := uint32(len(slice370))
+							result371 := witRuntime.Allocate(pinner, uintptr(length372*(2*4)), 4)
+							for index, element := range slice370 {
+								base := unsafe.Add(result371, index*(2*4))
+								utf8369 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8369)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8367)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8369)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length370)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result369)))
-							slice372 := ((element).Metadata).Examples
-							length374 := uint32(len(slice372))
-							result373 := witRuntime.Allocate(pinner, uintptr(length374*(2*4)), 4)
-							for index, element := range slice372 {
-								base := unsafe.Add(result373, index*(2*4))
-								utf8371 := unsafe.Pointer(unsafe.StringData(element))
-								pinner.Pin(utf8371)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length372)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result371)))
+							slice374 := ((element).Metadata).Examples
+							length376 := uint32(len(slice374))
+							result375 := witRuntime.Allocate(pinner, uintptr(length376*(2*4)), 4)
+							for index, element := range slice374 {
+								base := unsafe.Add(result375, index*(2*4))
+								utf8373 := unsafe.Pointer(unsafe.StringData(element))
+								pinner.Pin(utf8373)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8371)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8373)))
 
 							}
 
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length374)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result373)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length376)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result375)))
 
 							switch ((element).Metadata).Deprecated.Tag() {
 							case witTypes.OptionNone:
@@ -16945,10 +17035,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case witTypes.OptionSome:
 								payload := ((element).Metadata).Deprecated.Some()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4))) = int8(int32(1))
-								utf8375 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8375)
+								utf8377 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8377)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8375)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8377)))
 
 							default:
 								panic("unreachable")
@@ -16978,10 +17068,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 								case golem_core_types.RoleOther:
 									payload := payload.Other()
 									*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4))) = int8(int32(3))
-									utf8376 := unsafe.Pointer(unsafe.StringData(payload))
-									pinner.Pin(utf8376)
+									utf8378 := unsafe.Pointer(unsafe.StringData(payload))
+									pinner.Pin(utf8378)
 									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))) = uint32(uint32(len(payload)))
-									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8376)))
+									*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8378)))
 
 								default:
 									panic("unreachable")
@@ -16993,8 +17083,8 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length379)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result378)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(length381)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(result380)))
 
 					default:
 						panic("unreachable")
@@ -17039,13 +17129,13 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						default:
 							panic("unreachable")
 						}
-						var result380 int32
+						var result382 int32
 						if (payload).UsesPrincipal {
-							result380 = 1
+							result382 = 1
 						} else {
-							result380 = 0
+							result382 = 0
 						}
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4))) = int8(result380)
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), (32 + 12*4))) = int8(result382)
 
 					default:
 						panic("unreachable")
@@ -17053,13 +17143,13 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))) = uint32(length383)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))) = uint32(uintptr(uintptr(result382)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))) = uint32(length385)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))) = uint32(uintptr(uintptr(result384)))
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (25 * 4))) = uint32(length386)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 * 4))) = uint32(uintptr(uintptr(result385)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (25 * 4))) = uint32(length388)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 * 4))) = uint32(uintptr(uintptr(result387)))
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), (26 * 4))) = int8(int32((element).Mode))
 
 			switch (element).HttpMount.Tag() {
@@ -17069,20 +17159,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 			case witTypes.OptionSome:
 				payload := (element).HttpMount.Some()
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), (27 * 4))) = int8(int32(1))
-				slice390 := (payload).PathPrefix
-				length392 := uint32(len(slice390))
-				result391 := witRuntime.Allocate(pinner, uintptr(length392*(3*4)), 4)
-				for index, element := range slice390 {
-					base := unsafe.Add(result391, index*(3*4))
+				slice392 := (payload).PathPrefix
+				length394 := uint32(len(slice392))
+				result393 := witRuntime.Allocate(pinner, uintptr(length394*(3*4)), 4)
+				for index, element := range slice392 {
+					base := unsafe.Add(result393, index*(3*4))
 
 					switch element.Tag() {
 					case golem_agent_common.PathSegmentLiteral:
 						payload := element.Literal()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-						utf8387 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8387)
+						utf8389 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8389)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8387)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8389)))
 
 					case golem_agent_common.PathSegmentSystemVariable:
 						payload := element.SystemVariable()
@@ -17092,18 +17182,18 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case golem_agent_common.PathSegmentPathVariable:
 						payload := element.PathVariable()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-						utf8388 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-						pinner.Pin(utf8388)
+						utf8390 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+						pinner.Pin(utf8390)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8388)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8390)))
 
 					case golem_agent_common.PathSegmentRemainingPathVariable:
 						payload := element.RemainingPathVariable()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-						utf8389 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-						pinner.Pin(utf8389)
+						utf8391 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+						pinner.Pin(utf8391)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8389)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8391)))
 
 					default:
 						panic("unreachable")
@@ -17111,8 +17201,8 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (29 * 4))) = uint32(length392)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (28 * 4))) = uint32(uintptr(uintptr(result391)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (29 * 4))) = uint32(length394)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (28 * 4))) = uint32(uintptr(uintptr(result393)))
 
 				switch (payload).AuthDetails.Tag() {
 				case witTypes.OptionNone:
@@ -17121,52 +17211,52 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case witTypes.OptionSome:
 					payload := (payload).AuthDetails.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (30 * 4))) = int8(int32(1))
-					var result393 int32
+					var result395 int32
 					if (payload).Required {
-						result393 = 1
+						result395 = 1
 					} else {
-						result393 = 0
+						result395 = 0
 					}
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), (1 + 30*4))) = int8(result393)
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), (1 + 30*4))) = int8(result395)
 
 				default:
 					panic("unreachable")
 				}
-				var result394 int32
+				var result396 int32
 				if (payload).PhantomAgent {
-					result394 = 1
+					result396 = 1
 				} else {
-					result394 = 0
+					result396 = 0
 				}
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 + 30*4))) = int8(result394)
-				slice396 := ((payload).CorsOptions).AllowedPatterns
-				length398 := uint32(len(slice396))
-				result397 := witRuntime.Allocate(pinner, uintptr(length398*(2*4)), 4)
-				for index, element := range slice396 {
-					base := unsafe.Add(result397, index*(2*4))
-					utf8395 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8395)
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 + 30*4))) = int8(result396)
+				slice398 := ((payload).CorsOptions).AllowedPatterns
+				length400 := uint32(len(slice398))
+				result399 := witRuntime.Allocate(pinner, uintptr(length400*(2*4)), 4)
+				for index, element := range slice398 {
+					base := unsafe.Add(result399, index*(2*4))
+					utf8397 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8397)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8395)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8397)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 * 4))) = uint32(length398)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (31 * 4))) = uint32(uintptr(uintptr(result397)))
-				slice402 := (payload).WebhookSuffix
-				length404 := uint32(len(slice402))
-				result403 := witRuntime.Allocate(pinner, uintptr(length404*(3*4)), 4)
-				for index, element := range slice402 {
-					base := unsafe.Add(result403, index*(3*4))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 * 4))) = uint32(length400)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (31 * 4))) = uint32(uintptr(uintptr(result399)))
+				slice404 := (payload).WebhookSuffix
+				length406 := uint32(len(slice404))
+				result405 := witRuntime.Allocate(pinner, uintptr(length406*(3*4)), 4)
+				for index, element := range slice404 {
+					base := unsafe.Add(result405, index*(3*4))
 
 					switch element.Tag() {
 					case golem_agent_common.PathSegmentLiteral:
 						payload := element.Literal()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-						utf8399 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8399)
+						utf8401 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8401)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8399)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8401)))
 
 					case golem_agent_common.PathSegmentSystemVariable:
 						payload := element.SystemVariable()
@@ -17176,18 +17266,18 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case golem_agent_common.PathSegmentPathVariable:
 						payload := element.PathVariable()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(2))
-						utf8400 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-						pinner.Pin(utf8400)
+						utf8402 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+						pinner.Pin(utf8402)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8400)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8402)))
 
 					case golem_agent_common.PathSegmentRemainingPathVariable:
 						payload := element.RemainingPathVariable()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-						utf8401 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
-						pinner.Pin(utf8401)
+						utf8403 := unsafe.Pointer(unsafe.StringData((payload).VariableName))
+						pinner.Pin(utf8403)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(uint32(len((payload).VariableName)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8401)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(utf8403)))
 
 					default:
 						panic("unreachable")
@@ -17195,8 +17285,8 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (34 * 4))) = uint32(length404)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (33 * 4))) = uint32(uintptr(uintptr(result403)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (34 * 4))) = uint32(length406)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (33 * 4))) = uint32(uintptr(uintptr(result405)))
 
 			default:
 				panic("unreachable")
@@ -17233,37 +17323,37 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 			default:
 				panic("unreachable")
 			}
-			slice409 := (element).Config
-			length411 := uint32(len(slice409))
-			result410 := witRuntime.Allocate(pinner, uintptr(length411*(4*4)), 4)
-			for index, element := range slice409 {
-				base := unsafe.Add(result410, index*(4*4))
+			slice411 := (element).Config
+			length413 := uint32(len(slice411))
+			result412 := witRuntime.Allocate(pinner, uintptr(length413*(4*4)), 4)
+			for index, element := range slice411 {
+				base := unsafe.Add(result412, index*(4*4))
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32((element).Source))
-				slice406 := (element).Path
-				length408 := uint32(len(slice406))
-				result407 := witRuntime.Allocate(pinner, uintptr(length408*(2*4)), 4)
-				for index, element := range slice406 {
-					base := unsafe.Add(result407, index*(2*4))
-					utf8405 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8405)
+				slice408 := (element).Path
+				length410 := uint32(len(slice408))
+				result409 := witRuntime.Allocate(pinner, uintptr(length410*(2*4)), 4)
+				for index, element := range slice408 {
+					base := unsafe.Add(result409, index*(2*4))
+					utf8407 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8407)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8405)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8407)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(length408)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(result407)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = uint32(length410)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uintptr(uintptr(result409)))
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = (element).ValueType
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 35*4))) = uint32(length411)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 34*4))) = uint32(uintptr(uintptr(result410)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 35*4))) = uint32(length413)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 34*4))) = uint32(uintptr(uintptr(result412)))
 
 		}
 
-		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (2 * 4))) = uint32(length414)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), 4)) = uint32(uintptr(uintptr(result413)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (2 * 4))) = uint32(length416)
+		*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), 4)) = uint32(uintptr(uintptr(result415)))
 
 	case witTypes.ResultErr:
 		payload := result.Err()
@@ -17273,43 +17363,43 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 		case golem_agent_common.AgentErrorInvalidInput:
 			payload := payload.InvalidInput()
 			*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), 4)) = int8(int32(0))
-			utf8415 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf8415)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (3 * 4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (2 * 4))) = uint32(uintptr(uintptr(utf8415)))
-
-		case golem_agent_common.AgentErrorInvalidMethod:
-			payload := payload.InvalidMethod()
-			*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), 4)) = int8(int32(1))
-			utf8416 := unsafe.Pointer(unsafe.StringData(payload))
-			pinner.Pin(utf8416)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (3 * 4))) = uint32(uint32(len(payload)))
-			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (2 * 4))) = uint32(uintptr(uintptr(utf8416)))
-
-		case golem_agent_common.AgentErrorInvalidType:
-			payload := payload.InvalidType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), 4)) = int8(int32(2))
 			utf8417 := unsafe.Pointer(unsafe.StringData(payload))
 			pinner.Pin(utf8417)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (3 * 4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (2 * 4))) = uint32(uintptr(uintptr(utf8417)))
 
-		case golem_agent_common.AgentErrorInvalidAgentId:
-			payload := payload.InvalidAgentId()
-			*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), 4)) = int8(int32(3))
+		case golem_agent_common.AgentErrorInvalidMethod:
+			payload := payload.InvalidMethod()
+			*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), 4)) = int8(int32(1))
 			utf8418 := unsafe.Pointer(unsafe.StringData(payload))
 			pinner.Pin(utf8418)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (3 * 4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (2 * 4))) = uint32(uintptr(uintptr(utf8418)))
 
+		case golem_agent_common.AgentErrorInvalidType:
+			payload := payload.InvalidType()
+			*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), 4)) = int8(int32(2))
+			utf8419 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf8419)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (3 * 4))) = uint32(uint32(len(payload)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (2 * 4))) = uint32(uintptr(uintptr(utf8419)))
+
+		case golem_agent_common.AgentErrorInvalidAgentId:
+			payload := payload.InvalidAgentId()
+			*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), 4)) = int8(int32(3))
+			utf8420 := unsafe.Pointer(unsafe.StringData(payload))
+			pinner.Pin(utf8420)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (3 * 4))) = uint32(uint32(len(payload)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (2 * 4))) = uint32(uintptr(uintptr(utf8420)))
+
 		case golem_agent_common.AgentErrorCustomError:
 			payload := payload.CustomError()
 			*(*int8)(unsafe.Add(unsafe.Pointer(exportReturnArea), 4)) = int8(int32(4))
-			slice537 := ((payload).Graph).TypeNodes
-			length539 := uint32(len(slice537))
-			result538 := witRuntime.Allocate(pinner, uintptr(length539*(56+22*4)), 8)
-			for index, element := range slice537 {
-				base := unsafe.Add(result538, index*(56+22*4))
+			slice540 := ((payload).Graph).TypeNodes
+			length542 := uint32(len(slice540))
+			result541 := witRuntime.Allocate(pinner, uintptr(length542*(56+22*4)), 8)
+			for index, element := range slice540 {
+				base := unsafe.Add(result541, index*(56+22*4))
 
 				switch (element).Body.Tag() {
 				case golem_core_types.SchemaTypeBodyRefType:
@@ -17404,198 +17494,6 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := (payload).Unit.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(1))
-							utf8419 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8419)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4))) = uint32(uintptr(uintptr(utf8419)))
-
-						default:
-							panic("unreachable")
-						}
-
-					default:
-						panic("unreachable")
-					}
-
-				case golem_core_types.SchemaTypeBodyS16Type:
-					payload := (element).Body.S16Type()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
-
-					switch payload.Tag() {
-					case witTypes.OptionNone:
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(0))
-
-					case witTypes.OptionSome:
-						payload := payload.Some()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-
-						switch (payload).Min.Tag() {
-						case witTypes.OptionNone:
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(0))
-
-						case witTypes.OptionSome:
-							payload := (payload).Min.Some()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(1))
-
-							switch payload.Tag() {
-							case golem_core_types.NumericBoundSigned:
-								payload := payload.Signed()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(0))
-								*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = payload
-
-							case golem_core_types.NumericBoundUnsigned:
-								payload := payload.Unsigned()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(1))
-								*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
-
-							case golem_core_types.NumericBoundFloatBits:
-								payload := payload.FloatBits()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(2))
-								*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
-
-							default:
-								panic("unreachable")
-							}
-
-						default:
-							panic("unreachable")
-						}
-
-						switch (payload).Max.Tag() {
-						case witTypes.OptionNone:
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(0))
-
-						case witTypes.OptionSome:
-							payload := (payload).Max.Some()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(1))
-
-							switch payload.Tag() {
-							case golem_core_types.NumericBoundSigned:
-								payload := payload.Signed()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(0))
-								*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = payload
-
-							case golem_core_types.NumericBoundUnsigned:
-								payload := payload.Unsigned()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(1))
-								*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
-
-							case golem_core_types.NumericBoundFloatBits:
-								payload := payload.FloatBits()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(2))
-								*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
-
-							default:
-								panic("unreachable")
-							}
-
-						default:
-							panic("unreachable")
-						}
-
-						switch (payload).Unit.Tag() {
-						case witTypes.OptionNone:
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(0))
-
-						case witTypes.OptionSome:
-							payload := (payload).Unit.Some()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(1))
-							utf8420 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8420)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4))) = uint32(uintptr(uintptr(utf8420)))
-
-						default:
-							panic("unreachable")
-						}
-
-					default:
-						panic("unreachable")
-					}
-
-				case golem_core_types.SchemaTypeBodyS32Type:
-					payload := (element).Body.S32Type()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
-
-					switch payload.Tag() {
-					case witTypes.OptionNone:
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(0))
-
-					case witTypes.OptionSome:
-						payload := payload.Some()
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-
-						switch (payload).Min.Tag() {
-						case witTypes.OptionNone:
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(0))
-
-						case witTypes.OptionSome:
-							payload := (payload).Min.Some()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(1))
-
-							switch payload.Tag() {
-							case golem_core_types.NumericBoundSigned:
-								payload := payload.Signed()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(0))
-								*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = payload
-
-							case golem_core_types.NumericBoundUnsigned:
-								payload := payload.Unsigned()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(1))
-								*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
-
-							case golem_core_types.NumericBoundFloatBits:
-								payload := payload.FloatBits()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(2))
-								*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
-
-							default:
-								panic("unreachable")
-							}
-
-						default:
-							panic("unreachable")
-						}
-
-						switch (payload).Max.Tag() {
-						case witTypes.OptionNone:
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(0))
-
-						case witTypes.OptionSome:
-							payload := (payload).Max.Some()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(1))
-
-							switch payload.Tag() {
-							case golem_core_types.NumericBoundSigned:
-								payload := payload.Signed()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(0))
-								*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = payload
-
-							case golem_core_types.NumericBoundUnsigned:
-								payload := payload.Unsigned()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(1))
-								*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
-
-							case golem_core_types.NumericBoundFloatBits:
-								payload := payload.FloatBits()
-								*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(2))
-								*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
-
-							default:
-								panic("unreachable")
-							}
-
-						default:
-							panic("unreachable")
-						}
-
-						switch (payload).Unit.Tag() {
-						case witTypes.OptionNone:
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(0))
-
-						case witTypes.OptionSome:
-							payload := (payload).Unit.Some()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(1))
 							utf8421 := unsafe.Pointer(unsafe.StringData(payload))
 							pinner.Pin(utf8421)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = uint32(uint32(len(payload)))
@@ -17609,9 +17507,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						panic("unreachable")
 					}
 
-				case golem_core_types.SchemaTypeBodyS64Type:
-					payload := (element).Body.S64Type()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
+				case golem_core_types.SchemaTypeBodyS16Type:
+					payload := (element).Body.S16Type()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(3))
 
 					switch payload.Tag() {
 					case witTypes.OptionNone:
@@ -17705,9 +17603,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						panic("unreachable")
 					}
 
-				case golem_core_types.SchemaTypeBodyU8Type:
-					payload := (element).Body.U8Type()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
+				case golem_core_types.SchemaTypeBodyS32Type:
+					payload := (element).Body.S32Type()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(4))
 
 					switch payload.Tag() {
 					case witTypes.OptionNone:
@@ -17801,9 +17699,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						panic("unreachable")
 					}
 
-				case golem_core_types.SchemaTypeBodyU16Type:
-					payload := (element).Body.U16Type()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
+				case golem_core_types.SchemaTypeBodyS64Type:
+					payload := (element).Body.S64Type()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(5))
 
 					switch payload.Tag() {
 					case witTypes.OptionNone:
@@ -17897,9 +17795,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						panic("unreachable")
 					}
 
-				case golem_core_types.SchemaTypeBodyU32Type:
-					payload := (element).Body.U32Type()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
+				case golem_core_types.SchemaTypeBodyU8Type:
+					payload := (element).Body.U8Type()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(6))
 
 					switch payload.Tag() {
 					case witTypes.OptionNone:
@@ -17993,9 +17891,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						panic("unreachable")
 					}
 
-				case golem_core_types.SchemaTypeBodyU64Type:
-					payload := (element).Body.U64Type()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
+				case golem_core_types.SchemaTypeBodyU16Type:
+					payload := (element).Body.U16Type()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(7))
 
 					switch payload.Tag() {
 					case witTypes.OptionNone:
@@ -18089,9 +17987,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						panic("unreachable")
 					}
 
-				case golem_core_types.SchemaTypeBodyF32Type:
-					payload := (element).Body.F32Type()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
+				case golem_core_types.SchemaTypeBodyU32Type:
+					payload := (element).Body.U32Type()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(8))
 
 					switch payload.Tag() {
 					case witTypes.OptionNone:
@@ -18185,9 +18083,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						panic("unreachable")
 					}
 
-				case golem_core_types.SchemaTypeBodyF64Type:
-					payload := (element).Body.F64Type()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
+				case golem_core_types.SchemaTypeBodyU64Type:
+					payload := (element).Body.U64Type()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(9))
 
 					switch payload.Tag() {
 					case witTypes.OptionNone:
@@ -18281,6 +18179,198 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						panic("unreachable")
 					}
 
+				case golem_core_types.SchemaTypeBodyF32Type:
+					payload := (element).Body.F32Type()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(10))
+
+					switch payload.Tag() {
+					case witTypes.OptionNone:
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(0))
+
+					case witTypes.OptionSome:
+						payload := payload.Some()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
+
+						switch (payload).Min.Tag() {
+						case witTypes.OptionNone:
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(0))
+
+						case witTypes.OptionSome:
+							payload := (payload).Min.Some()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(1))
+
+							switch payload.Tag() {
+							case golem_core_types.NumericBoundSigned:
+								payload := payload.Signed()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(0))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = payload
+
+							case golem_core_types.NumericBoundUnsigned:
+								payload := payload.Unsigned()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(1))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
+
+							case golem_core_types.NumericBoundFloatBits:
+								payload := payload.FloatBits()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(2))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
+
+							default:
+								panic("unreachable")
+							}
+
+						default:
+							panic("unreachable")
+						}
+
+						switch (payload).Max.Tag() {
+						case witTypes.OptionNone:
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(0))
+
+						case witTypes.OptionSome:
+							payload := (payload).Max.Some()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(1))
+
+							switch payload.Tag() {
+							case golem_core_types.NumericBoundSigned:
+								payload := payload.Signed()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(0))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = payload
+
+							case golem_core_types.NumericBoundUnsigned:
+								payload := payload.Unsigned()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(1))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
+
+							case golem_core_types.NumericBoundFloatBits:
+								payload := payload.FloatBits()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(2))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
+
+							default:
+								panic("unreachable")
+							}
+
+						default:
+							panic("unreachable")
+						}
+
+						switch (payload).Unit.Tag() {
+						case witTypes.OptionNone:
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(0))
+
+						case witTypes.OptionSome:
+							payload := (payload).Unit.Some()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(1))
+							utf8429 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8429)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = uint32(uint32(len(payload)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4))) = uint32(uintptr(uintptr(utf8429)))
+
+						default:
+							panic("unreachable")
+						}
+
+					default:
+						panic("unreachable")
+					}
+
+				case golem_core_types.SchemaTypeBodyF64Type:
+					payload := (element).Body.F64Type()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(11))
+
+					switch payload.Tag() {
+					case witTypes.OptionNone:
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(0))
+
+					case witTypes.OptionSome:
+						payload := payload.Some()
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
+
+						switch (payload).Min.Tag() {
+						case witTypes.OptionNone:
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(0))
+
+						case witTypes.OptionSome:
+							payload := (payload).Min.Some()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 16)) = int8(int32(1))
+
+							switch payload.Tag() {
+							case golem_core_types.NumericBoundSigned:
+								payload := payload.Signed()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(0))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = payload
+
+							case golem_core_types.NumericBoundUnsigned:
+								payload := payload.Unsigned()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(1))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
+
+							case golem_core_types.NumericBoundFloatBits:
+								payload := payload.FloatBits()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 24)) = int8(int32(2))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)) = int64(payload)
+
+							default:
+								panic("unreachable")
+							}
+
+						default:
+							panic("unreachable")
+						}
+
+						switch (payload).Max.Tag() {
+						case witTypes.OptionNone:
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(0))
+
+						case witTypes.OptionSome:
+							payload := (payload).Max.Some()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 40)) = int8(int32(1))
+
+							switch payload.Tag() {
+							case golem_core_types.NumericBoundSigned:
+								payload := payload.Signed()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(0))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = payload
+
+							case golem_core_types.NumericBoundUnsigned:
+								payload := payload.Unsigned()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(1))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
+
+							case golem_core_types.NumericBoundFloatBits:
+								payload := payload.FloatBits()
+								*(*int8)(unsafe.Add(unsafe.Pointer(base), 48)) = int8(int32(2))
+								*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)) = int64(payload)
+
+							default:
+								panic("unreachable")
+							}
+
+						default:
+							panic("unreachable")
+						}
+
+						switch (payload).Unit.Tag() {
+						case witTypes.OptionNone:
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(0))
+
+						case witTypes.OptionSome:
+							payload := (payload).Unit.Some()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), 64)) = int8(int32(1))
+							utf8430 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8430)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))) = uint32(uint32(len(payload)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4))) = uint32(uintptr(uintptr(utf8430)))
+
+						default:
+							panic("unreachable")
+						}
+
+					default:
+						panic("unreachable")
+					}
+
 				case golem_core_types.SchemaTypeBodyCharType:
 
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
@@ -18292,15 +18382,15 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case golem_core_types.SchemaTypeBodyRecordType:
 					payload := (element).Body.RecordType()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(14))
-					slice441 := payload
-					length443 := uint32(len(slice441))
-					result442 := witRuntime.Allocate(pinner, uintptr(length443*(17*4)), 4)
-					for index, element := range slice441 {
-						base := unsafe.Add(result442, index*(17*4))
-						utf8429 := unsafe.Pointer(unsafe.StringData((element).Name))
-						pinner.Pin(utf8429)
+					slice443 := payload
+					length445 := uint32(len(slice443))
+					result444 := witRuntime.Allocate(pinner, uintptr(length445*(17*4)), 4)
+					for index, element := range slice443 {
+						base := unsafe.Add(result444, index*(17*4))
+						utf8431 := unsafe.Pointer(unsafe.StringData((element).Name))
+						pinner.Pin(utf8431)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8429)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8431)))
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = (element).Body
 
 						switch ((element).Metadata).Doc.Tag() {
@@ -18310,42 +18400,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := ((element).Metadata).Doc.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(1))
-							utf8430 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8430)
+							utf8432 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8432)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8430)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8432)))
 
 						default:
 							panic("unreachable")
 						}
-						slice432 := ((element).Metadata).Aliases
-						length434 := uint32(len(slice432))
-						result433 := witRuntime.Allocate(pinner, uintptr(length434*(2*4)), 4)
-						for index, element := range slice432 {
-							base := unsafe.Add(result433, index*(2*4))
-							utf8431 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8431)
+						slice434 := ((element).Metadata).Aliases
+						length436 := uint32(len(slice434))
+						result435 := witRuntime.Allocate(pinner, uintptr(length436*(2*4)), 4)
+						for index, element := range slice434 {
+							base := unsafe.Add(result435, index*(2*4))
+							utf8433 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8433)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8431)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8433)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(length434)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(result433)))
-						slice436 := ((element).Metadata).Examples
-						length438 := uint32(len(slice436))
-						result437 := witRuntime.Allocate(pinner, uintptr(length438*(2*4)), 4)
-						for index, element := range slice436 {
-							base := unsafe.Add(result437, index*(2*4))
-							utf8435 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8435)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(length436)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = uint32(uintptr(uintptr(result435)))
+						slice438 := ((element).Metadata).Examples
+						length440 := uint32(len(slice438))
+						result439 := witRuntime.Allocate(pinner, uintptr(length440*(2*4)), 4)
+						for index, element := range slice438 {
+							base := unsafe.Add(result439, index*(2*4))
+							utf8437 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8437)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8435)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8437)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(length438)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(result437)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = uint32(length440)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uintptr(uintptr(result439)))
 
 						switch ((element).Metadata).Deprecated.Tag() {
 						case witTypes.OptionNone:
@@ -18354,10 +18444,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := ((element).Metadata).Deprecated.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = int8(int32(1))
-							utf8439 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8439)
+							utf8441 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8441)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uintptr(uintptr(utf8439)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uintptr(uintptr(utf8441)))
 
 						default:
 							panic("unreachable")
@@ -18387,10 +18477,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case golem_core_types.RoleOther:
 								payload := payload.Other()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = int8(int32(3))
-								utf8440 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8440)
+								utf8442 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8442)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(uintptr(uintptr(utf8440)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(uintptr(uintptr(utf8442)))
 
 							default:
 								panic("unreachable")
@@ -18402,21 +18492,21 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length443)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result442)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length445)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result444)))
 
 				case golem_core_types.SchemaTypeBodyVariantType:
 					payload := (element).Body.VariantType()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(15))
-					slice456 := payload
-					length458 := uint32(len(slice456))
-					result457 := witRuntime.Allocate(pinner, uintptr(length458*(8+16*4)), 4)
-					for index, element := range slice456 {
-						base := unsafe.Add(result457, index*(8+16*4))
-						utf8444 := unsafe.Pointer(unsafe.StringData((element).Name))
-						pinner.Pin(utf8444)
+					slice458 := payload
+					length460 := uint32(len(slice458))
+					result459 := witRuntime.Allocate(pinner, uintptr(length460*(8+16*4)), 4)
+					for index, element := range slice458 {
+						base := unsafe.Add(result459, index*(8+16*4))
+						utf8446 := unsafe.Pointer(unsafe.StringData((element).Name))
+						pinner.Pin(utf8446)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Name)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8444)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8446)))
 
 						switch (element).Payload.Tag() {
 						case witTypes.OptionNone:
@@ -18438,42 +18528,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := ((element).Metadata).Doc.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-							utf8445 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8445)
+							utf8447 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8447)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8445)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8447)))
 
 						default:
 							panic("unreachable")
 						}
-						slice447 := ((element).Metadata).Aliases
-						length449 := uint32(len(slice447))
-						result448 := witRuntime.Allocate(pinner, uintptr(length449*(2*4)), 4)
-						for index, element := range slice447 {
-							base := unsafe.Add(result448, index*(2*4))
-							utf8446 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8446)
+						slice449 := ((element).Metadata).Aliases
+						length451 := uint32(len(slice449))
+						result450 := witRuntime.Allocate(pinner, uintptr(length451*(2*4)), 4)
+						for index, element := range slice449 {
+							base := unsafe.Add(result450, index*(2*4))
+							utf8448 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8448)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8446)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8448)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length449)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result448)))
-						slice451 := ((element).Metadata).Examples
-						length453 := uint32(len(slice451))
-						result452 := witRuntime.Allocate(pinner, uintptr(length453*(2*4)), 4)
-						for index, element := range slice451 {
-							base := unsafe.Add(result452, index*(2*4))
-							utf8450 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8450)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length451)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result450)))
+						slice453 := ((element).Metadata).Examples
+						length455 := uint32(len(slice453))
+						result454 := witRuntime.Allocate(pinner, uintptr(length455*(2*4)), 4)
+						for index, element := range slice453 {
+							base := unsafe.Add(result454, index*(2*4))
+							utf8452 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8452)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8450)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8452)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length453)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result452)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))) = uint32(length455)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))) = uint32(uintptr(uintptr(result454)))
 
 						switch ((element).Metadata).Deprecated.Tag() {
 						case witTypes.OptionNone:
@@ -18482,10 +18572,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := ((element).Metadata).Deprecated.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4))) = int8(int32(1))
-							utf8454 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8454)
+							utf8456 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8456)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8454)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4))) = uint32(uintptr(uintptr(utf8456)))
 
 						default:
 							panic("unreachable")
@@ -18515,10 +18605,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case golem_core_types.RoleOther:
 								payload := payload.Other()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4))) = int8(int32(3))
-								utf8455 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8455)
+								utf8457 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8457)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8455)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4))) = uint32(uintptr(uintptr(utf8457)))
 
 							default:
 								panic("unreachable")
@@ -18530,59 +18620,59 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length458)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result457)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length460)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result459)))
 
 				case golem_core_types.SchemaTypeBodyEnumType:
 					payload := (element).Body.EnumType()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-					slice460 := payload
-					length462 := uint32(len(slice460))
-					result461 := witRuntime.Allocate(pinner, uintptr(length462*(2*4)), 4)
-					for index, element := range slice460 {
-						base := unsafe.Add(result461, index*(2*4))
-						utf8459 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8459)
+					slice462 := payload
+					length464 := uint32(len(slice462))
+					result463 := witRuntime.Allocate(pinner, uintptr(length464*(2*4)), 4)
+					for index, element := range slice462 {
+						base := unsafe.Add(result463, index*(2*4))
+						utf8461 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8461)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8459)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8461)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length462)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result461)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length464)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result463)))
 
 				case golem_core_types.SchemaTypeBodyFlagsType:
 					payload := (element).Body.FlagsType()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
-					slice464 := payload
-					length466 := uint32(len(slice464))
-					result465 := witRuntime.Allocate(pinner, uintptr(length466*(2*4)), 4)
-					for index, element := range slice464 {
-						base := unsafe.Add(result465, index*(2*4))
-						utf8463 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8463)
+					slice466 := payload
+					length468 := uint32(len(slice466))
+					result467 := witRuntime.Allocate(pinner, uintptr(length468*(2*4)), 4)
+					for index, element := range slice466 {
+						base := unsafe.Add(result467, index*(2*4))
+						utf8465 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8465)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8463)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8465)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length466)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result465)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length468)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result467)))
 
 				case golem_core_types.SchemaTypeBodyTupleType:
 					payload := (element).Body.TupleType()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
-					slice467 := payload
-					length469 := uint32(len(slice467))
-					result468 := witRuntime.Allocate(pinner, uintptr(length469*4), 4)
-					for index, element := range slice467 {
-						base := unsafe.Add(result468, index*4)
+					slice469 := payload
+					length471 := uint32(len(slice469))
+					result470 := witRuntime.Allocate(pinner, uintptr(length471*4), 4)
+					for index, element := range slice469 {
+						base := unsafe.Add(result470, index*4)
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length469)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result468)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length471)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result470)))
 
 				case golem_core_types.SchemaTypeBodyListType:
 					payload := (element).Body.ListType()
@@ -18647,20 +18737,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (payload).Languages.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-						slice471 := payload
-						length473 := uint32(len(slice471))
-						result472 := witRuntime.Allocate(pinner, uintptr(length473*(2*4)), 4)
-						for index, element := range slice471 {
-							base := unsafe.Add(result472, index*(2*4))
-							utf8470 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8470)
+						slice473 := payload
+						length475 := uint32(len(slice473))
+						result474 := witRuntime.Allocate(pinner, uintptr(length475*(2*4)), 4)
+						for index, element := range slice473 {
+							base := unsafe.Add(result474, index*(2*4))
+							utf8472 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8472)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8470)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8472)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length473)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result472)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length475)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result474)))
 
 					default:
 						panic("unreachable")
@@ -18699,10 +18789,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (payload).Regex.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4))) = int8(int32(1))
-						utf8474 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8474)
+						utf8476 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8476)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))) = uint32(uintptr(uintptr(utf8474)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))) = uint32(uintptr(uintptr(utf8476)))
 
 					default:
 						panic("unreachable")
@@ -18719,20 +18809,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (payload).MimeTypes.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-						slice476 := payload
-						length478 := uint32(len(slice476))
-						result477 := witRuntime.Allocate(pinner, uintptr(length478*(2*4)), 4)
-						for index, element := range slice476 {
-							base := unsafe.Add(result477, index*(2*4))
-							utf8475 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8475)
+						slice478 := payload
+						length480 := uint32(len(slice478))
+						result479 := witRuntime.Allocate(pinner, uintptr(length480*(2*4)), 4)
+						for index, element := range slice478 {
+							base := unsafe.Add(result479, index*(2*4))
+							utf8477 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8477)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8475)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8477)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length478)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result477)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length480)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result479)))
 
 					default:
 						panic("unreachable")
@@ -18777,20 +18867,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (payload).AllowedMimeTypes.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = int8(int32(1))
-						slice480 := payload
-						length482 := uint32(len(slice480))
-						result481 := witRuntime.Allocate(pinner, uintptr(length482*(2*4)), 4)
-						for index, element := range slice480 {
-							base := unsafe.Add(result481, index*(2*4))
-							utf8479 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8479)
+						slice482 := payload
+						length484 := uint32(len(slice482))
+						result483 := witRuntime.Allocate(pinner, uintptr(length484*(2*4)), 4)
+						for index, element := range slice482 {
+							base := unsafe.Add(result483, index*(2*4))
+							utf8481 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8481)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8479)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8481)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length482)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result481)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length484)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result483)))
 
 					default:
 						panic("unreachable")
@@ -18803,20 +18893,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (payload).AllowedExtensions.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = int8(int32(1))
-						slice484 := payload
-						length486 := uint32(len(slice484))
-						result485 := witRuntime.Allocate(pinner, uintptr(length486*(2*4)), 4)
-						for index, element := range slice484 {
-							base := unsafe.Add(result485, index*(2*4))
-							utf8483 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8483)
+						slice486 := payload
+						length488 := uint32(len(slice486))
+						result487 := witRuntime.Allocate(pinner, uintptr(length488*(2*4)), 4)
+						for index, element := range slice486 {
+							base := unsafe.Add(result487, index*(2*4))
+							utf8485 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8485)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8483)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8485)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length486)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result485)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))) = uint32(length488)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(uintptr(uintptr(result487)))
 
 					default:
 						panic("unreachable")
@@ -18833,20 +18923,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (payload).AllowedSchemes.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-						slice488 := payload
-						length490 := uint32(len(slice488))
-						result489 := witRuntime.Allocate(pinner, uintptr(length490*(2*4)), 4)
-						for index, element := range slice488 {
-							base := unsafe.Add(result489, index*(2*4))
-							utf8487 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8487)
+						slice490 := payload
+						length492 := uint32(len(slice490))
+						result491 := witRuntime.Allocate(pinner, uintptr(length492*(2*4)), 4)
+						for index, element := range slice490 {
+							base := unsafe.Add(result491, index*(2*4))
+							utf8489 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8489)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8487)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8489)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length490)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result489)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(length492)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(result491)))
 
 					default:
 						panic("unreachable")
@@ -18859,20 +18949,20 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (payload).AllowedHosts.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = int8(int32(1))
-						slice492 := payload
-						length494 := uint32(len(slice492))
-						result493 := witRuntime.Allocate(pinner, uintptr(length494*(2*4)), 4)
-						for index, element := range slice492 {
-							base := unsafe.Add(result493, index*(2*4))
-							utf8491 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8491)
+						slice494 := payload
+						length496 := uint32(len(slice494))
+						result495 := witRuntime.Allocate(pinner, uintptr(length496*(2*4)), 4)
+						for index, element := range slice494 {
+							base := unsafe.Add(result495, index*(2*4))
+							utf8493 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8493)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8491)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8493)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(length494)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uintptr(uintptr(result493)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))) = uint32(length496)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uintptr(uintptr(result495)))
 
 					default:
 						panic("unreachable")
@@ -18889,24 +18979,24 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case golem_core_types.SchemaTypeBodyQuantityType:
 					payload := (element).Body.QuantityType()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-					utf8495 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
-					pinner.Pin(utf8495)
+					utf8497 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
+					pinner.Pin(utf8497)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).BaseUnit)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8495)))
-					slice497 := (payload).AllowedSuffixes
-					length499 := uint32(len(slice497))
-					result498 := witRuntime.Allocate(pinner, uintptr(length499*(2*4)), 4)
-					for index, element := range slice497 {
-						base := unsafe.Add(result498, index*(2*4))
-						utf8496 := unsafe.Pointer(unsafe.StringData(element))
-						pinner.Pin(utf8496)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8497)))
+					slice499 := (payload).AllowedSuffixes
+					length501 := uint32(len(slice499))
+					result500 := witRuntime.Allocate(pinner, uintptr(length501*(2*4)), 4)
+					for index, element := range slice499 {
+						base := unsafe.Add(result500, index*(2*4))
+						utf8498 := unsafe.Pointer(unsafe.StringData(element))
+						pinner.Pin(utf8498)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8496)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8498)))
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length499)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result498)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(length501)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(result500)))
 
 					switch (payload).Min.Tag() {
 					case witTypes.OptionNone:
@@ -18917,10 +19007,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = int8(int32(1))
 						*(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))) = (payload).Mantissa
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))) = (payload).Scale
-						utf8500 := unsafe.Pointer(unsafe.StringData((payload).Unit))
-						pinner.Pin(utf8500)
+						utf8502 := unsafe.Pointer(unsafe.StringData((payload).Unit))
+						pinner.Pin(utf8502)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))) = uint32(uint32(len((payload).Unit)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))) = uint32(uintptr(uintptr(utf8500)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))) = uint32(uintptr(uintptr(utf8502)))
 
 					default:
 						panic("unreachable")
@@ -18935,10 +19025,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (32 + 6*4))) = int8(int32(1))
 						*(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))) = (payload).Mantissa
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))) = (payload).Scale
-						utf8501 := unsafe.Pointer(unsafe.StringData((payload).Unit))
-						pinner.Pin(utf8501)
+						utf8503 := unsafe.Pointer(unsafe.StringData((payload).Unit))
+						pinner.Pin(utf8503)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))) = uint32(uint32(len((payload).Unit)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4))) = uint32(uintptr(uintptr(utf8501)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4))) = uint32(uintptr(uintptr(utf8503)))
 
 					default:
 						panic("unreachable")
@@ -18947,57 +19037,57 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case golem_core_types.SchemaTypeBodyUnionType:
 					payload := (element).Body.UnionType()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
-					slice521 := (payload).Branches
-					length523 := uint32(len(slice521))
-					result522 := witRuntime.Allocate(pinner, uintptr(length523*(23*4)), 4)
-					for index, element := range slice521 {
-						base := unsafe.Add(result522, index*(23*4))
-						utf8502 := unsafe.Pointer(unsafe.StringData((element).Tag))
-						pinner.Pin(utf8502)
+					slice523 := (payload).Branches
+					length525 := uint32(len(slice523))
+					result524 := witRuntime.Allocate(pinner, uintptr(length525*(23*4)), 4)
+					for index, element := range slice523 {
+						base := unsafe.Add(result524, index*(23*4))
+						utf8504 := unsafe.Pointer(unsafe.StringData((element).Tag))
+						pinner.Pin(utf8504)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Tag)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8502)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8504)))
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = (element).Body
 
 						switch (element).Discriminator.Tag() {
 						case golem_core_types.DiscriminatorRulePrefix:
 							payload := (element).Discriminator.Prefix()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(0))
-							utf8503 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8503)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8503)))
-
-						case golem_core_types.DiscriminatorRuleSuffix:
-							payload := (element).Discriminator.Suffix()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(1))
-							utf8504 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8504)
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8504)))
-
-						case golem_core_types.DiscriminatorRuleContains:
-							payload := (element).Discriminator.Contains()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(2))
 							utf8505 := unsafe.Pointer(unsafe.StringData(payload))
 							pinner.Pin(utf8505)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8505)))
 
-						case golem_core_types.DiscriminatorRuleRegex:
-							payload := (element).Discriminator.Regex()
-							*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(3))
+						case golem_core_types.DiscriminatorRuleSuffix:
+							payload := (element).Discriminator.Suffix()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(1))
 							utf8506 := unsafe.Pointer(unsafe.StringData(payload))
 							pinner.Pin(utf8506)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8506)))
 
+						case golem_core_types.DiscriminatorRuleContains:
+							payload := (element).Discriminator.Contains()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(2))
+							utf8507 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8507)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8507)))
+
+						case golem_core_types.DiscriminatorRuleRegex:
+							payload := (element).Discriminator.Regex()
+							*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(3))
+							utf8508 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8508)
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8508)))
+
 						case golem_core_types.DiscriminatorRuleFieldEquals:
 							payload := (element).Discriminator.FieldEquals()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(4))
-							utf8507 := unsafe.Pointer(unsafe.StringData((payload).FieldName))
-							pinner.Pin(utf8507)
+							utf8509 := unsafe.Pointer(unsafe.StringData((payload).FieldName))
+							pinner.Pin(utf8509)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len((payload).FieldName)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8507)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8509)))
 
 							switch (payload).Literal.Tag() {
 							case witTypes.OptionNone:
@@ -19006,10 +19096,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case witTypes.OptionSome:
 								payload := (payload).Literal.Some()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (6 * 4))) = int8(int32(1))
-								utf8508 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8508)
+								utf8510 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8510)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8508)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))) = uint32(uintptr(uintptr(utf8510)))
 
 							default:
 								panic("unreachable")
@@ -19018,10 +19108,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case golem_core_types.DiscriminatorRuleFieldAbsent:
 							payload := (element).Discriminator.FieldAbsent()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = int8(int32(5))
-							utf8509 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8509)
+							utf8511 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8511)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8509)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uintptr(uintptr(utf8511)))
 
 						default:
 							panic("unreachable")
@@ -19034,42 +19124,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := ((element).Metadata).Doc.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (9 * 4))) = int8(int32(1))
-							utf8510 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8510)
+							utf8512 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8512)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(utf8510)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))) = uint32(uintptr(uintptr(utf8512)))
 
 						default:
 							panic("unreachable")
 						}
-						slice512 := ((element).Metadata).Aliases
-						length514 := uint32(len(slice512))
-						result513 := witRuntime.Allocate(pinner, uintptr(length514*(2*4)), 4)
-						for index, element := range slice512 {
-							base := unsafe.Add(result513, index*(2*4))
-							utf8511 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8511)
+						slice514 := ((element).Metadata).Aliases
+						length516 := uint32(len(slice514))
+						result515 := witRuntime.Allocate(pinner, uintptr(length516*(2*4)), 4)
+						for index, element := range slice514 {
+							base := unsafe.Add(result515, index*(2*4))
+							utf8513 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8513)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8511)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8513)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))) = uint32(length514)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uintptr(uintptr(result513)))
-						slice516 := ((element).Metadata).Examples
-						length518 := uint32(len(slice516))
-						result517 := witRuntime.Allocate(pinner, uintptr(length518*(2*4)), 4)
-						for index, element := range slice516 {
-							base := unsafe.Add(result517, index*(2*4))
-							utf8515 := unsafe.Pointer(unsafe.StringData(element))
-							pinner.Pin(utf8515)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))) = uint32(length516)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))) = uint32(uintptr(uintptr(result515)))
+						slice518 := ((element).Metadata).Examples
+						length520 := uint32(len(slice518))
+						result519 := witRuntime.Allocate(pinner, uintptr(length520*(2*4)), 4)
+						for index, element := range slice518 {
+							base := unsafe.Add(result519, index*(2*4))
+							utf8517 := unsafe.Pointer(unsafe.StringData(element))
+							pinner.Pin(utf8517)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8515)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8517)))
 
 						}
 
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(length518)
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = uint32(uintptr(uintptr(result517)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))) = uint32(length520)
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))) = uint32(uintptr(uintptr(result519)))
 
 						switch ((element).Metadata).Deprecated.Tag() {
 						case witTypes.OptionNone:
@@ -19078,10 +19168,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 						case witTypes.OptionSome:
 							payload := ((element).Metadata).Deprecated.Some()
 							*(*int8)(unsafe.Add(unsafe.Pointer(base), (16 * 4))) = int8(int32(1))
-							utf8519 := unsafe.Pointer(unsafe.StringData(payload))
-							pinner.Pin(utf8519)
+							utf8521 := unsafe.Pointer(unsafe.StringData(payload))
+							pinner.Pin(utf8521)
 							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))) = uint32(uint32(len(payload)))
-							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4))) = uint32(uintptr(uintptr(utf8519)))
+							*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4))) = uint32(uintptr(uintptr(utf8521)))
 
 						default:
 							panic("unreachable")
@@ -19111,10 +19201,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 							case golem_core_types.RoleOther:
 								payload := payload.Other()
 								*(*int8)(unsafe.Add(unsafe.Pointer(base), (20 * 4))) = int8(int32(3))
-								utf8520 := unsafe.Pointer(unsafe.StringData(payload))
-								pinner.Pin(utf8520)
+								utf8522 := unsafe.Pointer(unsafe.StringData(payload))
+								pinner.Pin(utf8522)
 								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))) = uint32(uint32(len(payload)))
-								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))) = uint32(uintptr(uintptr(utf8520)))
+								*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4))) = uint32(uintptr(uintptr(utf8522)))
 
 							default:
 								panic("unreachable")
@@ -19126,8 +19216,8 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length523)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result522)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length525)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result524)))
 
 				case golem_core_types.SchemaTypeBodySecretType:
 					payload := (element).Body.SecretType()
@@ -19141,10 +19231,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (payload).Category.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = int8(int32(1))
-						utf8524 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8524)
+						utf8526 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8526)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(utf8524)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uintptr(uintptr(utf8526)))
 
 					default:
 						panic("unreachable")
@@ -19161,18 +19251,29 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (payload).ResourceName.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(int32(1))
-						utf8525 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8525)
+						utf8527 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8527)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(utf8525)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uintptr(uintptr(utf8527)))
 
 					default:
 						panic("unreachable")
 					}
 
+				case golem_core_types.SchemaTypeBodyPermissionCardType:
+					payload := (element).Body.PermissionCardType()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+					var result528 int32
+					if (payload).Polymorphic {
+						result528 = 1
+					} else {
+						result528 = 0
+					}
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result528)
+
 				case golem_core_types.SchemaTypeBodyFutureType:
 					payload := (element).Body.FutureType()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 
 					switch payload.Tag() {
 					case witTypes.OptionNone:
@@ -19189,7 +19290,7 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 				case golem_core_types.SchemaTypeBodyStreamType:
 					payload := (element).Body.StreamType()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 					switch payload.Tag() {
 					case witTypes.OptionNone:
@@ -19215,42 +19316,42 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case witTypes.OptionSome:
 					payload := ((element).Metadata).Doc.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 8*4))) = int8(int32(1))
-					utf8526 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8526)
+					utf8529 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8529)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8526)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4))) = uint32(uintptr(uintptr(utf8529)))
 
 				default:
 					panic("unreachable")
 				}
-				slice528 := ((element).Metadata).Aliases
-				length530 := uint32(len(slice528))
-				result529 := witRuntime.Allocate(pinner, uintptr(length530*(2*4)), 4)
-				for index, element := range slice528 {
-					base := unsafe.Add(result529, index*(2*4))
-					utf8527 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8527)
+				slice531 := ((element).Metadata).Aliases
+				length533 := uint32(len(slice531))
+				result532 := witRuntime.Allocate(pinner, uintptr(length533*(2*4)), 4)
+				for index, element := range slice531 {
+					base := unsafe.Add(result532, index*(2*4))
+					utf8530 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8530)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8527)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8530)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length530)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result529)))
-				slice532 := ((element).Metadata).Examples
-				length534 := uint32(len(slice532))
-				result533 := witRuntime.Allocate(pinner, uintptr(length534*(2*4)), 4)
-				for index, element := range slice532 {
-					base := unsafe.Add(result533, index*(2*4))
-					utf8531 := unsafe.Pointer(unsafe.StringData(element))
-					pinner.Pin(utf8531)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))) = uint32(length533)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))) = uint32(uintptr(uintptr(result532)))
+				slice535 := ((element).Metadata).Examples
+				length537 := uint32(len(slice535))
+				result536 := witRuntime.Allocate(pinner, uintptr(length537*(2*4)), 4)
+				for index, element := range slice535 {
+					base := unsafe.Add(result536, index*(2*4))
+					utf8534 := unsafe.Pointer(unsafe.StringData(element))
+					pinner.Pin(utf8534)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len(element)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8531)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8534)))
 
 				}
 
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length534)
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result533)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))) = uint32(length537)
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))) = uint32(uintptr(uintptr(result536)))
 
 				switch ((element).Metadata).Deprecated.Tag() {
 				case witTypes.OptionNone:
@@ -19259,10 +19360,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case witTypes.OptionSome:
 					payload := ((element).Metadata).Deprecated.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 15*4))) = int8(int32(1))
-					utf8535 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8535)
+					utf8538 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8538)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8535)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4))) = uint32(uintptr(uintptr(utf8538)))
 
 				default:
 					panic("unreachable")
@@ -19292,10 +19393,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case golem_core_types.RoleOther:
 						payload := payload.Other()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (56 + 19*4))) = int8(int32(3))
-						utf8536 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8536)
+						utf8539 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8539)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8536)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4))) = uint32(uintptr(uintptr(utf8539)))
 
 					default:
 						panic("unreachable")
@@ -19307,17 +19408,17 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (3 * 4))) = uint32(length539)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (2 * 4))) = uint32(uintptr(uintptr(result538)))
-			slice542 := ((payload).Graph).Defs
-			length544 := uint32(len(slice542))
-			result543 := witRuntime.Allocate(pinner, uintptr(length544*(6*4)), 4)
-			for index, element := range slice542 {
-				base := unsafe.Add(result543, index*(6*4))
-				utf8540 := unsafe.Pointer(unsafe.StringData((element).Id))
-				pinner.Pin(utf8540)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (3 * 4))) = uint32(length542)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (2 * 4))) = uint32(uintptr(uintptr(result541)))
+			slice545 := ((payload).Graph).Defs
+			length547 := uint32(len(slice545))
+			result546 := witRuntime.Allocate(pinner, uintptr(length547*(6*4)), 4)
+			for index, element := range slice545 {
+				base := unsafe.Add(result546, index*(6*4))
+				utf8543 := unsafe.Pointer(unsafe.StringData((element).Id))
+				pinner.Pin(utf8543)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)) = uint32(uint32(len((element).Id)))
-				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8540)))
+				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)) = uint32(uintptr(uintptr(utf8543)))
 
 				switch (element).Name.Tag() {
 				case witTypes.OptionNone:
@@ -19326,10 +19427,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case witTypes.OptionSome:
 					payload := (element).Name.Some()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), (2 * 4))) = int8(int32(1))
-					utf8541 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8541)
+					utf8544 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8544)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8541)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))) = uint32(uintptr(uintptr(utf8544)))
 
 				default:
 					panic("unreachable")
@@ -19338,26 +19439,26 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (5 * 4))) = uint32(length544)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (4 * 4))) = uint32(uintptr(uintptr(result543)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (5 * 4))) = uint32(length547)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (4 * 4))) = uint32(uintptr(uintptr(result546)))
 			*(*int32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (6 * 4))) = ((payload).Graph).Root
-			slice573 := ((payload).Value).ValueNodes
-			length575 := uint32(len(slice573))
-			result574 := witRuntime.Allocate(pinner, uintptr(length575*(16+4*4)), 8)
-			for index, element := range slice573 {
-				base := unsafe.Add(result574, index*(16+4*4))
+			slice576 := ((payload).Value).ValueNodes
+			length578 := uint32(len(slice576))
+			result577 := witRuntime.Allocate(pinner, uintptr(length578*(16+4*4)), 8)
+			for index, element := range slice576 {
+				base := unsafe.Add(result577, index*(16+4*4))
 
 				switch element.Tag() {
 				case golem_core_types.SchemaValueNodeBoolValue:
 					payload := element.BoolValue()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(0))
-					var result545 int32
+					var result548 int32
 					if payload {
-						result545 = 1
+						result548 = 1
 					} else {
-						result545 = 0
+						result548 = 0
 					}
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result545)
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 8)) = int8(result548)
 
 				case golem_core_types.SchemaValueNodeS8Value:
 					payload := element.S8Value()
@@ -19417,25 +19518,25 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case golem_core_types.SchemaValueNodeStringValue:
 					payload := element.StringValue()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(12))
-					utf8546 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8546)
+					utf8549 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8549)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8546)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8549)))
 
 				case golem_core_types.SchemaValueNodeRecordValue:
 					payload := element.RecordValue()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(13))
-					slice547 := payload
-					length549 := uint32(len(slice547))
-					result548 := witRuntime.Allocate(pinner, uintptr(length549*4), 4)
-					for index, element := range slice547 {
-						base := unsafe.Add(result548, index*4)
+					slice550 := payload
+					length552 := uint32(len(slice550))
+					result551 := witRuntime.Allocate(pinner, uintptr(length552*4), 4)
+					for index, element := range slice550 {
+						base := unsafe.Add(result551, index*4)
 						*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 					}
 
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length549)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result548)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length552)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result551)))
 
 				case golem_core_types.SchemaValueNodeVariantValue:
 					payload := element.VariantValue()
@@ -19463,42 +19564,27 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case golem_core_types.SchemaValueNodeFlagsValue:
 					payload := element.FlagsValue()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(16))
-					slice551 := payload
-					length553 := uint32(len(slice551))
-					result552 := witRuntime.Allocate(pinner, uintptr(length553*1), 1)
-					for index, element := range slice551 {
-						base := unsafe.Add(result552, index*1)
-						var result550 int32
-						if element {
-							result550 = 1
-						} else {
-							result550 = 0
-						}
-						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result550)
-
-					}
-
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length553)
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result552)))
-
-				case golem_core_types.SchemaValueNodeTupleValue:
-					payload := element.TupleValue()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
 					slice554 := payload
 					length556 := uint32(len(slice554))
-					result555 := witRuntime.Allocate(pinner, uintptr(length556*4), 4)
+					result555 := witRuntime.Allocate(pinner, uintptr(length556*1), 1)
 					for index, element := range slice554 {
-						base := unsafe.Add(result555, index*4)
-						*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
+						base := unsafe.Add(result555, index*1)
+						var result553 int32
+						if element {
+							result553 = 1
+						} else {
+							result553 = 0
+						}
+						*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(result553)
 
 					}
 
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length556)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result555)))
 
-				case golem_core_types.SchemaValueNodeListValue:
-					payload := element.ListValue()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
+				case golem_core_types.SchemaValueNodeTupleValue:
+					payload := element.TupleValue()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(17))
 					slice557 := payload
 					length559 := uint32(len(slice557))
 					result558 := witRuntime.Allocate(pinner, uintptr(length559*4), 4)
@@ -19511,9 +19597,9 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length559)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result558)))
 
-				case golem_core_types.SchemaValueNodeFixedListValue:
-					payload := element.FixedListValue()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(19))
+				case golem_core_types.SchemaValueNodeListValue:
+					payload := element.ListValue()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(18))
 					slice560 := payload
 					length562 := uint32(len(slice560))
 					result561 := witRuntime.Allocate(pinner, uintptr(length562*4), 4)
@@ -19526,21 +19612,36 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length562)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result561)))
 
-				case golem_core_types.SchemaValueNodeMapValue:
-					payload := element.MapValue()
-					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(20))
+				case golem_core_types.SchemaValueNodeFixedListValue:
+					payload := element.FixedListValue()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(19))
 					slice563 := payload
 					length565 := uint32(len(slice563))
-					result564 := witRuntime.Allocate(pinner, uintptr(length565*8), 4)
+					result564 := witRuntime.Allocate(pinner, uintptr(length565*4), 4)
 					for index, element := range slice563 {
-						base := unsafe.Add(result564, index*8)
-						*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = (element).Key
-						*(*int32)(unsafe.Add(unsafe.Pointer(base), 4)) = (element).Value
+						base := unsafe.Add(result564, index*4)
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = element
 
 					}
 
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length565)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result564)))
+
+				case golem_core_types.SchemaValueNodeMapValue:
+					payload := element.MapValue()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(20))
+					slice566 := payload
+					length568 := uint32(len(slice566))
+					result567 := witRuntime.Allocate(pinner, uintptr(length568*8), 4)
+					for index, element := range slice566 {
+						base := unsafe.Add(result567, index*8)
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 0)) = (element).Key
+						*(*int32)(unsafe.Add(unsafe.Pointer(base), 4)) = (element).Value
+
+					}
+
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(length568)
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(result567)))
 
 				case golem_core_types.SchemaValueNodeOptionValue:
 					payload := element.OptionValue()
@@ -19605,10 +19706,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case golem_core_types.SchemaValueNodeTextValue:
 					payload := element.TextValue()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(23))
-					utf8566 := unsafe.Pointer(unsafe.StringData((payload).Text))
-					pinner.Pin(utf8566)
+					utf8569 := unsafe.Pointer(unsafe.StringData((payload).Text))
+					pinner.Pin(utf8569)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Text)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8566)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8569)))
 
 					switch (payload).Language.Tag() {
 					case witTypes.OptionNone:
@@ -19617,10 +19718,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (payload).Language.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-						utf8567 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8567)
+						utf8570 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8570)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8567)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8570)))
 
 					default:
 						panic("unreachable")
@@ -19641,10 +19742,10 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					case witTypes.OptionSome:
 						payload := (payload).MimeType.Some()
 						*(*int8)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = int8(int32(1))
-						utf8568 := unsafe.Pointer(unsafe.StringData(payload))
-						pinner.Pin(utf8568)
+						utf8571 := unsafe.Pointer(unsafe.StringData(payload))
+						pinner.Pin(utf8571)
 						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))) = uint32(uint32(len(payload)))
-						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8568)))
+						*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))) = uint32(uintptr(uintptr(utf8571)))
 
 					default:
 						panic("unreachable")
@@ -19653,18 +19754,18 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 				case golem_core_types.SchemaValueNodePathValue:
 					payload := element.PathValue()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(25))
-					utf8569 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8569)
+					utf8572 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8572)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8569)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8572)))
 
 				case golem_core_types.SchemaValueNodeUrlValue:
 					payload := element.UrlValue()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(26))
-					utf8570 := unsafe.Pointer(unsafe.StringData(payload))
-					pinner.Pin(utf8570)
+					utf8573 := unsafe.Pointer(unsafe.StringData(payload))
+					pinner.Pin(utf8573)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8570)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8573)))
 
 				case golem_core_types.SchemaValueNodeDatetimeValue:
 					payload := element.DatetimeValue()
@@ -19682,18 +19783,18 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 					*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 					*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
-					utf8571 := unsafe.Pointer(unsafe.StringData((payload).Unit))
-					pinner.Pin(utf8571)
+					utf8574 := unsafe.Pointer(unsafe.StringData((payload).Unit))
+					pinner.Pin(utf8574)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))) = uint32(uint32(len((payload).Unit)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4))) = uint32(uintptr(uintptr(utf8571)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4))) = uint32(uintptr(uintptr(utf8574)))
 
 				case golem_core_types.SchemaValueNodeUnionValue:
 					payload := element.UnionValue()
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
-					utf8572 := unsafe.Pointer(unsafe.StringData((payload).Tag))
-					pinner.Pin(utf8572)
+					utf8575 := unsafe.Pointer(unsafe.StringData((payload).Tag))
+					pinner.Pin(utf8575)
 					*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
-					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8572)))
+					*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8575)))
 					*(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))) = (payload).Body
 
 				case golem_core_types.SchemaValueNodeSecretValue:
@@ -19706,14 +19807,19 @@ func wasm_export_golem_agent_guest_discover_agent_types() uintptr {
 					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 					*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
+				case golem_core_types.SchemaValueNodePermissionCardHandle:
+					payload := element.PermissionCardHandle()
+					*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+					*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
+
 				default:
 					panic("unreachable")
 				}
 
 			}
 
-			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (8 * 4))) = uint32(length575)
-			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (7 * 4))) = uint32(uintptr(uintptr(result574)))
+			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (8 * 4))) = uint32(length578)
+			*(*uint32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (7 * 4))) = uint32(uintptr(uintptr(result577)))
 			*(*int32)(unsafe.Add(unsafe.Pointer(exportReturnArea), (9 * 4))) = ((payload).Value).Root
 
 		default:

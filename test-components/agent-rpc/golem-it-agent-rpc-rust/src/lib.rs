@@ -198,20 +198,26 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
     fn test1(&self, server_agent_name: String) {
         let mut server = ScheduledInvocationServerClient::get(server_agent_name);
         let scheduled_for = datetime_200ms_from_now();
-        server.schedule_inc_global_by(1, scheduled_for);
+        server
+            .schedule_inc_global_by(1, scheduled_for)
+            .expect("failed to schedule invocation");
     }
 
     fn test2(&self, server_agent_name: String) {
         let mut server = ScheduledInvocationServerClient::get(server_agent_name);
         let scheduled_for = datetime_200ms_from_now();
-        let token = server.schedule_cancelable_inc_global_by(1, scheduled_for);
+        let token = server
+            .schedule_cancelable_inc_global_by(1, scheduled_for)
+            .expect("failed to schedule cancelable invocation");
         token.cancel();
     }
 
     fn test3(&mut self) {
         let mut self_client = ScheduledInvocationClientClient::get(self._name.clone());
         let scheduled_for = datetime_200ms_from_now();
-        self_client.schedule_inc_global_by(1, scheduled_for);
+        self_client
+            .schedule_inc_global_by(1, scheduled_for)
+            .expect("failed to schedule invocation");
     }
 
     fn inc_global_by(&mut self, value: u64) {
@@ -556,7 +562,7 @@ impl RpcAuthTester for RpcAuthTesterImpl {
 
         let arg = encode_single_parameter(1u64);
 
-        match rpc.invoke_and_await("inc_by", arg) {
+        match rpc.invoke_and_await("inc_by", arg, None) {
             Ok(_) => RpcCallOutcome::Ok,
             Err(e) => RpcCallOutcome::from(e),
         }
@@ -574,7 +580,9 @@ impl CancelTester for CancelTesterImpl {
         let wasm_rpc = WasmRpc::new("RpcCounter", constructor_data, None, Vec::new());
 
         let input = encode_single_parameter(1u64);
-        let future = wasm_rpc.async_invoke_and_await("inc_by", input).future;
+        let future = wasm_rpc
+            .async_invoke_and_await("inc_by", input, None)
+            .future;
 
         // Cancel immediately before polling/awaiting
         future.cancel();
@@ -588,7 +596,9 @@ impl CancelTester for CancelTesterImpl {
 
         // First, call inc_by to increment the counter
         let input = encode_single_parameter(5u64);
-        let future = wasm_rpc.async_invoke_and_await("inc_by", input).future;
+        let future = wasm_rpc
+            .async_invoke_and_await("inc_by", input, None)
+            .future;
 
         // Wait for completion. The P3 Golem WIT replaced `subscribe()`/pollable
         // polling of `future-invoke-result` with an `async get()`, so we just
@@ -648,6 +658,7 @@ impl HttpPollingSelfScheduler for HttpPollingSelfSchedulerImpl {
             .await;
 
         let me = HttpPollingSelfSchedulerClient::get(self.name.clone());
-        me.schedule_tick(host, port, datetime_500ms_from_now());
+        me.schedule_tick(host, port, datetime_500ms_from_now())
+            .expect("failed to schedule polling tick");
     }
 }

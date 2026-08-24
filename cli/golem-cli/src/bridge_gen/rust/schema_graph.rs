@@ -240,6 +240,13 @@ fn emit_schema_type(typ: &SchemaType) -> TokenStream {
             let spec = quota_token_spec(spec);
             quote! { golem_rust::schema::schema_type::SchemaType::QuotaToken { spec: #spec, metadata: #metadata } }
         }
+        PermissionCard { spec, .. } => {
+            let polymorphic = spec.polymorphic;
+            quote! { golem_rust::schema::schema_type::SchemaType::PermissionCard {
+                spec: golem_rust::schema::schema_type::PermissionCardSpec { polymorphic: #polymorphic },
+                metadata: #metadata,
+            } }
+        }
         Future { inner, .. } => {
             let inner = option_boxed_type(inner.as_deref());
             quote! { golem_rust::schema::schema_type::SchemaType::Future { inner: #inner, metadata: #metadata } }

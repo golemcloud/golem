@@ -19,21 +19,20 @@ import (
 )
 
 // Durability helpers expose Golem's exactly-once execution knobs to a handler:
-// atomic regions, persistence level, idempotence mode, an idempotency-key
-// generator, and oplog commit. They wrap host functions that the runtime already
-// implements; the durability semantics are guaranteed by the executor, and these
-// are thin, fail-loud wrappers (a host failure traps and surfaces as an
-// agent-error, matching the RPC/promise surface — no in-band error return).
+// atomic regions, idempotence mode, an idempotency-key generator, and oplog
+// commit. They wrap host functions that the runtime already implements; the
+// durability semantics are guaranteed by the executor, and these are thin,
+// fail-loud wrappers (a host failure traps and surfaces as an agent-error,
+// matching the RPC/promise surface — no in-band error return).
 //
 // Concurrency: these knobs apply at the worker level — the scope is per worker,
 // not per goroutine.
 // Golem runs an agent single-threaded with cooperative task-switching only at
 // await points (RPC, promise, sleep), so an atomic region or a
-// WithPersistenceLevel/WithIdempotenceMode scope is safe when it does not await
-// while other goroutines run concurrently; nesting on a single logical flow is
-// fine. To keep a scope from affecting concurrent work, don't hold it open across
-// a concurrent await (e.g. a CallAsync fan-out); for concurrency, distribute work
-// across agent instances.
+// WithIdempotenceMode scope is safe when it does not await while other goroutines
+// run concurrently; nesting on a single logical flow is fine. To keep a scope from
+// affecting concurrent work, don't hold it open across a concurrent await (e.g. a
+// CallAsync fan-out); for concurrency, distribute work across agent instances.
 
 // Atomically runs f as an atomic region: on normal return the region commits, so
 // on a later replay it is treated as a single completed step. If f panics, the
@@ -49,55 +48,6 @@ func Atomically(f func()) {
 	begin := apiHost.MarkBeginOperation()
 	f() // if this panics, the region stays open and is replayed on retry
 	apiHost.MarkEndOperation(begin)
-}
-
-// PersistenceLevel controls how much of an agent's execution is written to the
-// oplog. Lowering it speeds up execution where durable replay is not required.
-type PersistenceLevel int
-
-const (
-	// PersistNothing does not persist side effects; such a zone is skipped on
-	// replay. Use only for work that is safe to re-run or that you re-derive.
-	PersistNothing PersistenceLevel = iota
-	// PersistRemoteSideEffects persists remote side effects (e.g. RPC results).
-	PersistRemoteSideEffects
-	// PersistSmart is the default heuristic.
-	PersistSmart
-)
-
-func (l PersistenceLevel) toWit() apiHost.PersistenceLevel {
-	switch l {
-	case PersistNothing:
-		return apiHost.MakePersistenceLevelPersistNothing()
-	case PersistRemoteSideEffects:
-		return apiHost.MakePersistenceLevelPersistRemoteSideEffects()
-	default:
-		return apiHost.MakePersistenceLevelSmart()
-	}
-}
-
-func persistenceLevelFromWit(w apiHost.PersistenceLevel) PersistenceLevel {
-	switch w.Tag() {
-	case apiHost.PersistenceLevelPersistNothing:
-		return PersistNothing
-	case apiHost.PersistenceLevelPersistRemoteSideEffects:
-		return PersistRemoteSideEffects
-	default:
-		return PersistSmart
-	}
-}
-
-// WithPersistenceLevel sets the current persistence level and returns a function
-// that restores the previous level. Use it with defer to scope a level to the
-// rest of the current function:
-//
-//	defer golem.WithPersistenceLevel(golem.PersistNothing)()
-//
-// Scope a sub-block by wrapping it in a function literal with its own defer.
-func WithPersistenceLevel(level PersistenceLevel) (restore func()) {
-	prev := persistenceLevelFromWit(apiHost.GetOplogPersistenceLevel())
-	apiHost.SetOplogPersistenceLevel(level.toWit())
-	return func() { apiHost.SetOplogPersistenceLevel(prev.toWit()) }
 }
 
 // WithIdempotenceMode sets the current idempotence mode and returns a function

@@ -64,13 +64,13 @@ extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
   #| local.get 0)
 
 ///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32) local.get 0 call $moonbit.decref)
+
+///|
 #owned(str)
 extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
   #|(func (param i32) (result i32) local.get 0)
-
-///|
-extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 call $moonbit.decref)
 
 ///|
 extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =

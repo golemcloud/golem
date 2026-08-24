@@ -49,7 +49,6 @@ import type {
   StartSpanParameters,
   FinishSpanParameters,
   SetSpanAttributeParameters,
-  ChangePersistenceLevelParameters,
   BeginRemoteTransactionParameters,
   RemoteTransactionParameters,
   SnapshotParameters,
@@ -73,7 +72,6 @@ export type {
   SchemaValueTree,
   ComponentRevision,
   OplogIndex,
-  PersistenceLevel,
   Snapshot,
   Attribute,
   AttributeValue,
@@ -126,7 +124,6 @@ export type {
   StartSpanParameters,
   FinishSpanParameters,
   SetSpanAttributeParameters,
-  ChangePersistenceLevelParameters,
   BeginRemoteTransactionParameters,
   RemoteTransactionParameters,
   SnapshotParameters,
@@ -223,7 +220,6 @@ export type PublicOplogEntry =
   | { tag: 'start-span'; val: StartSpanParameters }
   | { tag: 'finish-span'; val: FinishSpanParameters }
   | { tag: 'set-span-attribute'; val: SetSpanAttributeParameters }
-  | { tag: 'change-persistence-level'; val: ChangePersistenceLevelParameters }
   | { tag: 'begin-remote-transaction'; val: BeginRemoteTransactionParameters }
   | { tag: 'pre-commit-remote-transaction'; val: RemoteTransactionParameters }
   | { tag: 'pre-rollback-remote-transaction'; val: RemoteTransactionParameters }

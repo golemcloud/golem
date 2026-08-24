@@ -350,6 +350,36 @@ pub mod workers {
             &["executor_id"]
         )
         .unwrap();
+        static ref OWNER_GROUP_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_owner_group_alive_count",
+            "Owner-routed active agent groups on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref PRIMARY_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_primary_store_alive_count",
+            "Live primary agent Stores on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        static ref ENTITY_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_entity_store_alive_count",
+            "Live transient entity Stores on this executor",
+            &["executor_id", "entity_kind"]
+        )
+        .unwrap();
+        static ref ENTITY_INVOCATION_ACTIVE_COUNT: GaugeVec = register_gauge_vec!(
+            "golem_entity_invocation_active_count",
+            "Entity invocation bodies currently active on this executor",
+            &["entity_kind", "execution_mode"]
+        )
+        .unwrap();
+        static ref ENTITY_INVOCATION_TOTAL: CounterVec = register_counter_vec!(
+            "golem_entity_invocation_total",
+            "Entity invocation bodies by terminal outcome",
+            &["entity_kind", "execution_mode", "outcome"]
+        )
+        .unwrap();
         pub static ref WORKER_KV_CACHE_VALUE_SIZE_BYTES: HistogramVec = register_histogram_vec!(
             "worker_kv_cache_value_size_bytes",
             "Bytes of a value written to the Worker-namespace KV cache (worker status blob size)",
@@ -512,6 +542,23 @@ pub mod workers {
             .with_label_values(&[id])
             .set(0.0);
         WORKER_STORE_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        OWNER_GROUP_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        PRIMARY_STORE_ALIVE_COUNT.with_label_values(&[id]).set(0.0);
+        for entity_kind in ["tool", "tool_middleware"] {
+            ENTITY_STORE_ALIVE_COUNT
+                .with_label_values(&[id, entity_kind])
+                .set(0.0);
+            for execution_mode in ["live", "replaying_completed", "replaying_incomplete"] {
+                ENTITY_INVOCATION_ACTIVE_COUNT
+                    .with_label_values(&[entity_kind, execution_mode])
+                    .set(0.0);
+                for outcome in ["succeeded", "failed", "cancelled"] {
+                    ENTITY_INVOCATION_TOTAL
+                        .with_label_values(&[entity_kind, execution_mode, outcome])
+                        .inc_by(0.0);
+                }
+            }
+        }
         WORKER_MEMORY_GROW_REJECTED_TOTAL
             .with_label_values(&[id])
             .inc_by(0.0);
@@ -544,6 +591,64 @@ pub mod workers {
         WORKER_STORE_ALIVE_COUNT
             .with_label_values(&[crate::metrics::storage::executor_id()])
             .dec();
+    }
+
+    pub fn inc_owner_group_alive() {
+        OWNER_GROUP_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    pub fn dec_owner_group_alive() {
+        OWNER_GROUP_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    pub fn inc_primary_store_alive() {
+        PRIMARY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .inc();
+    }
+
+    pub fn dec_primary_store_alive() {
+        PRIMARY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id()])
+            .dec();
+    }
+
+    pub fn inc_entity_store_alive(entity_kind: &'static str) {
+        ENTITY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id(), entity_kind])
+            .inc();
+    }
+
+    pub fn dec_entity_store_alive(entity_kind: &'static str) {
+        ENTITY_STORE_ALIVE_COUNT
+            .with_label_values(&[crate::metrics::storage::executor_id(), entity_kind])
+            .dec();
+    }
+
+    pub fn inc_entity_invocation_active(entity_kind: &'static str, execution_mode: &'static str) {
+        ENTITY_INVOCATION_ACTIVE_COUNT
+            .with_label_values(&[entity_kind, execution_mode])
+            .inc();
+    }
+
+    pub fn dec_entity_invocation_active(entity_kind: &'static str, execution_mode: &'static str) {
+        ENTITY_INVOCATION_ACTIVE_COUNT
+            .with_label_values(&[entity_kind, execution_mode])
+            .dec();
+    }
+
+    pub fn record_entity_invocation(
+        entity_kind: &'static str,
+        execution_mode: &'static str,
+        outcome: &'static str,
+    ) {
+        ENTITY_INVOCATION_TOTAL
+            .with_label_values(&[entity_kind, execution_mode, outcome])
+            .inc();
     }
 
     /// Phases a starting worker waits through before it can become resident. Each is
@@ -895,6 +1000,29 @@ pub mod wasm {
             "Number of in-function retries (retries inside host function without oplog replay)"
         )
         .unwrap();
+        static ref CUSTOM_INVOCATION_SCOPE_OPEN_TOTAL: Counter = register_counter!(
+            "custom_invocation_scope_open_total",
+            "Number of live custom-durability ownership scopes opened"
+        )
+        .unwrap();
+        static ref AGENT_PERMISSION_AUTHORIZATION_TOTAL: CounterVec = register_counter_vec!(
+            "agent_permission_authorization_total",
+            "Number of live host-call permission authorization decisions",
+            &["permission_class", "outcome"]
+        )
+        .unwrap();
+        static ref AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL: CounterVec = register_counter_vec!(
+            "agent_permission_authority_sync_total",
+            "Number of host-call authority boundary checks by path",
+            &["path"]
+        )
+        .unwrap();
+        static ref AGENT_PERMISSION_AUTHORITY_SYNC_SECONDS: Histogram = register_histogram!(
+            "agent_permission_authority_sync_seconds",
+            "Time spent refreshing host-call permission authority on the slow path",
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
     }
 
     pub fn record_host_function_call(iface: &str, name: &str) {
@@ -906,6 +1034,29 @@ pub mod wasm {
 
     pub fn record_in_function_retry() {
         IN_FUNCTION_RETRY_TOTAL.inc();
+    }
+
+    pub fn record_custom_invocation_scope_open() {
+        CUSTOM_INVOCATION_SCOPE_OPEN_TOTAL.inc();
+    }
+
+    pub fn record_agent_permission_authorization(permission_class: &str, allowed: bool) {
+        AGENT_PERMISSION_AUTHORIZATION_TOTAL
+            .with_label_values(&[permission_class, if allowed { "allowed" } else { "denied" }])
+            .inc();
+    }
+
+    pub fn record_agent_permission_authority_fast_path() {
+        AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL
+            .with_label_values(&["fast"])
+            .inc();
+    }
+
+    pub fn record_agent_permission_authority_slow_path(duration: Duration) {
+        AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL
+            .with_label_values(&["slow"])
+            .inc();
+        AGENT_PERMISSION_AUTHORITY_SYNC_SECONDS.observe(duration.as_secs_f64());
     }
 
     pub fn record_resume_worker(duration: Duration) {

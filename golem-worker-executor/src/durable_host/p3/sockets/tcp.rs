@@ -17,9 +17,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::durable_host::TcpSocketStreamDirection;
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable, NotCancellable};
+use crate::durable_host::authorization::targets::tcp_target;
+use crate::durable_host::concurrent::{
+    AccessClaimOptions, CallHandle, CallReplayOutcome, Cancellable, NotCancellable,
+    authorize_live_permissions_at_serialized_access, resolve_current_observational_owner,
+};
 use crate::durable_host::durability::{
-    DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
+    CustomInvocationContext, DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
 };
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
@@ -29,15 +33,15 @@ use crate::durable_host::tail_work::TailActivity;
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use golem_common::model::oplog::host_functions::{
-    P3SocketsTypesTcpSocketReceive, P3SocketsTypesTcpSocketReceiveAcquire,
-    P3SocketsTypesTcpSocketReceiveChunk, P3SocketsTypesTcpSocketSend,
-    P3SocketsTypesTcpSocketSendAcquire,
+    P3SocketsTypesTcpSocketConnect, P3SocketsTypesTcpSocketReceive,
+    P3SocketsTypesTcpSocketReceiveAcquire, P3SocketsTypesTcpSocketReceiveChunk,
+    P3SocketsTypesTcpSocketSend, P3SocketsTypesTcpSocketSendAcquire,
 };
 use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, SerializableP3TcpChunk};
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequestNoInput, HostResponseP3SocketsTcpAcquire,
-    HostResponseP3SocketsTcpReceive, HostResponseP3SocketsTcpReceiveChunk,
-    HostResponseP3SocketsTcpSend,
+    DurableFunctionType, HostPayloadPair, HostRequestNoInput, HostRequestP3SocketsConnect,
+    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend, OplogIndex,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::PollSender;
@@ -48,10 +52,23 @@ use wasmtime::component::{
     StreamConsumer, StreamProducer, StreamReader, StreamResult,
 };
 use wasmtime_wasi::p3::bindings::sockets::types;
-use wasmtime_wasi::p3::sockets::SocketResult;
+use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
 use wasmtime_wasi::sockets::{TcpSocket, WasiSockets, WasiSocketsView};
 
 use super::serialize_socket_error;
+
+pub(super) fn socket_target(
+    address: &types::IpSocketAddress,
+) -> Option<golem_common::model::card::PermissionTarget> {
+    match address {
+        types::IpSocketAddress::Ipv4(address) => {
+            let (a, b, c, d) = address.address;
+            let host = std::net::Ipv4Addr::new(a, b, c, d).to_string();
+            tcp_target(&host, address.port).ok()
+        }
+        types::IpSocketAddress::Ipv6(_) => None,
+    }
+}
 
 fn serialize_tcp_stream_result(
     result: Result<(), types::ErrorCode>,
@@ -889,6 +906,7 @@ struct TcpSocketReceiveTask<Ctx> {
     socket: Resource<TcpSocket>,
     demand_rx: mpsc::Receiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpReceiveResolution>,
+    observational_owner: Option<OplogIndex>,
     activity: TailActivity,
     _phantom: PhantomData<fn() -> Ctx>,
 }
@@ -898,12 +916,14 @@ impl<Ctx> TcpSocketReceiveTask<Ctx> {
         socket: Resource<TcpSocket>,
         demand_rx: mpsc::Receiver<TcpReceiveDemand>,
         result_tx: oneshot::Sender<TcpReceiveResolution>,
+        observational_owner: Option<OplogIndex>,
         activity: TailActivity,
     ) -> Self {
         Self {
             socket,
             demand_rx,
             result_tx,
+            observational_owner,
             activity,
             _phantom: PhantomData,
         }
@@ -921,6 +941,7 @@ where
             self.socket,
             self.demand_rx,
             self.result_tx,
+            self.observational_owner,
             self.activity,
         )
         .await
@@ -975,6 +996,7 @@ async fn run_tcp_socket_receive<Ctx, U>(
     socket: Resource<TcpSocket>,
     mut demand_rx: mpsc::Receiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpReceiveResolution>,
+    observational_owner: Option<OplogIndex>,
     activity: TailActivity,
 ) -> wasmtime::Result<()>
 where
@@ -982,17 +1004,24 @@ where
     U: Send + 'static,
 {
     // Open the parent batched scope. Children nest under its begin index.
-    let mut parent = match CallHandle::<P3SocketsTypesTcpSocketReceive, Cancellable>::start_access(
-        accessor,
-        durable_worker_ctx::<Ctx, U>,
-        HostRequestNoInput {},
-        DurableFunctionType::WriteRemoteBatched(None),
-    )
-    .await
-    {
-        Ok(parent) => parent,
-        Err(error) => return fail_tcp_receive_task(result_tx, wasmtime::Error::from(error), None),
-    };
+    let mut parent =
+        match CallHandle::<P3SocketsTypesTcpSocketReceive, Cancellable>::start_access_with_options(
+            accessor,
+            durable_worker_ctx::<Ctx, U>,
+            DurableFunctionType::WriteRemoteBatched(None),
+            AccessClaimOptions {
+                observational_owner,
+                ..Default::default()
+            },
+            async |_| Ok(HostRequestNoInput {}),
+        )
+        .await
+        {
+            Ok(parent) => parent,
+            Err(error) => {
+                return fail_tcp_receive_task(result_tx, wasmtime::Error::from(error), None);
+            }
+        };
     let parent_begin = parent.begin_index();
 
     // Live upstream wiring: only touch the socket when the parent call is live.
@@ -1048,12 +1077,18 @@ where
         // Safe park: waiting for the guest to demand the next chunk.
         let demand = activity.park(demand_rx.recv()).await;
 
-        let mut child =
-            match CallHandle::<P3SocketsTypesTcpSocketReceiveChunk, NotCancellable>::start_access(
+        let mut child = match CallHandle::<
+            P3SocketsTypesTcpSocketReceiveChunk,
+            NotCancellable,
+        >::start_access_with_options(
                 accessor,
                 durable_worker_ctx::<Ctx, U>,
-                HostRequestNoInput {},
                 DurableFunctionType::WriteRemoteBatched(Some(parent_begin)),
+                AccessClaimOptions {
+                    observational_owner,
+                    ..Default::default()
+                },
+                async |_| Ok(HostRequestNoInput {}),
             )
             .await
             {
@@ -1497,9 +1532,60 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 "connect",
             )
         });
-        let store = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-        <WasiSockets as types::HostTcpSocketWithStore<U>>::connect(&store, socket, remote_address)
-            .await
+        let live = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .state
+                .is_live()
+        });
+        let denied = if live {
+            match socket_target(&remote_address) {
+                Some(target) => !matches!(
+                    authorize_live_permissions_at_serialized_access(
+                        store,
+                        durable_worker_ctx::<Ctx, U>,
+                        &[target],
+                    )
+                    .await,
+                    Ok(Ok(_))
+                ),
+                None => true,
+            }
+        } else {
+            false
+        };
+        let request_address = remote_address;
+        let response = run_read_access::<_, _, Ctx, P3SocketsTypesTcpSocketConnect, _, _>(
+            store,
+            HostRequestP3SocketsConnect {
+                remote_address: request_address.into(),
+            },
+            DurableFunctionType::WriteRemote,
+            || async {
+                if denied {
+                    return Ok(HostResponseP3SocketsConnect {
+                        result: Err(SerializableP3SocketErrorCode::AccessDenied),
+                    });
+                }
+                let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
+                let result = <WasiSockets as types::HostTcpSocketWithStore<U>>::connect(
+                    &sockets,
+                    socket,
+                    remote_address,
+                )
+                .await;
+                Ok(HostResponseP3SocketsConnect {
+                    result: match result {
+                        Ok(()) => Ok(()),
+                        Err(error) => Err(serialize_socket_error(error)?),
+                    },
+                })
+            },
+        )
+        .await
+        .map_err(SocketError::trap)?;
+        response
+            .result
+            .map_err(|error| types::ErrorCode::from(error).into())
     }
 
     fn listen(
@@ -1588,6 +1674,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         accessor: &Accessor<U, Self>,
         socket: Resource<TcpSocket>,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
+        let custom_invocation_context = accessor.guest_task_context::<CustomInvocationContext>()?;
+        let observational_owner = accessor.with(|mut access| {
+            resolve_current_observational_owner(
+                durable_worker_ctx::<Ctx, U>(access.data_mut()),
+                custom_invocation_context.as_deref(),
+            )
+        })?;
         // One-shot acquire of the receive stream. On a second call (or when the
         // socket is not connected) this returns an error, surfaced as an empty
         // stream plus an immediately-failing result future, mirroring the native
@@ -1627,7 +1720,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 .tail_work_tracker()
                 .activity();
             store.spawn(TcpSocketReceiveTask::<Ctx>::new(
-                socket, demand_rx, result_tx, activity,
+                socket,
+                demand_rx,
+                result_tx,
+                observational_owner,
+                activity,
             ));
             Ok((stream, future))
         })

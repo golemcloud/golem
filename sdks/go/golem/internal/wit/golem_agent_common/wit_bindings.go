@@ -6,7 +6,7 @@
 //     golem:api@1.5.0
 //     golem:agent@2.0.0
 //     golem:rdbms@1.5.0
-//     golem:durability@1.5.0
+//     golem:durability@1.6.0
 //     golem:quota@1.5.0
 //     golem:secrets@0.1.0
 //     wasi:filesystem@0.3.0
@@ -20,6 +20,7 @@
 //     golem:websocket@1.5.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
+//     golem:permissions@0.1.0
 //     golem:tool@0.1.0
 //     wasi:io@0.2.6
 //     wasi:clocks@0.2.6

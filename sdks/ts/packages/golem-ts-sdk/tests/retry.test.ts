@@ -183,8 +183,6 @@ describe('retry host helpers', () => {
     }));
     vi.doMock('golem:api/host@1.5.0', () => ({
       trap: trapMock,
-      getOplogPersistenceLevel: vi.fn(),
-      setOplogPersistenceLevel: vi.fn(),
       getIdempotenceMode: vi.fn(),
       setIdempotenceMode: vi.fn(),
       markBeginOperation: vi.fn(),

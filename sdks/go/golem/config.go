@@ -268,7 +268,11 @@ func readConfigLeaf(d *definitions, lf configLeaf) (reflect.Value, error) {
 	if lf.source == common.AgentConfigSourceSecret {
 		return readSecretLeaf(lf)
 	}
-	tree := host.GetConfigValue(lf.path, d.graphForType(lf.typ))
+	res := host.GetConfigValue(lf.path, d.graphForType(lf.typ))
+	if res.IsErr() {
+		return reflect.Value{}, configValueErrorToGo(lf.path, res.Err())
+	}
+	tree := res.Ok()
 	dst := reflect.New(lf.typ).Elem()
 	dec := decoder{nodes: tree.ValueNodes}
 	if err := d.compile(lf.typ).decode(&dec, dst, tree.Root); err != nil {
@@ -297,8 +301,11 @@ func readSecretValue[T any](d *definitions, path []string) (T, error) {
 	var zero T
 	innerType := reflect.TypeFor[T]()
 
-	handleTree := host.GetConfigValue(path, d.graphForType(reflect.TypeFor[Secret[T]]()))
-	handle, err := extractSecretHandle(path, handleTree)
+	handleRes := host.GetConfigValue(path, d.graphForType(reflect.TypeFor[Secret[T]]()))
+	if handleRes.IsErr() {
+		return zero, configValueErrorToGo(path, handleRes.Err())
+	}
+	handle, err := extractSecretHandle(path, handleRes.Ok())
 	if err != nil {
 		return zero, err
 	}
@@ -367,6 +374,17 @@ func extractSecretHandle(path []string, tree types.SchemaValueTree) (*types.Secr
 		return nil, fmt.Errorf("golem/secret %v: expected a secret value, got node tag %d", path, node.Tag())
 	}
 	return node.SecretValue(), nil
+}
+
+// configValueErrorToGo maps a host config-value error onto a Go error, keeping
+// the case distinguishable rather than flattening it to a bare string.
+func configValueErrorToGo(path []string, e host.ConfigValueError) error {
+	switch e.Tag() {
+	case host.ConfigValueErrorPermissionDenied:
+		return fmt.Errorf("golem/config %v: permission denied", path)
+	default:
+		return fmt.Errorf("golem/config %v: config value error (tag %d)", path, e.Tag())
+	}
 }
 
 // secretErrorToGo maps a host secret-error onto a Go error, keeping the case

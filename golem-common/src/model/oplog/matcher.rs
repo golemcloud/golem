@@ -403,11 +403,6 @@ impl PublicOplogEntry {
                     || Self::string_match(&params.key, &[], query_path, query)
                     || Self::span_attribute_match(&attributes, &[], query_path, query)
             }
-            PublicOplogEntry::ChangePersistenceLevel(_params) => {
-                Self::string_match("changepersistencelevel", &[], query_path, query)
-                    || Self::string_match("change-persistence-level", &[], query_path, query)
-                    || Self::string_match("persistence-level", &[], query_path, query)
-            }
             PublicOplogEntry::BeginRemoteTransaction(_params) => {
                 Self::string_match("beginremotetransaction", &[], query_path, query)
                     || Self::string_match("begin-remote-transaction", &[], query_path, query)
@@ -467,6 +462,55 @@ impl PublicOplogEntry {
                 Self::string_match("cardinstallfailed", &[], query_path, query)
                     || Self::string_match("card-install-failed", &[], query_path, query)
                     || Self::string_match(&params.card_id.to_string(), &[], query_path, query)
+            }
+            PublicOplogEntry::CardDerived(params) => {
+                Self::string_match("cardderived", &[], query_path, query)
+                    || Self::string_match("card-derived", &[], query_path, query)
+                    || Self::string_match(&params.card_id.to_string(), &[], query_path, query)
+            }
+            PublicOplogEntry::CardTransferStarted(params) => {
+                Self::string_match("cardtransferstarted", &[], query_path, query)
+                    || Self::string_match("card-transfer-started", &[], query_path, query)
+                    || Self::string_match(&params.transfer_id.to_string(), &[], query_path, query)
+                    || Self::string_match(&params.card_id.to_string(), &[], query_path, query)
+            }
+            PublicOplogEntry::CardTransferred(params) => {
+                Self::string_match("cardtransferred", &[], query_path, query)
+                    || Self::string_match("card-transferred", &[], query_path, query)
+                    || Self::string_match(&params.transfer_id.to_string(), &[], query_path, query)
+                    || params.source_card_id.as_ref().is_some_and(|card_id| {
+                        Self::string_match(&card_id.to_string(), &[], query_path, query)
+                    })
+                    || Self::string_match(
+                        &params.installed_card_id.to_string(),
+                        &[],
+                        query_path,
+                        query,
+                    )
+            }
+            PublicOplogEntry::CardRevokedCascade(params) => {
+                Self::string_match("cardrevokedcascade", &[], query_path, query)
+                    || Self::string_match("card-revoked-cascade", &[], query_path, query)
+                    || params.revoked_card_ids.iter().any(|card_id| {
+                        Self::string_match(&card_id.to_string(), &[], query_path, query)
+                    })
+            }
+            PublicOplogEntry::CardTransferConfirmed(params) => {
+                Self::string_match("cardtransferconfirmed", &[], query_path, query)
+                    || Self::string_match("card-transfer-confirmed", &[], query_path, query)
+                    || Self::string_match(&params.transfer_id.to_string(), &[], query_path, query)
+                    || Self::string_match(
+                        &params.source_card_id.to_string(),
+                        &[],
+                        query_path,
+                        query,
+                    )
+                    || Self::string_match(
+                        &params.installed_card_id.to_string(),
+                        &[],
+                        query_path,
+                        query,
+                    )
             }
             PublicOplogEntry::CardExpired(params) => {
                 Self::string_match("cardexpired", &[], query_path, query)
@@ -791,6 +835,12 @@ impl PublicOplogEntry {
             }
             SchemaValue::QuotaToken(payload) => {
                 Self::string_match(&payload.resource_name, path_stack, query_path, query)
+            }
+            SchemaValue::PermissionCard(payload) => {
+                Self::string_match(&payload.card_id.to_string(), path_stack, query_path, query)
+                    || payload.parent_ids.iter().any(|parent_id| {
+                        Self::string_match(&parent_id.to_string(), path_stack, query_path, query)
+                    })
             }
         }
     }

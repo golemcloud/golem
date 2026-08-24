@@ -24,9 +24,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
-};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -232,10 +230,6 @@ impl Oplog for RateLimitedOplog {
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.inner.download_raw_payload(payload_id, md5_hash).await
-    }
-
-    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
-        self.inner.switch_persistence_level(mode).await;
     }
 
     async fn add_pair(
@@ -775,6 +769,8 @@ mod tests {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: None,
                 function_name,
+                invocation_id: None,
+                observational_owner: None,
                 request: Some(request_payload),
                 durable_function_type: DurableFunctionType::ReadRemote,
             }

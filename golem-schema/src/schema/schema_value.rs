@@ -52,6 +52,28 @@ pub type QuotaTokenVariantValue = QuotaTokenValuePayload;
 #[cfg(all(feature = "guest", not(feature = "host")))]
 pub type QuotaTokenVariantValue = crate::schema::wit::GuestQuotaTokenHandle;
 
+/// The payload carried by [`SchemaValue::PermissionCard`].
+///
+/// A permission-card is an opaque, unforgeable capability, exactly like a
+/// secret or quota-token. The representation differs by build target:
+///
+/// - On the host (and in feature-neutral builds) it is the trusted internal
+///   snapshot [`PermissionCardValuePayload`], converted to/from an owned
+///   `permission-card` handle by a `PermissionCardResolver` at the WIT
+///   boundary. The `card_id` field is the only authoritative identity; the
+///   other fields are trusted cache verified against the card store.
+/// - On a guest it is an opaque, affine, take-once owned handle
+///   ([`crate::schema::wit::GuestPermissionCardHandle`]) that the guest can
+///   only hold and transfer, never read.
+#[cfg(not(all(feature = "guest", not(feature = "host"))))]
+pub type PermissionCardVariantValue = PermissionCardValuePayload;
+
+/// The payload carried by [`SchemaValue::PermissionCard`] on a guest: an
+/// opaque, affine owned handle. See [`PermissionCardVariantValue`] (host
+/// build) for details.
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub type PermissionCardVariantValue = crate::schema::wit::GuestPermissionCardHandle;
+
 /// One node in the recursive in-memory schema-value tree.
 ///
 /// Always travels paired with a [`super::SchemaGraph`] (see
@@ -132,6 +154,7 @@ pub enum SchemaValue {
     // Capability nodes
     Secret(SecretVariantValue),
     QuotaToken(QuotaTokenVariantValue),
+    PermissionCard(PermissionCardVariantValue),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
@@ -244,4 +267,37 @@ pub struct QuotaTokenValuePayload {
     pub expected_use: u64,
     pub last_credit: i64,
     pub last_credit_at: DateTime<Utc>,
+}
+
+/// Capability value: the trusted internal/persistent representation of a
+/// permission-card, held only inside `SchemaValue::PermissionCard`. Across a
+/// WIT boundary the card travels as an opaque, unforgeable owned handle
+/// (`permission-card-handle(own<permission-card>)`); the host converts between
+/// this snapshot and a handle through a resolver and the receiver re-acquires
+/// the live card against `card_id` on demand. This snapshot is never exposed
+/// to or constructible by a guest.
+///
+/// Only `card_id` is authoritative identity. The remaining fields are trusted
+/// cache verified against the card store on the host side; receivers must not
+/// treat them as proof of authorization, only as a hint of the card's last
+/// known shape.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
+pub struct PermissionCardValuePayload {
+    /// Authoritative identity of the card. Survives serialization and is the
+    /// only field a receiver may trust without re-validation.
+    pub card_id: uuid::Uuid,
+    /// Direct parents in the permission DAG. Order is not significant. Trusted
+    /// cache only; receivers re-validate by walking the live card store.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parent_ids: Vec<uuid::Uuid>,
+    /// Absolute expiry of the card, if any. Trusted cache only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+    /// Whether the card is polymorphic (can spawn scoped child cards). Trusted
+    /// cache only; the live card store is the source of truth.
+    pub polymorphic: bool,
 }

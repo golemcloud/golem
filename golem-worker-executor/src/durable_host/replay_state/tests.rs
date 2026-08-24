@@ -1,17 +1,24 @@
 use super::*;
 use crate::services::oplog::{CommitLevel, OplogAddReceipt, OrderedOplogStart, PendingUpload};
 use async_trait::async_trait;
+use golem_common::model::card::{
+    AgentCardHolder, Card, CardHolder, CardId, InvocationWalletPin, StoredCard, WalletVersionToken,
+};
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::payload::types::{
     SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult,
 };
 use golem_common::model::oplog::{
     AgentError, DurableFunctionType, HostRequest, HostRequestNoInput, HostRequestPollCount,
     HostResponseMonotonicClockTimestamp, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult, OplogPayload, PayloadId, RawOplogPayload,
+    HostResponseP3HttpClientConsumeBodyResult, HostStreamKind, OplogPayload, PayloadId,
+    RawOplogPayload,
 };
-use golem_common::model::{AgentId, Timestamp};
+use golem_common::model::regions::OplogRegion;
+use golem_common::model::{AgentId, AgentInvocationPayload, IdempotencyKey, Timestamp};
+use golem_common::schema::IntoTypedSchemaValue;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use test_r::test;
@@ -150,8 +157,6 @@ impl Oplog for InMemoryOplog {
             .map(|(_, _, bytes)| bytes.clone())
             .ok_or_else(|| format!("missing test payload {payload_id}"))
     }
-
-    async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
 }
 
 fn test_agent_id() -> OwnedAgentId {
@@ -170,16 +175,720 @@ fn noop() -> OplogEntry {
     }
 }
 
+fn stored_test_card(card_id: CardId) -> StoredCard {
+    StoredCard::Concrete(Card {
+        card_id,
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    })
+}
+
+fn invocation_started(wallet_pin: InvocationWalletPin) -> OplogEntry {
+    OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::now_utc(),
+        idempotency_key: IdempotencyKey::new("wallet-pin-replay".to_string()),
+        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+        trace_id: TraceId::generate(),
+        trace_states: Vec::new(),
+        invocation_context: Vec::new(),
+        wallet_pin: Some(wallet_pin),
+    }
+}
+
 fn start_now() -> OplogEntry {
     OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
         parent_start_index: None,
         function_name: HostFunctionName::MonotonicClockNow,
+        invocation_id: None,
+        observational_owner: None,
         request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
     }
+}
+
+fn custom_request(value: i32) -> HostRequest {
+    HostRequest::Custom(value.into_typed_schema_value().unwrap())
+}
+
+fn custom_start(name: &str, value: i32, parent: Option<u64>, invocation_id: u128) -> OplogEntry {
+    custom_start_with_request(name, custom_request(value), parent, invocation_id)
+}
+
+fn custom_start_with_request(
+    name: &str,
+    request: HostRequest,
+    parent: Option<u64>,
+    invocation_id: u128,
+) -> OplogEntry {
+    OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: parent.map(OplogIndex::from_u64),
+        function_name: HostFunctionName::Custom(name.to_string()),
+        invocation_id: Some(uuid::Uuid::from_u128(invocation_id)),
+        observational_owner: None,
+        request: Some(OplogPayload::Inline(Box::new(request))),
+        durable_function_type: DurableFunctionType::ReadRemote,
+    }
+}
+
+fn custom_start_without_invocation_id(
+    name: &str,
+    request: HostRequest,
+    parent: Option<u64>,
+) -> OplogEntry {
+    let mut entry = custom_start_with_request(name, request, parent, 0);
+    let OplogEntry::Start { invocation_id, .. } = &mut entry else {
+        unreachable!();
+    };
+    *invocation_id = None;
+    entry
+}
+
+fn custom_end(start_index: u64, value: i32) -> OplogEntry {
+    OplogEntry::End {
+        timestamp: Timestamp::now_utc(),
+        start_index: OplogIndex::from_u64(start_index),
+        response: Some(OplogPayload::Inline(Box::new(HostResponse::Custom(
+            value.into_typed_schema_value().unwrap(),
+        )))),
+        forced_commit: false,
+    }
+}
+
+fn observational_start_now(owner: u64, parent: Option<u64>) -> OplogEntry {
+    let mut entry = start_now();
+    let OplogEntry::Start {
+        observational_owner,
+        parent_start_index,
+        ..
+    } = &mut entry
+    else {
+        unreachable!();
+    };
+    *observational_owner = Some(OplogIndex::from_u64(owner));
+    *parent_start_index = parent.map(OplogIndex::from_u64);
+    entry
+}
+
+fn owned_start_now(parent: u64) -> OplogEntry {
+    let mut entry = start_now();
+    let OplogEntry::Start {
+        parent_start_index, ..
+    } = &mut entry
+    else {
+        unreachable!();
+    };
+    *parent_start_index = Some(OplogIndex::from_u64(parent));
+    entry
+}
+
+fn stream_frame(parent: u64) -> OplogEntry {
+    OplogEntry::HostStreamFrame {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: OplogIndex::from_u64(parent),
+        kind: HostStreamKind::P3HttpRequestBody,
+        payload: OplogPayload::Inline(Box::new(HostRequest::NoInput(HostRequestNoInput {}))),
+    }
+}
+
+#[test]
+async fn completed_custom_invocation_drains_nested_custom_subtree() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        custom_start("inner", 2, Some(2), 2),
+        custom_end(3, 20),
+        custom_end(2, 10),
+    ])
+    .await;
+
+    let claimed = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("outer".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution_outcome(claimed.handle).await.unwrap() {
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. }) => {
+            assert_eq!(end_idx, OplogIndex::from_u64(5));
+        }
+        other => panic!("expected completed custom subtree, got {other:?}"),
+    }
+    assert!(rs.is_live());
+}
+
+#[test]
+async fn incomplete_custom_invocation_drains_completed_descendants_then_reexecutes_root() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        custom_start("inner", 2, Some(2), 2),
+        custom_end(3, 20),
+    ])
+    .await;
+
+    let claimed = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("outer".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(2));
+    assert!(matches!(
+        rs.await_resolution_outcome(claimed.handle).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+}
+
+#[test]
+async fn ordinary_claim_never_claims_observational_start() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        observational_start_now(2, None),
+        start_now(),
+    ])
+    .await;
+
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(handle.start_idx(), OplogIndex::from_u64(4));
+}
+
+#[test]
+async fn request_matching_claim_never_claims_observational_start() {
+    let request: HostRequest = HostRequestNoInput {}.into();
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        observational_start_now(2, None),
+        start_now(),
+    ])
+    .await;
+
+    let handle = rs
+        .claim_concurrent_start_matching_request(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            &request,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(handle.start_idx(), OplogIndex::from_u64(4));
+}
+
+#[test]
+async fn custom_replay_skips_interleaved_observational_tree_without_stealing_sibling() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        observational_start_now(2, None),
+        start_now(),
+        end_for(4, 42),
+        end_for(3, 99),
+        custom_end(2, 10),
+    ])
+    .await;
+
+    let custom = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("outer".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+    let sibling = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(sibling.start_idx(), OplogIndex::from_u64(4));
+
+    assert!(matches!(
+        rs.await_resolution_outcome(sibling).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(5)
+    ));
+    assert!(matches!(
+        rs.await_resolution_outcome(custom.handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(7)
+    ));
+}
+
+#[test]
+async fn custom_replay_skips_nested_observational_calls_and_stream_frames_by_identity() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        observational_start_now(2, None),
+        owned_start_now(3),
+        stream_frame(4),
+        end_for(4, 42),
+        end_for(3, 99),
+        custom_end(2, 10),
+    ])
+    .await;
+
+    let custom = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("outer".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        rs.await_resolution_outcome(custom.handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(8)
+    ));
+    assert!(rs.is_live());
+}
+
+#[test]
+async fn outer_custom_replay_skips_observational_calls_owned_by_nested_custom_invocation() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        custom_start("nested", 2, Some(2), 2),
+        observational_start_now(3, None),
+        end_for(4, 42),
+        custom_end(3, 20),
+        custom_end(2, 10),
+    ])
+    .await;
+
+    let outer = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("outer".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        rs.await_resolution_outcome(outer.handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(7)
+    ));
+    assert!(rs.is_live());
+}
+
+#[test]
+async fn incomplete_observational_tree_does_not_block_custom_live_fallback() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        observational_start_now(2, None),
+    ])
+    .await;
+
+    let custom = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("outer".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        rs.await_resolution_outcome(custom.handle).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+    assert!(rs.is_live());
+}
+
+#[test]
+async fn delivered_observational_completion_does_not_block_custom_live_fallback() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        observational_start_now(2, None),
+        end_for(3, 42),
+        delivered_for(3),
+        observational_start_now(2, None),
+    ])
+    .await;
+
+    let custom = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("outer".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        rs.await_resolution_outcome(custom.handle).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+    assert!(rs.is_live());
+}
+
+#[test]
+async fn observational_call_finishing_after_custom_terminal_is_still_skipped() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        custom_end(2, 10),
+        observational_start_now(2, None),
+        end_for(4, 99),
+        noop(),
+    ])
+    .await;
+
+    let custom = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("outer".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        rs.await_resolution_outcome(custom.handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(3)
+    ));
+
+    let next = rs
+        .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::NoOp { .. }))
+        .await
+        .unwrap();
+    assert_eq!(next.map(|(idx, _)| idx), Some(OplogIndex::from_u64(6)));
+}
+
+#[test]
+async fn custom_replay_skips_observational_cancellation() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("outer", 1, None, 1),
+        observational_start_now(2, None),
+        cancelled_for(3),
+        custom_end(2, 10),
+    ])
+    .await;
+
+    let custom = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("outer".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        rs.await_resolution_outcome(custom.handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(5)
+    ));
+    assert!(rs.is_live());
+}
+
+#[test]
+async fn custom_claim_matches_identical_generators_by_invocation_id_in_reverse_order() {
+    let no_input: HostRequest = HostRequestNoInput {}.into();
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start_with_request("generator", no_input.clone(), None, 1),
+        custom_start_with_request("generator", no_input.clone(), None, 2),
+        custom_end(2, 10),
+        custom_end(3, 20),
+    ])
+    .await;
+    let name = HostFunctionName::Custom("generator".to_string());
+    let second = rs
+        .claim_custom_start_matching_invocation_id(
+            &name,
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(2),
+            &no_input,
+        )
+        .await
+        .unwrap();
+    let first = rs
+        .claim_custom_start_matching_invocation_id(
+            &name,
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &no_input,
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.handle.start_idx(), OplogIndex::from_u64(2));
+    assert_eq!(second.handle.start_idx(), OplogIndex::from_u64(3));
+    assert!(matches!(
+        rs.await_resolution_outcome(first.handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(4)
+    ));
+    assert!(matches!(
+        rs.await_resolution_outcome(second.handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(5)
+    ));
+}
+
+#[test]
+async fn custom_claim_rejects_changed_request_for_same_invocation_id() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("operation", 1, None, 1),
+        custom_end(2, 10),
+    ])
+    .await;
+
+    let result = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("operation".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(2),
+        )
+        .await;
+    let Err(err) = result else {
+        panic!("a replayed custom request must match its recorded payload");
+    };
+    assert!(format!("{err}").contains("recorded request payload differs"));
+
+    let claimed = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("operation".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await
+        .expect("failed validation must not leave claim state behind");
+    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(2));
+}
+
+#[test]
+async fn custom_claim_rejects_reused_invocation_id() {
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("operation", 1, None, 1),
+        custom_start("different-operation", 2, None, 1),
+        custom_end(2, 10),
+        custom_end(3, 20),
+    ])
+    .await;
+
+    let result = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("operation".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &custom_request(1),
+        )
+        .await;
+    let Err(err) = result else {
+        panic!("custom invocation IDs are single-use");
+    };
+    assert!(format!("{err}").contains("reused by Starts 2 and 3"));
+}
+
+#[test]
+async fn custom_claim_rejects_start_without_invocation_id() {
+    let no_input: HostRequest = HostRequestNoInput {}.into();
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start_without_invocation_id("generator", no_input.clone(), None),
+        custom_end(2, 10),
+    ])
+    .await;
+
+    let result = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("generator".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(1),
+            &no_input,
+        )
+        .await;
+    let Err(err) = result else {
+        panic!("custom replay must require a deterministic invocation ID");
+    };
+    assert!(format!("{err}").contains("no Start with the required custom invocation ID"));
+}
+
+#[test]
+async fn custom_claim_never_claims_observational_start_with_same_invocation_id() {
+    let request = custom_request(1);
+    let mut observational = custom_start_with_request("operation", request.clone(), None, 2);
+    let OplogEntry::Start {
+        observational_owner,
+        ..
+    } = &mut observational
+    else {
+        unreachable!();
+    };
+    *observational_owner = Some(OplogIndex::from_u64(2));
+
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start("owner", 0, None, 1),
+        observational,
+        custom_start_with_request("operation", request.clone(), None, 2),
+    ])
+    .await;
+
+    let claimed = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("operation".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(2),
+            &request,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(4));
+}
+
+#[test]
+async fn custom_claim_ignores_start_without_invocation_id_before_exact_match() {
+    let request = custom_request(1);
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start_without_invocation_id("operation", request.clone(), None),
+        custom_start_with_request("operation", request.clone(), None, 2),
+        custom_end(2, 10),
+        custom_end(3, 20),
+    ])
+    .await;
+
+    let claimed = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("operation".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(2),
+            &request,
+        )
+        .await
+        .unwrap();
+    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(3));
+}
+
+#[test]
+async fn custom_claim_rejects_wrong_metadata_for_exact_id() {
+    let request = custom_request(1);
+    let rs = replay_state_over(vec![
+        noop(),
+        custom_start_with_request("different-operation", request.clone(), None, 2),
+    ])
+    .await;
+
+    let result = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("operation".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            uuid::Uuid::from_u128(2),
+            &request,
+        )
+        .await;
+    let Err(err) = result else {
+        panic!("an exact invocation ID with divergent metadata must be rejected");
+    };
+    assert!(format!("{err}").contains("different-operation"));
+}
+
+#[test]
+async fn custom_claim_id_can_be_reused_after_replay_restart() {
+    let entries = vec![
+        noop(),
+        custom_start("operation", 1, None, 1),
+        custom_end(2, 10),
+    ];
+    let rs = replay_state_over(entries.clone()).await;
+    let name = HostFunctionName::Custom("operation".to_string());
+    let invocation_id = uuid::Uuid::from_u128(1);
+
+    let claimed = rs
+        .claim_custom_start_matching_invocation_id(
+            &name,
+            &DurableFunctionType::ReadRemote,
+            None,
+            invocation_id,
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        rs.await_resolution_outcome(claimed.handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
+
+    drop(rs);
+    let rs = replay_state_over(entries).await;
+    let claimed_again = rs
+        .claim_custom_start_matching_invocation_id(
+            &name,
+            &DurableFunctionType::ReadRemote,
+            None,
+            invocation_id,
+            &custom_request(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(claimed_again.handle.start_idx(), OplogIndex::from_u64(2));
 }
 
 fn begin_atomic_region() -> OplogEntry {
@@ -207,6 +916,8 @@ fn fork_start() -> OplogEntry {
         timestamp: Timestamp::now_utc(),
         parent_start_index: None,
         function_name: HostFunctionName::GolemApiFork,
+        invocation_id: None,
+        observational_owner: None,
         request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
             HostRequestNoInput {},
         )))),
@@ -220,14 +931,211 @@ async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
         oplog.add(entry).await;
     }
     let oplog: Arc<dyn Oplog> = oplog;
-    ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
+    ReplayState::new(test_agent_id(), oplog, DeletedRegions::default(), None)
         .await
         .expect("failed to build replay state")
+}
+
+#[test]
+async fn permission_events_replay_after_invocation_wallet_pin() {
+    let owned_agent_id = test_agent_id();
+    let derived_card = stored_test_card(CardId::new());
+    let wallet_pin = InvocationWalletPin {
+        wallet_token: WalletVersionToken {
+            wallet_id_hash: CardHolder::Agent(AgentCardHolder {
+                agent_id: owned_agent_id.agent_id.clone(),
+            })
+            .wallet_id_hash(),
+            generation: 0,
+        },
+        pinned_card_ids: Vec::new(),
+        scope_card_id: Some(CardId::new()),
+    };
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        noop(),
+        invocation_started(wallet_pin.clone()),
+        OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            card: derived_card.clone(),
+            wallet_generation: Some(0),
+        },
+        start_now(),
+    ] {
+        oplog.add(entry).await;
+    }
+    let oplog: Arc<dyn Oplog> = oplog;
+    let replay_state = ReplayState::new(owned_agent_id, oplog, DeletedRegions::default(), None)
+        .await
+        .expect("failed to build replay state");
+
+    let invocation = replay_state
+        .get_oplog_entry_agent_invocation_started()
+        .await
+        .expect("failed to replay invocation start")
+        .expect("expected invocation start");
+    assert_eq!(invocation.wallet_pin, Some(wallet_pin.clone()));
+    assert_eq!(
+        replay_state
+            .pending_card_derivation(derived_card.card_id())
+            .await,
+        Some((derived_card.clone(), Some(0)))
+    );
+    assert_eq!(
+        replay_state.take_new_replay_events(),
+        vec![
+            ReplayEvent::InvocationWalletPinned { wallet_pin },
+            ReplayEvent::CardDerived {
+                card: derived_card,
+                wallet_generation: Some(0),
+            },
+        ]
+    );
+}
+
+#[test]
+async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
+    let card_id = CardId::new();
+    let mut card = stored_test_card(card_id);
+    let StoredCard::Concrete(card_data) = &mut card else {
+        unreachable!("the test fixture always creates a concrete card");
+    };
+    card_data.expires_at = Some(chrono::DateTime::UNIX_EPOCH);
+
+    // ReplayState's complete input is this oplog. In particular, it has no clock, card service,
+    // effective surface, or authorization callback. An already-expired card therefore remains a
+    // recorded installation until a recorded removal is encountered, and cannot invalidate the
+    // recorded successful operation that follows it.
+    let rs = replay_state_over(vec![
+        noop(),
+        OplogEntry::CardInstalled {
+            timestamp: Timestamp::now_utc(),
+            queued_event_index: None,
+            card: card.clone(),
+            wallet_generation: Some(7),
+        },
+        custom_start("durable-operation", 41, None, 1),
+        custom_end(3, 42),
+    ])
+    .await;
+
+    let claimed = rs
+        .claim_custom_start_matching_invocation_id(
+            &HostFunctionName::Custom("durable-operation".to_string()),
+            &DurableFunctionType::ReadRemote,
+            None,
+            Uuid::from_u128(1),
+            &custom_request(41),
+        )
+        .await
+        .expect("recorded durable operation must be claimable");
+    match rs
+        .await_resolution_outcome(claimed.handle)
+        .await
+        .expect("recorded durable operation must resolve")
+    {
+        ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
+            assert_eq!(
+                response,
+                Some(OplogPayload::Inline(Box::new(HostResponse::Custom(
+                    42.into_typed_schema_value().unwrap(),
+                ))))
+            );
+        }
+        other => panic!("expected the recorded successful result, got {other:?}"),
+    }
+
+    assert!(rs.is_live());
+    assert_eq!(
+        rs.take_new_replay_events(),
+        vec![
+            ReplayEvent::CardInstalled {
+                card,
+                wallet_generation: Some(7),
+            },
+            ReplayEvent::ReplayFinished,
+        ],
+        "replay must preserve recorded admission state and must not synthesize expiry"
+    );
+}
+
+#[test]
+async fn permission_events_are_recovered_from_skipped_regions() {
+    let transfer_id = Uuid::new_v4();
+    let source_card_id = CardId::new();
+    let card = stored_test_card(CardId::new());
+    let target_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: test_agent_id().agent_id,
+    });
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        noop(),
+        OplogEntry::CardTransferred {
+            timestamp: Timestamp::now_utc(),
+            transfer_id,
+            source_card_id: Some(source_card_id),
+            installed_card_id: card.card_id(),
+            target_holder: target_holder.clone(),
+            card: card.clone(),
+            target_wallet_generation: Some(1),
+        },
+        start_now(),
+    ] {
+        oplog.add(entry).await;
+    }
+    let oplog: Arc<dyn Oplog> = oplog;
+    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
+    let replay_state = ReplayState::new(test_agent_id(), oplog, skipped, None)
+        .await
+        .expect("failed to build replay state");
+
+    assert_eq!(
+        replay_state.take_new_replay_events(),
+        vec![ReplayEvent::CardTransferred {
+            transfer_id,
+            source_card_id: Some(source_card_id),
+            installed_card_id: card.card_id(),
+            target_holder,
+            card,
+            target_wallet_generation: Some(1),
+        }]
+    );
+}
+
+#[test]
+async fn snapshot_prefix_suppresses_replayed_permission_events() {
+    let card = stored_test_card(CardId::new());
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        noop(),
+        OplogEntry::CardInstalled {
+            timestamp: Timestamp::now_utc(),
+            queued_event_index: None,
+            card,
+            wallet_generation: Some(1),
+        },
+        start_now(),
+    ] {
+        oplog.add(entry).await;
+    }
+    let oplog: Arc<dyn Oplog> = oplog;
+    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
+    let replay_state = ReplayState::new(
+        test_agent_id(),
+        oplog,
+        skipped,
+        Some(OplogIndex::from_u64(2)),
+    )
+    .await
+    .expect("failed to build replay state");
+
+    assert!(replay_state.take_new_replay_events().is_empty());
 }
 
 fn stdout_log(message: &str) -> OplogEntry {
     OplogEntry::Log {
         timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
         level: LogLevel::Stdout,
         context: "stdout".to_string(),
         message: message.to_string(),
@@ -311,6 +1219,8 @@ async fn request_matching_downloads_uncached_external_payloads() {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: None,
                 function_name: HostFunctionName::MonotonicClockNow,
+                invocation_id: None,
+                observational_owner: None,
                 request: Some(payload),
                 durable_function_type: DurableFunctionType::ReadLocal,
             })
@@ -318,7 +1228,7 @@ async fn request_matching_downloads_uncached_external_payloads() {
     }
 
     let oplog: Arc<dyn Oplog> = oplog;
-    let rs = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
+    let rs = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default(), None)
         .await
         .unwrap();
 
@@ -604,6 +1514,8 @@ async fn dropped_scan_ahead_claim_leaves_no_residue_once_cursor_passes() {
             timestamp: Timestamp::now_utc(),
             parent_start_index: Some(OplogIndex::from_u64(parent)),
             function_name: HostFunctionName::MonotonicClockNow,
+            invocation_id: None,
+            observational_owner: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),
@@ -786,6 +1698,8 @@ fn start_with_parent(parent_start_index: u64) -> OplogEntry {
         timestamp: Timestamp::now_utc(),
         parent_start_index: Some(OplogIndex::from_u64(parent_start_index)),
         function_name: HostFunctionName::MonotonicClockNow,
+        invocation_id: None,
+        observational_owner: None,
         request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
             HostRequestNoInput {},
         )))),
@@ -1182,6 +2096,8 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             timestamp: Timestamp::now_utc(),
             parent_start_index: None,
             function_name: HostFunctionName::P3HttpClientConsumeBody,
+            invocation_id: None,
+            observational_owner: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),
@@ -1191,6 +2107,8 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             timestamp: Timestamp::now_utc(),
             parent_start_index: Some(OplogIndex::from_u64(2)),
             function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
+            invocation_id: None,
+            observational_owner: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),
@@ -1791,7 +2709,7 @@ async fn marker_in_deleted_region_delivers_end_normally() {
             end: OplogIndex::from_u64(4),
         }])
         .build();
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
     let handle = rs
@@ -1834,7 +2752,7 @@ async fn delivered_marker_with_deleted_start_is_skipped_as_orphan() {
             end: OplogIndex::from_u64(3),
         }])
         .build();
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -1860,7 +2778,7 @@ async fn duplicate_completion_discarded_markers_fail_construction() {
         oplog.add(entry).await;
     }
     let oplog: Arc<dyn Oplog> = oplog;
-    let err = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
+    let err = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default(), None)
         .await
         .expect_err("duplicate markers must fail replay state construction");
     assert!(
@@ -1882,7 +2800,7 @@ async fn conflicting_completion_markers_fail_construction() {
         oplog.add(entry).await;
     }
     let oplog: Arc<dyn Oplog> = oplog;
-    let err = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default())
+    let err = ReplayState::new(test_agent_id(), oplog, DeletedRegions::default(), None)
         .await
         .expect_err("conflicting markers must fail replay state construction");
     assert!(
@@ -1904,9 +2822,14 @@ async fn marker_recorded_at_runtime_is_visible_to_replay() {
         oplog.add(entry).await;
     }
     let oplog: Arc<dyn Oplog> = oplog;
-    let rs = ReplayState::new(test_agent_id(), oplog.clone(), DeletedRegions::default())
-        .await
-        .expect("failed to build replay state");
+    let rs = ReplayState::new(
+        test_agent_id(),
+        oplog.clone(),
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .expect("failed to build replay state");
     let marker_idx = oplog.add(discarded_for(2)).await;
     rs.record_discarded_completion(OplogIndex::from_u64(2), marker_idx);
     rs.set_replay_target(marker_idx)
@@ -2359,47 +3282,154 @@ async fn switch_to_live_wakes_parked_awaiter_as_incomplete() {
     );
 }
 
-fn change_persistence_nothing() -> OplogEntry {
-    OplogEntry::ChangePersistenceLevel {
-        timestamp: Timestamp::now_utc(),
-        persistence_level: PersistenceLevel::PersistNothing,
+#[test]
+async fn completed_entity_body_detects_unconsumed_owned_start_at_cursor_head() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 41),
+        end_for(2, 42),
+    ])
+    .await;
+    let outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(outer.start_idx(), OplogIndex::from_u64(2));
+
+    assert_eq!(
+        rs.unconsumed_scope_head(
+            OplogIndex::from_u64(2),
+            HashSet::from([OplogIndex::from_u64(3)]),
+        )
+        .await
+        .unwrap(),
+        None,
+        "a nested reconstructed entity body remains able to claim its own Start"
+    );
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        Some(OplogIndex::from_u64(3)),
+        "once no nested body can consume the owned Start, it is structural divergence"
+    );
+}
+
+#[test]
+async fn completed_entity_body_waits_for_active_owner_of_retried_transaction_begin() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        noop(),
+        OplogEntry::begin_remote_transaction(
+            golem_common::model::TransactionId::new("retried".to_string()),
+            Some(OplogIndex::from_u64(3)),
+        ),
+        end_for(3, 41),
+        end_for(2, 42),
+    ])
+    .await;
+    let _outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let _child = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+
+    let (index, _) = rs.get_oplog_entry().await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert_eq!(
+        rs.unconsumed_scope_head(
+            OplogIndex::from_u64(2),
+            HashSet::from([OplogIndex::from_u64(3)]),
+        )
+        .await
+        .unwrap(),
+        None,
+        "a retried transaction Begin belongs to its original scope Start even when it is not adjacent"
+    );
+}
+
+#[test]
+async fn completed_entity_body_does_not_reject_auto_drainable_dropped_call_terminal() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        cancelled_for(3),
+        end_for(2, 42),
+    ])
+    .await;
+    let outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let dropped_child = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    drop(dropped_child);
+
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
+    assert_eq!(
+        rs.unconsumed_scope_head(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        None,
+        "a pending terminal with a dropped receiver remains auto-drainable"
+    );
+
+    rs.drain_awaited_terminals().await.unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    match rs.await_resolution(outer).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
+        other => panic!("expected completed outer call, got {other:?}"),
     }
+}
+
+#[test]
+async fn visible_terminal_scan_crosses_multiple_chunks() {
+    let mut entries = vec![noop(), start_now()];
+    entries.extend(std::iter::repeat_with(noop).take(CHUNK_SIZE as usize + 1));
+    entries.push(end_for(2, 42));
+    let rs = replay_state_over(entries).await;
+
+    assert!(
+        rs.has_visible_terminal(OplogIndex::from_u64(2)).await,
+        "entity execution mode classification must scan through the complete replay prefix"
+    );
 }
 
 fn log_entry() -> OplogEntry {
     OplogEntry::Log {
         timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
         level: LogLevel::Info,
         context: "ctx".to_string(),
         message: "msg".to_string(),
     }
-}
-
-/// When replay reaches the target via a persist-nothing-zone jump (the zone extends to the end of
-/// the oplog and is never closed) rather than by consuming the target entry, the transition to
-/// live must still synthesize `ReplayFinished` — otherwise a pending automatic update would never
-/// be finalized. (Regression: the synthesis used to be gated on the *consumed* entry index
-/// equalling `replay_target`, which this jump never satisfies.)
-#[test]
-async fn replay_finished_emitted_when_persist_nothing_zone_reaches_target() {
-    // [NoOp(1), ChangePersistenceLevel(PersistNothing)(2), Log(3), Log(4)] — the persist-nothing
-    // zone opened at 2 is never closed, so replay jumps straight to the target (4) without
-    // consuming it.
-    let rs = replay_state_over(vec![
-        noop(),
-        change_persistence_nothing(),
-        log_entry(),
-        log_entry(),
-    ])
-    .await;
-    assert!(rs.is_live(), "replay should be complete after construction");
-    let events = rs.take_new_replay_events();
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, ReplayEvent::ReplayFinished)),
-        "a persist-nothing-zone jump to the target must still emit ReplayFinished, got {events:?}"
-    );
 }
 
 /// When replay reaches the target via a skipped-region jump (`get_out_of_skipped_region` jumps
@@ -2418,7 +3448,7 @@ async fn replay_finished_emitted_when_skipped_region_reaches_target() {
         start: OplogIndex::from_u64(3),
         end: OplogIndex::from_u64(4),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -2508,13 +3538,6 @@ fn end_atomic_region(begin_index: u64) -> OplogEntry {
     }
 }
 
-fn change_persistence_smart() -> OplogEntry {
-    OplogEntry::ChangePersistenceLevel {
-        timestamp: Timestamp::now_utc(),
-        persistence_level: PersistenceLevel::Smart,
-    }
-}
-
 fn pre_commit_remote_transaction(begin_index: u64) -> OplogEntry {
     OplogEntry::PreCommitRemoteTransaction {
         timestamp: Timestamp::now_utc(),
@@ -2529,17 +3552,16 @@ fn committed_remote_transaction(begin_index: u64) -> OplogEntry {
     }
 }
 
-/// A non-hint *positional* marker entry (atomic-region boundary, persistence-level switch, or an
+/// A non-hint *positional* marker entry (atomic-region boundary or an
 /// rdbms-transaction internal marker). These are never claimed and never auto-drained; a
 /// positional reader must consume them, and an overlapping awaiter parks on them until then.
 fn random_positional_marker(rng: &mut rand::rngs::StdRng) -> OplogEntry {
     use rand::Rng;
-    match rng.random_range(0..6) {
+    match rng.random_range(0..5) {
         0 => begin_atomic_region(),
         1 => end_atomic_region(1),
-        2 => change_persistence_smart(),
-        3 => pre_commit_remote_transaction(1),
-        4 => committed_remote_transaction(1),
+        2 => pre_commit_remote_transaction(1),
+        3 => committed_remote_transaction(1),
         // `NoOp` is non-hint, so it too must be consumed by a positional reader (unlike the
         // `Log` hint entries, which are skipped transparently).
         _ => noop(),
@@ -2725,7 +3747,7 @@ async fn concurrent_replay_call_permutation_fuzz() {
 /// Seam 1, full layout space: a randomized generator over fabricated overlap layouts that mix
 /// concurrent calls (completed / cancelled / incomplete) with **positional** scopes (`Start`/`End`
 /// pairs consumed by positional reads) and non-hint positional **markers** (atomic-region
-/// boundaries, persistence-level switches, rdbms-transaction internal markers), all freely
+/// boundaries and rdbms-transaction internal markers), all freely
 /// interleaved with `Log` hints, so that a sibling's scope `End` or a marker can land between
 /// another call's `Start` and `End` — the headline overlap layout generalized.
 ///
@@ -2980,7 +4002,7 @@ async fn orphan_end_with_deleted_start_is_skipped() {
         start: OplogIndex::from_u64(2),
         end: OplogIndex::from_u64(2),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -3019,7 +4041,7 @@ async fn orphan_cancelled_with_deleted_start_is_skipped() {
         start: OplogIndex::from_u64(2),
         end: OplogIndex::from_u64(2),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -3046,7 +4068,7 @@ async fn positional_reader_skips_orphan_terminal() {
         start: OplogIndex::from_u64(2),
         end: OplogIndex::from_u64(2),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -3070,7 +4092,7 @@ async fn deleted_terminal_reports_incomplete() {
         start: OplogIndex::from_u64(3),
         end: OplogIndex::from_u64(3),
     }]);
-    let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
         .await
         .expect("failed to build replay state");
 
@@ -3199,7 +4221,7 @@ async fn replay_skips_deleted_regions_fuzz() {
             start: OplogIndex::from_u64(s),
             end: OplogIndex::from_u64(e),
         }));
-        let rs = ReplayState::new(test_agent_id(), oplog, skipped)
+        let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
             .await
             .expect("failed to build replay state");
 
@@ -3288,103 +4310,6 @@ async fn replay_skips_deleted_regions_fuzz() {
     }
 }
 
-/// Seam 1, persist-nothing zones: a randomized generator that wraps a contiguous block of call
-/// pairs (and a `NoOp`) in a `ChangePersistenceLevel(PersistNothing)` … `ChangePersistenceLevel`
-/// zone. Everything recorded inside the zone is observability-only and must be skipped by the
-/// replay cursor (never claimed, never read), while the calls outside the zone claim at their
-/// true indices and resolve. A leading zone exercises the construction-time skip. Seeds are
-/// fixed, so any failure reproduces.
-#[test]
-async fn replay_skips_persist_nothing_zones_fuzz() {
-    use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
-
-    const CASES: u64 = 500;
-
-    for seed in 0..CASES {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let before = rng.random_range(0..=2usize);
-        let inside = rng.random_range(0..=2usize);
-        let after = rng.random_range(0..=2usize);
-        // Need at least one observable call so the assertions are meaningful.
-        if before + after == 0 {
-            continue;
-        }
-
-        let mut entries = vec![noop()];
-        let mut kept_start = Vec::new();
-        let mut kept_end = Vec::new();
-        let mut nanos = 0u64;
-
-        let push_call = |entries: &mut Vec<OplogEntry>, nanos: &mut u64| -> (u64, u64) {
-            entries.push(start_now());
-            let si = entries.len() as u64;
-            *nanos += 1;
-            entries.push(end_for(si, *nanos));
-            (si, entries.len() as u64)
-        };
-
-        for _ in 0..before {
-            let (si, ei) = push_call(&mut entries, &mut nanos);
-            kept_start.push(si);
-            kept_end.push(ei);
-        }
-
-        // Open the persist-nothing zone, record skipped filler, then close it.
-        entries.push(change_persistence_nothing());
-        entries.push(noop());
-        for _ in 0..inside {
-            push_call(&mut entries, &mut nanos);
-        }
-        entries.push(change_persistence_smart());
-
-        for _ in 0..after {
-            let (si, ei) = push_call(&mut entries, &mut nanos);
-            kept_start.push(si);
-            kept_end.push(ei);
-        }
-
-        let rs = replay_state_over(entries).await;
-
-        let mut handles = Vec::new();
-        for (k, &si) in kept_start.iter().enumerate() {
-            let handle = rs
-                .claim_concurrent_start(
-                    &HostFunctionName::MonotonicClockNow,
-                    &DurableFunctionType::ReadLocal,
-                )
-                .await
-                .unwrap_or_else(|e| panic!("seed {seed}: claim of kept call {k} failed: {e}"));
-            assert_eq!(
-                handle.start_idx(),
-                OplogIndex::from_u64(si),
-                "seed {seed}: kept call {k} claimed a Start inside the persist-nothing zone"
-            );
-            handles.push((k, handle));
-        }
-
-        for (k, handle) in handles {
-            match rs
-                .await_resolution(handle)
-                .await
-                .unwrap_or_else(|e| panic!("seed {seed}: await of kept call {k} failed: {e}"))
-            {
-                Resolution::Completed { end_idx: ei, .. } => assert_eq!(
-                    ei,
-                    OplogIndex::from_u64(kept_end[k]),
-                    "seed {seed}: kept call {k} resolved to the wrong End"
-                ),
-                other => panic!("seed {seed}: kept call {k} expected Completed, got {other:?}"),
-            }
-        }
-
-        assert!(
-            rs.is_live(),
-            "seed {seed}: replay did not reach live after skipping the persist-nothing zone"
-        );
-    }
-}
-
 fn suspend() -> OplogEntry {
     OplogEntry::Suspend {
         timestamp: Timestamp::now_utc(),
@@ -3398,6 +4323,8 @@ fn batched_scope_start() -> OplogEntry {
         timestamp: Timestamp::now_utc(),
         parent_start_index: None,
         function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
+        invocation_id: None,
+        observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
     }
@@ -3422,6 +4349,8 @@ fn batched_child_start(parent: u64) -> OplogEntry {
         timestamp: Timestamp::now_utc(),
         parent_start_index: Some(OplogIndex::from_u64(parent)),
         function_name: HostFunctionName::MonotonicClockNow,
+        invocation_id: None,
+        observational_owner: None,
         request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
             HostRequestNoInput {},
         )))),
@@ -3544,7 +4473,11 @@ async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver()
     // is claimed by identity (parent_start_index), and the scope End resolves response-less.
     let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let (scope_idx, scope_handle) = rs
-        .claim_scope_start(&scope_name, &DurableFunctionType::WriteRemoteBatched(None))
+        .claim_scope_start(
+            &scope_name,
+            &DurableFunctionType::WriteRemoteBatched(None),
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(scope_idx, OplogIndex::from_u64(11));
@@ -3611,6 +4544,7 @@ async fn discriminated_scope_claim_never_matches_plain_scope_start() {
         .claim_scope_start(
             &discriminated,
             &DurableFunctionType::WriteRemoteBatched(None),
+            None,
         )
         .await
         .expect_err("discriminated claim must not match the plain scope Start");
@@ -3622,7 +4556,7 @@ async fn discriminated_scope_claim_never_matches_plain_scope_start() {
 
     let plain = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let (scope_idx, scope_handle) = rs
-        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None))
+        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None), None)
         .await
         .unwrap();
     assert_eq!(scope_idx, OplogIndex::from_u64(2));
@@ -3642,6 +4576,8 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
         timestamp: Timestamp::now_utc(),
         parent_start_index: None,
         function_name: HostFunctionName::Custom("<scope:batched-write:req:abc123>".to_string()),
+        invocation_id: None,
+        observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
     };
@@ -3649,7 +4585,7 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
 
     let plain = HostFunctionName::Custom("<scope:batched-write>".to_string());
     let err = rs
-        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None))
+        .claim_scope_start(&plain, &DurableFunctionType::WriteRemoteBatched(None), None)
         .await
         .expect_err("plain claim must not match a discriminated scope Start");
     let message = format!("{err}");
@@ -3663,6 +4599,7 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
         .claim_scope_start(
             &discriminated,
             &DurableFunctionType::WriteRemoteBatched(None),
+            None,
         )
         .await
         .unwrap();
@@ -3674,6 +4611,44 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
         other => panic!("expected Completed for the discriminated scope, got {other:?}"),
     }
     assert!(rs.is_live(), "replay must reach live at the end");
+}
+
+#[test]
+async fn entity_owned_scope_claim_requires_the_recorded_parent() {
+    let parent = OplogIndex::from_u64(7);
+    let scope_start = OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: Some(parent),
+        function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
+        invocation_id: None,
+        observational_owner: None,
+        request: None,
+        durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+    };
+    let rs = replay_state_over(vec![noop(), scope_start, batched_scope_end(2)]).await;
+    let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
+
+    rs.claim_scope_start(
+        &scope_name,
+        &DurableFunctionType::WriteRemoteBatched(None),
+        Some(OplogIndex::from_u64(8)),
+    )
+    .await
+    .expect_err("a scope claim must not steal a sibling entity invocation's scope");
+
+    let (scope_index, handle) = rs
+        .claim_scope_start(
+            &scope_name,
+            &DurableFunctionType::WriteRemoteBatched(None),
+            Some(parent),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scope_index, OplogIndex::from_u64(2));
+    assert!(matches!(
+        rs.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
 }
 
 /// Pins the exact "expected" label each [`StartClaim`] variant renders for
@@ -3691,7 +4666,7 @@ fn start_claim_expected_descriptions_are_stable() {
     );
 
     assert_eq!(
-        StartClaim::scope(&name, &DurableFunctionType::WriteRemoteBatched(None))
+        StartClaim::scope(&name, &DurableFunctionType::WriteRemoteBatched(None), None)
             .expected_description(),
         format!(
             "Start {{ {name}, WriteRemoteBatched(None), request: None, parent_start_index: None }}"

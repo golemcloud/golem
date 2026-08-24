@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::authorization::targets::websocket_target;
 use crate::durable_host::concurrent::{
     CallHandle, CallReplayOutcome, LeaveIncompleteOnDrop, NotCancellable,
 };
@@ -104,15 +105,48 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Resource<WebSocketConnectionEntry>, Error>> {
         self.observe_function_call("golem:websocket/client", "connect");
 
-        let mut call = CallHandle::<host_functions::WebsocketClientConnect, NotCancellable>::start(
+        let begun = CallHandle::<host_functions::WebsocketClientConnect, NotCancellable>::begin(
             self,
-            HostRequestWebsocketConnect {
-                url: url.clone(),
-                headers: headers.clone(),
-            },
             DurableFunctionType::WriteRemote,
         )
         .await?;
+
+        let mut call = if begun.is_live() {
+            let denied = match websocket_target(&url) {
+                Ok(normalized) => !matches!(
+                    self.authorize_live_permission(&normalized.permission).await,
+                    Ok(Ok(_))
+                ),
+                Err(_) => true,
+            };
+            let call = begun
+                .start_live(
+                    self,
+                    HostRequestWebsocketConnect {
+                        url: url.clone(),
+                        headers: headers.clone(),
+                    },
+                )
+                .await?;
+            if denied {
+                let response = call
+                    .complete(
+                        self,
+                        HostResponseWebsocketConnectResponse {
+                            result: Err(SerializableWebsocketError::Other(
+                                "permission denied".into(),
+                            )),
+                        },
+                    )
+                    .await?;
+                return Ok(Err(serializable_error_to_error(
+                    response.result.unwrap_err(),
+                )));
+            }
+            call
+        } else {
+            begun.start_replay(self).await?
+        };
 
         if !call.is_live() {
             match call.replay(self).await? {
@@ -940,7 +974,7 @@ fn to_tungstenite_message(message: Message) -> tungstenite::Message {
 fn to_user_message(msg: tungstenite::Message) -> Result<Option<Message>, Error> {
     match msg {
         tungstenite::Message::Text(text) => Ok(Some(Message::Text(text.as_str().to_owned()))),
-        tungstenite::Message::Binary(data) => Ok(Some(Message::Binary(data.as_slice().to_vec()))),
+        tungstenite::Message::Binary(data) => Ok(Some(Message::Binary(data.as_ref().to_vec()))),
         tungstenite::Message::Close(frame) => {
             let (code, reason) = match frame {
                 Some(frame) => (frame.code.into(), frame.reason.to_string()),
@@ -1044,5 +1078,21 @@ fn serializable_error_to_error(e: SerializableWebsocketError) -> Error {
             reason: ci.reason,
         })),
         SerializableWebsocketError::Other(s) => Error::Other(s),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn permission_denial_uses_the_existing_other_error_case() {
+        let denied = Error::Other("permission denied".to_string());
+
+        assert!(matches!(
+            serializable_error_to_error(error_to_serializable(&denied)),
+            Error::Other(message) if message == "permission denied"
+        ));
     }
 }

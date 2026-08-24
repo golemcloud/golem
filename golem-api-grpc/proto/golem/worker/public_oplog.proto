@@ -53,7 +53,6 @@ message OplogEntry {
     StartSpanParameters StartSpan = 30;
     FinishSpanParameters FinishSpan = 31;
     SetSpanAttributeParameters SetSpanAttribute = 32;
-    ChangePersistenceLevelParameters ChangePersistenceLevel = 33;
     BeginRemoteTransactionParameters BeginRemoteTransaction = 34;
     RemoteTransactionParameters PreCommitRemoteTransaction = 35;
     RemoteTransactionParameters PreRollbackRemoteTransaction = 36;
@@ -75,6 +74,11 @@ message OplogEntry {
     HostStreamFrameParameters HostStreamFrame = 52;
     CompletionDiscardedParameters CompletionDiscarded = 53;
     CompletionDeliveredParameters CompletionDelivered = 54;
+    CardDerivedParameters CardDerived = 55;
+    CardTransferStartedParameters CardTransferStarted = 56;
+    CardTransferredParameters CardTransferred = 57;
+    CardRevokedCascadeParameters CardRevokedCascade = 58;
+    CardTransferConfirmedParameters CardTransferConfirmed = 59;
   }
 }
 
@@ -134,6 +138,8 @@ message StartParameters {
   string function_name = 4;
   optional golem.schema.TypedSchemaValue request = 5;
   WrappedFunctionType durable_function_type = 6;
+  optional golem.common.UUID invocation_id = 7;
+  optional uint64 observational_owner = 8;
 }
 
 message EndParameters {
@@ -162,6 +168,17 @@ message CompletionDeliveredParameters {
 message AgentInvocationStartedParameters {
   google.protobuf.Timestamp timestamp = 1;
   PublicAgentInvocation invocation = 2;
+  optional PublicInvocationWalletPin wallet_pin = 3;
+}
+
+message WalletVersionToken {
+  bytes wallet_id_hash = 1;
+  uint64 generation = 2;
+}
+
+message PublicInvocationWalletPin {
+  WalletVersionToken wallet_token = 1;
+  optional golem.common.UUID scope_card_id = 2;
 }
 
 message AgentInvocationFinishedParameters {
@@ -303,11 +320,13 @@ message CardRevokedParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
+  optional uint64 wallet_generation = 4;
 }
 
 message CardExpiredParameters {
   google.protobuf.Timestamp timestamp = 1;
   golem.common.UUID card_id = 2;
+  optional uint64 wallet_generation = 3;
 }
 
 message QueuedCardEvent {
@@ -319,9 +338,22 @@ message QueuedCardEvent {
     golem.common.UUID card_id = 1;
   }
 
+  message TransferStarted {
+    golem.common.UUID transfer_id = 1;
+    golem.common.UUID card_id = 2;
+    CardHolder target_holder = 3;
+  }
+
+  message TransferReceived {
+    golem.common.UUID transfer_id = 1;
+    golem.common.UUID card_id = 2;
+  }
+
   oneof event {
     Install install = 1;
     Revoke revoke = 2;
+    TransferStarted transfer_started = 3;
+    TransferReceived transfer_received = 4;
   }
 }
 
@@ -342,6 +374,7 @@ message CardInstalledParameters {
   google.protobuf.Timestamp timestamp = 1;
   optional uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
+  optional uint64 wallet_generation = 4;
 }
 
 message CardInstallFailedParameters {
@@ -349,6 +382,55 @@ message CardInstallFailedParameters {
   uint64 queued_event_index = 2;
   golem.common.UUID card_id = 3;
   CardInstallFailure reason = 4;
+}
+
+message CardHolder {
+  oneof holder {
+    golem.common.UUID account = 1;
+    golem.common.UUID application = 2;
+    AgentId agent = 3;
+  }
+}
+
+message CardDerivedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID card_id = 2;
+  repeated golem.common.UUID parent_ids = 3;
+  optional uint64 wallet_generation = 4;
+}
+
+// Source-agent durable transfer intent.
+message CardTransferStartedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID transfer_id = 2;
+  golem.common.UUID card_id = 3;
+  CardHolder target_holder = 4;
+  optional uint64 source_wallet_generation = 5;
+}
+
+// Target-agent durable admission of a transferred card.
+message CardTransferredParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID transfer_id = 2;
+  golem.common.UUID installed_card_id = 3;
+  CardHolder target_holder = 4;
+  golem.common.UUID source_card_id = 5;
+  optional uint64 target_wallet_generation = 6;
+}
+
+message CardRevokedCascadeParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  repeated golem.common.UUID revoked_card_ids = 2;
+  optional uint64 local_wallet_generation = 3;
+}
+
+// Source-agent terminal receipt, written after target admission is durable.
+message CardTransferConfirmedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID transfer_id = 2;
+  golem.common.UUID source_card_id = 3;
+  golem.common.UUID installed_card_id = 4;
+  CardHolder target_holder = 5;
 }
 
 // A durably recorded frame of a host-owned stream (e.g. an outgoing HTTP request body),
@@ -480,11 +562,6 @@ message SetSpanAttributeParameters {
   AttributeValue value = 4;
 }
 
-message ChangePersistenceLevelParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  PersistenceLevel persistence_level = 2;
-}
-
 enum OplogLogLevel {
   OPLOG_STDOUT = 0;
   OPLOG_STDERR = 1;
@@ -551,10 +628,4 @@ message OplogProcessorCheckpointParameters {
 message OplogEntryWithIndex {
   uint64 oplog_index = 1;
   OplogEntry entry = 2;
-}
-
-enum PersistenceLevel {
-  PERSIST_NOTHING = 0;
-  PERSIST_REMOTE_SIDE_EFFECTS = 1;
-  SMART = 2;
 }

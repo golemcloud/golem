@@ -27,14 +27,14 @@ use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
-    HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasCardService,
+    HasActiveAgents, HasAgentTypesService, HasBlobStoreService, HasCardService,
     HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
     HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService,
     HasPromiseService, HasQuotaService, HasResourceLimits, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWebSocketConnectionPool,
     HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
-    active_workers, agent_types, blob_store, card, component, golem_config, key_value, oplog,
+    active_agents, agent_types, blob_store, card, component, golem_config, key_value, oplog,
     promise, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
 };
 use crate::services::{HasOplog, HasRdbmsService, HasWorkerForkService, rdbms};
@@ -42,9 +42,11 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::base_model::component::ComponentRevision;
+use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::base_model::regions::DeletedRegionsBuilder;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
+use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::GolemApiFork;
@@ -89,7 +91,7 @@ pub trait WorkerForkService: Send + Sync {
 
 pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub rpc: Arc<dyn Rpc>,
-    pub active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+    pub active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
     pub agent_types: Arc<dyn agent_types::AgentTypesService>,
     pub agent_webhooks: Arc<AgentWebhooksService>,
     pub engine: Arc<wasmtime::Engine>,
@@ -131,9 +133,9 @@ impl<Ctx: WorkerCtx> HasEvents for DefaultWorkerFork<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DefaultWorkerFork<Ctx> {
-    fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>> {
-        self.active_workers.clone()
+impl<Ctx: WorkerCtx> HasActiveAgents<Ctx> for DefaultWorkerFork<Ctx> {
+    fn active_agents(&self) -> Arc<active_agents::ActiveAgents<Ctx>> {
+        self.active_agents.clone()
     }
 }
 
@@ -337,7 +339,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
             rpc: self.rpc.clone(),
-            active_workers: self.active_workers.clone(),
+            active_agents: self.active_agents.clone(),
             agent_types: self.agent_types.clone(),
             agent_webhooks: self.agent_webhooks.clone(),
             engine: self.engine.clone(),
@@ -378,7 +380,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         rpc: Arc<dyn Rpc>,
-        active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+        active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
@@ -416,7 +418,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     ) -> Self {
         Self {
             rpc,
-            active_workers,
+            active_agents,
             agent_types,
             agent_webhooks,
             engine,
@@ -621,7 +623,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let mut deleted_regions_builder = DeletedRegionsBuilder::new();
 
         for oplog_index in oplog_range {
-            let entry = source_oplog.read(oplog_index).await;
+            let entry = rewrite_forked_oplog_entry(
+                source_oplog.read(oplog_index).await,
+                &owned_source_agent_id.agent_id,
+                &owned_target_agent_id.agent_id,
+            );
             new_oplog.add(entry.clone()).await;
 
             if let OplogEntry::Revert { dropped_region, .. } = &entry {
@@ -742,6 +748,65 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     }
 }
 
+fn rewrite_forked_agent_holder(
+    holder: &mut CardHolder,
+    source_agent_id: &AgentId,
+    target_agent_id: &AgentId,
+) {
+    if matches!(holder, CardHolder::Agent(holder) if holder.agent_id == *source_agent_id) {
+        *holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: target_agent_id.clone(),
+        });
+    }
+}
+
+fn rewrite_forked_oplog_entry(
+    mut entry: OplogEntry,
+    source_agent_id: &AgentId,
+    target_agent_id: &AgentId,
+) -> OplogEntry {
+    match &mut entry {
+        OplogEntry::AgentInvocationStarted {
+            wallet_pin: Some(wallet_pin),
+            ..
+        } => {
+            wallet_pin.wallet_token.wallet_id_hash = CardHolder::Agent(AgentCardHolder {
+                agent_id: target_agent_id.clone(),
+            })
+            .wallet_id_hash();
+        }
+        OplogEntry::CardEventQueued {
+            event: QueuedCardEvent::TransferStarted(event),
+            ..
+        } => {
+            rewrite_forked_agent_holder(&mut event.target_holder, source_agent_id, target_agent_id)
+        }
+        OplogEntry::CardTransferStarted {
+            source_holder,
+            target_holder,
+            ..
+        } => {
+            if let Some(source_holder) = source_holder {
+                rewrite_forked_agent_holder(source_holder, source_agent_id, target_agent_id);
+            }
+            rewrite_forked_agent_holder(target_holder, source_agent_id, target_agent_id);
+        }
+        OplogEntry::CardTransferred { target_holder, .. }
+        | OplogEntry::CardTransferConfirmed { target_holder, .. } => {
+            rewrite_forked_agent_holder(target_holder, source_agent_id, target_agent_id);
+        }
+        OplogEntry::CardRevokedCascade {
+            affected_wallets, ..
+        } => {
+            for holder in affected_wallets {
+                rewrite_forked_agent_holder(holder, source_agent_id, target_agent_id);
+            }
+        }
+        _ => {}
+    }
+    entry
+}
+
 #[async_trait]
 impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     async fn fork(
@@ -826,6 +891,8 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
                     timestamp: now,
                     parent_start_index: copied_scope_start,
                     function_name: GolemApiFork::HOST_FUNCTION_NAME,
+                    invocation_id: None,
+                    observational_owner: None,
                     request: Some(request_payload),
                     durable_function_type: DurableFunctionType::WriteRemote,
                 },
@@ -863,5 +930,102 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             })?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::card::{CardId, InvocationWalletPin, WalletVersionToken};
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::OplogPayload;
+    use golem_common::model::{AgentInvocationPayload, IdempotencyKey};
+    use golem_common::schema::SchemaValue;
+    use test_r::test;
+
+    fn agent_id(name: &str) -> AgentId {
+        AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn fork_rewrites_invocation_wallet_identity() {
+        let source = agent_id("source");
+        let target = agent_id("target");
+        let entry = OplogEntry::AgentInvocationStarted {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: IdempotencyKey::new("fork-wallet-pin".to_string()),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                method_name: "test".to_string(),
+                input: SchemaValue::Record { fields: Vec::new() },
+                principal: Principal::anonymous(),
+                scope_card: None,
+            })),
+            trace_id: TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+            wallet_pin: Some(InvocationWalletPin {
+                wallet_token: WalletVersionToken {
+                    wallet_id_hash: CardHolder::Agent(AgentCardHolder {
+                        agent_id: source.clone(),
+                    })
+                    .wallet_id_hash(),
+                    generation: 7,
+                },
+                pinned_card_ids: Vec::new(),
+                scope_card_id: None,
+            }),
+        };
+
+        match rewrite_forked_oplog_entry(entry, &source, &target) {
+            OplogEntry::AgentInvocationStarted {
+                wallet_pin: Some(wallet_pin),
+                ..
+            } => assert_eq!(
+                wallet_pin.wallet_token.wallet_id_hash,
+                CardHolder::Agent(AgentCardHolder { agent_id: target }).wallet_id_hash()
+            ),
+            other => panic!("expected pinned invocation start, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fork_rewrites_only_local_transfer_holders() {
+        let source = agent_id("source");
+        let target = agent_id("target");
+        let remote = agent_id("remote");
+        let entry = OplogEntry::CardTransferStarted {
+            timestamp: Timestamp::now_utc(),
+            transfer_id: Uuid::new_v4(),
+            card_id: CardId::new(),
+            source_holder: Some(CardHolder::Agent(AgentCardHolder {
+                agent_id: source.clone(),
+            })),
+            target_holder: CardHolder::Agent(AgentCardHolder {
+                agent_id: remote.clone(),
+            }),
+            source_wallet_generation: Some(8),
+        };
+
+        match rewrite_forked_oplog_entry(entry, &source, &target) {
+            OplogEntry::CardTransferStarted {
+                source_holder,
+                target_holder,
+                ..
+            } => {
+                assert_eq!(
+                    source_holder,
+                    Some(CardHolder::Agent(AgentCardHolder { agent_id: target }))
+                );
+                assert_eq!(
+                    target_holder,
+                    CardHolder::Agent(AgentCardHolder { agent_id: remote })
+                );
+            }
+            other => panic!("expected transfer start, got {other:?}"),
+        }
     }
 }

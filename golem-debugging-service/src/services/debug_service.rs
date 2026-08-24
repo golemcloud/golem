@@ -24,7 +24,9 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
-    AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+    AgentResourcePattern, AgentVerb, ClassPermissionTarget, ConfigResourcePattern, ConfigVerb,
+    EnvResourcePattern, EnvVerb, FilesystemResourcePattern, FilesystemVerb, OplogResourcePattern,
+    OplogVerb, PermissionTarget,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -934,31 +936,77 @@ fn authorize_debugging(
     component: &Component,
     agent_id: &AgentId,
 ) -> Result<(), DebugServiceError> {
-    auth_ctx
-        .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
-            owner: AgentOwnerPattern::Agent {
-                account: component.account_email.clone(),
-                application: component.application_name.clone(),
-                environment: component.environment_name.clone(),
-                component: component.component_name.clone(),
-                agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
-            },
-            verb: Some(AgentVerb::Debug),
-            resource: AgentResourcePattern::Any,
-        }))
-        .map_err(|e| DebugServiceError::Unauthorized {
-            message: e.to_safe_string(),
-        })?;
+    let owner = AgentOwnerPattern::Agent {
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
+        component: component.component_name.clone(),
+        agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
+    };
+    for target in &debugging_permission_targets(owner) {
+        auth_ctx
+            .authorize_permission(target)
+            .map_err(|e| DebugServiceError::Unauthorized {
+                message: e.to_safe_string(),
+            })?;
+    }
 
     Ok(())
+}
+
+fn debugging_permission_targets(owner: AgentOwnerPattern) -> [PermissionTarget; 8] {
+    [
+        PermissionTarget::Oplog(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(OplogVerb::Read),
+            resource: OplogResourcePattern::Any,
+        }),
+        PermissionTarget::Agent(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(AgentVerb::View),
+            resource: AgentResourcePattern::Empty,
+        }),
+        PermissionTarget::Filesystem(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(FilesystemVerb::Read),
+            resource: FilesystemResourcePattern::any(),
+        }),
+        PermissionTarget::Env(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(EnvVerb::Read),
+            resource: EnvResourcePattern::Any,
+        }),
+        PermissionTarget::Config(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(ConfigVerb::Read),
+            resource: ConfigResourcePattern::Any,
+        }),
+        PermissionTarget::Agent(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(AgentVerb::Fork),
+            resource: AgentResourcePattern::Empty,
+        }),
+        PermissionTarget::Agent(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(AgentVerb::Interrupt),
+            resource: AgentResourcePattern::Empty,
+        }),
+        PermissionTarget::Agent(ClassPermissionTarget {
+            owner,
+            verb: Some(AgentVerb::Resume),
+            resource: AgentResourcePattern::Empty,
+        }),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use golem_common::base_model::component::ComponentRevision;
+    use golem_common::model::account::AccountEmail;
+    use golem_common::model::card::{EffectiveSurface, GrantSurface};
+    use golem_common::model::oplog::OplogIndex;
     use golem_common::model::oplog::{OplogEntry, OplogPayload, PayloadId, RawOplogPayload};
-    use golem_common::model::oplog::{OplogIndex, PersistenceLevel};
     use golem_common::model::regions::OplogRegion;
     use golem_common::model::{AgentInvocationResult, Timestamp};
     use golem_worker_executor::services::oplog::CommitLevel;
@@ -966,6 +1014,47 @@ mod tests {
     use std::fmt::{Debug, Formatter};
     use std::time::Duration;
     use test_r::test;
+
+    #[test]
+    fn debugging_requires_every_permission_in_the_legacy_alias_expansion() {
+        let owner =
+            AgentOwnerPattern::parse("owner@example.com/shop/prod/cart/ShoppingCart(\"alice\")")
+                .unwrap();
+        let targets = debugging_permission_targets(owner);
+
+        let authorize_all = |positive: Vec<PermissionTarget>| {
+            let auth_ctx = AuthCtx::agent_with_effective_surface(
+                AccountId::new(),
+                AccountEmail::new("caller@example.com"),
+                EffectiveSurface {
+                    source_card_ids: Vec::new(),
+                    lower: vec![GrantSurface {
+                        positive,
+                        negative: Vec::new(),
+                    }],
+                    upper: Vec::new(),
+                },
+            );
+            targets
+                .iter()
+                .all(|target| auth_ctx.authorize_permission(target).is_ok())
+        };
+
+        assert!(authorize_all(targets.to_vec()));
+        for missing in 0..targets.len() {
+            let positive = targets
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != missing)
+                .map(|(_, target)| target.clone())
+                .collect();
+            assert!(
+                !authorize_all(positive),
+                "debugging was allowed without constituent permission {missing}: {:?}",
+                targets[missing]
+            );
+        }
+    }
 
     #[test]
     async fn test_get_target_oplog_index_at_invocation_boundary_1() {
@@ -1212,8 +1301,6 @@ mod tests {
         ) -> Result<Vec<u8>, String> {
             unimplemented!()
         }
-
-        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
     }
 
     struct TestOplog {
@@ -1331,7 +1418,5 @@ mod tests {
         ) -> Result<Vec<u8>, String> {
             unimplemented!()
         }
-
-        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
     }
 }

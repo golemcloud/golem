@@ -84,6 +84,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.Start(p)                        => s"start(${p.functionName})"
     case OplogEntry.End(p)                          => s"end(${p.startIndex})"
     case OplogEntry.Cancelled(p)                    => s"cancelled(${p.startIndex})"
+    case OplogEntry.CompletionDiscarded(p)          => s"completion-discarded(${p.startIndex})"
+    case OplogEntry.CompletionDelivered(p)          => s"completion-delivered(${p.startIndex})"
     case OplogEntry.HostCall(p)                     => s"import(${p.functionName})"
     case OplogEntry.AgentInvocationStarted(p)       => s"export(${p.functionName})"
     case OplogEntry.AgentInvocationFinished(p)      => s"completed(${p.consumedFuel})"
@@ -116,7 +118,6 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.StartSpan(p)                    => s"start-span(${p.spanId})"
     case OplogEntry.FinishSpan(p)                   => s"finish-span(${p.spanId})"
     case OplogEntry.SetSpanAttribute(p)             => s"set-attr(${p.key})"
-    case OplogEntry.ChangePersistenceLevel(p)       => s"change-pl(${p.persistenceLevel})"
     case OplogEntry.BeginRemoteTransaction(p)       => s"begin-tx(${p.transactionId})"
     case OplogEntry.PreCommitRemoteTransaction(p)   => s"pre-commit(${p.beginIndex})"
     case OplogEntry.PreRollbackRemoteTransaction(p) => s"pre-rollback(${p.beginIndex})"
@@ -165,7 +166,6 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.GrowMemory(GrowMemoryParameters(ts, BigInt(65536))),
       OplogEntry.CancelPendingInvocation(CancelPendingInvocationParameters(ts, "idem-key")),
       OplogEntry.FinishSpan(FinishSpanParameters(ts, "span-1")),
-      OplogEntry.ChangePersistenceLevel(ChangePersistenceLevelParameters(ts, HostApi.PersistenceLevel.Smart)),
       OplogEntry.BeginRemoteTransaction(BeginRemoteTransactionParameters(ts, "tx-1")),
       OplogEntry.PreCommitRemoteTransaction(RemoteTransactionParameters(ts, BigInt(10))),
       OplogEntry.PreRollbackRemoteTransaction(RemoteTransactionParameters(ts, BigInt(11))),
@@ -187,12 +187,16 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           ts,
           None,
           "wasi:io/read",
+          None,
+          None,
           Some(sampleTyped),
           DurabilityApi.DurableFunctionType.ReadRemote
         )
       ),
       OplogEntry.End(EndParameters(ts, BigInt(4), Some(sampleTyped), forcedCommit = true)),
       OplogEntry.Cancelled(CancelledParameters(ts, BigInt(5), None)),
+      OplogEntry.CompletionDiscarded(CompletionDiscardedParameters(ts, BigInt(6))),
+      OplogEntry.CompletionDelivered(CompletionDeliveredParameters(ts, BigInt(7))),
       OplogEntry.AgentInvocationStarted(
         AgentInvocationStartedParameters(
           ts,
@@ -222,9 +226,9 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     )
 
   def spec = suite("OplogApiCompileSpec")(
-    test("all 41 OplogEntry variants constructed") {
+    test("all OplogEntry variants constructed") {
       val distinctTags = allEntries.map(describeEntry).map(_.takeWhile(_ != '(')).distinct
-      assertTrue(distinctTags.size >= 41)
+      assertTrue(distinctTags.size >= 43)
     },
     test("exhaustive OplogEntry match compiles") {
       allEntries.foreach(e => Predef.assert(describeEntry(e).nonEmpty))

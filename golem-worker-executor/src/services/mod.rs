@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod active_workers;
+pub mod active_agents;
 pub mod agent_memory_meter;
 pub mod agent_storage_meter;
 pub mod agent_types;
@@ -76,8 +76,8 @@ impl NoAdditionalDeps {
 }
 
 // HasXXX traits for fine-grained control of which dependencies a function needs
-pub trait HasActiveWorkers<Ctx: WorkerCtx> {
-    fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>>;
+pub trait HasActiveAgents<Ctx: WorkerCtx> {
+    fn active_agents(&self) -> Arc<active_agents::ActiveAgents<Ctx>>;
 }
 
 pub trait HasAgentTypesService {
@@ -222,7 +222,7 @@ pub trait HasEnvironmentStateService {
 
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
-    HasActiveWorkers<Ctx>
+    HasActiveAgents<Ctx>
     + HasAgentTypesService
     + HasAgentWebhooksService
     + HasCardService
@@ -262,7 +262,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
 
 impl<
     Ctx: WorkerCtx,
-    T: HasActiveWorkers<Ctx>
+    T: HasActiveAgents<Ctx>
         + HasAgentTypesService
         + HasAgentWebhooksService
         + HasCardService
@@ -304,7 +304,7 @@ impl<
 /// Helper struct for holding all available service dependencies in one place
 /// To be used as a convenient struct member for services that need access to all dependencies
 pub struct All<Ctx: WorkerCtx> {
-    active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+    active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
     agent_types: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks: Arc<AgentWebhooksService>,
     card_service: Arc<dyn card::CardService>,
@@ -348,7 +348,7 @@ pub struct All<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> Clone for All<Ctx> {
     fn clone(&self) -> Self {
         Self {
-            active_workers: self.active_workers.clone(),
+            active_agents: self.active_agents.clone(),
             agent_types: self.agent_types.clone(),
             agent_webhooks: self.agent_webhooks.clone(),
             card_service: self.card_service.clone(),
@@ -390,7 +390,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
 impl<Ctx: WorkerCtx> All<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+        active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks: Arc<AgentWebhooksService>,
         card_service: Arc<dyn card::CardService>,
@@ -429,7 +429,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         leak_sentinel: Arc<()>,
     ) -> Self {
         Self {
-            active_workers,
+            active_agents,
             agent_types,
             agent_webhooks,
             card_service,
@@ -476,7 +476,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
 
     pub fn from_other<T: HasAll<Ctx> + HasCardService>(this: &T) -> All<Ctx> {
         All::new(
-            this.active_workers(),
+            this.active_agents(),
             this.agent_types(),
             this.agent_webhooks(),
             this.card_service(),
@@ -529,9 +529,9 @@ impl<Ctx: WorkerCtx> UsesAllDeps for All<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasActiveWorkers<Ctx> for T {
-    fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>> {
-        self.all().active_workers.clone()
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasActiveAgents<Ctx> for T {
+    fn active_agents(&self) -> Arc<active_agents::ActiveAgents<Ctx>> {
+        self.all().active_agents.clone()
     }
 }
 

@@ -674,7 +674,8 @@ fn find_p3_stub(ty: &SchemaType) -> Option<&'static str> {
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
         | SchemaType::Secret { .. }
-        | SchemaType::QuotaToken { .. } => None,
+        | SchemaType::QuotaToken { .. }
+        | SchemaType::PermissionCard { .. } => None,
     }
 }
 

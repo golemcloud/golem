@@ -36,9 +36,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPl
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
-};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::{
     AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey, InvocationStatus,
@@ -1161,10 +1159,6 @@ impl Oplog for ForwardingOplog {
         self.inner.download_raw_payload(payload_id, md5_hash).await
     }
 
-    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
-        self.inner.switch_persistence_level(mode).await;
-    }
-
     async fn add_pair(
         &self,
         start: OplogEntry,
@@ -1936,7 +1930,6 @@ mod tests {
     use golem_common::model::diff;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
-    use golem_common::model::oplog::PersistenceLevel;
     use golem_common::model::plugin_registration::PluginRegistrationId;
     use golem_common::model::{AgentFingerprint, Timestamp};
     use golem_common::read_only_lock;
@@ -2394,8 +2387,6 @@ mod tests {
         ) -> Result<Vec<u8>, String> {
             unimplemented!()
         }
-
-        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
     }
 
     fn test_worker_metadata(
@@ -2722,6 +2713,8 @@ mod tests {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: None,
                 function_name,
+                invocation_id: None,
+                observational_owner: None,
                 request: Some(request_payload),
                 durable_function_type: DurableFunctionType::ReadRemote,
             }

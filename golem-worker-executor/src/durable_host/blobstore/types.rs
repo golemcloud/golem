@@ -21,7 +21,7 @@ use std::task::{Context, Poll};
 use bytes::BytesMut;
 use golem_common::model::oplog::host_functions::P3BlobstoreTypesIncomingValueConsumeAsync;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestNoInput, HostResponseP3BlobstoreIncomingValueStream,
+    DurableFunctionType, HostRequestNoInput, HostResponseP3BlobstoreIncomingValueStream, OplogIndex,
 };
 use wasmtime::AsContextMut;
 use wasmtime::StoreContextMut;
@@ -31,7 +31,12 @@ use wasmtime::component::{
 };
 use wasmtime_wasi::IoView;
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
+use crate::durable_host::LiveAuthorizationPermit;
+use crate::durable_host::concurrent::{
+    AccessClaimOptions, CallHandle, CallReplayOutcome, Cancellable,
+    resolve_current_observational_owner,
+};
+use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 
@@ -123,6 +128,8 @@ impl<D> StreamProducer<D> for DeferredIncomingValueStreamProducer {
 struct IncomingValueConsumeTask<Ctx> {
     contents: Vec<u8>,
     result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<u8>>>,
+    observational_owner: Option<OplogIndex>,
+    _admission: Option<LiveAuthorizationPermit>,
     /// The task's whole run is durable work with no guest-driven wait, so it
     /// stays active (no safe park point) from spawn to finish.
     _activity: TailActivity,
@@ -133,11 +140,15 @@ impl<Ctx> IncomingValueConsumeTask<Ctx> {
     fn new(
         contents: Vec<u8>,
         result_tx: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<u8>>>,
+        observational_owner: Option<OplogIndex>,
+        admission: Option<LiveAuthorizationPermit>,
         activity: TailActivity,
     ) -> Self {
         Self {
             contents,
             result_tx,
+            observational_owner,
+            _admission: admission,
             _activity: activity,
             _phantom: PhantomData,
         }
@@ -154,12 +165,18 @@ where
         accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {
         let result = async {
-            let mut handle =
-                CallHandle::<P3BlobstoreTypesIncomingValueConsumeAsync, Cancellable>::start_access(
+            let mut handle = CallHandle::<
+                P3BlobstoreTypesIncomingValueConsumeAsync,
+                Cancellable,
+            >::start_access_with_options(
                     accessor,
                     accessor.getter(),
-                    HostRequestNoInput {},
                     DurableFunctionType::ReadRemote,
+                    AccessClaimOptions {
+                        observational_owner: self.observational_owner,
+                        ..Default::default()
+                    },
+                    async |_| Ok(HostRequestNoInput {}),
                 )
                 .await
                 .map_err(wasmtime::Error::from)?;
@@ -315,7 +332,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
         mut host: Access<U, Self>,
         self_: Resource<IncomingValue>,
     ) -> anyhow::Result<Result<StreamReader<u8>, Error>> {
-        let contents = {
+        let custom_invocation_context = host
+            .as_context_mut()
+            .guest_task_context::<CustomInvocationContext>()?;
+        let observational_owner =
+            resolve_current_observational_owner(host.get(), custom_invocation_context.as_deref())?;
+        let (contents, admission) = {
             let ctx = host.get();
             ctx.observe_function_call(
                 "blobstore::types::incoming_value",
@@ -327,13 +349,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostIncomingValueWithStore<U>
                 .get::<IncomingValueEntry>(&self_)?
                 .body
                 .clone();
-            body.write().unwrap().drain(..).collect::<Vec<u8>>()
+            let contents = body.write().unwrap().drain(..).collect::<Vec<u8>>();
+            let admission = ctx
+                .as_wasi_view()
+                .table()
+                .get::<IncomingValueEntry>(&self_)?
+                .admission;
+            (contents, admission)
         };
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let activity = host.get().tail_work_tracker().activity();
         host.spawn(IncomingValueConsumeTask::<Ctx>::new(
-            contents, result_tx, activity,
+            contents,
+            result_tx,
+            observational_owner,
+            admission,
+            activity,
         ));
         Ok(Ok(StreamReader::new(
             &mut host,
@@ -375,13 +407,18 @@ impl OutgoingValueEntry {
 
 pub struct IncomingValueEntry {
     body: Arc<RwLock<Vec<u8>>>,
+    admission: Option<LiveAuthorizationPermit>,
 }
 
 impl IncomingValueEntry {
     #[allow(unused)]
-    pub fn new(body: Vec<u8>) -> IncomingValueEntry {
+    pub(crate) fn new(
+        body: Vec<u8>,
+        admission: Option<LiveAuthorizationPermit>,
+    ) -> IncomingValueEntry {
         IncomingValueEntry {
             body: Arc::new(RwLock::new(body)),
+            admission,
         }
     }
 }

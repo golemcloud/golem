@@ -20,8 +20,8 @@ use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
-    Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult,
+    Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkRunner, BenchmarkSource,
+    BenchmarkSuite, BenchmarkSuiteItem, BenchmarkSuiteResult,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
@@ -190,6 +190,11 @@ async fn main() {
             path,
             save_to_json,
             add_to_json,
+            runner_id,
+            runner_label,
+            source_repository,
+            source_commit_sha,
+            source_ref,
             ..
         } => {
             info!("Reading benchmark suite from {path:?}");
@@ -216,6 +221,17 @@ async fn main() {
             .await;
 
             let mut suite_result = BenchmarkSuiteResult::new(&suite.name);
+            suite_result.runner = runner_id.as_ref().map(|id| BenchmarkRunner {
+                id: id.clone(),
+                label: runner_label.clone(),
+            });
+            if source_repository.is_some() || source_commit_sha.is_some() || source_ref.is_some() {
+                suite_result.source = Some(BenchmarkSource {
+                    repository: source_repository.clone(),
+                    commit_sha: source_commit_sha.clone(),
+                    source_ref: source_ref.clone(),
+                });
+            }
             for benchmark in suite.benchmarks {
                 info!("Running {benchmark:?}");
 

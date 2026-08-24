@@ -65,7 +65,7 @@ async-trait = "0.1.87"
 async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "deflate"] }
 auditable-serde = "0.8.0"
 aws-config = "1.5.10"
-aws-sdk-s3 = "1.65.0"
+aws-sdk-s3 = { version = "1.65.0", default-features = false, features = ["default-https-client", "rt-tokio", "rustls"] }
 backtrace-on-stack-overflow = "0.3.0"
 axum = { version = "0.8", features = ["multipart"] }
 axum-jrpc = "0.9.0"
@@ -137,6 +137,7 @@ humantime = "2.3.0"
 humantime-serde = "1.1.1"
 hyper = { version = "1.6.0", features = ["full"] }
 ident-mash = "0.1.0"
+im = "15.1.0"
 include_dir = "0.7.4"
 indexmap = { version = "2.12.0", features = ["serde"] }
 indoc = "2.0.6"
@@ -167,7 +168,6 @@ mimalloc = "0.1.52"
 minijinja = "2.7.0"
 
 nanoid = "0.4.0"
-native-tls = "=0.2.13"
 nondestructive = "0.0.26"
 nonempty-collections = "1.2.1"
 nonzero_ext = "0.3.0"
@@ -176,8 +176,6 @@ num-traits = "0.2.19"
 once_cell = "1.21.0"
 openapiv3 = "=2.0.0"
 openidconnect = "4.0.1"
-openssl = "=0.10.73"
-openssl-sys = "=0.9.109"
 opentelemetry = "0.30.0"
 opentelemetry-otlp = { version = "0.30.0" }
 opentelemetry-prometheus-text-exporter = "=0.2.0"
@@ -237,7 +235,8 @@ shell-words = "1.1.0"
 shlex = "1.3.0"
 similar = "2.7.0"
 spdx = "0.10.8"
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "mysql", "uuid", "migrate", "chrono", "json", "bigdecimal", "mac_address", "bit-vec", "ipnetwork", ] }
+sqlparser = { version = "=0.62.0", features = ["visitor"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "mysql", "uuid", "migrate", "derive", "chrono", "json", "bigdecimal", "mac_address", "bit-vec", "ipnetwork", ] }
 sqlx-core = { version = "0.8" }
 strip-ansi-escapes = "0.2.0"
 strum = "0.27.1"
@@ -260,7 +259,7 @@ tokio-metrics = { version = "0.5.0", features = ["metrics-rs-integration"] }
 tokio-postgres = "0.7.13"
 tokio-rustls = { version = "0.26.2" }
 tokio-stream = { version = "0.1", features = ["sync"] }
-tokio-tungstenite = { version = "0.25.0", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.27.0", features = ["rustls-tls-webpki-roots"] }
 tokio-util = "0.7.13"
 toml = "0.9.5"
 toml_edit = "0.23.3"
@@ -328,6 +327,11 @@ wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = 
 
 [profile.dev]
 panic = "abort"
+debug = "line-tables-only"
+
+[profile.full-debug]
+inherits = "dev"
+debug = "full"
 
 # Build the Cranelift/regalloc codegen crates (the ones Wasmtime runs to compile
 # wasm -> native) at opt-level 3 even in debug builds. A debug-built Cranelift is

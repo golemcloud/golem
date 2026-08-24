@@ -13,6 +13,13 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::{
+    LiveAuthorizationPermit, authority_snapshot_is_current_at, authorize_effective_surface,
+    record_permission_decisions,
+};
+use crate::services::card::CardState;
+use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 
 pub(super) fn ambient_trap_context<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
@@ -143,6 +150,12 @@ pub struct CallHandle<Pair: HostPayloadPair, P: DropPolicy> {
     /// In-function retry decision logic. Also the home of the call's `DurableFunctionType` and
     /// captured `DurableExecutionState`.
     pub(super) retry: InFunctionRetryController,
+    /// Whether switching this call to live execution requires a recovered, synchronized agent
+    /// permission-card authority boundary.
+    pub(super) requires_agent_authority: bool,
+    /// The authority snapshot captured at the same boundary that admitted live execution.
+    /// Replay handles acquire it only if an incomplete call switches back to live execution.
+    pub(super) agent_auth_ctx: Option<AuthCtx>,
     /// Policy-controlled sink for unfinished drops, from [`DropPolicy::production_drop_sink`]:
     /// the worker's dropped-call event sender for `Cancellable`/`LeaveIncompleteOnDrop`, `None`
     /// for `NotCancellable`. Unit tests attach their own sink to observe drop events.
@@ -190,10 +203,9 @@ pub(super) struct BegunCallExecutionScope {
     /// Atomic region active when the durable call was initiated, captured so the call's membership
     /// lease is registered against the region it was actually started in.
     pub(super) atomic_region: Option<OplogIndex>,
-    /// Persistence level active when the call was initiated. Kept with the call so p3 Accessor
-    /// windows can snapshot all execution facts before async work resumes elsewhere.
-    #[allow(dead_code)]
-    pub(super) persistence_level: PersistenceLevel,
+    /// Custom durable invocation whose physical execution this call observes. Captured once at
+    /// initiation so asynchronous continuations never depend on ambient task context.
+    pub(super) observational_owner: Option<OplogIndex>,
 }
 
 impl BegunCallExecutionScope {
@@ -203,10 +215,13 @@ impl BegunCallExecutionScope {
         atomic_lease: Option<Arc<AtomicRegionLease>>,
     ) -> CallExecutionScope {
         CallExecutionScope {
-            retry_from: self.parent_start_index.unwrap_or(start_idx),
+            retry_from: self
+                .observational_owner
+                .or(self.parent_start_index)
+                .unwrap_or(start_idx),
             durable_scope: self.parent_start_index,
+            observational_owner: self.observational_owner,
             atomic_lease,
-            persistence_level: self.persistence_level,
         }
     }
 }
@@ -219,15 +234,14 @@ pub(super) struct CallExecutionScope {
     /// The enclosing durable scope, if this call belongs to one.
     #[allow(dead_code)]
     pub(super) durable_scope: Option<OplogIndex>,
+    /// Custom durable invocation that owns this observational call, if any.
+    pub(super) observational_owner: Option<OplogIndex>,
     /// The call's atomic-region ownership lease, registered when the call was initiated inside an
     /// open atomic region. The lease's *current* owner — not the initiation-time region — drives
     /// trap/retry classification: region close transfers pending members to the enclosing region
     /// or detaches them, and a detached call must group at its own `retry_from` instead of
     /// retrying into the committed region.
     pub(super) atomic_lease: Option<Arc<AtomicRegionLease>>,
-    /// Persistence level active when this call was initiated.
-    #[allow(dead_code)]
-    pub(super) persistence_level: PersistenceLevel,
 }
 
 impl CallExecutionScope {
@@ -244,13 +258,16 @@ impl CallExecutionScope {
         }
     }
 
-    /// The retry point to attach to a trap raised by this call: the call's *currently owning*
-    /// atomic region (whole region retried from its begin index) if it still has one, otherwise
-    /// its enclosing durable scope `Start` or its own `Start`. This mirrors
+    /// The retry point to attach to a trap raised by this call: the owning custom invocation for
+    /// an observational call, otherwise the call's *currently owning* atomic region (whole region
+    /// retried from its begin index) if it still has one, otherwise its enclosing durable scope
+    /// `Start` or its own `Start`. This mirrors
     /// [`ScopedRetryHost::retry_point`] so a hard (non-semantic) trap groups exactly like an
     /// inline/semantic retry would.
-    fn trap_retry_point(&self) -> OplogIndex {
-        self.atomic_region().unwrap_or(self.retry_from)
+    pub(super) fn trap_retry_point(&self) -> OplogIndex {
+        self.observational_owner
+            .or_else(|| self.atomic_region())
+            .unwrap_or(self.retry_from)
     }
 }
 
@@ -279,6 +296,7 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     replay_state: crate::durable_host::replay_state::ReplayState,
     linear_memory: crate::services::linear_memory::LinearMemoryTracker,
     execution_scope: BegunCallExecutionScope,
+    entity_parent_start_index: Option<OplogIndex>,
     retry: InFunctionRetryController,
     /// The registered atomic-region membership lease for a live persisted call initiated inside an
     /// open atomic region; `None` otherwise.
@@ -290,9 +308,9 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     /// permit when a replayed scope switches to live mid-start.
     live_host_calls: Arc<AtomicUsize>,
     /// Taken at prepare time — synchronously with worker state, *before* any oplog entry of this
-    /// call is appended — so an in-flight check (e.g. the `set_oplog_persistence_level` boundary
-    /// guard) can never observe zero calls between this call's `Start` append and its handle
-    /// construction in `finish_access_start`. `Some` for live calls, `None` on replay.
+    /// call is appended — so boundary checks can never observe zero calls between this call's
+    /// `Start` append and its handle construction in `finish_access_start`. `Some` for live calls,
+    /// `None` on replay.
     live_call_permit: Option<LiveCallPermit>,
     _phantom: PhantomData<(Pair, P)>,
 }
@@ -322,10 +340,20 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
 ///   match it (by value, never by serialized bytes — payloads can contain `HashMap`s whose byte
 ///   order is process-random), disambiguating concurrent top-level calls that differ only in
 ///   their request.
+/// - `observational_owner` carries ownership from a resource created by an earlier observational
+///   call into an asynchronous continuation. When absent, initiation captures the current custom
+///   invocation from the guest-task context.
 #[derive(Default)]
 pub(crate) struct AccessClaimOptions {
     pub(crate) scope_discriminator: Option<String>,
     pub(crate) request_identity: Option<HostRequest>,
+    /// Explicit durable parent for runtimes whose invocation scope is established outside the
+    /// calling Store, such as entity sidecar bodies. When an ambient durable parent also exists,
+    /// both identities must agree.
+    pub(crate) parent_start_index: Option<OplogIndex>,
+    /// Ownership propagated from a resource created by an earlier observational call. When absent,
+    /// initiation captures the current custom-invocation task context.
+    pub(crate) observational_owner: Option<OplogIndex>,
 }
 
 struct ExecutedAccessStart<Pair: HostPayloadPair, P: DropPolicy> {
@@ -399,9 +427,57 @@ impl Drop for AccessStartAtomicGuard {
 fn is_write_side_effect_for_access(function_type: &DurableFunctionType) -> bool {
     matches!(
         function_type,
-        DurableFunctionType::WriteRemote
+        DurableFunctionType::WriteLocal
+            | DurableFunctionType::WriteRemote
             | DurableFunctionType::WriteRemoteBatched(_)
             | DurableFunctionType::WriteRemoteTransaction(_)
+    )
+}
+
+fn resolve_observational_owner<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    explicit_owner: Option<OplogIndex>,
+    custom_invocation_scope: Option<CustomInvocationScope>,
+) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+    match explicit_owner {
+        Some(owner) => Ok(Some(owner)),
+        None => custom_invocation_scope
+            .map(|scope| {
+                let registered = ctx
+                    .state
+                    .custom_invocation_scopes
+                    .get(&scope.scope_id)
+                    .ok_or_else(|| {
+                        WorkerExecutorError::runtime(format!(
+                            "custom-operation scope {} is no longer active",
+                            scope.scope_id
+                        ))
+                    })?;
+                if registered.owner_start_index != scope.owner_start_index
+                    || !ctx
+                        .state
+                        .active_custom_invocations
+                        .contains_key(&scope.owner_start_index)
+                {
+                    return Err(WorkerExecutorError::runtime(format!(
+                        "custom-operation scope {} has stale invocation attribution",
+                        scope.scope_id
+                    )));
+                }
+                Ok(scope.owner_start_index)
+            })
+            .transpose(),
+    }
+}
+
+pub(crate) fn resolve_current_observational_owner<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    custom_invocation_context: Option<&CustomInvocationContext>,
+) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+    resolve_observational_owner(
+        ctx,
+        None,
+        custom_invocation_context.and_then(CustomInvocationContext::current),
     )
 }
 
@@ -445,9 +521,7 @@ impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHo
     }
 
     fn durable_execution_state(&self) -> DurableExecutionState {
-        let mut state = self.inner.durable_execution_state();
-        state.persistence_level = self.execution_scope.persistence_level;
-        state
+        self.inner.durable_execution_state()
     }
 
     fn atomic_region_has_side_effects_for(&self, begin_index: OplogIndex) -> bool {
@@ -564,7 +638,40 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         request: Pair::Req,
         function_type: DurableFunctionType,
     ) -> Result<Self, WorkerExecutorError> {
-        let begun = Self::begin(ctx, function_type).await?;
+        Self::start_inner(ctx, request, function_type, false).await
+    }
+
+    pub async fn start_with_agent_authority<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+    ) -> Result<Self, WorkerExecutorError> {
+        Self::start_inner(ctx, request, function_type, true).await
+    }
+
+    pub async fn start_with_agent_authority_capture<Ctx: WorkerCtx, T>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> T,
+    ) -> Result<(Self, Option<T>), WorkerExecutorError> {
+        let (begun, captured) =
+            Self::begin_with_agent_authority_capture(ctx, function_type, capture).await?;
+        let handle = if begun.is_live() {
+            begun.start_live(ctx, request).await?
+        } else {
+            begun.start_replay(ctx).await?
+        };
+        Ok((handle, captured))
+    }
+
+    async fn start_inner<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        requires_agent_authority: bool,
+    ) -> Result<Self, WorkerExecutorError> {
+        let begun = Self::begin_inner(ctx, function_type, requires_agent_authority).await?;
         if begun.is_live() {
             begun.start_live(ctx, request).await
         } else {
@@ -649,14 +756,26 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         Ctx: WorkerCtx,
         F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
     {
+        // Capture the immutable task-context snapshot synchronously, before the first await. The
+        // store window below validates it against worker state and moves the owner into the call's
+        // execution scope.
+        let custom_invocation_scope = store
+            .guest_task_context::<CustomInvocationContext>()
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            .as_deref()
+            .and_then(CustomInvocationContext::current);
         if !is_accessor_supported_function_type(&function_type) {
             return Err(WorkerExecutorError::runtime(format!(
-                "p3 accessor durable call path currently supports only ReadLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
+                "p3 accessor durable call path currently supports only ReadLocal/WriteLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
             )));
+        }
+        let is_live = store.with(|mut access| get_ctx(access.data_mut()).state.is_live());
+        if !is_live {
+            process_pending_replay_events_access(store, get_ctx).await?;
         }
         let prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
-            Self::prepare_access_start(ctx, function_type, claim_options)
+            Self::prepare_access_start(ctx, function_type, claim_options, custom_invocation_scope)
         })?;
         let mut start_guard = AccessStartAtomicGuard::new(prepared.atomic_lease.clone());
 
@@ -664,9 +783,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             return Err(err.source);
         }
 
-        match Self::execute_access_start(prepared, build_request).await {
+        match Self::execute_access_start(store, get_ctx, prepared, build_request).await {
             Ok(executed) => {
-                process_pending_replay_events_access(store, get_ctx).await?;
                 let result = store.with(|mut access| {
                     let ctx = get_ctx(access.data_mut());
                     Self::finish_access_start(ctx, executed)
@@ -756,6 +874,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
         claim_options: AccessClaimOptions,
+        custom_invocation_scope: Option<CustomInvocationScope>,
     ) -> Result<PreparedAccessStart<Pair, P, Ctx>, WorkerExecutorError> {
         DurabilityHost::observe_function_call(ctx, Pair::INTERFACE, Pair::FUNCTION);
         if !is_accessor_supported_function_type(&function_type) {
@@ -782,16 +901,31 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             .last()
             .map(|region| region.begin_index);
 
-        let parent_start_index = ctx
-            .state
-            .child_parent_start_index(&function_type, OplogIndex::INITIAL);
+        let ambient_parent_start_index =
+            ctx.child_parent_start_index(&function_type, OplogIndex::INITIAL);
+        if claim_options.parent_start_index.is_some()
+            && ambient_parent_start_index.is_some()
+            && claim_options.parent_start_index != ambient_parent_start_index
+        {
+            return Err(WorkerExecutorError::runtime(
+                "durable call has conflicting explicit and ambient parent Start indexes",
+            ));
+        }
+        let parent_start_index = claim_options
+            .parent_start_index
+            .or(ambient_parent_start_index);
+        let observational_owner = resolve_observational_owner(
+            ctx,
+            claim_options.observational_owner,
+            custom_invocation_scope,
+        )?;
         let execution_scope = BegunCallExecutionScope {
             parent_start_index,
             atomic_region,
-            persistence_level: ctx.state.persistence_level,
+            observational_owner,
         };
         let is_live = durable_execution_state.is_live;
-        let snapshotting = durable_execution_state.snapshotting_mode.is_some();
+        let snapshotting = durable_execution_state.snapshotting_mode;
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
         // A live persisted call initiated inside an open atomic region joins the region's member
@@ -826,6 +960,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             replay_state: ctx.state.replay_state.clone(),
             linear_memory: ctx.linear_memory.clone(),
             execution_scope,
+            entity_parent_start_index: ctx.entity_parent_start_index(),
             retry,
             atomic_lease,
             drop_sink: P::production_drop_sink(ctx.state.dropped_call_event_sender()),
@@ -851,11 +986,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
     /// cursor skips whole persist-nothing zones without claiming the entries inside them. The
     /// replay branch below guards against ever *replaying* a durable call inside a PersistNothing
     /// block, mirroring `read_persisted_durable_function_invocation`.
-    async fn execute_access_start<Ctx: WorkerCtx, F>(
+    async fn execute_access_start<T, D, Ctx, F>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         mut prepared: PreparedAccessStart<Pair, P, Ctx>,
         build_request: F,
     ) -> Result<ExecutedAccessStart<Pair, P>, (WorkerExecutorError, AccessStartCleanup)>
     where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
         F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
     {
         let mut live_call_permit = prepared.live_call_permit.take();
@@ -881,7 +1021,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     retry.function_type().clone(),
                     DurableExecutionState {
                         is_live: true,
-                        persistence_level: previous.persistence_level,
                         snapshotting_mode: previous.snapshotting_mode,
                         assume_idempotence: previous.assume_idempotence,
                         max_in_function_retry_delay: previous.max_in_function_retry_delay,
@@ -949,9 +1088,30 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     _phantom: PhantomData,
                 })
             } else {
+                let _boundary_guard = lock_synchronized_card_event_boundary_access(store, get_ctx)
+                    .await
+                    .map_err(|err| {
+                        (
+                            err,
+                            AccessStartCleanup {
+                                atomic_lease: prepared.atomic_lease.clone(),
+                            },
+                        )
+                    })?;
+                if !store.with(|mut access| get_ctx(access.data_mut()).state.is_live()) {
+                    return Err((
+                        WorkerExecutorError::runtime(
+                            "live accessor start returned to replay during boundary synchronization",
+                        ),
+                        AccessStartCleanup {
+                            atomic_lease: prepared.atomic_lease.clone(),
+                        },
+                    ));
+                }
                 let request: HostRequest = request.into();
                 let function_type = retry.function_type().clone();
                 let parent_start_index = execution_scope.parent_start_index;
+                let observational_owner = execution_scope.observational_owner;
                 let (start_idx, request_upload) = prepared
                     .oplog
                     .add_start_with_reserved_payload(request, move |request_payload| {
@@ -959,6 +1119,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                             timestamp: Timestamp::now_utc(),
                             parent_start_index,
                             function_name: Pair::HOST_FUNCTION_NAME,
+                            invocation_id: None,
+                            observational_owner,
                             request: Some(request_payload),
                             durable_function_type: function_type,
                         }
@@ -1002,17 +1164,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 })
             }
         } else {
-            if retry.durable_execution_state().persistence_level == PersistenceLevel::PersistNothing
-            {
-                return Err((
-                    WorkerExecutorError::runtime(
-                        "Trying to replay a durable invocation in a PersistNothing block",
-                    ),
-                    AccessStartCleanup {
-                        atomic_lease: prepared.atomic_lease.clone(),
-                    },
-                ));
-            }
             // A call owned by another durable record (its own opened scope, or the parent
             // encoded in the function type) is claimed by identity: accessor host calls run
             // concurrently, so owned `Start`s (e.g. per-chunk children of overlapping
@@ -1115,8 +1266,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         if prepared.is_live {
             let entry = OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
-                parent_start_index: None,
+                parent_start_index: prepared.entity_parent_start_index,
                 function_name: scope_name,
+                invocation_id: None,
+                observational_owner: prepared.execution_scope.observational_owner,
                 request: None,
                 durable_function_type: function_type,
             };
@@ -1137,7 +1290,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             // replayed oplog was recorded with the discriminators already in place.
             let (begin_index, replay_handle) = prepared
                 .replay_state
-                .claim_scope_start(&scope_name, &function_type)
+                .claim_scope_start(
+                    &scope_name,
+                    &function_type,
+                    prepared.entity_parent_start_index,
+                )
                 .await
                 .map_err(|err| {
                     (
@@ -1180,10 +1337,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         begin_index,
                         OplogEntry::is_end_remote_write_s::<ScopeScanState>,
                         OplogEntry::no_concurrent_side_effect,
-                        ScopeScanState::new(
-                            begin_index,
-                            prepared.execution_scope.persistence_level,
-                        ),
+                        ScopeScanState::new(begin_index),
                         OplogEntry::track_scope_membership,
                     )
                     .await;
@@ -1269,6 +1423,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             parked_undelivered_replay: false,
             execution_scope: executed.execution_scope,
             retry: executed.retry,
+            requires_agent_authority: false,
+            agent_auth_ctx: None,
             drop_sink: executed.drop_sink,
             cleanup_sink: executed.cleanup_sink,
             // Taken at prepare time (or at the replay→live switch), before this call's first
@@ -1300,6 +1456,64 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
     ) -> Result<BegunCall<Pair, P>, WorkerExecutorError> {
+        Self::begin_inner(ctx, function_type, false).await
+    }
+
+    pub async fn begin_with_agent_authority<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+    ) -> Result<BegunCall<Pair, P>, WorkerExecutorError> {
+        Self::begin_inner(ctx, function_type, true).await
+    }
+
+    pub(crate) async fn begin_with_agent_authority_capture<Ctx: WorkerCtx, T>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> T,
+    ) -> Result<(BegunCall<Pair, P>, Option<T>), WorkerExecutorError> {
+        let custom_invocation_scope =
+            wasmtime::component::current_guest_task_context::<CustomInvocationContext>()
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                .as_deref()
+                .and_then(CustomInvocationContext::current);
+        let observational_owner = resolve_observational_owner(ctx, None, custom_invocation_scope)?;
+        drain_queued_dropped_call_events(ctx)
+            .await
+            .map_err(|err| err.source)?;
+        DurabilityHost::observe_function_call(ctx, Pair::INTERFACE, Pair::FUNCTION);
+        let (begin_index, captured) = ctx
+            .begin_durable_function_with_agent_authority_capture(
+                &function_type,
+                Pair::FQFN,
+                capture,
+            )
+            .await?;
+        Ok((
+            Self::finish_begin(
+                ctx,
+                function_type,
+                begin_index,
+                false,
+                None,
+                observational_owner,
+            ),
+            captured,
+        ))
+    }
+
+    async fn begin_inner<Ctx: WorkerCtx>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        requires_agent_authority: bool,
+    ) -> Result<BegunCall<Pair, P>, WorkerExecutorError> {
+        // Capture and validate the host task's immutable initiation-time context before the first
+        // await. Calls already in flight retain this owner after the guest leaves the lexical scope.
+        let custom_invocation_scope =
+            wasmtime::component::current_guest_task_context::<CustomInvocationContext>()
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                .as_deref()
+                .and_then(CustomInvocationContext::current);
+        let observational_owner = resolve_observational_owner(ctx, None, custom_invocation_scope)?;
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(|err| err.source)?;
@@ -1307,32 +1521,59 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
 
         // Read-only guard, pending replay events and durable-scope open all happen inside
         // `begin_durable_function`.
-        let begin_index = ctx
-            .begin_durable_function(&function_type, Pair::FQFN)
-            .await?;
+        let (begin_index, agent_auth_ctx) = if requires_agent_authority {
+            let (begin_index, auth_ctx) = ctx
+                .begin_durable_function_with_agent_authority(&function_type, Pair::FQFN)
+                .await?;
+            (begin_index, auth_ctx)
+        } else {
+            (
+                ctx.begin_durable_function(&function_type, Pair::FQFN)
+                    .await?,
+                None,
+            )
+        };
+        Ok(Self::finish_begin(
+            ctx,
+            function_type,
+            begin_index,
+            requires_agent_authority,
+            agent_auth_ctx,
+            observational_owner,
+        ))
+    }
+
+    fn finish_begin<Ctx: WorkerCtx>(
+        ctx: &DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        begin_index: OplogIndex,
+        requires_agent_authority: bool,
+        agent_auth_ctx: Option<AuthCtx>,
+        observational_owner: Option<OplogIndex>,
+    ) -> BegunCall<Pair, P> {
         let durable_execution_state = InFunctionRetryHost::durable_execution_state(ctx);
         let execution_scope = BegunCallExecutionScope {
-            parent_start_index: ctx
-                .state
-                .child_parent_start_index(&function_type, begin_index),
+            parent_start_index: ctx.child_parent_start_index(&function_type, begin_index),
             atomic_region: ctx
                 .state
                 .active_atomic_regions
                 .last()
                 .map(|region| region.begin_index),
-            persistence_level: ctx.state.persistence_level,
+            observational_owner,
         };
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
 
-        Ok(BegunCall {
+        BegunCall {
             begin_index,
             execution_scope,
             retry,
+            requires_agent_authority,
+            agent_auth_ctx,
             drop_sink: P::production_drop_sink(ctx.state.dropped_call_event_sender()),
             cleanup_sink: ctx.state.dropped_call_event_sender(),
             _phantom: PhantomData,
-        })
+        }
     }
 
     pub fn is_live(&self) -> bool {
@@ -1343,12 +1584,70 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
         self.start_idx
     }
 
+    pub async fn recorded_request<Ctx: WorkerCtx>(
+        &self,
+        ctx: &DurableWorkerCtx<Ctx>,
+    ) -> Result<Pair::Req, WorkerExecutorError>
+    where
+        Pair::Req: TryFrom<HostRequest, Error = String>,
+    {
+        let entry = ctx.state.oplog.read(self.start_idx).await;
+        let OplogEntry::Start {
+            request: Some(request),
+            ..
+        } = entry
+        else {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                format!("Start with request at {}", self.start_idx),
+                format!("{entry:?}"),
+            ));
+        };
+        let request = ctx
+            .state
+            .oplog
+            .download_payload(request)
+            .await
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to load durable call request at {}: {error}",
+                    self.start_idx
+                ))
+            })?;
+        Pair::Req::try_from(request).map_err(|actual| {
+            WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN.to_string(), actual)
+        })
+    }
+
+    pub(crate) fn parent_start_index(&self) -> Option<OplogIndex> {
+        self.execution_scope.durable_scope
+    }
+
     /// The index returned by `begin_durable_function`: the durable scope `Start` for a
     /// non-idempotent `WriteRemote` / `WriteRemoteBatched(None)`, or the pre-call index otherwise.
     /// Used by call sites that derive a stable identifier from that index (e.g. the idempotency-key
     /// derivation).
     pub fn begin_index(&self) -> OplogIndex {
         self.begin_index
+    }
+
+    pub fn agent_auth_ctx(&self) -> &AuthCtx {
+        self.agent_auth_ctx
+            .as_ref()
+            .expect("agent authority context requested from a call without live agent authority")
+    }
+
+    pub fn take_agent_auth_ctx(&mut self) -> AuthCtx {
+        self.agent_auth_ctx
+            .take()
+            .expect("agent authority context requested from a call without live agent authority")
+    }
+
+    pub(crate) fn observational_owner(&self) -> Option<OplogIndex> {
+        self.execution_scope.observational_owner
+    }
+
+    pub(crate) fn is_observational(&self) -> bool {
+        self.observational_owner().is_some()
     }
 
     /// Low-level abandon: marks the call as finished without writing anything to the oplog, leaving
@@ -1999,6 +2298,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     || ctx.state.live_host_call_counter(),
                 )?;
+                if self.requires_agent_authority {
+                    match ctx.capture_agent_auth_ctx_at_boundary().await {
+                        Ok(Some(auth_ctx)) => self.agent_auth_ctx = Some(auth_ctx),
+                        Ok(None) => {
+                            self.abandon_for_trap();
+                            return Err(WorkerExecutorError::runtime(
+                                "incomplete authority-bearing call did not switch to live execution",
+                            ));
+                        }
+                        Err(error) => {
+                            self.abandon_for_trap();
+                            return Err(error);
+                        }
+                    }
+                }
                 Ok(CallReplayOutcome::Incomplete(self))
             }
         }
@@ -2081,7 +2395,96 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         })
                     },
                 )?;
+                let synchronization = if self.requires_agent_authority {
+                    match agent_auth_ctx_at_serialized_access(store, get_ctx).await {
+                        Ok(auth_ctx) => {
+                            self.agent_auth_ctx = Some(auth_ctx);
+                            Ok(())
+                        }
+                        Err(error) => Err(error),
+                    }
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = synchronization {
+                    self.abandon_for_trap();
+                    return Err(error);
+                }
                 Ok(CallReplayOutcome::Incomplete(self))
+            }
+        }
+    }
+
+    /// Replay terminal handling for entity-body reconstruction. Unlike the guest-future accessor
+    /// path, a recorded cancellation is returned to the reconstruction coordinator instead of
+    /// parking forever: the coordinator owns the transient entity task and aborts it at that
+    /// durable boundary. Completed responses are decoded normally and incomplete Starts become
+    /// live-repair handles under the original Start index.
+    pub async fn replay_reconstruction_access<T, D, Ctx>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<ReconstructionReplayOutcome<Pair, P>, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.ensure_accessor_terminal_supported("replay_reconstruction_access")?;
+        let function_type = self.retry.function_type().clone();
+        let begin_index = self.begin_index;
+        let (replay_state, oplog, completion_marker_recorder) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.state.replay_state.clone(),
+                ctx.state.oplog.clone(),
+                ctx.state.completion_marker_recorder(),
+            )
+        });
+        let replay = self
+            .replay
+            .take()
+            .expect("replay_reconstruction_access() called on a live handle");
+        let outcome = replay_state.await_resolution_outcome(replay).await?;
+        match classify_replay_resolution(outcome) {
+            ReplayedResolution::Delivered(payload, disposition) => {
+                self.finished = true;
+                let response = decode_replayed_payload::<Pair>(&oplog, payload).await?;
+                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
+                    .await?;
+                CompletionDelivery::replay_delivered(
+                    disposition,
+                    self.start_idx,
+                    completion_marker_recorder,
+                    self.trap_context(),
+                    self.cleanup_sink.clone(),
+                )
+                .deliver_at_accessor_terminal(store)
+                .await?;
+                Ok(ReconstructionReplayOutcome::Replayed(response))
+            }
+            ReplayedResolution::Undelivered(UndeliveredTerminal::CancelledWithoutPartial {
+                ..
+            }) => {
+                self.finished = true;
+                end_durable_function_access(store, get_ctx, function_type, begin_index, false)
+                    .await?;
+                Ok(ReconstructionReplayOutcome::Cancelled)
+            }
+            ReplayedResolution::Undelivered(terminal) => {
+                self.finished = true;
+                Err(terminal.direct_divergence_error())
+            }
+            ReplayedResolution::Incomplete => {
+                self.prepare_incomplete_live_repair(
+                    Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
+                    || {
+                        store.with(|mut access| {
+                            get_ctx(access.data_mut()).state.live_host_call_counter()
+                        })
+                    },
+                )?;
+                Ok(ReconstructionReplayOutcome::Incomplete(self))
             }
         }
     }
@@ -2187,6 +2590,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                         })
                     },
                 )?;
+                let synchronization = if self.requires_agent_authority {
+                    match agent_auth_ctx_at_serialized_access(store, get_ctx).await {
+                        Ok(auth_ctx) => {
+                            self.agent_auth_ctx = Some(auth_ctx);
+                            Ok(())
+                        }
+                        Err(error) => Err(error),
+                    }
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = synchronization {
+                    self.abandon_for_trap();
+                    return Err(error);
+                }
                 Ok(DeferredCallReplayOutcome::Incomplete(self))
             }
         }
@@ -2879,18 +3297,19 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (is_live, worker, replay_state) = store.with(|mut access| {
+    let (is_live, worker, replay_state, parent_start_index) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
         (
             ctx.state.is_live(),
             ctx.public_state.worker(),
             ctx.state.replay_state.clone(),
+            ctx.entity_parent_start_index(),
         )
     });
 
     if is_live {
         worker
-            .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
+            .add_to_oplog(OplogEntry::finish_span(parent_start_index, span_id.clone()))
             .await;
     } else {
         crate::get_oplog_entry_owned!(replay_state, OplogEntry::FinishSpan)?;
@@ -2906,6 +3325,7 @@ fn is_accessor_supported_function_type(function_type: &DurableFunctionType) -> b
     matches!(
         function_type,
         DurableFunctionType::ReadLocal
+            | DurableFunctionType::WriteLocal
             | DurableFunctionType::ReadRemote
             | DurableFunctionType::WriteRemote
             | DurableFunctionType::WriteRemoteBatched(_)
@@ -2938,6 +3358,558 @@ fn is_accessor_terminal_supported_function_type(function_type: &DurableFunctionT
         || matches!(function_type, DurableFunctionType::WriteRemote)
 }
 
+pub(crate) async fn authorize_live_permissions_at_serialized_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    targets: &[golem_common::model::card::PermissionTarget],
+) -> Result<Result<LiveAuthorizationPermit, AuthorizationError>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    enum FastResult {
+        OperatorAuthorized,
+        Stable(Result<(), AuthorizationError>),
+        Slow,
+    }
+
+    let fast_result = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        assert!(
+            ctx.state.is_live(),
+            "live permission authorization must not run during replay"
+        );
+        if ctx.operator_authorizes_current_invocation() {
+            return FastResult::OperatorAuthorized;
+        }
+        let published_generation = ctx
+            .state
+            .published_authority_generation
+            .load(Ordering::Acquire);
+        let now = chrono::Utc::now();
+        if authority_snapshot_is_current_at(
+            ctx.state.authority_initialized,
+            ctx.state.card_interest_index.authority_is_open(),
+            ctx.state.processed_authority_generation,
+            published_generation,
+            ctx.state.next_authority_expiration,
+            now,
+        ) {
+            let result = authorize_effective_surface(&ctx.state.agent_effective_surface, targets);
+            if ctx.authority_snapshot_is_stable(published_generation) {
+                FastResult::Stable(result)
+            } else {
+                FastResult::Slow
+            }
+        } else {
+            FastResult::Slow
+        }
+    });
+    match fast_result {
+        FastResult::OperatorAuthorized => {
+            record_permission_decisions(targets, true);
+            return Ok(Ok(LiveAuthorizationPermit { _private: () }));
+        }
+        FastResult::Stable(result) => {
+            crate::metrics::wasm::record_agent_permission_authority_fast_path();
+            record_permission_decisions(targets, result.is_ok());
+            return Ok(result.map(|()| LiveAuthorizationPermit { _private: () }));
+        }
+        FastResult::Slow => {}
+    }
+
+    let started = std::time::Instant::now();
+    loop {
+        let boundary_guard =
+            lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, true)
+                .await?
+                .expect("waiting authority boundary always returns a guard");
+        let result = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            if ctx.operator_authorizes_current_invocation() {
+                return Some(Ok(()));
+            }
+            let generation = ctx
+                .state
+                .published_authority_generation
+                .load(Ordering::Acquire);
+            let result = authorize_effective_surface(&ctx.state.agent_effective_surface, targets);
+            // A due cached deadline sent us through synchronization. Recompute it from the
+            // synchronized wallet before deciding whether the snapshot is stable.
+            ctx.refresh_authority_expiration_deadline();
+            if ctx.authority_snapshot_is_stable(generation) {
+                ctx.adopt_authority_generation(generation);
+                Some(result)
+            } else {
+                None
+            }
+        });
+        if let Some(result) = result {
+            crate::metrics::wasm::record_agent_permission_authority_slow_path(started.elapsed());
+            record_permission_decisions(targets, result.is_ok());
+            return Ok(result.map(|()| LiveAuthorizationPermit { _private: () }));
+        }
+        drop(boundary_guard);
+    }
+}
+
+pub(crate) async fn try_agent_auth_ctx_at_serialized_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<Option<AuthCtx>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let Some(_boundary_guard) =
+        lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, false).await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(store.with(|mut access| {
+        get_ctx(access.data_mut()).agent_auth_ctx()
+    })))
+}
+
+pub(crate) async fn agent_auth_ctx_at_serialized_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<AuthCtx, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let _boundary_guard =
+        lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, true)
+            .await?
+            .expect("waiting authority boundary always returns a guard");
+    Ok(store.with(|mut access| get_ctx(access.data_mut()).agent_auth_ctx()))
+}
+
+async fn lock_synchronized_card_event_boundary_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<tokio::sync::OwnedMutexGuard<()>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    Ok(
+        lock_synchronized_card_event_boundary_access_inner(store, get_ctx, false, true)
+            .await?
+            .expect("unrestricted card boundary always returns a guard"),
+    )
+}
+
+async fn lock_synchronized_card_event_boundary_access_inner<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    requires_agent_authority: bool,
+    wait_for_authority: bool,
+) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let boundary_lock = store.with(|mut access| {
+        get_ctx(access.data_mut())
+            .state
+            .card_event_boundary_lock
+            .clone()
+    });
+    loop {
+        let boundary_guard = boundary_lock.clone().lock_owned().await;
+        let (authority_checked, authority_open, card_interest_index) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                requires_agent_authority && ctx.state.is_live(),
+                ctx.state.card_interest_index.authority_is_open(),
+                ctx.state.card_interest_index.clone(),
+            )
+        });
+        if authority_checked && !authority_open {
+            drop(boundary_guard);
+            if !wait_for_authority {
+                return Ok(None);
+            }
+            card_interest_index.wait_until_authority_open().await;
+            continue;
+        }
+        synchronize_agent_wallet_at_boundary_access(store, get_ctx).await?;
+        if requires_agent_authority && !authority_checked {
+            let authority_open_after_replay = store.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                !ctx.state.is_live() || ctx.state.card_interest_index.authority_is_open()
+            });
+            if !authority_open_after_replay {
+                drop(boundary_guard);
+                if !wait_for_authority {
+                    return Ok(None);
+                }
+                card_interest_index.wait_until_authority_open().await;
+                continue;
+            }
+        }
+        let has_pending_source_transfer = store.with(|mut access| {
+            get_ctx(access.data_mut())
+                .state
+                .card_event_boundary_scan
+                .as_ref()
+                .is_some_and(|scan| {
+                    scan.pending.iter().any(|pending| {
+                        matches!(&pending.event, QueuedCardEvent::TransferStarted(_))
+                    })
+                })
+        });
+        let retries = if has_pending_source_transfer {
+            prepare_pending_source_card_transfers_access(store, get_ctx).await?
+        } else {
+            Vec::new()
+        };
+        if retries.is_empty() {
+            return Ok(Some(boundary_guard));
+        }
+        // Target delivery takes the target worker's boundary lock. Release the source lock while
+        // delivering, then reconcile again before returning the guard that protects live Start.
+        drop(boundary_guard);
+        complete_pending_source_card_transfers_access(store, get_ctx, retries).await?;
+    }
+}
+
+async fn synchronize_agent_wallet_at_boundary_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    process_pending_replay_events_access(store, get_ctx).await?;
+    drain_card_revocations_and_expiry_access(store, get_ctx).await
+}
+
+async fn drain_card_revocations_and_expiry_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let is_live = store.with(|mut access| get_ctx(access.data_mut()).state.is_live());
+    if !is_live {
+        return Ok(());
+    }
+
+    loop {
+        let pending_events = crate::durable_host::next_drainable_card_events(
+            pending_card_events_at_boundary_access(store, get_ctx).await?,
+        );
+        let Some(pending_event) = pending_events.first() else {
+            break;
+        };
+        match &pending_event.event {
+            QueuedCardEvent::Revoke(_) => {
+                let card_ids = pending_events
+                    .into_iter()
+                    .filter_map(|pending_event| match pending_event.event {
+                        QueuedCardEvent::Revoke(event) => Some(event.card_id),
+                        QueuedCardEvent::Install(_)
+                        | QueuedCardEvent::TransferStarted(_)
+                        | QueuedCardEvent::TransferReceived(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                apply_card_revocations_access(store, get_ctx, card_ids).await?;
+            }
+            QueuedCardEvent::Install(event) => {
+                let Some(card) = event.card.clone() else {
+                    return Err(WorkerExecutorError::runtime(
+                        "queued card install is missing card payload",
+                    ));
+                };
+                apply_card_install_access(store, get_ctx, pending_event.oplog_index, card).await?;
+            }
+            QueuedCardEvent::TransferReceived(event) => {
+                let Some(card) = event.card.clone() else {
+                    return Err(WorkerExecutorError::runtime(
+                        "received card transfer is missing card payload",
+                    ));
+                };
+                apply_received_card_transfer_access(
+                    store,
+                    get_ctx,
+                    pending_event.oplog_index,
+                    event.transfer_id,
+                    event.source_card_id,
+                    card,
+                )
+                .await?;
+            }
+            QueuedCardEvent::TransferStarted(_) => {
+                unreachable!("filtered above")
+            }
+        }
+    }
+    remove_expired_wallet_cards_access(store, get_ctx).await?;
+
+    let expired_scope_root_ids = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        crate::durable_host::expired_wallet_card_ids_at(
+            &ctx.state.invocation_scope_root_cards,
+            chrono::Utc::now(),
+        )
+    });
+    apply_card_revocations_access(store, get_ctx, expired_scope_root_ids).await
+}
+
+async fn pending_card_events_at_boundary_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<Vec<golem_common::model::PendingCardEventRef>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let (worker, oplog) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (ctx.public_state.worker().clone(), ctx.state.oplog.clone())
+    });
+    let status = worker.get_non_detached_last_known_status().await;
+    let current_idx = oplog.current_oplog_index().await;
+    let unread_range = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        match &mut ctx.state.card_event_boundary_scan {
+            Some(scan) => {
+                scan.synchronize(status.oplog_idx, &status.pending_card_events, current_idx)
+            }
+            None => {
+                ctx.state.card_event_boundary_scan =
+                    Some(crate::durable_host::CardEventBoundaryScan::new(
+                        status.oplog_idx,
+                        status.pending_card_events,
+                    ));
+            }
+        }
+        ctx.state
+            .card_event_boundary_scan
+            .as_ref()
+            .expect("card event boundary scan must be initialized")
+            .unread_range(current_idx)
+    });
+
+    if let Some((start, count)) = unread_range {
+        let entries = oplog.read_many(start, count).await;
+        store.with(|mut access| {
+            get_ctx(access.data_mut())
+                .state
+                .card_event_boundary_scan
+                .as_mut()
+                .expect("card event boundary scan must be initialized")
+                .fold_through(current_idx, &entries);
+        });
+    }
+
+    Ok(store.with(|mut access| {
+        get_ctx(access.data_mut())
+            .state
+            .card_event_boundary_scan
+            .as_ref()
+            .expect("card event boundary scan must be initialized")
+            .pending
+            .clone()
+    }))
+}
+
+async fn admit_card_to_wallet_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    card: &golem_common::model::card::StoredCard,
+) -> Result<Result<u64, CardInstallFailure>, WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let card_id = card.card_id();
+    let (owned_agent_id, mut candidate_card_ids, interest_index, card_service) =
+        store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.owned_agent_id.clone(),
+                ctx.interested_card_ids(),
+                ctx.state.card_interest_index.clone(),
+                ctx.state.card_service.clone(),
+            )
+        });
+    if !candidate_card_ids.contains(&card_id) {
+        candidate_card_ids.push(card_id);
+    }
+    interest_index
+        .set_card_interest(owned_agent_id, &candidate_card_ids)
+        .await;
+
+    let card_state = card_service
+        .check_cards(vec![card_id])
+        .await?
+        .remove(&card_id);
+    let failure = match card_state {
+        Some(CardState::Live(registered_card)) if registered_card.as_ref() == card => None,
+        Some(CardState::Live(_)) => Some(CardInstallFailure::NotPermitted),
+        Some(CardState::Revoked) => Some(CardInstallFailure::CardRevoked),
+        Some(CardState::Unknown) | None => Some(CardInstallFailure::NotFound),
+    };
+
+    let (result, owned_agent_id, interested_card_ids, interest_index) =
+        store.with(|mut access| -> Result<_, WorkerExecutorError> {
+            let ctx = get_ctx(access.data_mut());
+            let result = if let Some(failure) = failure {
+                Err(failure)
+            } else {
+                if crate::durable_host::add_wallet_card(
+                    &mut ctx.state.agent_wallet_cards,
+                    &mut ctx.state.wallet_generation,
+                    card.clone(),
+                )? {
+                    ctx.rederive_agent_effective_surface_from_wallet();
+                }
+                Ok(ctx.state.wallet_generation)
+            };
+            Ok((
+                result,
+                ctx.owned_agent_id.clone(),
+                ctx.interested_card_ids(),
+                ctx.state.card_interest_index.clone(),
+            ))
+        })?;
+    interest_index
+        .set_card_interest(owned_agent_id, &interested_card_ids)
+        .await;
+    Ok(result)
+}
+
+async fn apply_card_install_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    queued_event_index: OplogIndex,
+    card: golem_common::model::card::StoredCard,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let card_id = card.card_id();
+    let result = admit_card_to_wallet_access(store, get_ctx, &card).await?;
+    let worker = store.with(|mut access| get_ctx(access.data_mut()).public_state.worker().clone());
+    let entry = match result {
+        Ok(wallet_generation) => {
+            OplogEntry::card_installed(Some(queued_event_index), card, Some(wallet_generation))
+        }
+        Err(reason) => OplogEntry::card_install_failed(queued_event_index, card_id, reason),
+    };
+    worker.add_and_commit_oplog(entry).await;
+    Ok(())
+}
+
+async fn apply_received_card_transfer_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    queued_event_index: OplogIndex,
+    transfer_id: uuid::Uuid,
+    source_card_id: Option<golem_common::model::card::CardId>,
+    card: golem_common::model::card::StoredCard,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let card_id = card.card_id();
+    let result = admit_card_to_wallet_access(store, get_ctx, &card).await?;
+    let (agent_id, worker) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.owned_agent_id.agent_id.clone(),
+            ctx.public_state.worker().clone(),
+        )
+    });
+    let entry = match result {
+        Ok(wallet_generation) => OplogEntry::card_transferred(
+            transfer_id,
+            source_card_id,
+            card_id,
+            golem_common::model::card::CardHolder::Agent(
+                golem_common::model::card::AgentCardHolder { agent_id },
+            ),
+            card,
+            Some(wallet_generation),
+        ),
+        Err(reason) => OplogEntry::card_install_failed(queued_event_index, card_id, reason),
+    };
+    worker.add_and_commit_oplog(entry).await;
+    Ok(())
+}
+
+async fn remove_expired_wallet_cards_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let (expired_card_generations, owned_agent_id, interested_card_ids, interest_index, worker) =
+        store.with(|mut access| -> Result<_, WorkerExecutorError> {
+            let ctx = get_ctx(access.data_mut());
+            let expired_card_ids = crate::durable_host::expired_wallet_card_ids_at(
+                &ctx.state.agent_wallet_cards,
+                chrono::Utc::now(),
+            );
+            let mut expired_card_generations = Vec::with_capacity(expired_card_ids.len());
+            for card_id in expired_card_ids {
+                if crate::durable_host::remove_wallet_card(
+                    &mut ctx.state.agent_wallet_cards,
+                    &mut ctx.state.wallet_generation,
+                    card_id,
+                )? {
+                    expired_card_generations.push((card_id, ctx.state.wallet_generation));
+                }
+            }
+            if !expired_card_generations.is_empty() {
+                ctx.rederive_agent_effective_surface_from_wallet();
+            }
+            Ok((
+                expired_card_generations,
+                ctx.owned_agent_id.clone(),
+                ctx.interested_card_ids(),
+                ctx.state.card_interest_index.clone(),
+                ctx.public_state.worker().clone(),
+            ))
+        })?;
+
+    if expired_card_generations.is_empty() {
+        return Ok(());
+    }
+    interest_index
+        .set_card_interest(owned_agent_id, &interested_card_ids)
+        .await;
+    for (card_id, wallet_generation) in expired_card_generations {
+        worker
+            .add_and_commit_oplog(OplogEntry::card_expired(card_id, Some(wallet_generation)))
+            .await;
+    }
+    Ok(())
+}
+
 async fn process_pending_replay_events_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -2964,31 +3936,494 @@ where
                 );
                 update_state_to_new_component_revision_access(store, get_ctx, new_revision).await?;
             }
-            crate::durable_host::replay_state::ReplayEvent::CardInstalled { card } => {
-                store.with(|mut access| {
+            crate::durable_host::replay_state::ReplayEvent::InvocationWalletPinned {
+                wallet_pin,
+            } => {
+                store.with(|mut access| -> Result<(), WorkerExecutorError> {
+                    let ctx = get_ctx(access.data_mut());
+                    if crate::durable_host::apply_invocation_wallet_pin(
+                        &mut ctx.state.agent_wallet_cards,
+                        ctx.state.wallet_id_hash,
+                        &mut ctx.state.wallet_generation,
+                        wallet_pin,
+                    )? {
+                        ctx.rederive_agent_effective_surface_from_wallet();
+                    }
+                    Ok(())
+                })?;
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardInstalled {
+                card,
+                wallet_generation,
+            } => {
+                store.with(|mut access| -> Result<(), WorkerExecutorError> {
                     let ctx = get_ctx(access.data_mut());
                     let card_id = card.card_id();
                     tracing::debug!(card_id = %card_id, "Applying replayed card installation");
-                    ctx.state.agent_wallet_cards.insert(card_id, card);
-                    ctx.rederive_agent_effective_surface_from_wallet();
-                });
-            }
-            crate::durable_host::replay_state::ReplayEvent::CardRevoked { card_id }
-            | crate::durable_host::replay_state::ReplayEvent::CardExpired { card_id } => {
-                store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    tracing::debug!(card_id = %card_id, "Applying replayed card removal");
-                    if ctx.state.agent_wallet_cards.remove(&card_id).is_some() {
+                    if crate::durable_host::add_wallet_card(
+                        &mut ctx.state.agent_wallet_cards,
+                        &mut ctx.state.wallet_generation,
+                        card,
+                    )? {
                         ctx.rederive_agent_effective_surface_from_wallet();
                     }
-                });
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut ctx.state.wallet_generation,
+                        wallet_generation,
+                    )
+                })?;
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardDerived {
+                wallet_generation,
+                ..
+            } => {
+                store.with(|mut access| {
+                    let ctx = get_ctx(access.data_mut());
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut ctx.state.wallet_generation,
+                        wallet_generation,
+                    )
+                })?;
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardTransferStarted {
+                card_id,
+                source_holder,
+                source_wallet_generation,
+                ..
+            } => {
+                store.with(|mut access| -> Result<(), WorkerExecutorError> {
+                    let ctx = get_ctx(access.data_mut());
+                    if source_holder.as_ref().is_none_or(|source_holder| {
+                        crate::durable_host::card_holder_is_agent(
+                            source_holder,
+                            &ctx.owned_agent_id.agent_id,
+                        )
+                    }) && crate::durable_host::transfer_started_removes_source_membership(
+                        ctx.state.agent_wallet_cards.get(&card_id),
+                        &source_holder,
+                        &ctx.owned_agent_id.agent_id,
+                    ) && crate::durable_host::remove_wallet_card(
+                        &mut ctx.state.agent_wallet_cards,
+                        &mut ctx.state.wallet_generation,
+                        card_id,
+                    )? {
+                        ctx.rederive_agent_effective_surface_from_wallet();
+                    }
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut ctx.state.wallet_generation,
+                        source_wallet_generation,
+                    )
+                })?;
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardTransferred {
+                target_holder,
+                card,
+                target_wallet_generation,
+                ..
+            } => {
+                store.with(|mut access| -> Result<(), WorkerExecutorError> {
+                    let ctx = get_ctx(access.data_mut());
+                    if crate::durable_host::card_holder_is_agent(
+                        &target_holder,
+                        &ctx.owned_agent_id.agent_id,
+                    ) && crate::durable_host::add_wallet_card(
+                        &mut ctx.state.agent_wallet_cards,
+                        &mut ctx.state.wallet_generation,
+                        card,
+                    )? {
+                        ctx.rederive_agent_effective_surface_from_wallet();
+                    }
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut ctx.state.wallet_generation,
+                        target_wallet_generation,
+                    )
+                })?;
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardTransferConfirmed { .. } => {}
+            crate::durable_host::replay_state::ReplayEvent::CardRevokedCascade {
+                card_ids,
+                local_wallet_generation,
+            } => {
+                store.with(|mut access| -> Result<(), WorkerExecutorError> {
+                    let ctx = get_ctx(access.data_mut());
+                    let wallet_changed = crate::durable_host::remove_wallet_cards(
+                        &mut ctx.state.agent_wallet_cards,
+                        &mut ctx.state.wallet_generation,
+                        &card_ids,
+                    )?;
+                    let scope_changed = ctx.clear_invocation_scope_if_roots_include(&card_ids);
+                    if wallet_changed || scope_changed {
+                        ctx.rederive_agent_effective_surface_from_wallet();
+                    }
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut ctx.state.wallet_generation,
+                        local_wallet_generation,
+                    )
+                })?;
+            }
+            crate::durable_host::replay_state::ReplayEvent::CardRevoked {
+                card_id,
+                wallet_generation,
+            }
+            | crate::durable_host::replay_state::ReplayEvent::CardExpired {
+                card_id,
+                wallet_generation,
+            } => {
+                store.with(|mut access| -> Result<(), WorkerExecutorError> {
+                    let ctx = get_ctx(access.data_mut());
+                    let wallet_changed = crate::durable_host::remove_wallet_card(
+                        &mut ctx.state.agent_wallet_cards,
+                        &mut ctx.state.wallet_generation,
+                        card_id,
+                    )?;
+                    let scope_changed = ctx.clear_invocation_scope_if_roots_include(&[card_id]);
+                    if wallet_changed || scope_changed {
+                        ctx.rederive_agent_effective_surface_from_wallet();
+                    }
+                    crate::durable_host::adopt_recorded_wallet_generation(
+                        &mut ctx.state.wallet_generation,
+                        wallet_generation,
+                    )
+                })?;
             }
             crate::durable_host::replay_state::ReplayEvent::ReplayFinished => {
                 tracing::debug!("Replaying oplog finished");
                 finalize_pending_automatic_update_access(store, get_ctx).await?;
+                check_post_replay_wallet_liveness_access(store, get_ctx).await?;
             }
         }
     }
+    Ok(())
+}
+
+async fn check_post_replay_wallet_liveness_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let (
+        owned_agent_id,
+        interested_card_ids,
+        invocation_scope_card,
+        interest_index,
+        card_service,
+        worker,
+    ) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.owned_agent_id.clone(),
+            ctx.interested_card_ids(),
+            ctx.state.invocation_scope_card.clone(),
+            ctx.state.card_interest_index.clone(),
+            ctx.state.card_service.clone(),
+            ctx.public_state.worker().clone(),
+        )
+    });
+
+    interest_index
+        .set_card_interest(owned_agent_id, &interested_card_ids)
+        .await;
+    if interested_card_ids.is_empty() {
+        return Ok(());
+    }
+
+    let card_states = card_service.check_cards(interested_card_ids).await?;
+    let live_scope_root_cards = crate::durable_host::live_scope_root_cards_from_states(
+        invocation_scope_card.as_ref(),
+        &card_states,
+    )?;
+    store.with(|mut access| {
+        get_ctx(access.data_mut()).state.invocation_scope_root_cards = live_scope_root_cards;
+    });
+    let revoked_card_ids = card_states
+        .into_iter()
+        .filter_map(|(card_id, state)| (state == CardState::Revoked).then_some(card_id))
+        .collect::<Vec<_>>();
+    worker
+        .queue_card_revocations_locked(&revoked_card_ids)
+        .await;
+    Ok(())
+}
+
+async fn prepare_pending_source_card_transfers_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<
+    Vec<crate::durable_host::permissions::PendingSourceCardTransferRetry>,
+    WorkerExecutorError,
+>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let (is_live, oplog, source_agent_id) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.state.is_live(),
+            ctx.state.oplog.clone(),
+            ctx.owned_agent_id.agent_id.clone(),
+        )
+    });
+    if !is_live {
+        return Ok(Vec::new());
+    }
+
+    let pending_events = pending_card_events_at_boundary_access(store, get_ctx).await?;
+    let mut retries = Vec::new();
+    let mut first_error = None;
+    for pending in pending_events {
+        if let QueuedCardEvent::TransferStarted(transfer) = &pending.event {
+            let retry =
+                crate::durable_host::permissions::prepare_pending_source_card_transfer_retry(
+                    oplog.as_ref(),
+                    &source_agent_id,
+                    &pending,
+                    transfer,
+                )
+                .await;
+            match retry {
+                Ok(Some(mut retry)) => {
+                    match ensure_pending_source_card_transfer_started_access(store, get_ctx, &retry)
+                        .await
+                    {
+                        Ok(()) => {
+                            retry.started = true;
+                            retries.push(retry);
+                        }
+                        Err(error) if first_error.is_none() => first_error = Some(error),
+                        Err(_) => {}
+                    }
+                }
+                Ok(None) => {}
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
+            }
+        }
+    }
+
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(retries),
+    }
+}
+
+async fn ensure_pending_source_card_transfer_started_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    retry: &crate::durable_host::permissions::PendingSourceCardTransferRetry,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    if retry.started {
+        return Ok(());
+    }
+
+    let (worker, source_agent_id) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.public_state.worker().clone(),
+            ctx.owned_agent_id.agent_id.clone(),
+        )
+    });
+    let target_holder =
+        golem_common::model::card::CardHolder::Agent(golem_common::model::card::AgentCardHolder {
+            agent_id: retry.target_agent_id.clone(),
+        });
+
+    let refresh_interest = store.with(|mut access| -> Result<Option<_>, WorkerExecutorError> {
+        let ctx = get_ctx(access.data_mut());
+        let changed = retry.remove_source_membership
+            && crate::durable_host::remove_wallet_card(
+                &mut ctx.state.agent_wallet_cards,
+                &mut ctx.state.wallet_generation,
+                retry.source_card_id,
+            )?;
+        if changed {
+            ctx.rederive_agent_effective_surface_from_wallet();
+            Ok(Some((
+                ctx.owned_agent_id.clone(),
+                ctx.interested_card_ids(),
+                ctx.state.card_interest_index.clone(),
+            )))
+        } else {
+            Ok(None)
+        }
+    })?;
+    if let Some((owned_agent_id, interested_card_ids, interest_index)) = refresh_interest {
+        interest_index
+            .set_card_interest(owned_agent_id, &interested_card_ids)
+            .await;
+    }
+
+    worker
+        .add_and_commit_oplog(OplogEntry::card_transfer_started(
+            retry.transfer_id,
+            retry.source_card_id,
+            Some(golem_common::model::card::CardHolder::Agent(
+                golem_common::model::card::AgentCardHolder {
+                    agent_id: source_agent_id,
+                },
+            )),
+            target_holder,
+            store.with(|mut access| Some(get_ctx(access.data_mut()).state.wallet_generation)),
+        ))
+        .await;
+
+    Ok(())
+}
+
+async fn complete_pending_source_card_transfers_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    retries: Vec<crate::durable_host::permissions::PendingSourceCardTransferRetry>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    for retry in retries {
+        complete_pending_source_card_transfer_access(store, get_ctx, retry).await?;
+    }
+
+    Ok(())
+}
+
+async fn complete_pending_source_card_transfer_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    retry: crate::durable_host::permissions::PendingSourceCardTransferRetry,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let (worker, worker_proxy, environment_id) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.public_state.worker().clone(),
+            ctx.worker_proxy().clone(),
+            ctx.owned_agent_id.environment_id,
+        )
+    });
+    let target_holder =
+        golem_common::model::card::CardHolder::Agent(golem_common::model::card::AgentCardHolder {
+            agent_id: retry.target_agent_id.clone(),
+        });
+
+    worker_proxy
+        .deliver_card_transfer(
+            &retry.target_agent_id,
+            environment_id,
+            retry.transfer_id,
+            retry.source_card_id,
+            &retry.installed_card,
+        )
+        .await
+        .map_err(|error| {
+            WorkerExecutorError::runtime(format!(
+                "permission-card transfer delivery failed: {error}"
+            ))
+        })?;
+
+    let boundary_lock = store.with(|mut access| {
+        get_ctx(access.data_mut())
+            .state
+            .card_event_boundary_lock
+            .clone()
+    });
+    let _boundary_guard = boundary_lock.lock().await;
+    let (oplog, source_agent_id) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (ctx.state.oplog.clone(), ctx.owned_agent_id.agent_id.clone())
+    });
+    if retry.is_confirmed(oplog.as_ref(), &source_agent_id).await? {
+        return Ok(());
+    }
+    worker
+        .add_and_commit_oplog(OplogEntry::card_transfer_confirmed(
+            retry.transfer_id,
+            retry.source_card_id,
+            retry.installed_card.card_id(),
+            target_holder,
+        ))
+        .await;
+    Ok(())
+}
+
+async fn apply_card_revocations_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    mut card_ids: Vec<golem_common::model::card::CardId>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    card_ids.sort_unstable();
+    card_ids.dedup();
+    if card_ids.is_empty() {
+        return Ok(());
+    }
+
+    let (
+        owned_agent_id,
+        interested_card_ids,
+        interest_index,
+        worker,
+        affected_wallets,
+        wallet_generation,
+    ) = store.with(|mut access| -> Result<_, WorkerExecutorError> {
+        let ctx = get_ctx(access.data_mut());
+        let wallet_changed = crate::durable_host::remove_wallet_cards(
+            &mut ctx.state.agent_wallet_cards,
+            &mut ctx.state.wallet_generation,
+            &card_ids,
+        )?;
+        let scope_changed = ctx.clear_invocation_scope_if_roots_include(&card_ids);
+        if wallet_changed || scope_changed {
+            ctx.rederive_agent_effective_surface_from_wallet();
+        }
+        let affected_wallets = if wallet_changed {
+            vec![golem_common::model::card::CardHolder::Agent(
+                golem_common::model::card::AgentCardHolder {
+                    agent_id: ctx.owned_agent_id.agent_id.clone(),
+                },
+            )]
+        } else {
+            Vec::new()
+        };
+        Ok((
+            ctx.owned_agent_id.clone(),
+            ctx.interested_card_ids(),
+            ctx.state.card_interest_index.clone(),
+            ctx.public_state.worker().clone(),
+            affected_wallets,
+            ctx.state.wallet_generation,
+        ))
+    })?;
+
+    interest_index
+        .set_card_interest(owned_agent_id, &interested_card_ids)
+        .await;
+    worker
+        .add_and_commit_oplog(OplogEntry::CardRevokedCascade {
+            timestamp: Timestamp::now_utc(),
+            revoked_card_ids: card_ids,
+            affected_wallets,
+            local_wallet_generation: Some(wallet_generation),
+        })
+        .await;
     Ok(())
 }
 
@@ -3004,7 +4439,6 @@ struct AccessRevisionUpdateInputs {
 
 type AccessRevisionUpdateAgentState = (
     HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
-    golem_common::model::card::EffectiveSurface,
     BTreeMap<golem_common::model::card::CardId, golem_common::model::card::StoredCard>,
 );
 
@@ -3109,7 +4543,7 @@ where
             owned_agent_id: ctx.owned_agent_id.clone(),
             agent_id: ctx.state.agent_id.clone(),
             initial_agent_config: ctx.state.initial_agent_config.clone(),
-            worker_dir: ctx.worker_dir.path().to_path_buf(),
+            worker_dir: ctx.owner_filesystem.path().to_path_buf(),
             current_revision: ctx.state.component_metadata.revision,
         }
     });
@@ -3120,11 +4554,10 @@ where
     }
 
     let update = prepare_revision_update_access(store, get_ctx, &inputs, new_revision).await?;
-    store.with(|mut access| {
+    store.with(|mut access| -> Result<(), WorkerExecutorError> {
         let ctx = get_ctx(access.data_mut());
-        apply_revision_update_access(ctx, update);
-    });
-    Ok(())
+        apply_revision_update_access(ctx, update)
+    })
 }
 
 async fn prepare_revision_update_access<T, D, Ctx>(
@@ -3174,21 +4607,7 @@ where
         let initial_card =
             super::super::agent_initial_card_from_component_metadata(&metadata, agent_id)?;
         let initial_wallet_cards = BTreeMap::from([(initial_card.card_id(), initial_card)]);
-        let context = super::super::agent_monomorphization_context(
-            &metadata,
-            &inputs.owned_agent_id,
-            agent_id,
-        );
-        let effective_surface = golem_common::model::card::agent_effective_surface_from_wallet(
-            &context,
-            initial_wallet_cards.values(),
-        );
-
-        Some((
-            updated_agent_config,
-            effective_surface,
-            initial_wallet_cards,
-        ))
+        Some((updated_agent_config, initial_wallet_cards))
     } else {
         None
     };
@@ -3263,7 +4682,7 @@ where
 fn apply_revision_update_access<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     update: AccessRevisionUpdate,
-) {
+) -> Result<(), WorkerExecutorError> {
     let read_only_paths = super::super::compute_read_only_paths(&update.files);
     {
         let mut files = ctx
@@ -3278,13 +4697,19 @@ fn apply_revision_update_access<Ctx: WorkerCtx>(
         *read_only = read_only_paths;
     }
 
-    if let Some((agent_config, effective_surface, initial_wallet_cards)) = update.agent_state {
+    ctx.state.component_metadata = update.metadata;
+
+    if let Some((agent_config, initial_wallet_cards)) = update.agent_state {
         ctx.state.agent_config = agent_config;
         ctx.state.cached_agent_config_retry_policies = None;
-        ctx.state.agent_effective_surface = effective_surface;
-        ctx.state.agent_wallet_cards = initial_wallet_cards;
+        crate::durable_host::replace_wallet_cards(
+            &mut ctx.state.agent_wallet_cards,
+            &mut ctx.state.wallet_generation,
+            initial_wallet_cards,
+        )?;
+        ctx.rederive_agent_effective_surface_from_wallet();
     }
-    ctx.state.component_metadata = update.metadata;
+    Ok(())
 }
 
 async fn record_worker_update_failed_access<T, D, Ctx>(
@@ -3353,6 +4778,8 @@ pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
     begin_index: OplogIndex,
     execution_scope: BegunCallExecutionScope,
     retry: InFunctionRetryController,
+    requires_agent_authority: bool,
+    agent_auth_ctx: Option<AuthCtx>,
     drop_sink: Option<UnboundedSender<DropEvent>>,
     cleanup_sink: Option<UnboundedSender<DropEvent>>,
     _phantom: PhantomData<(Pair, P)>,
@@ -3361,6 +4788,12 @@ pub struct BegunCall<Pair: HostPayloadPair, P: DropPolicy> {
 impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
     pub fn is_live(&self) -> bool {
         self.retry.durable_execution_state().is_live
+    }
+
+    pub fn agent_auth_ctx(&self) -> &AuthCtx {
+        self.agent_auth_ctx
+            .as_ref()
+            .expect("agent authority context requested from a call without live agent authority")
     }
 
     /// The index returned by `begin_durable_function` — see [`CallHandle::begin_index`]. Available
@@ -3377,11 +4810,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         request: Pair::Req,
     ) -> Result<CallHandle<Pair, P>, WorkerExecutorError> {
         debug_assert!(self.is_live(), "start_live() called on a replay handle");
-        let snapshotting = self
-            .retry
-            .durable_execution_state()
-            .snapshotting_mode
-            .is_some();
+        let snapshotting = self.retry.durable_execution_state().snapshotting_mode;
         // The host-call `Start` nests inside the enclosing durable scope captured at initiation
         // (its own opened scope, or the scope encoded in the function type), derived explicitly —
         // never from the set of temporally-open sibling scopes. `None` for a top-level unscoped call.
@@ -3398,6 +4827,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             let request: HostRequest = request.into();
             let function_type = self.retry.function_type().clone();
             let oplog = ctx.state.oplog.clone();
+            let observational_owner = self.execution_scope.observational_owner;
             // Reserve the request payload and append the `Start` in one guarded step: a big request
             // blob's upload is *begun* but not awaited, so the `Start` is appended in initiation
             // order before the (potentially slow) upload finishes. `add_start_with_reserved_payload`
@@ -3410,6 +4840,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                         timestamp: Timestamp::now_utc(),
                         parent_start_index,
                         function_name: Pair::HOST_FUNCTION_NAME,
+                        invocation_id: None,
+                        observational_owner,
                         request: Some(request_payload),
                         durable_function_type: function_type,
                     }
@@ -3457,6 +4889,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             parked_undelivered_replay: false,
             execution_scope,
             retry: self.retry,
+            requires_agent_authority: self.requires_agent_authority,
+            agent_auth_ctx: self.agent_auth_ctx,
             drop_sink: self.drop_sink,
             cleanup_sink: self.cleanup_sink,
             live_call_permit: Some(LiveCallPermit::new(ctx.state.live_host_call_counter())),
@@ -3471,19 +4905,24 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
     ) -> Result<CallHandle<Pair, P>, WorkerExecutorError> {
         debug_assert!(!self.is_live(), "start_replay() called on a live handle");
-        // Defensive guard, mirroring `read_persisted_durable_function_invocation`.
-        if self.retry.durable_execution_state().persistence_level
-            == PersistenceLevel::PersistNothing
-        {
-            return Err(WorkerExecutorError::runtime(
-                "Trying to replay a durable invocation in a PersistNothing block",
-            ));
-        }
-        let replay = ctx
-            .state
-            .replay_state
-            .claim_concurrent_start(&Pair::HOST_FUNCTION_NAME, self.retry.function_type())
-            .await?;
+        let replay = match self.execution_scope.parent_start_index {
+            Some(parent_start_index) => {
+                ctx.state
+                    .replay_state
+                    .claim_owned_concurrent_start(
+                        &Pair::HOST_FUNCTION_NAME,
+                        self.retry.function_type(),
+                        parent_start_index,
+                    )
+                    .await?
+            }
+            None => {
+                ctx.state
+                    .replay_state
+                    .claim_concurrent_start(&Pair::HOST_FUNCTION_NAME, self.retry.function_type())
+                    .await?
+            }
+        };
         let start_idx = replay.start_idx();
         // Replay handles never participate in the live in-flight member guard, but keep their
         // initiation-time region for trap/retry classification.
@@ -3503,6 +4942,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             parked_undelivered_replay: false,
             execution_scope,
             retry: self.retry,
+            requires_agent_authority: self.requires_agent_authority,
+            agent_auth_ctx: self.agent_auth_ctx,
             drop_sink: self.drop_sink,
             cleanup_sink: self.cleanup_sink,
             live_call_permit: None,

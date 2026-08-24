@@ -1,4 +1,4 @@
-use crate::services::active_workers::ActiveWorkers;
+use crate::services::active_agents::ActiveAgents;
 use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
@@ -123,7 +123,7 @@ pub trait RunningWorkerEnumerationService: Send + Sync {
 
 #[derive(Clone)]
 pub struct RunningWorkerEnumerationServiceDefault<Ctx: WorkerCtx> {
-    active_workers: Arc<ActiveWorkers<Ctx>>,
+    active_agents: Arc<ActiveAgents<Ctx>>,
 }
 
 #[async_trait]
@@ -143,10 +143,10 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
                 .unwrap_or("N/A".to_string())
         );
 
-        let active_workers = self.active_workers.snapshot().await;
+        let active_agents = self.active_agents.snapshot().await;
 
         let mut workers: Vec<AgentMetadata> = vec![];
-        for (agent_id, worker) in active_workers {
+        for (agent_id, worker) in active_agents {
             let metadata = worker.get_latest_worker_metadata().await;
             if agent_id.component_id == *component_id
                 && (metadata.last_known_status.status == AgentStatus::Running)
@@ -161,8 +161,8 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
 }
 
 impl<Ctx: WorkerCtx> RunningWorkerEnumerationServiceDefault<Ctx> {
-    pub fn new(active_workers: Arc<ActiveWorkers<Ctx>>) -> Self {
-        Self { active_workers }
+    pub fn new(active_agents: Arc<ActiveAgents<Ctx>>) -> Self {
+        Self { active_agents }
     }
 }
 

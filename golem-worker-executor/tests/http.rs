@@ -16,7 +16,7 @@ use crate::Tracing;
 use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
@@ -1815,6 +1815,12 @@ async fn outgoing_http_post_cancel_records_cancelled_and_replays(
             (2, 0, 0),
             "the replayed and the fresh cancelled non-idempotent sends must both record \
              Start + Cancelled pairs: {sends:?}"
+        );
+        assert!(
+            oplog
+                .iter()
+                .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+            "replaying a cancelled POST must not require a worker-level retry: {oplog:?}"
         );
     }
 

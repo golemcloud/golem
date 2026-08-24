@@ -21,8 +21,7 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpRequestBodyFrame, SerializableTlsAlertReceivedPayload,
 };
 use golem_common::model::oplog::{
-    HostRequest, HostStreamKind, OplogEntry, OplogIndex, OplogPayload, PayloadId, PersistenceLevel,
-    RawOplogPayload,
+    HostRequest, HostStreamKind, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
 };
 use http::{HeaderMap, HeaderValue};
 use http_body::Frame;
@@ -209,8 +208,6 @@ impl Oplog for FrameTestOplog {
     ) -> Result<Vec<u8>, String> {
         unimplemented!()
     }
-
-    async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
 }
 
 /// A guest body producing the given frames, then ending (or failing when

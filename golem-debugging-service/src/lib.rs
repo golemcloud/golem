@@ -35,7 +35,7 @@ use golem_service_base::storage::blob::BlobStorage;
 pub use golem_worker_executor::RunDetails;
 use golem_worker_executor::durable_host::DurableWorkerCtx;
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
-use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::active_agents::ActiveAgents;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
@@ -129,7 +129,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
-        active_workers: Arc<ActiveWorkers<DebugContext>>,
+        active_agents: Arc<ActiveAgents<DebugContext>>,
         engine: Arc<Engine>,
         linker: Arc<Linker<DebugContext>>,
         runtime: Handle,
@@ -165,7 +165,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
     ) -> anyhow::Result<All<DebugContext>> {
         create_debugging_service_services(
             direct_invocation_auth_service,
-            active_workers,
+            active_agents,
             engine,
             linker,
             runtime,
@@ -210,7 +210,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
 #[allow(clippy::too_many_arguments)]
 pub async fn create_debugging_service_services(
     direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
-    active_workers: Arc<ActiveWorkers<DebugContext>>,
+    active_agents: Arc<ActiveAgents<DebugContext>>,
     engine: Arc<Engine>,
     linker: Arc<Linker<DebugContext>>,
     runtime: Handle,
@@ -255,7 +255,7 @@ pub async fn create_debugging_service_services(
             worker_proxy.clone(),
             shard_service.clone(),
         )),
-        active_workers.clone(),
+        active_agents.clone(),
         engine.clone(),
         linker.clone(),
         runtime.clone(),
@@ -298,7 +298,7 @@ pub async fn create_debugging_service_services(
             shard_service.clone(),
         )),
         direct_invocation_auth_service,
-        active_workers.clone(),
+        active_agents.clone(),
         engine.clone(),
         linker.clone(),
         runtime.clone(),
@@ -334,7 +334,7 @@ pub async fn create_debugging_service_services(
     ));
 
     Ok(All::new(
-        active_workers,
+        active_agents,
         agent_types_service,
         agent_webhooks_service,
         card_service,
@@ -383,7 +383,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized + Sen
     debug!("Initializing debug worker executor");
 
     let memory_snapshot =
-        golem_worker_executor::services::active_workers::memory_probe::default_probe(
+        golem_worker_executor::services::active_agents::memory_probe::default_probe(
             golem_config.memory.system_memory_override,
         )
         .snapshot();
@@ -484,6 +484,30 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
         HasSelf<DurableWorkerCtx<DebugContext>>,
     >(&mut linker, get_durable_ctx)?;
     golem_worker_executor::preview2::golem::tool::host::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::permissions::types::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::permissions::inspect::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::permissions::derive::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::permissions::revoke::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::permissions::wallet::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::permissions::kernel_introspection::add_to_linker::<
         _,
         HasSelf<DurableWorkerCtx<DebugContext>>,
     >(&mut linker, get_durable_ctx)?;

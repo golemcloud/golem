@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::durable_host::HostFailureKind;
+use crate::durable_host::authorization::targets::{tcp_target, udp_target};
 use golem_common::model::oplog::host_functions::{
     P3SocketsTypesUdpSocketReceive, P3SocketsTypesUdpSocketSend,
 };
@@ -32,6 +33,31 @@ use tokio_util::sync::PollSender;
 use wasmtime::component::StreamReader;
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::p3::bindings::sockets::ip_name_lookup;
+
+#[test]
+fn p3_socket_targets_normalize_ipv4_and_reject_ipv6() {
+    let ipv4 = types::IpSocketAddress::Ipv4(types::Ipv4SocketAddress {
+        port: 8080,
+        address: (127, 0, 0, 1),
+    });
+    assert_eq!(
+        tcp::socket_target(&ipv4),
+        Some(tcp_target("127.0.0.1", 8080).unwrap())
+    );
+    assert_eq!(
+        udp::socket_target(&ipv4),
+        Some(udp_target("127.0.0.1", 8080).unwrap())
+    );
+
+    let ipv6 = types::IpSocketAddress::Ipv6(types::Ipv6SocketAddress {
+        port: 8080,
+        flow_info: 0,
+        address: (0, 0, 0, 0, 0, 0, 0, 1),
+        scope_id: 0,
+    });
+    assert!(tcp::socket_target(&ipv6).is_none());
+    assert!(udp::socket_target(&ipv6).is_none());
+}
 
 #[test]
 fn p3_ip_name_lookup_address_payload_mapping_roundtrips() {

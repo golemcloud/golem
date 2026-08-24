@@ -16,13 +16,13 @@ use crate::durable_host::concurrent::{
     ConcurrentReplayResolver, ReplayCallHandle, Resolution, ResolutionOutcome,
 };
 use crate::services::oplog::{Oplog, OplogOps};
-use golem_common::model::card::{CardId, StoredCard};
+use golem_common::model::card::{CardHolder, CardId, InvocationWalletPin, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AtomicOplogIndex, DurableFunctionType, HostRequest, HostResponse, HostResponseGolemApiFork,
-    LogLevel, OplogEntry, OplogIndex, OplogPayload, PersistenceLevel,
+    LogLevel, OplogEntry, OplogIndex, OplogPayload, OplogScopeProjection,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -43,21 +43,68 @@ use uuid::Uuid;
 
 const CHUNK_SIZE: u64 = 1024;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ReplayEvent {
     ReplayFinished,
-    UpdateReplayed { new_revision: ComponentRevision },
-    ForkReplayed { new_phantom_id: Uuid },
-    CardInstalled { card: StoredCard },
-    CardRevoked { card_id: CardId },
-    CardExpired { card_id: CardId },
+    UpdateReplayed {
+        new_revision: ComponentRevision,
+    },
+    ForkReplayed {
+        new_phantom_id: Uuid,
+    },
+    InvocationWalletPinned {
+        wallet_pin: InvocationWalletPin,
+    },
+    CardInstalled {
+        card: StoredCard,
+        wallet_generation: Option<u64>,
+    },
+    CardDerived {
+        card: StoredCard,
+        wallet_generation: Option<u64>,
+    },
+    CardTransferStarted {
+        transfer_id: Uuid,
+        card_id: CardId,
+        source_holder: Option<CardHolder>,
+        target_holder: CardHolder,
+        source_wallet_generation: Option<u64>,
+    },
+    CardTransferred {
+        transfer_id: Uuid,
+        source_card_id: Option<CardId>,
+        installed_card_id: CardId,
+        target_holder: CardHolder,
+        card: StoredCard,
+        target_wallet_generation: Option<u64>,
+    },
+    CardTransferConfirmed {
+        transfer_id: Uuid,
+        source_card_id: CardId,
+        installed_card_id: CardId,
+        target_holder: CardHolder,
+    },
+    CardRevokedCascade {
+        card_ids: Vec<CardId>,
+        local_wallet_generation: Option<u64>,
+    },
+    CardRevoked {
+        card_id: CardId,
+        wallet_generation: Option<u64>,
+    },
+    CardExpired {
+        card_id: CardId,
+        wallet_generation: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub struct AgentInvocationStartedEntry {
+    pub oplog_index: OplogIndex,
     pub idempotency_key: IdempotencyKey,
     pub invocation_payload: AgentInvocationPayload,
     pub invocation_context: InvocationContextStack,
+    pub wallet_pin: Option<InvocationWalletPin>,
 }
 
 /// The outcome of [`ReplayState::claim_any_concurrent_start`]: the replay handle for the claimed
@@ -260,6 +307,7 @@ struct PublishedPosition {
 struct CursorState {
     skipped_regions: DeletedRegions,
     next_skipped_region: Option<OplogRegion>,
+    initial_snapshot_skip_end: Option<OplogIndex>,
     /// Set after consuming a `CompletionDelivered` marker. Its following hints cannot be skipped
     /// until the delivery barrier is acknowledged, because doing so would advance replay beyond
     /// the recorded guest callback boundary.
@@ -283,6 +331,15 @@ struct CursorState {
     /// such an entry it is auto-consumed like an awaited terminal instead of being handed to a
     /// positional reader; its resolver awaiter was registered at claim time.
     claimed_starts: HashSet<OplogIndex>,
+    /// Invocation IDs of custom durable roots already claimed during this replay. Custom
+    /// invocation IDs are single-use even if a malformed oplog contains more than one matching
+    /// `Start`.
+    claimed_custom_invocation_ids: HashSet<uuid::Uuid>,
+    /// Completed custom durable invocations replay as one logical subtree: once a root `Start`
+    /// is claimed, descendant `Start`s are replay-inert implementation details of that recorded
+    /// operation and are drained with their terminals while resolving the root. The map stores
+    /// every known member index for each root so nested descendants can be recognized by parent.
+    custom_subtrees: HashMap<OplogIndex, HashSet<OplogIndex>>,
 }
 
 #[allow(dead_code)]

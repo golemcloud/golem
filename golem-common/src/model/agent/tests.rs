@@ -58,7 +58,7 @@ fn agent_id_structural_normalization() {
 fn invalid_phantom_id() {
     failure_test_with_string(
         "agent-1()[not-a-uuid]",
-        "Invalid UUID in phantom ID: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `n` at 1",
+        "Invalid UUID in phantom ID: invalid character: found `n` at 0",
     )
 }
 

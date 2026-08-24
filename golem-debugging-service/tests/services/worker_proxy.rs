@@ -13,7 +13,7 @@ use golem_common::model::agent::{AgentInvocationMode, Principal};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
+use golem_common::model::worker::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, IdempotencyKey, InvocationStatus, OwnedAgentId, PromiseId,
 };
@@ -72,6 +72,7 @@ impl WorkerProxy for TestWorkerProxy {
     async fn start(
         &self,
         _owned_agent_id: &OwnedAgentId,
+        _method_name: &str,
         _caller_agent_id: &AgentId,
         _caller_env: HashMap<String, String>,
         _caller_stack: InvocationContextStack,
@@ -102,10 +103,26 @@ impl WorkerProxy for TestWorkerProxy {
         _principal: Principal,
         _environment_id: EnvironmentId,
         _auth_ctx: &AuthCtx,
+        _scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::unknown(
                 "Not implemented in tests as debug service is not expected to call invoke_agent through proxy",
+            ),
+        ))
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        _target_agent_id: &AgentId,
+        _environment_id: EnvironmentId,
+        _transfer_id: uuid::Uuid,
+        _source_card_id: golem_common::model::card::CardId,
+        _card: &golem_common::model::card::StoredCard,
+    ) -> Result<(), WorkerProxyError> {
+        Err(WorkerProxyError::InternalError(
+            WorkerExecutorError::unknown(
+                "Not implemented in tests as debug service does not deliver permission cards",
             ),
         ))
     }
@@ -162,6 +179,7 @@ impl WorkerProxy for TestWorkerProxy {
                 lower: Vec::new(),
                 upper: Vec::new(),
             },
+            delegation_surface: None,
         });
 
         let result = loop {
@@ -221,6 +239,7 @@ impl WorkerProxy for TestWorkerProxy {
                 lower: Vec::new(),
                 upper: Vec::new(),
             },
+            delegation_surface: None,
         });
 
         let result = self
@@ -255,6 +274,7 @@ impl WorkerProxy for TestWorkerProxy {
         &self,
         agent_id: &AgentId,
         target: RevertWorkerTarget,
+        resolved_revert: Option<ResolvedRevert>,
         _auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         let component = self
@@ -273,6 +293,7 @@ impl WorkerProxy for TestWorkerProxy {
                 lower: Vec::new(),
                 upper: Vec::new(),
             },
+            delegation_surface: None,
         });
 
         let result = self
@@ -284,6 +305,12 @@ impl WorkerProxy for TestWorkerProxy {
                 target: Some(target.into()),
                 auth_ctx: Some(auth_ctx.into()),
                 principal: None,
+                resolved_revert: resolved_revert.map(|resolved| {
+                    golem_api_grpc::proto::golem::common::ResolvedRevert {
+                        last_oplog_index: resolved.last_oplog_index.as_u64(),
+                        observed_oplog_index: resolved.observed_oplog_index.as_u64(),
+                    }
+                }),
             })
             .await?
             .into_inner()

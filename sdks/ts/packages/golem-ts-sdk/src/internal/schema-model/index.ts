@@ -19,6 +19,7 @@
 export * from './errors';
 export * from './secretHandle';
 export * from './quotaTokenHandle';
+export * from './permissionCardHandle';
 export * from './model';
 export * from './builder';
 export * from './wit';

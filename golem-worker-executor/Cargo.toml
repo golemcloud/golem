@@ -87,6 +87,7 @@ rustls = { workspace = true, features = [ "ring" ] }
 scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sqlparser = { workspace = true }
 sqlx = { workspace = true }
 sqlx-core = { workspace = true }
 sysinfo = { workspace = true }
@@ -113,6 +114,10 @@ windows-sys = { workspace = true }
 
 [[bench]]
 name = "invocation_lowering"
+harness = false
+
+[[bench]]
+name = "authorization"
 harness = false
 
 [dev-dependencies]

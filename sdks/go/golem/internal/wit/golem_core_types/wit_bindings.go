@@ -6,7 +6,7 @@
 //     golem:api@1.5.0
 //     golem:agent@2.0.0
 //     golem:rdbms@1.5.0
-//     golem:durability@1.5.0
+//     golem:durability@1.6.0
 //     golem:quota@1.5.0
 //     golem:secrets@0.1.0
 //     wasi:filesystem@0.3.0
@@ -20,6 +20,7 @@
 //     golem:websocket@1.5.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
+//     golem:permissions@0.1.0
 //     golem:tool@0.1.0
 //     wasi:io@0.2.6
 //     wasi:clocks@0.2.6
@@ -215,6 +216,58 @@ func SecretFromOwnHandle(handleValue int32) *Secret {
 func SecretFromBorrowHandle(handleValue int32) *Secret {
 	handle := witRuntime.MakeHandle(handleValue)
 	return &Secret{handle}
+}
+
+//go:wasmimport golem:core/types@2.0.0 [resource-drop]permission-card
+func resourceDropPermissionCard(handle int32)
+
+// An unforgeable handle to a permission card held by the runtime. The
+// handle is opaque to guests: components can hold, pass, derive, install,
+// and revoke cards only through the `golem:permissions` interfaces. When
+// carried in a `schema-value-tree` (see
+// `schema-value-node::permission-card-handle`) the handle is transferred
+// by ownership; the host converts it to/from its internal trusted
+// card-store representation at the boundary. The wire form is the card-id
+// (UUID) alone — no grants, parents, or metadata cross the wire as
+// authority.
+type PermissionCard struct {
+	handle *witRuntime.Handle
+}
+
+func (self *PermissionCard) TakeHandle() int32 {
+	return self.handle.Take()
+}
+
+func (self *PermissionCard) SetHandle(handle int32) {
+	self.handle.Set(handle)
+}
+
+func (self *PermissionCard) Handle() int32 {
+	return self.handle.Use()
+}
+
+func (self *PermissionCard) Drop() {
+	handle := self.handle.TakeOrNil()
+	if handle != 0 {
+		resourceDropPermissionCard(handle)
+	}
+}
+
+func PermissionCardFromOwnHandle(handleValue int32) *PermissionCard {
+	handle := witRuntime.MakeHandle(handleValue)
+	value := &PermissionCard{handle}
+	runtime.AddCleanup(value, func(_ int) {
+		handleValue := handle.TakeOrNil()
+		if handleValue != 0 {
+			resourceDropPermissionCard(handleValue)
+		}
+	}, 0)
+	return value
+}
+
+func PermissionCardFromBorrowHandle(handleValue int32) *PermissionCard {
+	handle := witRuntime.MakeHandle(handleValue)
+	return &PermissionCard{handle}
 }
 
 // A named type definition inside a `schema-graph`.
@@ -604,6 +657,13 @@ type QuotaTokenSpec struct {
 	ResourceName witTypes.Option[string]
 }
 
+type PermissionCardSpec struct {
+	// `true` = polymorphic (carries slot variables in owner / resource-id),
+	// `false` = monomorphic. Structural metadata only; authority lives in
+	// the card store, not in the schema spec.
+	Polymorphic bool
+}
+
 const (
 	// --- Reference to a named definition in the same `schema-graph` ---
 	SchemaTypeBodyRefType uint8 = 0
@@ -643,11 +703,12 @@ const (
 	// --- Discriminated union (closed, inferred-tag) ---
 	SchemaTypeBodyUnionType uint8 = 31
 	// --- Capability nodes ---
-	SchemaTypeBodySecretType     uint8 = 32
-	SchemaTypeBodyQuotaTokenType uint8 = 33
+	SchemaTypeBodySecretType         uint8 = 32
+	SchemaTypeBodyQuotaTokenType     uint8 = 33
+	SchemaTypeBodyPermissionCardType uint8 = 34
 	// --- WASI P3 stubs (parseable only; no semantics yet) ---
-	SchemaTypeBodyFutureType uint8 = 34
-	SchemaTypeBodyStreamType uint8 = 35
+	SchemaTypeBodyFutureType uint8 = 35
+	SchemaTypeBodyStreamType uint8 = 36
 )
 
 // The structural body of a `schema-type-node`.
@@ -852,6 +913,12 @@ func (self SchemaTypeBody) QuotaTokenType() QuotaTokenSpec {
 	}
 	return self.value.(QuotaTokenSpec)
 }
+func (self SchemaTypeBody) PermissionCardType() PermissionCardSpec {
+	if self.tag != SchemaTypeBodyPermissionCardType {
+		panic("tag mismatch")
+	}
+	return self.value.(PermissionCardSpec)
+}
 func (self SchemaTypeBody) FutureType() witTypes.Option[int32] {
 	if self.tag != SchemaTypeBodyFutureType {
 		panic("tag mismatch")
@@ -966,6 +1033,9 @@ func MakeSchemaTypeBodySecretType(value SecretSpec) SchemaTypeBody {
 }
 func MakeSchemaTypeBodyQuotaTokenType(value QuotaTokenSpec) SchemaTypeBody {
 	return SchemaTypeBody{SchemaTypeBodyQuotaTokenType, value}
+}
+func MakeSchemaTypeBodyPermissionCardType(value PermissionCardSpec) SchemaTypeBody {
+	return SchemaTypeBody{SchemaTypeBodyPermissionCardType, value}
 }
 func MakeSchemaTypeBodyFutureType(value witTypes.Option[int32]) SchemaTypeBody {
 	return SchemaTypeBody{SchemaTypeBodyFutureType, value}
@@ -1117,8 +1187,9 @@ const (
 	// Discriminated union: tag is matched against schema branches.
 	SchemaValueNodeUnionValue uint8 = 30
 	// Capability nodes
-	SchemaValueNodeSecretValue      uint8 = 31
-	SchemaValueNodeQuotaTokenHandle uint8 = 32
+	SchemaValueNodeSecretValue          uint8 = 31
+	SchemaValueNodeQuotaTokenHandle     uint8 = 32
+	SchemaValueNodePermissionCardHandle uint8 = 33
 )
 
 type SchemaValueNode struct {
@@ -1328,6 +1399,12 @@ func (self SchemaValueNode) QuotaTokenHandle() *QuotaToken {
 	}
 	return self.value.(*QuotaToken)
 }
+func (self SchemaValueNode) PermissionCardHandle() *PermissionCard {
+	if self.tag != SchemaValueNodePermissionCardHandle {
+		panic("tag mismatch")
+	}
+	return self.value.(*PermissionCard)
+}
 
 func MakeSchemaValueNodeBoolValue(value bool) SchemaValueNode {
 	return SchemaValueNode{SchemaValueNodeBoolValue, value}
@@ -1427,6 +1504,9 @@ func MakeSchemaValueNodeSecretValue(value *Secret) SchemaValueNode {
 }
 func MakeSchemaValueNodeQuotaTokenHandle(value *QuotaToken) SchemaValueNode {
 	return SchemaValueNode{SchemaValueNodeQuotaTokenHandle, value}
+}
+func MakeSchemaValueNodePermissionCardHandle(value *PermissionCard) SchemaValueNode {
+	return SchemaValueNode{SchemaValueNodePermissionCardHandle, value}
 }
 
 // ============================================================

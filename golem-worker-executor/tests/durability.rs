@@ -15,7 +15,7 @@
 use crate::Tracing;
 use axum::Router;
 use axum::extract::Query;
-use axum::routing::get;
+use axum::routing::{any, get};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::oplog::{
     MultipartPartData, OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex, PublicSnapshotData,
@@ -25,14 +25,15 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TEST_CARD_ID, TestContext, WorkerExecutorTestDependencies,
-    start, start_with_snapshot_policy,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    start_with_snapshot_policy,
 };
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -64,7 +65,7 @@ fn total_memory_growth(entries: &[PublicOplogEntryWithIndex]) -> u64 {
         .sum()
 }
 
-async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiver<LogEvent>) {
+pub(crate) async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiver<LogEvent>) {
     tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(event) = events.recv().await {
             match AgentEvent::try_from(event) {
@@ -98,6 +99,8 @@ async fn custom_durability_1(
 
     let response = Arc::new(AtomicU32::new(0));
     let response_clone = response.clone();
+    let request_history = Arc::new(Mutex::new(Vec::new()));
+    let request_history_in_server = request_history.clone();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
@@ -113,6 +116,10 @@ async fn custom_durability_1(
             let route = Router::new().route(
                 "/callback",
                 get(move |query: Query<QueryParams>| async move {
+                    request_history_in_server
+                        .lock()
+                        .unwrap()
+                        .push(query.payload.clone());
                     let result = format!(
                         "{}-{}",
                         response_clone.fetch_add(1, Ordering::AcqRel),
@@ -144,6 +151,58 @@ async fn custom_durability_1(
         .invoke_and_await_agent(&component, &agent_id, "callback", data_value!("a"))
         .await?;
 
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let logical_starts: Vec<_> = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name == "golem-it::test-callback")
+        })
+        .collect();
+    assert_eq!(
+        logical_starts.len(),
+        1,
+        "one custom logical call is recorded"
+    );
+    let logical_start = logical_starts[0].oplog_index;
+    assert!(oplog.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == logical_start)
+    ));
+    let observational_starts: Vec<_> = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.observational_owner == Some(logical_start)
+            )
+        })
+        .collect();
+    assert!(
+        !observational_starts.is_empty(),
+        "host calls owned by the custom invocation are recorded as ordinary observational calls"
+    );
+    assert!(
+        oplog.iter().any(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::api::get_self_metadata"
+                        && params.observational_owner == Some(logical_start)
+            )
+        }),
+        "every host effect initiated by the live custom invocation is observational; starts: {:#?}",
+        oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params) => Some((
+                    entry.oplog_index,
+                    &params.function_name,
+                    params.observational_owner,
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    );
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
@@ -160,6 +219,293 @@ async fn custom_durability_1(
 
     assert_eq!(result1.into_typed::<String>()?, "0-a");
     assert_eq!(result2.into_typed::<String>()?, "1-b");
+    assert_eq!(&*request_history.lock().unwrap(), &["a", "b"]);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn custom_durability_counter_ids_handle_nested_and_concurrent_no_input_calls(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let response = Arc::new(AtomicU32::new(0));
+    let history = Arc::new(Mutex::new(Vec::<String>::new()));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+
+    #[derive(Deserialize)]
+    struct Params {
+        payload: String,
+    }
+
+    let server_response = response.clone();
+    let server_history = history.clone();
+    let server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/callback",
+                any(move |Query(params): Query<Params>| {
+                    let response = server_response.clone();
+                    let history = server_history.clone();
+                    async move {
+                        history.lock().unwrap().push(params.payload.clone());
+                        if params.payload == "slow" {
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                        }
+                        format!(
+                            "{}-{}",
+                            response.fetch_add(1, Ordering::AcqRel),
+                            params.payload
+                        )
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("CustomDurability", "counter-invocation-ids");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let nested = executor
+        .invoke_and_await_agent(&component, &agent_id, "nested_no_input", data_value!())
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(nested, vec!["0-nested", "1-root-sibling"]);
+
+    let concurrent = executor
+        .invoke_and_await_agent(&component, &agent_id, "concurrent_no_input", data_value!())
+        .await?
+        .into_typed::<Vec<String>>()?;
+    assert_eq!(
+        concurrent,
+        vec!["3-slow", "2-fast"],
+        "the slow call starts first but completes after its identical sibling"
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let custom_starts: Vec<_> = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params)
+                if params.function_name == "golem-it::test-generator"
+                    || params.function_name == "golem-it::test-generator-parent" =>
+            {
+                Some((
+                    entry.oplog_index,
+                    params.parent_start_index,
+                    params.invocation_id,
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(custom_starts.len(), 5);
+    assert!(custom_starts.iter().all(|(_, _, id)| id.is_some()));
+    let unique_ids: std::collections::HashSet<_> = custom_starts
+        .iter()
+        .map(|(_, _, id)| id.expect("custom Start invocation ID"))
+        .collect();
+    assert_eq!(unique_ids.len(), custom_starts.len());
+    let outer_start = custom_starts
+        .iter()
+        .find(|(_, parent, _)| parent.is_none())
+        .expect("outer custom Start")
+        .0;
+    assert!(
+        custom_starts
+            .iter()
+            .any(|(_, parent, _)| *parent == Some(outer_start)),
+        "the nested generator has the outer custom invocation as its call-tree parent"
+    );
+
+    assert_eq!(
+        &*history.lock().unwrap(),
+        &["nested", "root-sibling", "slow", "fast"]
+    );
+    executor.simulated_crash(&worker_id).await?;
+    let after_recovery = executor
+        .invoke_and_await_agent(&component, &agent_id, "callback", data_value!("after"))
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(after_recovery, "4-after");
+    assert_eq!(
+        &*history.lock().unwrap(),
+        &["nested", "root-sibling", "slow", "fast", "after"],
+        "replay must not re-execute nested or concurrent generator effects"
+    );
+
+    server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn custom_durability_crash_mid_live_invocation_reexecutes_whole_body(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let history = Arc::new(Mutex::new(Vec::<String>::new()));
+    let hold_first_callback = Arc::new(AtomicBool::new(true));
+    let callback_arrived = Arc::new(tokio::sync::Notify::new());
+    let release_callback = Arc::new(tokio::sync::Notify::new());
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+
+    #[derive(Deserialize)]
+    struct Params {
+        payload: String,
+    }
+
+    let route_history = history.clone();
+    let route_arrived = callback_arrived.clone();
+    let route_release = release_callback.clone();
+    let route_hold = hold_first_callback.clone();
+    let server = tokio::spawn(
+        async move {
+            let probe_history = route_history.clone();
+            let route = Router::new()
+                .route(
+                    "/probe",
+                    get(move |Query(params): Query<Params>| {
+                        probe_history
+                            .lock()
+                            .unwrap()
+                            .push(format!("probe:{}", params.payload));
+                        async { "probe" }
+                    }),
+                )
+                .route(
+                    "/callback",
+                    get(move |Query(params): Query<Params>| {
+                        let history = route_history.clone();
+                        let arrived = route_arrived.clone();
+                        let release = route_release.clone();
+                        let hold = route_hold.clone();
+                        async move {
+                            history
+                                .lock()
+                                .unwrap()
+                                .push(format!("callback:{}", params.payload));
+                            if hold.swap(false, Ordering::SeqCst) {
+                                arrived.notify_one();
+                                release.notified().await;
+                            }
+                            format!("done-{}", params.payload)
+                        }
+                    }),
+                );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("CustomDurability", "custom-durability-mid-block");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let invocation = tokio::spawn(
+        {
+            let executor = executor.clone();
+            let component = component.clone();
+            let agent_id = agent_id.clone();
+            async move {
+                executor
+                    .invoke_and_await_agent(
+                        &component,
+                        &agent_id,
+                        "callback_after_probe",
+                        data_value!("x"),
+                    )
+                    .await
+            }
+        }
+        .in_current_span(),
+    );
+    tokio::time::timeout(Duration::from_secs(20), callback_arrived.notified()).await?;
+    executor.simulated_crash(&worker_id).await?;
+    release_callback.notify_waiters();
+    let result = invocation.await??;
+    assert_eq!(result.into_typed::<String>()?, "done-x");
+    assert_eq!(
+        &*history.lock().unwrap(),
+        &["probe:x", "callback:x", "probe:x", "callback:x"]
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let logical_starts: Vec<_> = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name == "golem-it::test-callback")
+        })
+        .collect();
+    assert_eq!(
+        logical_starts.len(),
+        1,
+        "whole-block recovery keeps one logical custom invocation"
+    );
+    let logical_start = logical_starts[0].oplog_index;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == logical_start)
+            })
+            .count(),
+        1,
+        "the recovered custom invocation has one logical terminal"
+    );
+    let observational_starts: Vec<_> = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.observational_owner == Some(logical_start)
+            )
+        })
+        .collect();
+    assert!(
+        observational_starts.len() >= 2,
+        "whole-block recovery keeps physical host calls observable as ordinary calls"
+    );
+
+    let before_replay = history.lock().unwrap().len();
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        history.lock().unwrap().len(),
+        before_replay,
+        "completed replay touches neither endpoint"
+    );
+    server.abort();
     Ok(())
 }
 
@@ -511,80 +857,6 @@ async fn snapshot_based_recovery(
         increment_after.into_typed::<u32>()?,
         106,
         "Counter should continue from 106 after snapshot recovery"
-    );
-
-    drop(executor);
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn snapshot_based_recovery_preserves_installed_cards(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
-    )
-    .await?;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    let agent_id = agent_id!("SnapshotCardRecoveryAgent");
-    let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-
-    let (high_bits, low_bits) = TEST_CARD_ID.0.as_u64_pair();
-    let installed = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "install_card_by_id",
-            data_value!(high_bits, low_bits),
-        )
-        .await?
-        .into_typed::<bool>()?;
-    assert!(installed, "test card should install");
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let snapshot_count = oplog
-        .iter()
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
-        .count();
-    assert!(
-        snapshot_count >= 1,
-        "Expected at least one snapshot before restart, got {snapshot_count}"
-    );
-
-    drop(executor);
-    let executor = start_with_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 1 },
-    )
-    .await?;
-
-    let still_usable = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "derive_card_by_id",
-            data_value!(high_bits, low_bits),
-        )
-        .await?
-        .into_typed::<bool>()?;
-
-    assert!(
-        still_usable,
-        "installed card should remain in the agent wallet after snapshot recovery"
     );
 
     drop(executor);

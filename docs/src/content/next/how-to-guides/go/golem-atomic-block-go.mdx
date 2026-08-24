@@ -5,10 +5,10 @@
 Golem provides **automatic durable execution** — all agents are durable by
 default. The helpers in this skill are **advanced controls** that most agents
 never need. Reach for them only when you have a specific requirement around
-atomicity, persistence granularity, idempotency, or oplog replication.
+atomicity, idempotency, or oplog replication.
 
-They live in the `golem` package (`golem.Atomically`, `golem.WithPersistenceLevel`,
-`golem.WithIdempotenceMode`, `golem.OplogCommit`, `golem.GenerateIdempotencyKey`)
+They live in the `golem` package (`golem.Atomically`, `golem.WithIdempotenceMode`,
+`golem.OplogCommit`, `golem.GenerateIdempotencyKey`)
 and are thin, **fail-loud** wrappers over host functions: on a host failure they
 trap and surface as an agent-error — there is no in-band error return.
 
@@ -63,38 +63,6 @@ golem.Atomically(func() {
 > across a crash. For compensating multi-step workflows, prefer the saga helpers in
 > [`golem-add-transactions-go`](/next/how-to-guides/go/golem-add-transactions-go), which build on this primitive.
 
-## Persistence Level Control
-
-`golem.WithPersistenceLevel(level)` sets the current persistence level and returns
-a `restore` function. Use it with `defer` to scope the level to the rest of the
-current function; wrap a sub-block in a function literal with its own `defer` to
-scope it tighter:
-
-```go
-func doWork(ctx *golem.Context[state], amount int64) int64 {
-	var derived int64
-	func() {
-		defer golem.WithPersistenceLevel(golem.PersistNothing)()
-		derived = amount * 2 // recomputed on replay, not persisted
-	}()
-	return derived
-}
-```
-
-The levels are:
-
-| Level | Meaning |
-|---|---|
-| `golem.PersistNothing` | Side effects are not persisted; the zone is skipped on replay. Use only for work that is safe to re-run or that you re-derive. |
-| `golem.PersistRemoteSideEffects` | Persists remote side effects (e.g. RPC results). |
-| `golem.PersistSmart` | The default heuristic. |
-
-`PersistNothing` does **not** disable oplog recording — it means the zone's side
-effects are not re-executed on replay. This is primarily for authoring
-Golem-specific libraries that implement their own custom durability on top of raw
-side effects; naively running real side effects inside such a zone will break
-recovery. It is not a knob for ordinary application code.
-
 ## Idempotence Mode
 
 `golem.WithIdempotenceMode(idempotent)` sets the mode and returns a `restore`
@@ -147,19 +115,19 @@ for the current call and restores the previous one on return. See
 ## Not available in the Go SDK
 
 The Rust SDK exposes separate `_async` variants (`atomically_async`,
-`with_persistence_level_async`, `with_idempotence_mode_async`,
-`with_retry_policy_async`). The Go SDK has **no async variants** — Go does not
+`with_idempotence_mode_async`, `with_retry_policy_async`). The Go SDK has **no
+async variants** — Go does not
 split sync/async APIs. `golem.Atomically` takes a plain `func()`, and the
-persistence/idempotence scopes are `defer`-based; blocking operations (RPC, HTTP,
-promises) already suspend the fiber at their await points, so a single API covers
-both cases.
+idempotence scope is `defer`-based; blocking operations (RPC, HTTP, promises)
+already suspend the fiber at their await points, so a single API covers both
+cases.
 
 ## Key Constraints
 
 - `golem.Atomically` takes `func()` and returns nothing — capture results in an
   outer variable; abort by panicking.
-- `WithPersistenceLevel` / `WithIdempotenceMode` return a `restore func()` — call
-  it (usually via `defer`) or the scope never ends.
+- `WithIdempotenceMode` returns a `restore func()` — call it (usually via
+  `defer`) or the scope never ends.
 - These knobs are **worker-global**, not per-goroutine — don't hold a scope open
   across a concurrent await.
 - Failures trap and surface as agent-errors; there is no error return value.

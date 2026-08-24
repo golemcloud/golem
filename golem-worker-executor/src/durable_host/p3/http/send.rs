@@ -18,9 +18,10 @@ use super::serialization::{
     serialize_error_code, serialize_method, serialize_request, serialize_response_headers,
 };
 use super::*;
+use crate::durable_host::authorization::targets::http_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallHandle, Cancellable, DeferredCallReplayOutcome, DropPolicy,
-    LeaveIncompleteOnDrop, finish_span_in_memory,
+    LeaveIncompleteOnDrop, authorize_live_permissions_at_serialized_access, finish_span_in_memory,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
@@ -113,6 +114,37 @@ where
     U: Send + 'static,
     P: DropPolicy,
 {
+    // Replay must claim and restore the recorded outcome without rebuilding a permission target.
+    // On the live path only the request head is inspected here; no body/resource ownership or
+    // transmission state is consumed before admission.
+    let live = store.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .state
+            .is_live()
+    });
+    let authorization_permits = if live {
+        match serialize_request::<Ctx, U>(store, borrow_resource(&req))
+            .ok()
+            .and_then(|request_head| {
+                http_target(&outgoing_http_request_uri(&request_head))
+                    .ok()
+                    .map(|target| target.permission)
+            }) {
+            Some(permission) => authorize_live_permissions_at_serialized_access(
+                store,
+                durable_worker_ctx::<Ctx, U>,
+                &[permission],
+            )
+            .await
+            .ok()
+            .and_then(Result::ok),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let authorization_denied = live && authorization_permits.is_none();
+
     // Detach the request's body-transmission wiring (installed by the durable
     // `request::new`) *before* anything else: the inner `WasiHttp::send` deletes
     // the request from the resource table at the start of the call, and reps are
@@ -136,16 +168,18 @@ where
 
     // Per-invocation HTTP call limit and monthly account-level HTTP call quota,
     // mirroring the P2 `http::outgoing_handler::handle` path. Both checks
-    // no-op during replay and run before any durability machinery so that a
-    // denied call writes no oplog entry.
-    store.with(|mut access| {
-        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        ctx.state
-            .check_and_increment_http_call_count()
-            .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
-        ctx.record_monthly_http_call()
-            .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))
-    })?;
+    // no-op during replay. Permission-denied calls are durably recorded below
+    // without consuming quota.
+    if !authorization_denied {
+        store.with(|mut access| {
+            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+            ctx.state
+                .check_and_increment_http_call_count()
+                .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
+            ctx.record_monthly_http_call()
+                .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))
+        })?;
+    }
 
     // The request head is serialized (and recorded) exactly as the guest built
     // it. The send's `outgoing-http-request` invocation-context span is
@@ -184,17 +218,20 @@ where
     let claim_options = AccessClaimOptions {
         scope_discriminator: Some(format!("req:{scope_discriminator}")),
         request_identity: Some(HostRequest::from(host_request.clone())),
+        parent_start_index: None,
+        observational_owner: None,
     };
     let mut handle = CallHandle::<P3HttpClientSend, P>::start_access_with_options(
         store,
         durable_worker_ctx::<Ctx, U>,
-        function_type,
+        function_type.clone(),
         claim_options,
         async |_| Ok(host_request),
     )
     .await
     .map_err(HttpError::trap)?;
     let send_start_index = handle.start_index();
+    let observational_owner = handle.observational_owner();
 
     let span = store
         .with(|mut access| {
@@ -224,7 +261,14 @@ where
         // `ReplayedRequestLeakGuard`. Both arms below hand request ownership
         // over (inline consume / live re-execution) and disarm it first.
         let (disarm_leak_guard_tx, disarm_leak_guard_rx) = oneshot::channel();
-        spawn_replayed_request_leak_guard::<Ctx, U>(store, req.rep(), disarm_leak_guard_rx);
+        let replay_scope = (handle.begin_index() != handle.start_index())
+            .then_some((function_type.clone(), handle.begin_index()));
+        spawn_replayed_request_leak_guard::<Ctx, U>(
+            store,
+            req.rep(),
+            replay_scope,
+            disarm_leak_guard_rx,
+        );
         match handle
             .replay_access_deferred(store, durable_worker_ctx::<Ctx, U>)
             .await
@@ -300,12 +344,17 @@ where
                                     durable_body: None,
                                 }),
                                 body_is_placeholder: true,
+                                observational_owner,
                             },
                         );
                         // Spawns the demand-gated transmission recorder
                         // at the same point as the live path, so a demanded
                         // recording's `Start` is claimed where it was appended.
-                        start_transmission_recording::<Ctx, U>(store, pending_transmission);
+                        start_transmission_recording::<Ctx, U>(
+                            store,
+                            pending_transmission,
+                            observational_owner,
+                        );
                         if delivery.is_replay_discarded() {
                             // The recorded run persisted this send's `End` but the guest
                             // dropped the send future before it returned. The recorded
@@ -333,7 +382,11 @@ where
                         // Spawns the demand-gated transmission recorder
                         // at the same point as the live path, so a demanded
                         // recording's `Start` is claimed where it was appended.
-                        start_transmission_recording::<Ctx, U>(store, pending_transmission);
+                        start_transmission_recording::<Ctx, U>(
+                            store,
+                            pending_transmission,
+                            observational_owner,
+                        );
                         if delivery.is_replay_discarded() {
                             // The recorded run persisted this send's `End` but the guest
                             // dropped the send future before the error was returned. The
@@ -355,6 +408,38 @@ where
                 handle = live_handle
             }
         }
+    }
+
+    if authorization_denied {
+        consume_replayed_request::<Ctx, U>(store, req, None).await?;
+        let error_code = ErrorCode::HttpRequestDenied;
+        let result =
+            SerializableP3HttpClientSendResult::HttpError(serialize_error_code(&error_code));
+        let (_, delivery) = handle
+            .complete_access_deferred(
+                store,
+                durable_worker_ctx::<Ctx, U>,
+                HostResponseP3HttpClientSendResult { result },
+                None,
+            )
+            .await
+            .map_err(HttpError::trap)?;
+        if delivery.is_live_armed() {
+            if let Err(error) = finish_p3_send_span_in_memory::<Ctx, U>(store, &span) {
+                delivery.suppress();
+                return Err(HttpError::trap(error));
+            }
+        } else {
+            finish_p3_send_span::<Ctx, U>(store, &span)
+                .await
+                .map_err(HttpError::trap)?;
+        }
+        start_transmission_recording::<Ctx, U>(store, pending_transmission, observational_owner);
+        delivery
+            .deliver_at_accessor_terminal(store)
+            .await
+            .map_err(HttpError::trap)?;
+        return Err(error_code.into());
     }
 
     // Inject the Golem-managed headers into the request resource before the
@@ -387,70 +472,89 @@ where
     // `inline_retry_eligible` gates only the retry decisions inside the
     // attempt loop; with it false the first attempt's outcome is final and
     // flows through the common post-loop completion.
-    let inline_retry_eligible =
-        inline_retry_eligible_for_method::<Ctx, U>(store, &serialized_request.method);
+    let inline_retry_eligible = !handle.is_observational()
+        && inline_retry_eligible_for_method::<Ctx, U>(store, &serialized_request.method);
 
-    let converted =
-        match convert_physical_send_request::<Ctx, U>(store, req, handle.start_index()).await {
-            Ok(physical) => physical,
-            Err(PhysicalSendConversionError::Trap(error)) => {
-                return Err(HttpError::trap(wasmtime::Error::from_anyhow(
-                    handle.trap(error),
-                )));
-            }
-            Err(PhysicalSendConversionError::HttpError(error)) => {
-                let _ = error
-                    .final_transmission_tx
-                    .send(Err(error.error_code.clone()));
-                let error_code = error.error_code;
-                let serialized_error = serialize_error_code(&error_code);
-                let result = SerializableP3HttpClientSendResult::HttpError(serialized_error);
-                // The guest-visible error return below is the real delivery boundary: record
-                // the terminal through the deferred API so a future torn between the `End` and
-                // the return records the discard instead of replay redelivering the error.
-                let (_, delivery) = handle
-                    .complete_access_deferred(
-                        store,
-                        durable_worker_ctx::<Ctx, U>,
-                        HostResponseP3HttpClientSendResult { result },
-                        None,
-                    )
+    let recording_enabled = store.with(|mut access| {
+        !durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .state
+            .snapshotting_mode
+    });
+    let converted = match convert_physical_send_request::<Ctx, U>(
+        store,
+        req,
+        handle.start_index(),
+        recording_enabled,
+    )
+    .await
+    {
+        Ok(physical) => physical,
+        Err(PhysicalSendConversionError::Trap(error)) => {
+            return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                handle.trap(error),
+            )));
+        }
+        Err(PhysicalSendConversionError::HttpError(error)) => {
+            let _ = error
+                .final_transmission_tx
+                .send(Err(error.error_code.clone()));
+            let error_code = error.error_code;
+            let serialized_error = serialize_error_code(&error_code);
+            let result = SerializableP3HttpClientSendResult::HttpError(serialized_error);
+            // The guest-visible error return below is the real delivery boundary: record
+            // the terminal through the deferred API so a future torn between the `End` and
+            // the return records the discard instead of replay redelivering the error.
+            let (_, delivery) = handle
+                .complete_access_deferred(
+                    store,
+                    durable_worker_ctx::<Ctx, U>,
+                    HostResponseP3HttpClientSendResult { result },
+                    None,
+                )
+                .await
+                .map_err(HttpError::trap)?;
+            if delivery.is_live_armed() {
+                // Only the synchronous in-memory span finish remains; everything up to
+                // the return leaves no tear window.
+                if let Err(error) = finish_p3_send_span_in_memory::<Ctx, U>(store, &span) {
+                    // The error is observed by the caller (the worker traps): not a
+                    // silent discard, so no marker.
+                    delivery.suppress();
+                    return Err(HttpError::trap(error));
+                }
+                start_transmission_recording::<Ctx, U>(
+                    store,
+                    pending_transmission,
+                    observational_owner,
+                );
+                // The guest-visible error return below still crosses Wasmtime's lowering
+                // and terminal-consumption boundary: hand the token to the terminal
+                // observer instead of consuming it here.
+                delivery
+                    .deliver_at_accessor_terminal(store)
                     .await
                     .map_err(HttpError::trap)?;
-                if delivery.is_live_armed() {
-                    // Only the synchronous in-memory span finish remains; everything up to
-                    // the return leaves no tear window.
-                    if let Err(error) = finish_p3_send_span_in_memory::<Ctx, U>(store, &span) {
-                        // The error is observed by the caller (the worker traps): not a
-                        // silent discard, so no marker.
-                        delivery.suppress();
-                        return Err(HttpError::trap(error));
-                    }
-                    start_transmission_recording::<Ctx, U>(store, pending_transmission);
-                    // The guest-visible error return below still crosses Wasmtime's lowering
-                    // and terminal-consumption boundary: hand the token to the terminal
-                    // observer instead of consuming it here.
-                    delivery
-                        .deliver_at_accessor_terminal(store)
-                        .await
-                        .map_err(HttpError::trap)?;
-                } else {
-                    // Unpersisted live call (snapshotting): the original span handling
-                    // applies.
-                    finish_p3_send_span::<Ctx, U>(store, &span)
-                        .await
-                        .map_err(HttpError::trap)?;
-                    start_transmission_recording::<Ctx, U>(store, pending_transmission);
-                    delivery.delivered();
-                }
-                return Err(error_code.into());
+            } else {
+                // Unpersisted live call (snapshotting): the original span handling
+                // applies.
+                finish_p3_send_span::<Ctx, U>(store, &span)
+                    .await
+                    .map_err(HttpError::trap)?;
+                start_transmission_recording::<Ctx, U>(
+                    store,
+                    pending_transmission,
+                    observational_owner,
+                );
+                delivery.delivered();
             }
-        };
+            return Err(error_code.into());
+        }
+    };
     let PhysicalSend::Replayable(physical) = converted;
     let mut retry_state = InFunctionRetryState::new();
     let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
         store,
-        handle.start_index(),
+        handle.trap_context().retry_from,
         RetryContext::http(&retry_method, &retry_uri),
     )
     .await;
@@ -483,13 +587,10 @@ where
                 // the rejected response, throw, and trap with an impoverished context (no
                 // `status-code`), silently falling back to the default trap policy. Mirrors
                 // `try_status_code_retry`'s atomic-region fallback on the p2 path.
-                if handle.trap_context().in_atomic_region
+                if (handle.trap_context().in_atomic_region || handle.is_observational())
                     && store.with(|mut access| {
                         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                        ctx.state.is_live()
-                            && ctx.state.snapshotting_mode.is_none()
-                            && ctx.state.persistence_level
-                                != golem_common::model::oplog::PersistenceLevel::PersistNothing
+                        ctx.state.is_live() && !ctx.state.snapshotting_mode
                     })
                     && matching_status_retry_policy(
                         store,
@@ -726,13 +827,18 @@ where
                         durable_body: Some(physical.body.clone()),
                     }),
                     body_is_placeholder: false,
+                    observational_owner,
                 },
             );
             // Spawns the demand-gated transmission recorder at a
             // deterministic point (right after the send `End`, mirrored by the
             // replay arm above): if the guest reads the transmission future,
             // the result is recorded here; otherwise no entries are written.
-            start_transmission_recording::<Ctx, U>(store, pending_transmission);
+            start_transmission_recording::<Ctx, U>(
+                store,
+                pending_transmission,
+                observational_owner,
+            );
             // Everything since the `End` was synchronous, so no tear window remains between
             // here and handing the token to Wasmtime's terminal observer, which settles it
             // when the guest actually consumes (or discards) the lowered response.
@@ -768,7 +874,7 @@ where
                 );
                 let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
                     store,
-                    handle.start_index(),
+                    handle.trap_context().retry_from,
                     properties.clone(),
                 )
                 .await;
@@ -819,7 +925,11 @@ where
             // send consumed the request even on failure, so a demanded
             // transmission result — `Ok(())` from the dropped I/O wiring,
             // or a deterministic body-validation error — still resolves.
-            start_transmission_recording::<Ctx, U>(store, pending_transmission);
+            start_transmission_recording::<Ctx, U>(
+                store,
+                pending_transmission,
+                observational_owner,
+            );
             // The guest-visible error return below still crosses Wasmtime's lowering and
             // terminal-consumption boundary: hand the token to the terminal observer instead
             // of consuming it here.
@@ -906,20 +1016,18 @@ pub(super) async fn convert_physical_send_request<Ctx, U>(
     store: &Accessor<U, DurableP3<Ctx>>,
     req: Resource<Request>,
     send_start_index: OplogIndex,
+    recording_enabled: bool,
 ) -> Result<PhysicalSend<Ctx>, PhysicalSendConversionError>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
     let (final_transmission_tx, final_transmission_rx) = oneshot::channel();
-    let (pool, oplog, recording_enabled) = store.with(|mut access| {
+    let (pool, oplog) = store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         (
             ctx.wasi_http.connection_pool.clone(),
             ctx.state.oplog.clone(),
-            ctx.state.snapshotting_mode.is_none()
-                && ctx.state.persistence_level
-                    != golem_common::model::oplog::PersistenceLevel::PersistNothing,
         )
     });
     let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);

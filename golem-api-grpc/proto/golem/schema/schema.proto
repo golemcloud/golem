@@ -98,6 +98,7 @@ message SchemaType {
     // Capability nodes
     SecretSpec secret_type = 70;
     QuotaTokenSpec quota_token_type = 71;
+    PermissionCardSpec permission_card_type = 72;
 
     // WASI P3 stubs (parseable only; no semantics yet)
     WasiStubType future_type = 80;
@@ -272,6 +273,10 @@ message QuotaTokenSpec {
   optional string resource_name = 1;
 }
 
+message PermissionCardSpec {
+  bool polymorphic = 1;
+}
+
 // Future/Stream stub bodies. Absent `element` means the inner type is unknown.
 message WasiStubType {
   SchemaType element = 1;
@@ -330,6 +335,7 @@ message SchemaValue {
     // Capability nodes
     SecretValue secret_value = 70;
     QuotaTokenValue quota_token_value = 71;
+    PermissionCardValue permission_card_value = 72;
   }
 }
 
@@ -422,6 +428,13 @@ message QuotaTokenValue {
   uint64 expected_use = 3;
   int64 last_credit = 4;
   DatetimeValue last_credit_at = 5;
+}
+
+message PermissionCardValue {
+  golem.common.UUID card_id = 1;
+  repeated golem.common.UUID parent_ids = 2;
+  DatetimeValue expires_at = 3;
+  bool polymorphic = 4;
 }
 
 // A typed value: a self-contained SchemaGraph paired with a value tree built

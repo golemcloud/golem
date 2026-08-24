@@ -7,14 +7,6 @@ pub(all) struct EnvironmentId {
 } derive(Show, Eq)
 
 ///|
-/// Configurable persistence level for agents
-pub(all) enum PersistenceLevel {
-  PersistNothing
-  PersistRemoteSideEffects
-  Smart
-} derive(Show, Eq)
-
-///|
 /// Describes how to update an agent to a different component version
 pub(all) enum UpdateMode {
   AUTOMATIC
@@ -245,6 +237,13 @@ pub(all) enum RevertAgentTarget {
 } derive(Show, Eq)
 
 ///|
+/// Error returned by an operation targeting another agent.
+pub(all) suberror AgentOperationError {
+  PermissionDenied
+  BackendError(String)
+} derive(Show, Eq)
+
+///|
 /// Details about the fork result
 pub(all) struct ForkDetails {
   forked_phantom_id : @types.Uuid
@@ -267,38 +266,6 @@ pub(all) struct GetPromiseResult(Int) derive(Show, Eq)
 pub fn GetPromiseResult::drop(self : GetPromiseResult) -> Unit {
   let GetPromiseResult(resource) = self
   wasmImportResourceDropGetPromiseResult(resource)
-}
-
-///|
-/// Plain-data handle to a permission card visible to the guest.
-pub(all) struct Card {
-  card_id : @types.CardId
-} derive(Show, Eq)
-
-///|
-pub(all) suberror CardInstallError {
-  REVOKED
-  NOT_FOUND
-  NOT_PERMITTED
-} derive(Show, Eq)
-
-///|
-pub fn CardInstallError::ordinal(self : CardInstallError) -> Int {
-  match self {
-    REVOKED => 0
-    NOT_FOUND => 1
-    NOT_PERMITTED => 2
-  }
-}
-
-///|
-pub fn CardInstallError::from(self : Int) -> CardInstallError {
-  match self {
-    0 => REVOKED
-    1 => NOT_FOUND
-    2 => NOT_PERMITTED
-    _ => panic()
-  }
 }
 
 ///|
@@ -437,109 +404,137 @@ pub fn GetAgents::get_agents(
 
 ///|
 /// Retrieves the next batch of agent metadata.
-pub fn GetAgents::get_next(self : GetAgents) -> Array[AgentMetadata]? {
+pub fn GetAgents::get_next(
+  self : GetAgents,
+) -> Result[Array[AgentMetadata]?, AgentOperationError] {
   let GetAgents(handle) = self
-  let return_area = mbt_ffi_malloc(12)
+  let return_area = mbt_ffi_malloc(16)
   wasmImportMethodGetAgentsGetNext(handle, return_area)
 
-  let lifted : Array[AgentMetadata]? = match mbt_ffi_load8_u(return_area + 0) {
-    0 => Option::None
-    1 => {
-      let array9 : Array[AgentMetadata] = []
-      for index10 = 0
-          index10 < mbt_ffi_load32(return_area + 8)
-          index10 = index10 + 1 {
-        let iter_base = mbt_ffi_load32(return_area + 4) + index10 * 88
+  let lifted13 = match mbt_ffi_load8_u(return_area + 0) {
+    0 => {
+      let lifted : Array[AgentMetadata]? = match
+        mbt_ffi_load8_u(return_area + 4) {
+        0 => Option::None
+        1 => {
+          let array9 : Array[AgentMetadata] = []
+          for index10 = 0
+              index10 < mbt_ffi_load32(return_area + 12)
+              index10 = index10 + 1 {
+            let iter_base = mbt_ffi_load32(return_area + 8) + index10 * 88
 
-        let result = mbt_ffi_ptr2str(
-          mbt_ffi_load32(iter_base + 16),
-          mbt_ffi_load32(iter_base + 20),
-        )
+            let result = mbt_ffi_ptr2str(
+              mbt_ffi_load32(iter_base + 16),
+              mbt_ffi_load32(iter_base + 20),
+            )
 
-        let array : Array[String] = []
-        for index = 0; index < mbt_ffi_load32(iter_base + 28); index = index + 1 {
-          let iter_base = mbt_ffi_load32(iter_base + 24) + index * 8
+            let array : Array[String] = []
+            for index = 0
+                index < mbt_ffi_load32(iter_base + 28)
+                index = index + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 24) + index * 8
 
-          let result0 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(iter_base + 0),
-            mbt_ffi_load32(iter_base + 4),
-          )
+              let result0 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(iter_base + 0),
+                mbt_ffi_load32(iter_base + 4),
+              )
 
-          array.push(result0)
-        }
-        mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+              array.push(result0)
+            }
+            mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-        let array3 : Array[(String, String)] = []
-        for index4 = 0
-            index4 < mbt_ffi_load32(iter_base + 36)
-            index4 = index4 + 1 {
-          let iter_base = mbt_ffi_load32(iter_base + 32) + index4 * 16
+            let array3 : Array[(String, String)] = []
+            for index4 = 0
+                index4 < mbt_ffi_load32(iter_base + 36)
+                index4 = index4 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 32) + index4 * 16
 
-          let result1 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(iter_base + 0),
-            mbt_ffi_load32(iter_base + 4),
-          )
+              let result1 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(iter_base + 0),
+                mbt_ffi_load32(iter_base + 4),
+              )
 
-          let result2 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(iter_base + 8),
-            mbt_ffi_load32(iter_base + 12),
-          )
+              let result2 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(iter_base + 8),
+                mbt_ffi_load32(iter_base + 12),
+              )
 
-          array3.push((result1, result2))
-        }
-        mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
+              array3.push((result1, result2))
+            }
+            mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-        let array7 : Array[(String, String)] = []
-        for index8 = 0
-            index8 < mbt_ffi_load32(iter_base + 44)
-            index8 = index8 + 1 {
-          let iter_base = mbt_ffi_load32(iter_base + 40) + index8 * 16
+            let array7 : Array[(String, String)] = []
+            for index8 = 0
+                index8 < mbt_ffi_load32(iter_base + 44)
+                index8 = index8 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 40) + index8 * 16
 
-          let result5 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(iter_base + 0),
-            mbt_ffi_load32(iter_base + 4),
-          )
+              let result5 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(iter_base + 0),
+                mbt_ffi_load32(iter_base + 4),
+              )
 
-          let result6 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(iter_base + 8),
-            mbt_ffi_load32(iter_base + 12),
-          )
+              let result6 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(iter_base + 8),
+                mbt_ffi_load32(iter_base + 12),
+              )
 
-          array7.push((result5, result6))
-        }
-        mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
+              array7.push((result5, result6))
+            }
+            mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
 
-        array9.push(AgentMetadata::{
-          agent_id: @types.AgentId::{
-            component_id: @types.ComponentId::{
-              uuid: @types.Uuid::{
-                high_bits: mbt_ffi_load64(iter_base + 0).reinterpret_as_uint64(),
-                low_bits: mbt_ffi_load64(iter_base + 8).reinterpret_as_uint64(),
+            array9.push(AgentMetadata::{
+              agent_id: @types.AgentId::{
+                component_id: @types.ComponentId::{
+                  uuid: @types.Uuid::{
+                    high_bits: mbt_ffi_load64(iter_base + 0).reinterpret_as_uint64(),
+                    low_bits: mbt_ffi_load64(iter_base + 8).reinterpret_as_uint64(),
+                  },
+                },
+                agent_id: result,
               },
-            },
-            agent_id: result,
-          },
-          args: array,
-          env: array3,
-          config: array7,
-          status: AgentStatus::from(mbt_ffi_load8_u(iter_base + 48)),
-          component_revision: mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
-          retry_count: mbt_ffi_load64(iter_base + 64).reinterpret_as_uint64(),
-          environment_id: EnvironmentId::{
-            uuid: @types.Uuid::{
-              high_bits: mbt_ffi_load64(iter_base + 72).reinterpret_as_uint64(),
-              low_bits: mbt_ffi_load64(iter_base + 80).reinterpret_as_uint64(),
-            },
-          },
-        })
-      }
-      mbt_ffi_free(mbt_ffi_load32(return_area + 4))
+              args: array,
+              env: array3,
+              config: array7,
+              status: AgentStatus::from(mbt_ffi_load8_u(iter_base + 48)),
+              component_revision: mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+              retry_count: mbt_ffi_load64(iter_base + 64).reinterpret_as_uint64(),
+              environment_id: EnvironmentId::{
+                uuid: @types.Uuid::{
+                  high_bits: mbt_ffi_load64(iter_base + 72).reinterpret_as_uint64(),
+                  low_bits: mbt_ffi_load64(iter_base + 80).reinterpret_as_uint64(),
+                },
+              },
+            })
+          }
+          mbt_ffi_free(mbt_ffi_load32(return_area + 8))
 
-      Option::Some(array9)
+          Option::Some(array9)
+        }
+        _ => panic()
+      }
+
+      Result::Ok(lifted)
+    }
+    1 => {
+      let lifted12 = match mbt_ffi_load8_u(return_area + 4) {
+        0 => AgentOperationError::PermissionDenied
+        1 => {
+          let result11 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          AgentOperationError::BackendError(result11)
+        }
+        _ => panic()
+      }
+
+      Result::Err(lifted12)
     }
     _ => panic()
   }
-  let ret = lifted
+  let ret = lifted13
   mbt_ffi_free(return_area)
   return ret
 }
@@ -690,35 +685,6 @@ pub fn trap(reason : String) -> Unit {
 }
 
 ///|
-/// Gets the agent's current persistence level.
-pub fn get_oplog_persistence_level() -> PersistenceLevel {
-  let result : Int = wasmImportGetOplogPersistenceLevel()
-
-  let lifted = match result {
-    0 => PersistenceLevel::PersistNothing
-    1 => PersistenceLevel::PersistRemoteSideEffects
-    2 => PersistenceLevel::Smart
-    _ => panic()
-  }
-  let ret = lifted
-  return ret
-}
-
-///|
-/// Sets the agent's current persistence level. This can increase the performance of execution in cases where durable
-/// execution is not required.
-pub fn set_oplog_persistence_level(
-  new_persistence_level : PersistenceLevel,
-) -> Unit {
-  let lowered = match new_persistence_level {
-    PersistNothing => 0
-    PersistRemoteSideEffects => 1
-    Smart => 2
-  }
-  wasmImportSetOplogPersistenceLevel(lowered)
-}
-
-///|
 /// Gets the current idempotence mode. See `set-idempotence-mode` for details.
 pub fn get_idempotence_mode() -> Bool {
   let result : Int = wasmImportGetIdempotenceMode()
@@ -751,93 +717,15 @@ pub fn generate_idempotency_key() -> @types.Uuid {
 }
 
 ///|
-/// Returns one permission card currently installed in this agent's wallet, if any.
-pub fn self_card() -> Card? {
-  let return_area = mbt_ffi_malloc(24)
-  wasmImportSelfCard(return_area)
-
-  let lifted : Card? = match mbt_ffi_load8_u(return_area + 0) {
-    0 => Option::None
-    1 =>
-      Option::Some(Card::{
-        card_id: @types.CardId::{
-          uuid: @types.Uuid::{
-            high_bits: mbt_ffi_load64(return_area + 8).reinterpret_as_uint64(),
-            low_bits: mbt_ffi_load64(return_area + 16).reinterpret_as_uint64(),
-          },
-        },
-      })
-    _ => panic()
-  }
-  let ret = lifted
-  mbt_ffi_free(return_area)
-  return ret
-}
-
-///|
-/// Derives a card handle from an installed card. This minimal test-facing form keeps the card as plain data.
-pub fn derive_card(card : Card) -> Result[Card, String] {
-  let return_area = mbt_ffi_malloc(24)
-  wasmImportDeriveCard(
-    card.card_id.uuid.high_bits.reinterpret_as_int64(),
-    card.card_id.uuid.low_bits.reinterpret_as_int64(),
-    return_area,
-  )
-
-  let lifted = match mbt_ffi_load8_u(return_area + 0) {
-    0 =>
-      Result::Ok(Card::{
-        card_id: @types.CardId::{
-          uuid: @types.Uuid::{
-            high_bits: mbt_ffi_load64(return_area + 8).reinterpret_as_uint64(),
-            low_bits: mbt_ffi_load64(return_area + 16).reinterpret_as_uint64(),
-          },
-        },
-      })
-    1 => {
-      let result = mbt_ffi_ptr2str(
-        mbt_ffi_load32(return_area + 8),
-        mbt_ffi_load32(return_area + 12),
-      )
-
-      Result::Err(result)
-    }
-    _ => panic()
-  }
-  let ret = lifted
-  mbt_ffi_free(return_area)
-  return ret
-}
-
-///|
-/// Installs a card into this agent's own wallet.
-pub fn install_card(card : Card) -> Result[Unit, CardInstallError] {
-  let return_area = mbt_ffi_malloc(2)
-  wasmImportInstallCard(
-    card.card_id.uuid.high_bits.reinterpret_as_int64(),
-    card.card_id.uuid.low_bits.reinterpret_as_int64(),
-    return_area,
-  )
-
-  let lifted = match mbt_ffi_load8_u(return_area + 0) {
-    0 => Result::Ok(())
-    1 => Result::Err(CardInstallError::from(mbt_ffi_load8_u(return_area + 1)))
-    _ => panic()
-  }
-  let ret = lifted
-  mbt_ffi_free(return_area)
-  return ret
-}
-
-///|
 /// Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
 /// not waiting for the agent to get updated.
 pub fn update_agent(
   agent_id : @types.AgentId,
   target_revision : UInt64,
   mode : UpdateMode,
-) -> Unit {
+) -> Result[Unit, AgentOperationError] {
   let ptr = mbt_ffi_str2ptr(agent_id.agent_id)
+  let return_area = mbt_ffi_malloc(16)
   wasmImportUpdateAgent(
     agent_id.component_id.uuid.high_bits.reinterpret_as_int64(),
     agent_id.component_id.uuid.low_bits.reinterpret_as_int64(),
@@ -845,92 +733,144 @@ pub fn update_agent(
     agent_id.agent_id.length(),
     target_revision.reinterpret_as_int64(),
     mode.ordinal(),
+    return_area,
   )
+
+  let lifted0 = match mbt_ffi_load8_u(return_area + 0) {
+    0 => Result::Ok(())
+    1 => {
+      let lifted = match mbt_ffi_load8_u(return_area + 4) {
+        0 => AgentOperationError::PermissionDenied
+        1 => {
+          let result = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          AgentOperationError::BackendError(result)
+        }
+        _ => panic()
+      }
+
+      Result::Err(lifted)
+    }
+    _ => panic()
+  }
+  let ret = lifted0
   mbt_ffi_free(ptr)
+  mbt_ffi_free(return_area)
+  return ret
 }
 
 ///|
 /// Get the current agent's metadata
-pub fn get_self_metadata() -> AgentMetadata {
-  let return_area = mbt_ffi_malloc(88)
+pub fn get_self_metadata() -> Result[AgentMetadata, AgentOperationError] {
+  let return_area = mbt_ffi_malloc(96)
   wasmImportGetSelfMetadata(return_area)
 
-  let result = mbt_ffi_ptr2str(
-    mbt_ffi_load32(return_area + 16),
-    mbt_ffi_load32(return_area + 20),
-  )
+  let lifted10 = match mbt_ffi_load8_u(return_area + 0) {
+    0 => {
+      let result = mbt_ffi_ptr2str(
+        mbt_ffi_load32(return_area + 24),
+        mbt_ffi_load32(return_area + 28),
+      )
 
-  let array : Array[String] = []
-  for index = 0; index < mbt_ffi_load32(return_area + 28); index = index + 1 {
-    let iter_base = mbt_ffi_load32(return_area + 24) + index * 8
+      let array : Array[String] = []
+      for index = 0; index < mbt_ffi_load32(return_area + 36); index = index + 1 {
+        let iter_base = mbt_ffi_load32(return_area + 32) + index * 8
 
-    let result0 = mbt_ffi_ptr2str(
-      mbt_ffi_load32(iter_base + 0),
-      mbt_ffi_load32(iter_base + 4),
-    )
+        let result0 = mbt_ffi_ptr2str(
+          mbt_ffi_load32(iter_base + 0),
+          mbt_ffi_load32(iter_base + 4),
+        )
 
-    array.push(result0)
-  }
-  mbt_ffi_free(mbt_ffi_load32(return_area + 24))
+        array.push(result0)
+      }
+      mbt_ffi_free(mbt_ffi_load32(return_area + 32))
 
-  let array3 : Array[(String, String)] = []
-  for index4 = 0; index4 < mbt_ffi_load32(return_area + 36); index4 = index4 + 1 {
-    let iter_base = mbt_ffi_load32(return_area + 32) + index4 * 16
+      let array3 : Array[(String, String)] = []
+      for index4 = 0
+          index4 < mbt_ffi_load32(return_area + 44)
+          index4 = index4 + 1 {
+        let iter_base = mbt_ffi_load32(return_area + 40) + index4 * 16
 
-    let result1 = mbt_ffi_ptr2str(
-      mbt_ffi_load32(iter_base + 0),
-      mbt_ffi_load32(iter_base + 4),
-    )
+        let result1 = mbt_ffi_ptr2str(
+          mbt_ffi_load32(iter_base + 0),
+          mbt_ffi_load32(iter_base + 4),
+        )
 
-    let result2 = mbt_ffi_ptr2str(
-      mbt_ffi_load32(iter_base + 8),
-      mbt_ffi_load32(iter_base + 12),
-    )
+        let result2 = mbt_ffi_ptr2str(
+          mbt_ffi_load32(iter_base + 8),
+          mbt_ffi_load32(iter_base + 12),
+        )
 
-    array3.push((result1, result2))
-  }
-  mbt_ffi_free(mbt_ffi_load32(return_area + 32))
+        array3.push((result1, result2))
+      }
+      mbt_ffi_free(mbt_ffi_load32(return_area + 40))
 
-  let array7 : Array[(String, String)] = []
-  for index8 = 0; index8 < mbt_ffi_load32(return_area + 44); index8 = index8 + 1 {
-    let iter_base = mbt_ffi_load32(return_area + 40) + index8 * 16
+      let array7 : Array[(String, String)] = []
+      for index8 = 0
+          index8 < mbt_ffi_load32(return_area + 52)
+          index8 = index8 + 1 {
+        let iter_base = mbt_ffi_load32(return_area + 48) + index8 * 16
 
-    let result5 = mbt_ffi_ptr2str(
-      mbt_ffi_load32(iter_base + 0),
-      mbt_ffi_load32(iter_base + 4),
-    )
+        let result5 = mbt_ffi_ptr2str(
+          mbt_ffi_load32(iter_base + 0),
+          mbt_ffi_load32(iter_base + 4),
+        )
 
-    let result6 = mbt_ffi_ptr2str(
-      mbt_ffi_load32(iter_base + 8),
-      mbt_ffi_load32(iter_base + 12),
-    )
+        let result6 = mbt_ffi_ptr2str(
+          mbt_ffi_load32(iter_base + 8),
+          mbt_ffi_load32(iter_base + 12),
+        )
 
-    array7.push((result5, result6))
-  }
-  mbt_ffi_free(mbt_ffi_load32(return_area + 40))
-  let ret = AgentMetadata::{
-    agent_id: @types.AgentId::{
-      component_id: @types.ComponentId::{
-        uuid: @types.Uuid::{
-          high_bits: mbt_ffi_load64(return_area + 0).reinterpret_as_uint64(),
-          low_bits: mbt_ffi_load64(return_area + 8).reinterpret_as_uint64(),
+        array7.push((result5, result6))
+      }
+      mbt_ffi_free(mbt_ffi_load32(return_area + 48))
+
+      Result::Ok(AgentMetadata::{
+        agent_id: @types.AgentId::{
+          component_id: @types.ComponentId::{
+            uuid: @types.Uuid::{
+              high_bits: mbt_ffi_load64(return_area + 8).reinterpret_as_uint64(),
+              low_bits: mbt_ffi_load64(return_area + 16).reinterpret_as_uint64(),
+            },
+          },
+          agent_id: result,
         },
-      },
-      agent_id: result,
-    },
-    args: array,
-    env: array3,
-    config: array7,
-    status: AgentStatus::from(mbt_ffi_load8_u(return_area + 48)),
-    component_revision: mbt_ffi_load64(return_area + 56).reinterpret_as_uint64(),
-    retry_count: mbt_ffi_load64(return_area + 64).reinterpret_as_uint64(),
-    environment_id: EnvironmentId::{
-      uuid: @types.Uuid::{
-        high_bits: mbt_ffi_load64(return_area + 72).reinterpret_as_uint64(),
-        low_bits: mbt_ffi_load64(return_area + 80).reinterpret_as_uint64(),
-      },
-    },
+        args: array,
+        env: array3,
+        config: array7,
+        status: AgentStatus::from(mbt_ffi_load8_u(return_area + 56)),
+        component_revision: mbt_ffi_load64(return_area + 64).reinterpret_as_uint64(),
+        retry_count: mbt_ffi_load64(return_area + 72).reinterpret_as_uint64(),
+        environment_id: EnvironmentId::{
+          uuid: @types.Uuid::{
+            high_bits: mbt_ffi_load64(return_area + 80).reinterpret_as_uint64(),
+            low_bits: mbt_ffi_load64(return_area + 88).reinterpret_as_uint64(),
+          },
+        },
+      })
+    }
+    1 => {
+      let lifted = match mbt_ffi_load8_u(return_area + 8) {
+        0 => AgentOperationError::PermissionDenied
+        1 => {
+          let result9 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 12),
+            mbt_ffi_load32(return_area + 16),
+          )
+
+          AgentOperationError::BackendError(result9)
+        }
+        _ => panic()
+      }
+
+      Result::Err(lifted)
+    }
+    _ => panic()
   }
+  let ret = lifted10
   mbt_ffi_free(return_area)
   return ret
 }
@@ -1047,10 +987,11 @@ pub fn fork_agent(
   source_agent_id : @types.AgentId,
   target_agent_id : @types.AgentId,
   oplog_idx_cut_off : UInt64,
-) -> Unit {
+) -> Result[Unit, AgentOperationError] {
   let ptr = mbt_ffi_str2ptr(source_agent_id.agent_id)
 
   let ptr0 = mbt_ffi_str2ptr(target_agent_id.agent_id)
+  let return_area = mbt_ffi_malloc(16)
   wasmImportForkAgent(
     source_agent_id.component_id.uuid.high_bits.reinterpret_as_int64(),
     source_agent_id.component_id.uuid.low_bits.reinterpret_as_int64(),
@@ -1061,9 +1002,34 @@ pub fn fork_agent(
     ptr0,
     target_agent_id.agent_id.length(),
     oplog_idx_cut_off.reinterpret_as_int64(),
+    return_area,
   )
+
+  let lifted1 = match mbt_ffi_load8_u(return_area + 0) {
+    0 => Result::Ok(())
+    1 => {
+      let lifted = match mbt_ffi_load8_u(return_area + 4) {
+        0 => AgentOperationError::PermissionDenied
+        1 => {
+          let result = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          AgentOperationError::BackendError(result)
+        }
+        _ => panic()
+      }
+
+      Result::Err(lifted)
+    }
+    _ => panic()
+  }
+  let ret = lifted1
   mbt_ffi_free(ptr)
   mbt_ffi_free(ptr0)
+  mbt_ffi_free(return_area)
+  return ret
 }
 
 ///|
@@ -1071,13 +1037,14 @@ pub fn fork_agent(
 pub fn revert_agent(
   agent_id : @types.AgentId,
   revert_target : RevertAgentTarget,
-) -> Unit {
+) -> Result[Unit, AgentOperationError] {
   let ptr = mbt_ffi_str2ptr(agent_id.agent_id)
 
   let (lowered, lowered1) = match revert_target {
     RevertToOplogIndex(payload) => (0, payload.reinterpret_as_int64())
     RevertLastInvocations(payload0) => (1, payload0.reinterpret_as_int64())
   }
+  let return_area = mbt_ffi_malloc(16)
   wasmImportRevertAgent(
     agent_id.component_id.uuid.high_bits.reinterpret_as_int64(),
     agent_id.component_id.uuid.low_bits.reinterpret_as_int64(),
@@ -1085,8 +1052,33 @@ pub fn revert_agent(
     agent_id.agent_id.length(),
     lowered,
     lowered1,
+    return_area,
   )
+
+  let lifted2 = match mbt_ffi_load8_u(return_area + 0) {
+    0 => Result::Ok(())
+    1 => {
+      let lifted = match mbt_ffi_load8_u(return_area + 4) {
+        0 => AgentOperationError::PermissionDenied
+        1 => {
+          let result = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          AgentOperationError::BackendError(result)
+        }
+        _ => panic()
+      }
+
+      Result::Err(lifted)
+    }
+    _ => panic()
+  }
+  let ret = lifted2
   mbt_ffi_free(ptr)
+  mbt_ffi_free(return_area)
+  return ret
 }
 
 ///|
@@ -1220,28 +1212,51 @@ pub fn resolve_agent_id_strict(
 /// with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
 /// both sides. The newly created agent continues running from the same point, but the return value is
 /// going to be different in this agent and the forked agent.
-pub fn fork() -> ForkResult {
-  let return_area = mbt_ffi_malloc(24)
+pub fn fork() -> Result[ForkResult, AgentOperationError] {
+  let return_area = mbt_ffi_malloc(32)
   wasmImportFork(return_area)
 
-  let lifted = match mbt_ffi_load8_u(return_area + 0) {
-    0 =>
-      ForkResult::Original(ForkDetails::{
-        forked_phantom_id: @types.Uuid::{
-          high_bits: mbt_ffi_load64(return_area + 8).reinterpret_as_uint64(),
-          low_bits: mbt_ffi_load64(return_area + 16).reinterpret_as_uint64(),
-        },
-      })
-    1 =>
-      ForkResult::Forked(ForkDetails::{
-        forked_phantom_id: @types.Uuid::{
-          high_bits: mbt_ffi_load64(return_area + 8).reinterpret_as_uint64(),
-          low_bits: mbt_ffi_load64(return_area + 16).reinterpret_as_uint64(),
-        },
-      })
+  let lifted1 = match mbt_ffi_load8_u(return_area + 0) {
+    0 => {
+      let lifted = match mbt_ffi_load8_u(return_area + 8) {
+        0 =>
+          ForkResult::Original(ForkDetails::{
+            forked_phantom_id: @types.Uuid::{
+              high_bits: mbt_ffi_load64(return_area + 16).reinterpret_as_uint64(),
+              low_bits: mbt_ffi_load64(return_area + 24).reinterpret_as_uint64(),
+            },
+          })
+        1 =>
+          ForkResult::Forked(ForkDetails::{
+            forked_phantom_id: @types.Uuid::{
+              high_bits: mbt_ffi_load64(return_area + 16).reinterpret_as_uint64(),
+              low_bits: mbt_ffi_load64(return_area + 24).reinterpret_as_uint64(),
+            },
+          })
+        _ => panic()
+      }
+
+      Result::Ok(lifted)
+    }
+    1 => {
+      let lifted0 = match mbt_ffi_load8_u(return_area + 8) {
+        0 => AgentOperationError::PermissionDenied
+        1 => {
+          let result = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 12),
+            mbt_ffi_load32(return_area + 16),
+          )
+
+          AgentOperationError::BackendError(result)
+        }
+        _ => panic()
+      }
+
+      Result::Err(lifted0)
+    }
     _ => panic()
   }
-  let ret = lifted
+  let ret = lifted1
   mbt_ffi_free(return_area)
   return ret
 }

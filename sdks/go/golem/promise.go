@@ -128,7 +128,22 @@ func (p *Promise[T]) Await() T {
 // the agent is not http-api-deployed, or if a different agent type created the
 // promise. Typically called once per promise.
 func (p *Promise[T]) WebhookURL() string {
-	return host.CreateWebhook(p.id.toWit())
+	res := host.CreateWebhook(p.id.toWit())
+	if res.IsErr() {
+		panic(webhookErrorToGo(res.Err()))
+	}
+	return res.Ok()
+}
+
+func webhookErrorToGo(e host.WebhookError) error {
+	switch e.Tag() {
+	case host.WebhookErrorPermissionDenied:
+		return fmt.Errorf("golem: webhook: permission denied")
+	case host.WebhookErrorInternalError:
+		return fmt.Errorf("golem: webhook: internal error: %s", e.InternalError())
+	default:
+		return fmt.Errorf("golem: webhook: error (tag %d)", e.Tag())
+	}
 }
 
 // CompletePromise completes the promise identified by id, from within any agent

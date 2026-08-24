@@ -773,13 +773,12 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 /// (the provider exports no agents).
 ///
 /// The invocation currently asserts the worker executor's `golem:tool/host`
-/// stub error: through a real deployed invocation, the generated client is
-/// proven to reach the executor's `tool-rpc.new` host function (execution
-/// stops there today, before `invoke-and-await`). Once the tool runtime is
-/// implemented in the worker executor, the invocation is expected to succeed
-/// and return `ok:echo:hello`; flip the trailing assertions accordingly —
-/// only then does this test validate the generated command path and input
-/// encoding against the provider.
+/// sidecar-backend error: through a real deployed invocation, the generated
+/// client is proven to reach the executor's tool invocation host function.
+/// Once the tool runtime is implemented in the worker executor, the invocation
+/// is expected to succeed and return `ok:echo:hello`; flip the trailing
+/// assertions accordingly — only then does this test validate the generated
+/// command path and input encoding against the provider.
 #[test]
 #[timeout("15 minutes")]
 async fn test_rust_tool_guest_bridge_e2e() {
@@ -836,6 +835,11 @@ async fn test_rust_tool_guest_bridge_e2e() {
 
             tools:
               echo: {{}}
+
+            agents:
+              EchoConsumerAgent:
+                tools:
+                  echo: {{}}
 
             bridge:
               rust:
@@ -960,15 +964,15 @@ async fn test_rust_tool_guest_bridge_e2e() {
         ])
         .await;
 
-    // The worker executor's `golem:tool/host` invocation is not implemented yet:
-    // `tool-rpc.new` traps (before `invoke-and-await` is ever reached), so the
-    // invocation must fail with the stub error, proving the generated client
-    // reaches the executor's tool host. Once the tool runtime lands, replace
+    // The worker executor's `golem:tool/host` invocation requires a sidecar
+    // backend that this test server does not configure, so the agent method must
+    // return that error, proving the generated client reaches the executor's tool
+    // host. Once the tool runtime lands, replace
     // this with:
     //     assert!(outputs.success_or_dump());
     //     assert!(outputs.stdout_contains("ok:echo:hello"));
-    let invocation_reached_tool_host_stub = !outputs.success()
-        && outputs.stderr_contains("golem:tool/host tool invocation is not yet implemented");
+    let invocation_reached_tool_host_stub = outputs
+        .stdout_contains("golem:tool/host tool invocation requires the sidecar invocation backend");
     if !invocation_reached_tool_host_stub {
         outputs.dump();
     }
@@ -1450,6 +1454,11 @@ async fn test_ts_tool_guest_bridge_e2e() {
             tools:
               echo: {{}}
 
+            agents:
+              EchoConsumerAgent:
+                tools:
+                  echo: {{}}
+
             bridge:
               ts:
                 internal:
@@ -1478,8 +1487,23 @@ async fn test_ts_tool_guest_bridge_e2e() {
               init: () => ({}),
               methods: {
                 async callEcho({ message }) {
-                  const value = await EchoClient.newClient().echo(message);
-                  return `ok:${value}`;
+                  try {
+                    const value = await EchoClient.newClient().echo(message);
+                    return `ok:${value}`;
+                  } catch (error) {
+                    const toolError = error as {
+                      tag?: string;
+                      error?: { tag?: string; val?: unknown };
+                    };
+                    if (
+                      toolError.tag === 'rpc' &&
+                      toolError.error?.tag === 'remote-internal-error' &&
+                      typeof toolError.error.val === 'string'
+                    ) {
+                      return toolError.error.val;
+                    }
+                    throw error;
+                  }
                 },
               },
             });
@@ -1509,8 +1533,8 @@ async fn test_ts_tool_guest_bridge_e2e() {
             "\"hello\"",
         ])
         .await;
-    let reached_tool_host_stub = !outputs.success()
-        && outputs.stderr_contains("golem:tool/host tool invocation is not yet implemented");
+    let reached_tool_host_stub = outputs
+        .stdout_contains("golem:tool/host tool invocation requires the sidecar invocation backend");
     if !reached_tool_host_stub {
         outputs.dump();
     }
@@ -1731,6 +1755,11 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
             tools:
               echo: {{}}
 
+            agents:
+              EchoConsumerAgent:
+                tools:
+                  echo: {{}}
+
             bridge:
               moonbit:
                 internal:
@@ -1758,7 +1787,7 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
         &consumer_pkg_path,
         consumer_pkg.replace(
             "import {",
-            "import {\n  \"echo-tool-guest-client/client\" @echoClient,",
+            "import {\n  \"echo-tool-guest-client/client\" @echoClient,\n  \"golemcloud/golem_sdk/tool\" @tool,",
         ),
     )
     .unwrap();
@@ -1780,7 +1809,8 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
               client.drop()
               match result {
                 Ok(value) => "ok:" + value
-                Err(_) => "err"
+                Err(@tool.ToolError::Rpc(@tool.RpcError::RemoteInternal(message))) => message
+                Err(_) => "unexpected tool error"
               }
             }
 
@@ -1830,8 +1860,10 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
             "\"hello\"",
         ])
         .await;
-    let reached_tool_host_stub = !outputs.success()
-        && outputs.stderr_contains("golem:tool/host tool invocation is not yet implemented");
+    let reached_tool_host_stub = outputs.success()
+        && outputs.stdout_contains(
+            "golem:tool/host tool invocation requires the sidecar invocation backend",
+        );
     if !reached_tool_host_stub {
         outputs.dump();
     }

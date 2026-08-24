@@ -33,7 +33,9 @@ use golem_common::model::agent::{
 };
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
-    AgentMethodName, AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+    AgentInvocationIdPattern, AgentInvocationIdentifier, AgentMethodName, AgentPluginName,
+    AgentResourcePattern, AgentVerb, CardId, ClassPermissionTarget, FilesystemPathPattern,
+    FilesystemResourcePattern, FilesystemVerb, OplogResourcePattern, OplogVerb, PermissionTarget,
     StoredCard,
 };
 use golem_common::model::component::{
@@ -45,10 +47,11 @@ use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
+use golem_common::model::worker::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::schema::json_input_schema_value_to_typed_schema_value;
 use golem_common::schema::{SchemaType, TypedSchemaValue};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
@@ -184,19 +187,61 @@ fn authorize_agent_permission(
 ) -> WorkerResult<()> {
     auth_ctx
         .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
-            owner: AgentOwnerPattern::Agent {
-                account: component.account_email.clone(),
-                application: component.application_name.clone(),
-                environment: component.environment_name.clone(),
-                component: component.component_name.clone(),
-                agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
-            },
+            owner: agent_owner(component, agent_id),
             verb: Some(verb),
             resource,
         }))
         .map_err(AuthServiceError::Unauthorized)?;
 
     Ok(())
+}
+
+fn authorize_oplog_permission(
+    auth_ctx: &AuthCtx,
+    component: &Component,
+    agent_id: &AgentId,
+    resource: OplogResourcePattern,
+) -> WorkerResult<()> {
+    auth_ctx
+        .authorize_permission(&PermissionTarget::Oplog(ClassPermissionTarget {
+            owner: agent_owner(component, agent_id),
+            verb: Some(OplogVerb::Read),
+            resource,
+        }))
+        .map_err(AuthServiceError::Unauthorized)?;
+
+    Ok(())
+}
+
+fn authorize_filesystem_permission(
+    auth_ctx: &AuthCtx,
+    component: &Component,
+    agent_id: &AgentId,
+    verb: FilesystemVerb,
+    path: &CanonicalFilePath,
+) -> WorkerResult<()> {
+    let resource = FilesystemPathPattern::parse(path.as_abs_str())
+        .map(FilesystemResourcePattern::Path)
+        .map_err(WorkerServiceError::TypeChecker)?;
+    auth_ctx
+        .authorize_permission(&PermissionTarget::Filesystem(ClassPermissionTarget {
+            owner: agent_owner(component, agent_id),
+            verb: Some(verb),
+            resource,
+        }))
+        .map_err(AuthServiceError::Unauthorized)?;
+
+    Ok(())
+}
+
+fn agent_owner(component: &Component, agent_id: &AgentId) -> AgentOwnerPattern {
+    AgentOwnerPattern::Agent {
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
+        component: component.component_name.clone(),
+        agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
+    }
 }
 
 fn authorize_component_agents_permission(
@@ -274,6 +319,36 @@ impl WorkerService {
         .await
     }
 
+    pub async fn create_for_invocation(
+        &self,
+        agent_id: &AgentId,
+        method_name: String,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
+        let component = self
+            .component_service
+            .get_current_by_id_uncached(agent_id.component_id)
+            .await?;
+
+        self.create_with_component_and_resource(
+            agent_id,
+            component,
+            environment_variables,
+            config,
+            ignore_already_existing,
+            auth_ctx,
+            invocation_context,
+            principal,
+            AgentResourcePattern::Method(AgentMethodName(method_name)),
+        )
+        .await
+    }
+
     // Like create, but skip fetching the component.
     pub async fn create_with_component(
         &self,
@@ -286,15 +361,36 @@ impl WorkerService {
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
     ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
+        self.create_with_component_and_resource(
+            agent_id,
+            component,
+            environment_variables,
+            config,
+            ignore_already_existing,
+            auth_ctx,
+            invocation_context,
+            principal,
+            AgentResourcePattern::Any,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn create_with_component_and_resource(
+        &self,
+        agent_id: &AgentId,
+        component: Component,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        resource: AgentResourcePattern,
+    ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
         assert!(component.id == agent_id.component_id);
 
-        authorize_agent_permission(
-            &auth_ctx,
-            &component,
-            agent_id,
-            AgentVerb::Invoke,
-            AgentResourcePattern::Any,
-        )?;
+        authorize_agent_permission(&auth_ctx, &component, agent_id, AgentVerb::Invoke, resource)?;
 
         let (_, fingerprint) = self
             .worker_client
@@ -329,7 +425,7 @@ impl WorkerService {
             &component,
             agent_id,
             AgentVerb::View,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::Empty,
         )?;
 
         let stream = self
@@ -365,7 +461,7 @@ impl WorkerService {
             &component,
             agent_id,
             AgentVerb::Delete,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::Empty,
         )?;
 
         self.worker_client
@@ -419,7 +515,7 @@ impl WorkerService {
             &component,
             agent_id,
             AgentVerb::Interrupt,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::Empty,
         )?;
 
         self.worker_client
@@ -449,7 +545,7 @@ impl WorkerService {
             &component,
             agent_id,
             AgentVerb::View,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::Empty,
         )?;
 
         let result = self
@@ -478,7 +574,7 @@ impl WorkerService {
             &auth_ctx,
             &component,
             AgentVerb::View,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::Empty,
         )?;
 
         let result = self
@@ -513,7 +609,7 @@ impl WorkerService {
             &component,
             agent_id,
             AgentVerb::Resume,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::Empty,
         )?;
 
         self.worker_client
@@ -541,7 +637,7 @@ impl WorkerService {
             &component,
             agent_id,
             AgentVerb::UpdateRevision,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::Empty,
         )?;
 
         self.worker_client
@@ -571,12 +667,16 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        authorize_agent_permission(
+        let start = cursor
+            .as_ref()
+            .map(|cursor| cursor.next_oplog_index)
+            .unwrap_or_else(|| from_oplog_index.into());
+        let end = start.checked_add(count.saturating_sub(1));
+        authorize_oplog_permission(
             &auth_ctx,
             &component,
             agent_id,
-            AgentVerb::View,
-            AgentResourcePattern::OplogIndex(from_oplog_index.into()),
+            OplogResourcePattern::range(Some(start), end),
         )?;
 
         let result = self
@@ -607,13 +707,7 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        authorize_agent_permission(
-            &auth_ctx,
-            &component,
-            agent_id,
-            AgentVerb::View,
-            AgentResourcePattern::Any,
-        )?;
+        authorize_oplog_permission(&auth_ctx, &component, agent_id, OplogResourcePattern::Any)?;
 
         let result = self
             .worker_client
@@ -641,12 +735,19 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        authorize_agent_permission(
+        authorize_filesystem_permission(
             &auth_ctx,
             &component,
             agent_id,
-            AgentVerb::View,
-            AgentResourcePattern::Any,
+            FilesystemVerb::Stat,
+            &path,
+        )?;
+        authorize_filesystem_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            FilesystemVerb::List,
+            &path,
         )?;
 
         let nodes = self
@@ -678,7 +779,7 @@ impl WorkerService {
             &component,
             agent_id,
             AgentVerb::View,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::Empty,
         )?;
 
         self.worker_client
@@ -702,12 +803,12 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        authorize_agent_permission(
+        authorize_filesystem_permission(
             &auth_ctx,
             &component,
             agent_id,
-            AgentVerb::View,
-            AgentResourcePattern::Any,
+            FilesystemVerb::Read,
+            &path,
         )?;
 
         let contents_stream = self
@@ -724,6 +825,41 @@ impl WorkerService {
         Ok(contents_stream)
     }
 
+    async fn resolve_agent_plugin_name(
+        &self,
+        component: &Component,
+        agent_id: &AgentId,
+        plugin_priority: PluginPriority,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<String> {
+        let metadata = self
+            .worker_client
+            .get_metadata(agent_id, component.environment_id, auth_ctx.clone())
+            .await?;
+        let component_revision = self
+            .component_service
+            .get_revision(agent_id.component_id, metadata.component_revision)
+            .await?;
+        let agent_type = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id)
+            .map_err(|err| WorkerServiceError::TypeChecker(err.to_string()))?;
+
+        component_revision
+            .metadata
+            .agent_type_plugins(&agent_type)
+            .and_then(|plugins| {
+                plugins
+                    .iter()
+                    .find(|plugin| plugin.priority == plugin_priority)
+            })
+            .map(|plugin| plugin.plugin_name.clone())
+            .ok_or_else(|| {
+                WorkerServiceError::TypeChecker(format!(
+                    "Plugin priority {} is not installed for agent type {}",
+                    plugin_priority.0, agent_type.0
+                ))
+            })
+    }
+
     pub async fn activate_plugin(
         &self,
         agent_id: &AgentId,
@@ -735,12 +871,16 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
+        let plugin_name = self
+            .resolve_agent_plugin_name(&component, agent_id, plugin_priority, &auth_ctx)
+            .await?;
+
         authorize_agent_permission(
             &auth_ctx,
             &component,
             agent_id,
             AgentVerb::ActivatePlugin,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::PluginName(AgentPluginName(plugin_name)),
         )?;
 
         self.worker_client
@@ -766,12 +906,16 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
+        let plugin_name = self
+            .resolve_agent_plugin_name(&component, agent_id, plugin_priority, &auth_ctx)
+            .await?;
+
         authorize_agent_permission(
             &auth_ctx,
             &component,
             agent_id,
             AgentVerb::DeactivatePlugin,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::PluginName(AgentPluginName(plugin_name)),
         )?;
 
         self.worker_client
@@ -803,7 +947,7 @@ impl WorkerService {
             &component,
             source_agent_id,
             AgentVerb::Fork,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::Empty,
         )?;
 
         self.worker_client
@@ -827,21 +971,69 @@ impl WorkerService {
         target: RevertWorkerTarget,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
+        self.revert_worker_prepared(agent_id, target, None, auth_ctx)
+            .await
+    }
+
+    pub async fn revert_worker_prepared(
+        &self,
+        agent_id: &AgentId,
+        target: RevertWorkerTarget,
+        prepared_revert: Option<ResolvedRevert>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()> {
         let component = self
             .component_service
             .get_current_by_id(agent_id.component_id)
             .await?;
 
+        let resolved_revert = match &target {
+            RevertWorkerTarget::RevertToOplogIndex(_) => {
+                if prepared_revert.is_some() {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "Resolved revert must only be supplied for a count-based revert",
+                    )
+                    .into());
+                }
+                None
+            }
+            RevertWorkerTarget::RevertLastInvocations(target) => match prepared_revert {
+                Some(resolved) => Some(resolved),
+                None => Some(
+                    self.worker_client
+                        .resolve_revert_last_invocations(
+                            agent_id,
+                            target.number_of_invocations,
+                            component.environment_id,
+                            auth_ctx.clone(),
+                        )
+                        .await?,
+                ),
+            },
+        };
+        let last_oplog_index = resolved_revert
+            .as_ref()
+            .map(|resolved| resolved.last_oplog_index)
+            .unwrap_or_else(|| match &target {
+                RevertWorkerTarget::RevertToOplogIndex(target) => target.last_oplog_index,
+                RevertWorkerTarget::RevertLastInvocations(_) => unreachable!(),
+            });
         authorize_agent_permission(
             &auth_ctx,
             &component,
             agent_id,
             AgentVerb::Revert,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::OplogIndex(last_oplog_index.into()),
         )?;
 
         self.worker_client
-            .revert_worker(agent_id, target, component.environment_id, auth_ctx)
+            .revert_worker(
+                agent_id,
+                target,
+                resolved_revert,
+                component.environment_id,
+                auth_ctx,
+            )
             .await?;
 
         Ok(())
@@ -858,12 +1050,19 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
+        let invocation_id = uuid::Uuid::parse_str(&idempotency_key.value)
+            .map(AgentInvocationIdPattern::Uuid)
+            .unwrap_or_else(|_| {
+                AgentInvocationIdPattern::Identifier(AgentInvocationIdentifier(
+                    idempotency_key.value.clone(),
+                ))
+            });
         authorize_agent_permission(
             &auth_ctx,
             &component,
             agent_id,
             AgentVerb::CancelInvocation,
-            AgentResourcePattern::Any,
+            AgentResourcePattern::InvocationId(invocation_id),
         )?;
 
         let canceled = self
@@ -892,17 +1091,14 @@ impl WorkerService {
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
+        auth_ctx
+            .authorize_system_only("process oplog entries")
+            .map_err(AuthServiceError::Unauthorized)?;
+
         let component = self
             .component_service
             .get_revision(target_agent_id.component_id, component_revision)
             .await?;
-        authorize_agent_permission(
-            &auth_ctx,
-            &component,
-            target_agent_id,
-            AgentVerb::Invoke,
-            AgentResourcePattern::Any,
-        )?;
 
         self.worker_client
             .process_oplog_entries(
@@ -915,6 +1111,43 @@ impl WorkerService {
                 metadata,
                 first_entry_index,
                 entries,
+                auth_ctx,
+            )
+            .await
+    }
+
+    pub async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: StoredCard,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()> {
+        auth_ctx
+            .authorize_system_only("deliver permission card transfer")
+            .map_err(AuthServiceError::Unauthorized)?;
+
+        let component = self
+            .component_service
+            .get_current_by_id(target_agent_id.component_id)
+            .await?;
+        if component.environment_id != environment_id {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "target agent environment mismatch: expected {}, got {}",
+                component.environment_id, environment_id
+            ))
+            .into());
+        }
+
+        self.worker_client
+            .deliver_card_transfer(
+                target_agent_id,
+                environment_id,
+                transfer_id,
+                source_card_id,
+                card,
                 auth_ctx,
             )
             .await
@@ -935,6 +1168,7 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
         known_environment_id: Option<EnvironmentId>,
+        scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
         let component = self
             .component_service
@@ -958,6 +1192,7 @@ impl WorkerService {
             account_id,
             auth_ctx.clone(),
             principal,
+            scope_card,
             |final_agent_id| {
                 authorize_agent_permission(
                     &auth_ctx,
@@ -997,6 +1232,7 @@ impl WorkerService {
         account_id: AccountId,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
+        scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         authorize: impl FnOnce(&AgentId) -> WorkerResult<()>,
     ) -> WorkerResult<AgentInvocationOutput> {
         let observation_only =
@@ -1031,6 +1267,7 @@ impl WorkerService {
                 account_id,
                 auth_ctx,
                 principal,
+                scope_card,
             )
             .await?;
         output.agent_id.get_or_insert(agent_id);
@@ -1252,6 +1489,7 @@ impl WorkerService {
                 component_owner_account_id,
                 auth.clone(),
                 principal,
+                None,
                 |final_agent_id| {
                     auth.authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
                         owner: AgentOwnerPattern::Agent {
@@ -1348,6 +1586,8 @@ mod tests {
     use futures::Stream;
     use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
     use golem_common::base_model::component_metadata::KnownExports;
+    use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+    use golem_common::base_model::plugin_registration::PluginRegistrationId;
     use golem_common::model::AgentInvocationOutput;
     use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
@@ -1357,17 +1597,30 @@ mod tests {
         ResolvedAgentType, Snapshotting, ephemeral_invocation_phantom_id,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
-    use golem_common::model::card::{AgentVerb, StoredCard};
-    use golem_common::model::component::{
-        CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
+    use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
+    use golem_common::model::card::{
+        AgentInvocationIdPattern, AgentInvocationIdentifier, AgentMethodName, AgentPluginName,
+        AgentResourcePattern, AgentVerb, Card, CardId, ClassPermissionTarget, EffectiveSurface,
+        FilesystemPathPattern, FilesystemResourcePattern, FilesystemVerb, GrantSurface,
+        OplogResourcePattern, OplogVerb, PermissionPattern, PermissionTarget, PolymorphicCard,
+        StoredCard,
     };
-    use golem_common::model::component_metadata::ComponentMetadata;
+    use golem_common::model::component::{
+        CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, InstalledPlugin,
+        PluginPriority,
+    };
+    use golem_common::model::component_metadata::{AgentTypeProvisionConfig, ComponentMetadata};
     use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
-    use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
-    use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+    use golem_common::model::worker::{
+        AgentConfigEntryDto, AgentMetadataDto, AgentUpdateMode, ResolvedRevert,
+        RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
+    };
+    use golem_common::model::{
+        AgentFilter, AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, ScanCursor, Timestamp,
+    };
     use golem_common::schema::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
         SchemaGraph, SchemaValue,
@@ -1376,7 +1629,7 @@ mod tests {
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;
     use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -1840,9 +2093,13 @@ mod tests {
         }
     }
 
+    type RecordedCardTransfer = (AgentId, EnvironmentId, Uuid, CardId, StoredCard, AuthCtx);
+
     struct RecordingWorkerClient {
         created_agent_ids: Mutex<Vec<AgentId>>,
+        delivered_card_transfers: Mutex<Vec<RecordedCardTransfer>>,
         invocations: Mutex<Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)>>,
+        effects: Mutex<Vec<&'static str>>,
         invocation_output: AgentInvocationOutput,
     }
 
@@ -1850,7 +2107,9 @@ mod tests {
         fn new(invocation_output: AgentInvocationOutput) -> Self {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
+                delivered_card_transfers: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
+                effects: Mutex::new(Vec::new()),
                 invocation_output,
             }
         }
@@ -1865,6 +2124,10 @@ mod tests {
 
         fn invocations(&self) -> Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)> {
             self.invocations.lock().unwrap().clone()
+        }
+
+        fn delivered_card_transfers(&self) -> Vec<RecordedCardTransfer> {
+            self.delivered_card_transfers.lock().unwrap().clone()
         }
     }
 
@@ -1900,7 +2163,8 @@ mod tests {
         }
 
         async fn delete(&self, _: &AgentId, _: EnvironmentId, _: AuthCtx) -> WorkerResult<()> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("delete");
+            Ok(())
         }
 
         async fn complete_promise(
@@ -1921,16 +2185,39 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
         ) -> WorkerResult<()> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("interrupt");
+            Ok(())
         }
 
         async fn get_metadata(
             &self,
-            _: &AgentId,
-            _: EnvironmentId,
+            agent_id: &AgentId,
+            environment_id: EnvironmentId,
             _: AuthCtx,
         ) -> WorkerResult<AgentMetadataDto> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("metadata");
+            Ok(AgentMetadataDto {
+                agent_id: agent_id.clone(),
+                environment_id,
+                created_by: AccountId::new(),
+                env: HashMap::new(),
+                config: Vec::new(),
+                status: AgentStatus::Idle,
+                component_revision: self.invocation_output.component_revision.unwrap(),
+                retry_count: 0,
+                pending_invocation_count: 0,
+                updates: Vec::new(),
+                created_at: Timestamp::now_utc(),
+                last_error: None,
+                component_size: 0,
+                total_linear_memory_size: 0,
+                exported_resource_instances: Vec::new(),
+                active_plugins: HashSet::new(),
+                skipped_regions: Vec::new(),
+                deleted_regions: Vec::new(),
+                last_oplog_index: OplogIndex::INITIAL,
+                fingerprint: AgentFingerprint::new(),
+            })
         }
 
         async fn find_metadata(
@@ -1953,7 +2240,8 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
         ) -> WorkerResult<()> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("resume");
+            Ok(())
         }
 
         async fn update(
@@ -1965,7 +2253,8 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
         ) -> WorkerResult<()> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("update");
+            Ok(())
         }
 
         async fn get_oplog(
@@ -1977,7 +2266,13 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
         ) -> Result<GetOplogResponse, super::WorkerServiceError> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("get-oplog");
+            Ok(GetOplogResponse {
+                entries: Vec::new(),
+                next: None,
+                first_index_in_chunk: 0,
+                last_index: 0,
+            })
         }
 
         async fn search_oplog(
@@ -1989,7 +2284,13 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
         ) -> Result<GetOplogResponse, super::WorkerServiceError> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("search-oplog");
+            Ok(GetOplogResponse {
+                entries: Vec::new(),
+                next: None,
+                first_index_in_chunk: 0,
+                last_index: 0,
+            })
         }
 
         async fn get_file_system_node(
@@ -2000,7 +2301,8 @@ mod tests {
             _: AccountId,
             _: AuthCtx,
         ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("filesystem-node");
+            Ok(Vec::new())
         }
 
         async fn get_agent_wallet(
@@ -2022,7 +2324,8 @@ mod tests {
             _: AuthCtx,
         ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>
         {
-            unimplemented!()
+            self.effects.lock().unwrap().push("file-contents");
+            Ok(Box::pin(futures::stream::empty()))
         }
 
         async fn activate_plugin(
@@ -2032,7 +2335,8 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
         ) -> WorkerResult<()> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("activate-plugin");
+            Ok(())
         }
 
         async fn deactivate_plugin(
@@ -2042,7 +2346,8 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
         ) -> WorkerResult<()> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("deactivate-plugin");
+            Ok(())
         }
 
         async fn fork_worker(
@@ -2055,17 +2360,33 @@ mod tests {
             _: AccountEmail,
             _: AuthCtx,
         ) -> WorkerResult<()> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("fork");
+            Ok(())
         }
 
         async fn revert_worker(
             &self,
             _: &AgentId,
             _: RevertWorkerTarget,
+            _: Option<ResolvedRevert>,
             _: EnvironmentId,
             _: AuthCtx,
         ) -> WorkerResult<()> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("revert");
+            Ok(())
+        }
+
+        async fn resolve_revert_last_invocations(
+            &self,
+            _: &AgentId,
+            _: u64,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<ResolvedRevert> {
+            Ok(ResolvedRevert {
+                last_oplog_index: OplogIndex::from_u64(42),
+                observed_oplog_index: OplogIndex::from_u64(100),
+            })
         }
 
         async fn cancel_invocation(
@@ -2075,7 +2396,8 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
         ) -> WorkerResult<bool> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("cancel-invocation");
+            Ok(true)
         }
 
         async fn invoke_agent(
@@ -2093,6 +2415,7 @@ mod tests {
             _: AccountId,
             _: AuthCtx,
             _: golem_api_grpc::proto::golem::component::Principal,
+            _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         ) -> WorkerResult<AgentInvocationOutput> {
             self.invocations.lock().unwrap().push((
                 agent_id.clone(),
@@ -2100,6 +2423,26 @@ mod tests {
                 freshness_disposition,
             ));
             Ok(self.invocation_output.clone())
+        }
+
+        async fn deliver_card_transfer(
+            &self,
+            target_agent_id: &AgentId,
+            environment_id: EnvironmentId,
+            transfer_id: uuid::Uuid,
+            source_card_id: CardId,
+            card: StoredCard,
+            auth_ctx: AuthCtx,
+        ) -> WorkerResult<()> {
+            self.delivered_card_transfers.lock().unwrap().push((
+                target_agent_id.clone(),
+                environment_id,
+                transfer_id,
+                source_card_id,
+                card,
+                auth_ctx,
+            ));
+            Ok(())
         }
 
         async fn process_oplog_entries(
@@ -2115,7 +2458,8 @@ mod tests {
             _: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
             _: AuthCtx,
         ) -> WorkerResult<()> {
-            unimplemented!()
+            self.effects.lock().unwrap().push("process-oplog-entries");
+            Ok(())
         }
     }
 
@@ -2125,6 +2469,7 @@ mod tests {
         agent_type_name: AgentTypeName,
         component_id: ComponentId,
         component_revision: ComponentRevision,
+        environment_id: EnvironmentId,
     }
 
     impl RestHarness {
@@ -2188,6 +2533,7 @@ mod tests {
                 agent_type_name,
                 component_id,
                 component_revision,
+                environment_id,
             }
         }
 
@@ -2266,6 +2612,33 @@ mod tests {
         component_revision: ComponentRevision,
         agent_type: AgentTypeSchema,
     ) -> Component {
+        let provision_config = AgentTypeProvisionConfig {
+            initial_permissions: PolymorphicCard {
+                card_id: CardId::new(),
+                parent_ids: Vec::new(),
+                lower_positive: Vec::new(),
+                lower_negative: Vec::new(),
+                upper_positive: Vec::new(),
+                upper_negative: Vec::new(),
+                created_at: Utc::now(),
+                expires_at: None,
+                system_card: false,
+            },
+            env: BTreeMap::new(),
+            config: Vec::new(),
+            plugins: vec![InstalledPlugin {
+                environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
+                priority: PluginPriority(7),
+                parameters: BTreeMap::new(),
+                plugin_registration_id: PluginRegistrationId::new(),
+                plugin_name: "audit-plugin".to_string(),
+                plugin_version: "1.0.0".to_string(),
+                oplog_processor_component_id: None,
+                oplog_processor_component_revision: None,
+            }],
+            files: Vec::new(),
+        };
+        let agent_type_name = agent_type.type_name.clone();
         Component {
             id: component_id,
             revision: component_revision,
@@ -2284,7 +2657,7 @@ mod tests {
                 None,
                 None,
                 vec![agent_type],
-                BTreeMap::new(),
+                BTreeMap::from([(agent_type_name, provision_config)]),
             ),
             created_at: Utc::now(),
             wasm_hash: Hash::empty(),
@@ -2294,6 +2667,76 @@ mod tests {
 
     fn empty_json_tuple() -> SchemaValue {
         SchemaValue::Record { fields: vec![] }
+    }
+
+    fn test_card() -> StoredCard {
+        StoredCard::Concrete(Card {
+            card_id: CardId::new(),
+            parent_ids: vec![],
+            lower_positive: vec![],
+            lower_negative: vec![],
+            upper_positive: vec![],
+            upper_negative: vec![],
+            created_at: Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        })
+    }
+
+    fn agent_target(
+        agent_id: &AgentId,
+        verb: AgentVerb,
+        resource: AgentResourcePattern,
+    ) -> PermissionTarget {
+        PermissionTarget::Agent(ClassPermissionTarget {
+            owner: AgentOwnerPattern::Agent {
+                account: AccountEmail::new("weather@golem"),
+                application: ApplicationName::try_from("weather-app").unwrap(),
+                environment: EnvironmentName::try_from("prod").unwrap(),
+                component: ComponentName("weather-component".to_string()),
+                agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
+            },
+            verb: Some(verb),
+            resource,
+        })
+    }
+
+    fn auth_ctx_with_permissions(positive: Vec<PermissionTarget>) -> AuthCtx {
+        AuthCtx::agent_with_effective_surface(
+            AccountId::new(),
+            AccountEmail::new("caller@golem"),
+            EffectiveSurface {
+                source_card_ids: Vec::new(),
+                lower: vec![GrantSurface {
+                    positive,
+                    negative: Vec::new(),
+                }],
+                upper: Vec::new(),
+            },
+        )
+    }
+
+    fn oplog_target(agent_id: &AgentId, resource: OplogResourcePattern) -> PermissionTarget {
+        PermissionTarget::Oplog(ClassPermissionTarget {
+            owner: match agent_target(agent_id, AgentVerb::View, AgentResourcePattern::Empty) {
+                PermissionTarget::Agent(target) => target.owner,
+                _ => unreachable!(),
+            },
+            verb: Some(OplogVerb::Read),
+            resource,
+        })
+    }
+
+    fn filesystem_target(agent_id: &AgentId, verb: FilesystemVerb, path: &str) -> PermissionTarget {
+        PermissionTarget::Filesystem(ClassPermissionTarget {
+            owner: match agent_target(agent_id, AgentVerb::View, AgentResourcePattern::Empty) {
+                PermissionTarget::Agent(target) => target.owner,
+                _ => unreachable!(),
+            },
+            verb: Some(verb),
+            resource: FilesystemResourcePattern::Path(FilesystemPathPattern::parse(path).unwrap()),
+        })
     }
 
     fn phantom_id(agent_id: &AgentId) -> Option<Uuid> {
@@ -2322,6 +2765,474 @@ mod tests {
             ),
             AgentVerb::Invoke,
         );
+    }
+
+    #[test]
+    async fn invocation_target_activation_accepts_the_concrete_method_grant_only() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        let run_permission = agent_target(
+            &agent_id,
+            AgentVerb::Invoke,
+            AgentResourcePattern::Method(AgentMethodName("run".to_string())),
+        );
+
+        harness
+            .worker_service
+            .create_for_invocation(
+                &agent_id,
+                "run".to_string(),
+                HashMap::new(),
+                Vec::new(),
+                true,
+                auth_ctx_with_permissions(vec![run_permission]),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let other_method_permission = agent_target(
+            &agent_id,
+            AgentVerb::Invoke,
+            AgentResourcePattern::Method(AgentMethodName("other".to_string())),
+        );
+        assert!(
+            harness
+                .worker_service
+                .create_for_invocation(
+                    &agent_id,
+                    "run".to_string(),
+                    HashMap::new(),
+                    Vec::new(),
+                    true,
+                    auth_ctx_with_permissions(vec![other_method_permission]),
+                    None,
+                    None,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            harness
+                .worker_client
+                .created_agent_ids
+                .lock()
+                .unwrap()
+                .len(),
+            1,
+            "denied target activation reached the worker client"
+        );
+    }
+
+    #[test]
+    async fn service_operations_use_exact_agent_oplog_and_filesystem_resources() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        let path = CanonicalFilePath::from_abs_str("/data/report.txt").unwrap();
+        let invocation_id = "invocation-1";
+        let permissions = vec![
+            agent_target(&agent_id, AgentVerb::Delete, AgentResourcePattern::Empty),
+            agent_target(&agent_id, AgentVerb::Interrupt, AgentResourcePattern::Empty),
+            agent_target(&agent_id, AgentVerb::Resume, AgentResourcePattern::Empty),
+            agent_target(
+                &agent_id,
+                AgentVerb::UpdateRevision,
+                AgentResourcePattern::Empty,
+            ),
+            agent_target(&agent_id, AgentVerb::Fork, AgentResourcePattern::Empty),
+            oplog_target(&agent_id, OplogResourcePattern::range(Some(5), Some(7))),
+            filesystem_target(&agent_id, FilesystemVerb::Stat, path.as_abs_str()),
+            filesystem_target(&agent_id, FilesystemVerb::List, path.as_abs_str()),
+            filesystem_target(&agent_id, FilesystemVerb::Read, path.as_abs_str()),
+            agent_target(
+                &agent_id,
+                AgentVerb::CancelInvocation,
+                AgentResourcePattern::InvocationId(AgentInvocationIdPattern::Identifier(
+                    AgentInvocationIdentifier(invocation_id.to_string()),
+                )),
+            ),
+        ];
+        let auth_ctx = auth_ctx_with_permissions(permissions);
+
+        harness
+            .worker_service
+            .delete(&agent_id, auth_ctx.clone())
+            .await
+            .unwrap();
+        harness
+            .worker_service
+            .interrupt(&agent_id, false, auth_ctx.clone())
+            .await
+            .unwrap();
+        harness
+            .worker_service
+            .resume(&agent_id, false, auth_ctx.clone())
+            .await
+            .unwrap();
+        harness
+            .worker_service
+            .update(
+                &agent_id,
+                AgentUpdateMode::Automatic,
+                ComponentRevision::new(1).unwrap(),
+                false,
+                auth_ctx.clone(),
+            )
+            .await
+            .unwrap();
+        let fork_target = AgentId {
+            component_id: harness.component_id,
+            agent_id: "fork-target()".to_string(),
+        };
+        harness
+            .worker_service
+            .fork_worker(
+                &agent_id,
+                &fork_target,
+                OplogIndex::from_u64(4),
+                auth_ctx.clone(),
+            )
+            .await
+            .unwrap();
+        harness
+            .worker_service
+            .get_oplog(
+                &agent_id,
+                OplogIndex::from_u64(5),
+                None,
+                3,
+                auth_ctx.clone(),
+            )
+            .await
+            .unwrap();
+        harness
+            .worker_service
+            .get_file_system_node(&agent_id, path.clone(), auth_ctx.clone())
+            .await
+            .unwrap();
+        let _contents = harness
+            .worker_service
+            .get_file_contents(&agent_id, path, auth_ctx.clone())
+            .await
+            .unwrap();
+        assert!(
+            harness
+                .worker_service
+                .cancel_invocation(
+                    &agent_id,
+                    &IdempotencyKey::new(invocation_id.to_string()),
+                    auth_ctx,
+                )
+                .await
+                .unwrap()
+        );
+
+        assert_eq!(
+            *harness.worker_client.effects.lock().unwrap(),
+            vec![
+                "delete",
+                "interrupt",
+                "resume",
+                "update",
+                "fork",
+                "get-oplog",
+                "filesystem-node",
+                "file-contents",
+                "cancel-invocation",
+            ]
+        );
+    }
+
+    #[test]
+    async fn plugin_lifecycle_resolves_and_authorizes_the_concrete_plugin_name() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = build_public_agent_id(
+            harness.component_id,
+            harness.agent_type_name.clone(),
+            empty_constructor_parameters(),
+            None,
+            AgentMode::Durable,
+        )
+        .unwrap();
+        let resource =
+            AgentResourcePattern::PluginName(AgentPluginName("audit-plugin".to_string()));
+        let permissions = vec![
+            agent_target(&agent_id, AgentVerb::ActivatePlugin, resource.clone()),
+            agent_target(&agent_id, AgentVerb::DeactivatePlugin, resource),
+        ];
+        let auth_ctx = auth_ctx_with_permissions(permissions);
+
+        harness
+            .worker_service
+            .activate_plugin(&agent_id, PluginPriority(7), auth_ctx.clone())
+            .await
+            .unwrap();
+        harness
+            .worker_service
+            .deactivate_plugin(&agent_id, PluginPriority(7), auth_ctx)
+            .await
+            .unwrap();
+        assert_eq!(
+            *harness.worker_client.effects.lock().unwrap(),
+            vec![
+                "metadata",
+                "activate-plugin",
+                "metadata",
+                "deactivate-plugin"
+            ]
+        );
+
+        let wrong_permission = agent_target(
+            &agent_id,
+            AgentVerb::ActivatePlugin,
+            AgentResourcePattern::PluginName(AgentPluginName("other-plugin".to_string())),
+        );
+        assert!(
+            harness
+                .worker_service
+                .activate_plugin(
+                    &agent_id,
+                    PluginPriority(7),
+                    auth_ctx_with_permissions(vec![wrong_permission]),
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            *harness.worker_client.effects.lock().unwrap(),
+            vec![
+                "metadata",
+                "activate-plugin",
+                "metadata",
+                "deactivate-plugin",
+                "metadata"
+            ],
+            "denied plugin activation reached the activation backend"
+        );
+    }
+
+    #[test]
+    async fn revert_uses_the_concrete_cutoff_for_index_and_count_targets() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        let cutoff = OplogIndex::from_u64(42);
+        let exact_permission = agent_target(
+            &agent_id,
+            AgentVerb::Revert,
+            AgentResourcePattern::OplogIndex(cutoff.into()),
+        );
+
+        harness
+            .worker_service
+            .revert_worker(
+                &agent_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: cutoff,
+                }),
+                auth_ctx_with_permissions(vec![exact_permission.clone()]),
+            )
+            .await
+            .unwrap();
+        harness
+            .worker_service
+            .revert_worker(
+                &agent_id,
+                RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                    number_of_invocations: 1,
+                }),
+                auth_ctx_with_permissions(vec![exact_permission]),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            harness
+                .worker_service
+                .revert_worker(
+                    &agent_id,
+                    RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                        number_of_invocations: 1,
+                    }),
+                    auth_ctx_with_permissions(vec![agent_target(
+                        &agent_id,
+                        AgentVerb::Revert,
+                        AgentResourcePattern::OplogIndex(OplogIndex::from_u64(41).into()),
+                    )]),
+                )
+                .await
+                .is_err(),
+            "count-based revert authorization used a target other than the resolved cutoff"
+        );
+
+        assert_eq!(
+            *harness.worker_client.effects.lock().unwrap(),
+            vec!["revert", "revert"]
+        );
+    }
+
+    #[test]
+    async fn card_transfer_delivery_is_system_only_and_preserves_retry_identity() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let target_agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "permission-transfer-target".to_string(),
+        };
+        let transfer_id = Uuid::new_v4();
+        let source_card_id = CardId::new();
+        let card = test_card();
+
+        for _ in 0..2 {
+            harness
+                .worker_service
+                .deliver_card_transfer(
+                    &target_agent_id,
+                    harness.environment_id,
+                    transfer_id,
+                    source_card_id,
+                    card.clone(),
+                    AuthCtx::System,
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            harness.worker_client.delivered_card_transfers(),
+            vec![
+                (
+                    target_agent_id.clone(),
+                    harness.environment_id,
+                    transfer_id,
+                    source_card_id,
+                    card.clone(),
+                    AuthCtx::System,
+                ),
+                (
+                    target_agent_id.clone(),
+                    harness.environment_id,
+                    transfer_id,
+                    source_card_id,
+                    card.clone(),
+                    AuthCtx::System,
+                ),
+            ]
+        );
+
+        let non_system_auth = AuthCtx::agent_with_effective_surface(
+            AccountId::new(),
+            AccountEmail::new("caller@golem"),
+            EffectiveSurface::default(),
+        );
+        assert!(
+            harness
+                .worker_service
+                .deliver_card_transfer(
+                    &target_agent_id,
+                    harness.environment_id,
+                    transfer_id,
+                    source_card_id,
+                    card,
+                    non_system_auth,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            harness.worker_client.delivered_card_transfers().len(),
+            2,
+            "a non-system request must not reach the executor client"
+        );
+    }
+
+    #[test]
+    async fn oplog_processor_dispatch_is_system_only() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let target_agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "oplog-processor".to_string(),
+        };
+
+        harness
+            .worker_service
+            .process_oplog_entries(
+                &target_agent_id,
+                harness.environment_id,
+                harness.component_revision,
+                IdempotencyKey::fresh(),
+                AccountId::new(),
+                HashMap::new(),
+                golem_api_grpc::proto::golem::worker::AgentMetadata::default(),
+                OplogIndex::INITIAL,
+                Vec::new(),
+                AuthCtx::System,
+            )
+            .await
+            .unwrap();
+
+        let non_system_auth = AuthCtx::agent_with_effective_surface(
+            AccountId::new(),
+            AccountEmail::new("caller@golem"),
+            EffectiveSurface::default(),
+        );
+        assert!(
+            harness
+                .worker_service
+                .process_oplog_entries(
+                    &target_agent_id,
+                    harness.environment_id,
+                    harness.component_revision,
+                    IdempotencyKey::fresh(),
+                    AccountId::new(),
+                    HashMap::new(),
+                    golem_api_grpc::proto::golem::worker::AgentMetadata::default(),
+                    OplogIndex::INITIAL,
+                    Vec::new(),
+                    non_system_auth,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            *harness.worker_client.effects.lock().unwrap(),
+            vec!["process-oplog-entries"],
+            "a non-system request must not reach the executor client"
+        );
+    }
+
+    #[test]
+    fn card_transfer_wire_payload_preserves_authority_resource_kind() {
+        let permission: PermissionPattern =
+            "agent(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : activate-plugin : plugin-a"
+                .parse()
+                .unwrap();
+
+        let card = StoredCard::Concrete(Card {
+            card_id: CardId::new(),
+            parent_ids: vec![],
+            lower_positive: vec![permission],
+            lower_negative: vec![],
+            upper_positive: vec![],
+            upper_negative: vec![],
+            created_at: Utc::now(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        });
+
+        let wire_payload = desert_rust::serialize_to_byte_vec(&card).unwrap();
+        let decoded: StoredCard = desert_rust::deserialize(&wire_payload).unwrap();
+
+        assert_eq!(decoded, card, "the transfer payload must preserve the card");
     }
 
     #[test]
@@ -2475,6 +3386,7 @@ mod tests {
                 Vec::new(),
                 AuthCtx::system(),
                 Principal::anonymous().into(),
+                None,
                 None,
             )
             .await
