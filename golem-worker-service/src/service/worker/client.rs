@@ -532,12 +532,19 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             principal: None,
         };
 
-        // How many times the request has actually gone out. Both retry layers
-        // bump this: `call_worker_executor` reroutes to a new owner when an
-        // attempt fails at the transport, and the gRPC client beneath it
-        // reconnects and re-sends on a broken connection. Counting the
-        // dispatches rather than the routing attempts is deliberate, because
-        // only the lower layer knows about the second kind.
+        // How many times the request has been handed to a connection. Both
+        // retry layers bump this: `call_worker_executor` reroutes to a new
+        // owner when an attempt fails at the transport, and the gRPC client
+        // beneath it reconnects and re-sends on a broken connection. Counting
+        // dispatches rather than routing attempts is deliberate, because only
+        // the lower layer knows about the second kind.
+        //
+        // A dispatch that was handed to a connection may or may not have
+        // reached the executor: `attempt` races the call against the connection
+        // being retired, and a lost reply looks the same as a request that
+        // never left. That ambiguity is what is being counted — it is the
+        // reason the count exists, not an imprecision in it. Dispatches the
+        // executor provably turned away are taken back out again below.
         let dispatches = Arc::new(AtomicU64::new(0));
 
         self.call_worker_executor(
@@ -552,12 +559,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             },
             {
                 let dispatches = dispatches.clone();
-                move |response| {
-                    map_delete_worker_response(
-                        response.into_inner(),
-                        dispatches.load(Ordering::SeqCst),
-                    )
-                }
+                move |response| handle_delete_reply(response.into_inner(), &dispatches)
             },
             WorkerServiceError::InternalCallError,
         )
@@ -1453,7 +1455,53 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     }
 }
 
-/// Reads a `delete_worker` reply, given how many times the request has gone out.
+/// One attempt's worth of `delete_worker` reply handling.
+///
+/// Reads the reply against the dispatch count, and takes the dispatch back out
+/// of the count when the executor proved it touched nothing. Shared with the
+/// retry closure in [`WorkerExecutorWorkerClient::delete`] so that a test can
+/// drive a real sequence of attempts through the same arithmetic.
+fn handle_delete_reply(
+    response: workerexecutor::v1::DeleteWorkerResponse,
+    dispatches: &AtomicU64,
+) -> Result<(), ResponseMapResult> {
+    let reply = map_delete_worker_response(response, dispatches.load(Ordering::SeqCst));
+    if reply.touched_nothing {
+        dispatches.fetch_sub(1, Ordering::SeqCst);
+    }
+    reply.result
+}
+
+/// What a `delete_worker` reply means for the caller, and what it proves about
+/// the dispatch that produced it.
+struct DeleteReply {
+    result: Result<(), ResponseMapResult>,
+    /// Set when the executor turned the dispatch away before touching the
+    /// agent, so it must not be counted among the dispatches that might have
+    /// deleted it.
+    touched_nothing: bool,
+}
+
+impl DeleteReply {
+    /// The executor answered for this agent.
+    fn answered(result: Result<(), ResponseMapResult>) -> Self {
+        Self {
+            result,
+            touched_nothing: false,
+        }
+    }
+
+    /// The executor refused the dispatch before looking the agent up.
+    fn turned_away(error: ResponseMapResult) -> Self {
+        Self {
+            result: Err(error),
+            touched_nothing: true,
+        }
+    }
+}
+
+/// Reads a `delete_worker` reply, given how many dispatches of the request
+/// might have reached the executor.
 ///
 /// Deleting is not idempotent in its *response*. `delete_worker_internal` opens
 /// with a metadata lookup and reports the agent missing when there is nothing
@@ -1462,36 +1510,50 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 /// executor dying between doing the work and answering produces: the agent is
 /// really gone, and the caller is told it was never there.
 ///
-/// So a not-found answer is only trustworthy on the first dispatch. After that,
-/// the agent being absent is equally well explained by an earlier dispatch of
-/// this very delete having done it, and the delete is reported as having
-/// succeeded. The one case that rounds the other way is a delete of an agent
-/// that never existed whose first dispatch failed at the transport: that caller
-/// now sees success instead of not-found, which is the ordinary reading of
-/// deleting something already gone.
+/// So a not-found answer is only trustworthy while this is the only dispatch
+/// that could have done anything. Past that, the agent being absent is equally
+/// well explained by an earlier dispatch of this very delete having done it, and
+/// the delete is reported as having succeeded.
 ///
-/// Every other failure is passed through untouched at any dispatch count,
-/// `InvalidShardId` included — that one is what drives the reroute.
+/// Which is why the routing refusals are singled out rather than just passed
+/// through. `delete_worker_internal` checks it owns the agent *before* it looks
+/// up metadata and before it touches anything, so a dispatch answered with
+/// `InvalidShardId` or `ShardingNotReady` is one that provably deleted nothing.
+/// It is retried, and if it still counted, the honest not-found that came back
+/// from the real owner would be reported to the caller as a successful delete —
+/// which for an ordinary rebalance over an agent that never existed needs no
+/// crash at all to happen.
+///
+/// The one case that does round the other way is a delete of an agent that never
+/// existed whose earlier dispatch failed at the *transport*: that caller sees
+/// success instead of not-found. Nothing can distinguish it from the lost-reply
+/// case, and success is the ordinary reading of deleting something already gone.
+///
+/// Every other failure is passed through unchanged at any dispatch count.
 fn map_delete_worker_response(
     response: workerexecutor::v1::DeleteWorkerResponse,
     dispatches: u64,
-) -> Result<(), ResponseMapResult> {
+) -> DeleteReply {
     match response {
         workerexecutor::v1::DeleteWorkerResponse {
             result: Some(workerexecutor::v1::delete_worker_response::Result::Success(_)),
-        } => Ok(()),
+        } => DeleteReply::answered(Ok(())),
         workerexecutor::v1::DeleteWorkerResponse {
             result: Some(workerexecutor::v1::delete_worker_response::Result::Failure(err)),
         } => {
             let mapped: ResponseMapResult = err.into();
             match mapped {
+                error @ (ResponseMapResult::InvalidShardId { .. }
+                | ResponseMapResult::ShardingNotReady) => DeleteReply::turned_away(error),
                 ResponseMapResult::Expected(WorkerServiceError::GolemError(
                     WorkerExecutorError::AgentNotFound { .. },
-                )) if dispatches > 1 => Ok(()),
-                other => Err(other),
+                )) if dispatches > 1 => DeleteReply::answered(Ok(())),
+                other => DeleteReply::answered(Err(other)),
             }
         }
-        workerexecutor::v1::DeleteWorkerResponse { .. } => Err("Empty response".into()),
+        workerexecutor::v1::DeleteWorkerResponse { .. } => {
+            DeleteReply::answered(Err("Empty response".into()))
+        }
     }
 }
 
@@ -1538,6 +1600,23 @@ mod tests {
         }
     }
 
+    fn not_found() -> workerexecutor::v1::DeleteWorkerResponse {
+        failure(WorkerExecutorError::worker_not_found(agent_id()))
+    }
+
+    fn wrong_shard() -> workerexecutor::v1::DeleteWorkerResponse {
+        failure(WorkerExecutorError::InvalidShardId {
+            shard_id: ShardId::new(1),
+            shard_ids: vec![ShardId::new(2)],
+        })
+    }
+
+    /// Mirrors the one line in the retry closure that records a dispatch, so a
+    /// sequence test drives the same arithmetic the production path does.
+    fn dispatched(dispatches: &AtomicU64) {
+        dispatches.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// The one dispatch that can honestly say the agent was never there.
     ///
     /// Nothing else has touched the agent on this code path, so the executor's
@@ -1546,13 +1625,11 @@ mod tests {
     /// `AGENT_NOT_FOUND`.
     #[test]
     fn the_only_dispatch_of_a_delete_still_reports_a_missing_agent() {
-        let result = map_delete_worker_response(
-            failure(WorkerExecutorError::worker_not_found(agent_id())),
-            1,
-        );
+        let reply = map_delete_worker_response(not_found(), 1);
 
+        assert!(!reply.touched_nothing);
         assert!(matches!(
-            result,
+            reply.result,
             Err(ResponseMapResult::Expected(WorkerServiceError::GolemError(
                 WorkerExecutorError::AgentNotFound { .. }
             )))
@@ -1572,55 +1649,99 @@ mod tests {
     #[test]
     fn a_delete_whose_reply_was_lost_is_not_reported_as_a_missing_agent() {
         for dispatches in [2, 3, 7] {
-            let result = map_delete_worker_response(
-                failure(WorkerExecutorError::worker_not_found(agent_id())),
-                dispatches,
-            );
+            let reply = map_delete_worker_response(not_found(), dispatches);
 
             assert!(
-                result.is_ok(),
+                reply.result.is_ok(),
                 "dispatch {dispatches} must read a missing agent as its own delete having \
-                 landed, got {result:?}"
+                 landed, got {:?}",
+                reply.result
             );
         }
     }
 
-    /// Only not-found is reinterpreted, and only ever into success.
+    /// A dispatch the executor refused deleted nothing, and must not make the
+    /// next answer ambiguous.
     ///
-    /// `InvalidShardId` is the load-bearing one: it is what makes
-    /// `call_worker_executor` invalidate its routing table and try the new
-    /// owner, so swallowing it on a later dispatch would strand the delete on
-    /// an executor that does not own the agent.
+    /// `delete_worker_internal` checks ownership before it looks the agent up,
+    /// so `InvalidShardId` and `ShardingNotReady` both prove the dispatch was
+    /// turned away untouched. Both are retried. Without taking them back out of
+    /// the count, deleting an agent that never existed during an ordinary
+    /// rebalance would report success — no crash, no lost reply, just a stale
+    /// routing table.
+    ///
+    /// Driven through `handle_delete_reply` rather than asserted on the flag
+    /// alone, so the count really does come back down.
+    #[test]
+    fn a_dispatch_the_executor_turned_away_is_taken_back_out_of_the_count() {
+        for refusal in [wrong_shard, || {
+            failure(WorkerExecutorError::ShardingNotReady)
+        }] {
+            let dispatches = AtomicU64::new(0);
+
+            dispatched(&dispatches);
+            let refused = handle_delete_reply(refusal(), &dispatches);
+            assert!(refused.is_err(), "the refusal itself must still reroute");
+            assert_eq!(
+                dispatches.load(Ordering::SeqCst),
+                0,
+                "a refused dispatch must not stay in the count"
+            );
+
+            dispatched(&dispatches);
+            let answer = handle_delete_reply(not_found(), &dispatches);
+            assert!(
+                matches!(
+                    answer,
+                    Err(ResponseMapResult::Expected(WorkerServiceError::GolemError(
+                        WorkerExecutorError::AgentNotFound { .. }
+                    )))
+                ),
+                "only the reroute preceded this, so the agent really was never \
+                 there: {answer:?}"
+            );
+        }
+    }
+
+    /// The positive control for the test above: an earlier dispatch that got no
+    /// reply at all is the ambiguous one, and still converts.
+    ///
+    /// A transport failure never reaches `handle_delete_reply`, so the count
+    /// keeps it — which is the whole point of counting dispatches rather than
+    /// replies.
+    #[test]
+    fn a_dispatch_that_was_never_answered_still_makes_the_next_answer_ambiguous() {
+        let dispatches = AtomicU64::new(0);
+
+        dispatched(&dispatches); // lost at the transport: no reply to handle
+        dispatched(&dispatches);
+
+        assert!(handle_delete_reply(not_found(), &dispatches).is_ok());
+    }
+
+    /// Only not-found is reinterpreted, and only ever into success.
     #[test]
     fn a_re_sent_delete_still_surfaces_every_other_failure() {
-        let invalid_shard = map_delete_worker_response(
-            failure(WorkerExecutorError::InvalidShardId {
-                shard_id: ShardId::new(1),
-                shard_ids: vec![ShardId::new(2)],
-            }),
-            2,
-        );
-        assert!(matches!(
-            invalid_shard,
-            Err(ResponseMapResult::InvalidShardId { .. })
-        ));
-
         let unrelated =
             map_delete_worker_response(failure(WorkerExecutorError::unknown("boom")), 2);
-        assert!(matches!(unrelated, Err(ResponseMapResult::Other(_))));
+        assert!(!unrelated.touched_nothing);
+        assert!(matches!(unrelated.result, Err(ResponseMapResult::Other(_))));
 
         let empty = map_delete_worker_response(
             workerexecutor::v1::DeleteWorkerResponse { result: None },
             2,
         );
-        assert!(matches!(empty, Err(ResponseMapResult::Other(_))));
+        assert!(!empty.touched_nothing);
+        assert!(matches!(empty.result, Err(ResponseMapResult::Other(_))));
     }
 
     /// A delete that is answered is a delete that succeeded, on any dispatch.
     #[test]
     fn a_confirmed_delete_reads_the_same_on_every_dispatch() {
         for dispatches in [1, 2] {
-            assert!(map_delete_worker_response(success(), dispatches).is_ok());
+            let reply = map_delete_worker_response(success(), dispatches);
+            assert!(!reply.touched_nothing);
+            assert!(reply.result.is_ok());
         }
     }
 }
