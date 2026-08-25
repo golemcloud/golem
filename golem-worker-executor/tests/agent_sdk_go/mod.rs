@@ -16,6 +16,7 @@
 //! by `test-components/build-components.sh go`). This is the foundational suite —
 //! more scenarios (durability/replay, RPC, config, …) build on this wiring.
 
+pub mod atomic_http;
 pub mod blobstore;
 pub mod config;
 pub mod durability;

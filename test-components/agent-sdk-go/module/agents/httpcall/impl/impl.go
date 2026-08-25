@@ -16,13 +16,22 @@ import (
 
 type state struct{}
 
+func fetch(payload string) string {
+	url := "http://localhost:" + os.Getenv("PORT") + "/callback?payload=" + payload
+	resp := golem.Must(http.Get(url))
+	defer resp.Body.Close()
+	return string(golem.Must(io.ReadAll(resp.Body)))
+}
+
 var agent = golem.Implement(httpcall.Agent, func(httpcall.Id) *state { return &state{} })
 
 func init() {
 	golem.Handle(agent, httpcall.Callback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
-		url := "http://localhost:" + os.Getenv("PORT") + "/callback?payload=" + in.Payload
-		resp := golem.Must(http.Get(url))
-		defer resp.Body.Close()
-		return string(golem.Must(io.ReadAll(resp.Body)))
+		return fetch(in.Payload)
+	})
+	golem.Handle(agent, httpcall.AtomicCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
+		var body string
+		golem.Atomically(func() { body = fetch(in.Payload) })
+		return body
 	})
 }

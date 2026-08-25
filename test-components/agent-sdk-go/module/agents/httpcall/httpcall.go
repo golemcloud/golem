@@ -14,3 +14,8 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 
 var Callback = golem.DefineMethod[Id, CallbackIn, string]("callback",
 	golem.Desc("GET the PORT callback endpoint with the payload and return its body"))
+
+// AtomicCallback makes the same call inside golem.Atomically — the minimal case
+// for "does an outbound HTTP call settle before an atomic region closes?".
+var AtomicCallback = golem.DefineMethod[Id, CallbackIn, string]("atomic-callback",
+	golem.Desc("GET the callback endpoint inside an atomic region"))
