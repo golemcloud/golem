@@ -141,8 +141,8 @@ pub(super) fn task_for_marker_receipt(
     tokio::spawn(async move { await_marker_receipt(&mut receipt).await })
 }
 
-/// A deferred guest-delivery token returned by [`CallHandle::complete_access_deferred`] /
-/// [`CallHandle::replay_access_deferred`] for call sites whose result crosses one more fallible
+/// A deferred guest-delivery token returned by [`DurableCallSession::complete_access_deferred`] /
+/// [`DurableCallSession::replay_access_deferred`] for call sites whose result crosses one more fallible
 /// boundary *after* the durable terminal is recorded — a second-stage channel send to the guest
 /// task, a span finish plus resource-state transition before the host method returns, or a wire
 /// conversion. The plain `complete_access` boundary (the accessor terminal itself) is too early
@@ -463,7 +463,7 @@ impl CompletionDelivery {
     ///
     /// Starting a later durable call on the same host subtask while this observer is still armed
     /// is a forbidden host-function pattern (see
-    /// [`CallHandle::supersede_prior_completion_delivery`], which hard-errors): host code must
+    /// [`DurableCallSession::supersede_prior_completion_delivery`], which hard-errors): host code must
     /// arm the observer only as the tail operation of its host function. That invariant is what
     /// lets a markerless `End` be tail-gated on replay — a completion consumed host-internally
     /// would legitimize durable tail entries that depend on an unmarked delivery.
@@ -602,7 +602,7 @@ impl CompletionDelivery {
 impl CompletionDelivery {
     /// A live-armed token over `oplog` whose torn/failed delivery appends a
     /// `CompletionDiscarded` marker for `start_idx`, exactly as
-    /// [`CallHandle::complete_access_deferred`] arms one for a persisted live call whose `End`
+    /// [`DurableCallSession::complete_access_deferred`] arms one for a persisted live call whose `End`
     /// is already durable. `oplog` must already contain the call's `Start`/`End` entries (the
     /// token's replay state is built over its current contents).
     pub(crate) async fn test_live_armed(
@@ -641,7 +641,7 @@ impl CompletionDelivery {
     }
 
     /// A replay token for a recorded discarded completion, as
-    /// [`CallHandle::replay_access_deferred`] returns when the recorded run persisted the `End`
+    /// [`DurableCallSession::replay_access_deferred`] returns when the recorded run persisted the `End`
     /// but never delivered it.
     pub(crate) fn test_replay_discarded() -> Self {
         Self::replay_discarded()
@@ -657,7 +657,7 @@ impl CompletionDelivery {
 
     /// A tail-gated replay token for a markerless completed `End` (the recorded run crashed
     /// after the `End` became durable but before the completion crossed to the guest), exactly
-    /// as [`CallHandle::replay_access_deferred`] builds one. `replay_state` must be the state
+    /// as [`DurableCallSession::replay_access_deferred`] builds one. `replay_state` must be the state
     /// replaying `oplog`, with the call's `Start` already claimed and resolved — as the real
     /// replay path guarantees before it constructs the token.
     pub(crate) fn test_replay_at_tail(

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::durability::InFunctionRetryHost;
 use crate::durable_host::suspendable_wait::{
     ParkOutcome, PromiseWaiting, SuspendableWaitContext, chrono_duration_to_nanos,
@@ -39,7 +39,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> wasmtime::Result<bool> {
         self.observe_function_call("io::poll:pollable", "ready");
         let rep = self_.rep();
-        let handle = CallHandle::<IoPollReady, NotCancellable>::start(
+        let handle = DurableCallSession::<IoPollReady, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
@@ -181,7 +181,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         };
 
         let count = in_.len();
-        let mut handle = CallHandle::<IoPollPoll, NotCancellable>::start(
+        let mut handle = DurableCallSession::<IoPollPoll, NotCancellable>::start(
             self,
             HostRequestPollCount { count },
             DurableFunctionType::ReadLocal,

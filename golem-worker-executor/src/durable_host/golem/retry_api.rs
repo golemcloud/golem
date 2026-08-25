@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{CallHandle, NotCancellable};
+use crate::durable_host::concurrent::{DurableCallSession, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::preview2::golem_api_1_x::retry::{
@@ -36,7 +36,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_retry_policies(&mut self) -> anyhow::Result<Vec<WitNamedRetryPolicy>> {
         self.observe_function_call("golem::api::retry", "get_retry_policies");
 
-        let handle = CallHandle::<GolemApiRetryGetRetryPolicies, NotCancellable>::start(
+        let handle = DurableCallSession::<GolemApiRetryGetRetryPolicies, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::ReadRemote,
@@ -59,12 +59,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<WitNamedRetryPolicy>> {
         self.observe_function_call("golem::api::retry", "get_retry_policy_by_name");
 
-        let handle = CallHandle::<GolemApiRetryGetRetryPolicyByName, NotCancellable>::start(
-            self,
-            HostRequestGolemRetryPolicyByName { name: name.clone() },
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let handle =
+            DurableCallSession::<GolemApiRetryGetRetryPolicyByName, NotCancellable>::start(
+                self,
+                HostRequestGolemRetryPolicyByName { name: name.clone() },
+                DurableFunctionType::ReadRemote,
+            )
+            .await?;
 
         let persisted = handle
             .run(self, async |ctx| -> anyhow::Result<_> {
@@ -95,7 +96,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .collect();
 
-        let handle = CallHandle::<GolemApiRetryResolveRetryPolicy, NotCancellable>::start(
+        let handle = DurableCallSession::<GolemApiRetryResolveRetryPolicy, NotCancellable>::start(
             self,
             HostRequestGolemRetryResolvePolicy {
                 verb,

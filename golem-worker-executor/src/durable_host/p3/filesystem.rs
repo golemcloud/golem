@@ -25,7 +25,8 @@ use std::task::{Context, Poll};
 use crate::durable_host::LiveAuthorizationPermit;
 use crate::durable_host::authorization::targets::{CanonicalGuestPath, filesystem_target};
 use crate::durable_host::concurrent::{
-    CallHandle, CallReplayOutcome, NotCancellable, authorize_live_permissions_at_serialized_access,
+    CallReplayOutcome, DurableCallSession, NotCancellable,
+    authorize_live_permissions_at_serialized_access,
 };
 use crate::durable_host::filesystem::types::calculate_metadata_hash_parts;
 use crate::durable_host::p3::{
@@ -968,7 +969,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let authorization_result = Arc::new(Mutex::new(None));
         let authorization_for_start = Arc::clone(&authorization_result);
         let fd_rep = fd.rep();
-        let mut handle = CallHandle::<
+        let mut handle = DurableCallSession::<
             P3FilesystemTypesDescriptorWriteViaStream,
             NotCancellable,
         >::start_access_with(
@@ -983,12 +984,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                         "",
                     );
                     let result = match path {
-                        Ok(path) => authorize_paths(
-                            accessor,
-                            &[(FilesystemVerb::Write, path)],
-                        )
-                        .await
-                        .map_err(|_| ()),
+                        Ok(path) => authorize_paths(accessor, &[(FilesystemVerb::Write, path)])
+                            .await
+                            .map_err(|_| ()),
                         Err(_) => Err(()),
                     };
                     *authorization_for_start.lock().unwrap() = Some(result);
@@ -1099,7 +1097,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let authorization_result = Arc::new(Mutex::new(None));
         let authorization_for_start = Arc::clone(&authorization_result);
         let fd_rep = fd.rep();
-        let mut handle = CallHandle::<
+        let mut handle = DurableCallSession::<
             P3FilesystemTypesDescriptorAppendViaStream,
             NotCancellable,
         >::start_access_with(
@@ -1114,12 +1112,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                         "",
                     );
                     let result = match path {
-                        Ok(path) => authorize_paths(
-                            accessor,
-                            &[(FilesystemVerb::Write, path)],
-                        )
-                        .await
-                        .map_err(|_| ()),
+                        Ok(path) => authorize_paths(accessor, &[(FilesystemVerb::Write, path)])
+                            .await
+                            .map_err(|_| ()),
                         Err(_) => Err(()),
                     };
                     *authorization_for_start.lock().unwrap() = Some(result);

@@ -17,6 +17,7 @@
 
 pub(crate) mod authorization;
 pub mod blobstore;
+mod call_coordinator;
 mod cli;
 mod clocks;
 mod concurrent;
@@ -3139,7 +3140,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     /// Appends a completed child host call inside a durable scope, as an eager `Start` immediately
-    /// followed by its matching `End`. Unlike [`crate::durable_host::concurrent::CallHandle::start`]
+    /// followed by its matching `End`. Unlike [`crate::durable_host::concurrent::DurableCallSession::start`]
     /// this never opens a new durable scope — it records the result of a poll on an async future
     /// (HTTP / RPC) within a request/invoke scope that the caller opens and closes itself.
     ///

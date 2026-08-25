@@ -15,7 +15,7 @@
 use crate::durable_host::authorization::targets::{
     agent_method_target, agent_owner, config_segments_target,
 };
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::secrets::secret_hold_target_for_path;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
@@ -303,7 +303,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn get_all_agent_types_model(
         &mut self,
     ) -> anyhow::Result<Vec<RegisteredAgentTypeSchema>> {
-        let mut handle = CallHandle::<GolemAgentGetAllAgentTypes, NotCancellable>::start(
+        let mut handle = DurableCallSession::<GolemAgentGetAllAgentTypes, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::ReadRemote,
@@ -353,7 +353,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type_name: AgentTypeName,
     ) -> anyhow::Result<Option<RegisteredAgentTypeSchema>> {
-        let mut handle = CallHandle::<GolemAgentGetAgentType, NotCancellable>::start(
+        let mut handle = DurableCallSession::<GolemAgentGetAgentType, NotCancellable>::start(
             self,
             HostRequestGolemAgentGetAgentType {
                 agent_type_name: agent_type_name.clone(),
@@ -545,7 +545,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             false
         };
-        let mut handle = CallHandle::<GolemAgentCreateWebhook, NotCancellable>::start(
+        let mut handle = DurableCallSession::<GolemAgentCreateWebhook, NotCancellable>::start(
             self,
             HostRequestGolemApiPromiseId {
                 promise_id: promise_id.clone(),
@@ -671,7 +671,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             false
         };
 
-        let begun = CallHandle::<GolemAgentGetConfigValue, NotCancellable>::begin(
+        let begun = DurableCallSession::<GolemAgentGetConfigValue, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
         )

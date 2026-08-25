@@ -14,7 +14,8 @@
 
 use crate::durable_host::authorization::targets::udp_target;
 use crate::durable_host::concurrent::{
-    CallHandle, CallReplayOutcome, NotCancellable, authorize_live_permissions_at_serialized_access,
+    CallReplayOutcome, DurableCallSession, NotCancellable,
+    authorize_live_permissions_at_serialized_access,
 };
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call, run_read_access,
@@ -81,15 +82,16 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         } else {
             false
         };
-        let mut handle = CallHandle::<P3SocketsTypesUdpSocketConnect, NotCancellable>::start(
-            self.0.durable_ctx_mut(),
-            HostRequestP3SocketsConnect {
-                remote_address: remote_address.into(),
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await
-        .map_err(SocketError::trap)?;
+        let mut handle =
+            DurableCallSession::<P3SocketsTypesUdpSocketConnect, NotCancellable>::start(
+                self.0.durable_ctx_mut(),
+                HostRequestP3SocketsConnect {
+                    remote_address: remote_address.into(),
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await
+            .map_err(SocketError::trap)?;
         if !handle.is_live() {
             match handle
                 .replay(self.0.durable_ctx_mut())
