@@ -73,7 +73,7 @@ pub trait FileSystem {
         release: PromiseId,
     ) -> Result<(), String>;
     fn hash(&self, path: String) -> Result<HashResult, String>;
-    fn stream_to_file(&self, path: String, len: u64) -> Result<(), String>;
+    fn write_zeroes_to_file_via_stream(&self, path: String, len: u64) -> Result<(), String>;
     fn stream_to_stdout(&self, len: u64) -> Result<(), String>;
     fn blocking_stream_and_flush_to_file(&self, path: String, len: u64) -> Result<(), String>;
     /// Set the size of a file using `descriptor::set_size` (the WASI pwrite-truncate path).
@@ -288,7 +288,7 @@ impl FileSystem for FileSystemImpl {
             .map_err(|e| format!("{e:?}"))
     }
 
-    fn stream_to_file(&self, path: String, len: u64) -> Result<(), String> {
+    fn write_zeroes_to_file_via_stream(&self, path: String, len: u64) -> Result<(), String> {
         let dirs = wasi::filesystem::preopens::get_directories();
         let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
         let rel = path.trim_start_matches('/');
@@ -301,7 +301,9 @@ impl FileSystem for FileSystemImpl {
             )
             .map_err(|e| format!("{e:?}"))?;
         let stream: OutputStream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
-        stream.write_zeroes(len).map_err(|e| format!("{e:?}"))
+        stream
+            .blocking_write_zeroes_and_flush(len)
+            .map_err(|e| format!("{e:?}"))
     }
 
     fn stream_to_stdout(&self, len: u64) -> Result<(), String> {

@@ -3492,7 +3492,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "stream_to_file",
+            "write_zeroes_to_file_via_stream",
             data_value!("/testfile.txt", 131_072_u64),
         )
         .await?;

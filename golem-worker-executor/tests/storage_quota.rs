@@ -333,14 +333,14 @@ async fn agent_quota_stream_write_exceeding_limit_fails(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "stream_to_file",
+            "write_zeroes_to_file_via_stream",
             data_value!("/stream.bin", 1024u64),
         )
         .await;
 
     assert!(
         result.is_err(),
-        "expected stream_to_file to fail when quota exceeded"
+        "expected write_zeroes_to_file_via_stream to fail when quota exceeded"
     );
     let err_str = format!("{result:?}");
     assert!(
@@ -381,7 +381,7 @@ async fn agent_quota_stream_write_within_limit_succeeds(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "stream_to_file",
+            "write_zeroes_to_file_via_stream",
             data_value!("/stream.bin", 1024u64),
         )
         .await?;
@@ -421,11 +421,14 @@ async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
         .invoke_and_await_agent(
             &component,
             &failing_agent_id,
-            "stream_to_file",
+            "write_zeroes_to_file_via_stream",
             data_value!("/big.bin", 2 * 1024 * 1024u64),
         )
         .await;
-    assert!(failed.is_err(), "expected oversized stream_to_file to fail");
+    assert!(
+        failed.is_err(),
+        "expected oversized write_zeroes_to_file_via_stream to fail"
+    );
 
     // A second worker should still be able to allocate and write if the first
     // worker's failed attempt released pool permits.
@@ -438,7 +441,7 @@ async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
         .invoke_and_await_agent(
             &component,
             &succeeding_agent_id,
-            "stream_to_file",
+            "write_zeroes_to_file_via_stream",
             data_value!("/small.bin", 1024u64),
         )
         .await?;
@@ -453,8 +456,8 @@ async fn executor_pool_stream_write_failed_attempt_does_not_leak_pool_permits(
     Ok(())
 }
 
-/// Overwriting the same file with `stream_to_file` must not double-charge
-/// quota when the file does not grow.
+/// Overwriting the same file with `write_zeroes_to_file_via_stream` must not
+/// double-charge quota when the file does not grow.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -481,7 +484,7 @@ async fn agent_quota_stream_overwrite_same_file_should_not_double_charge(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "stream_to_file",
+            "write_zeroes_to_file_via_stream",
             data_value!("/same-stream.bin", 1024u64),
         )
         .await?;
@@ -490,7 +493,7 @@ async fn agent_quota_stream_overwrite_same_file_should_not_double_charge(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "stream_to_file",
+            "write_zeroes_to_file_via_stream",
             data_value!("/same-stream.bin", 1024u64),
         )
         .await?;
@@ -896,8 +899,8 @@ async fn agent_quota_pwrite_overwrite_same_range_should_not_double_charge(
 }
 
 /// Storage quota is cumulative across write paths. Writing via `write_file`
-/// and then via `stream_to_file` both count against the same per-agent
-/// quota. If their combined sizes exceed the limit, the second write fails.
+/// and then via `write_zeroes_to_file_via_stream` both count against the same
+/// per-agent quota. If their combined sizes exceed the limit, the second write fails.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -909,7 +912,8 @@ async fn agent_quota_cumulative_across_write_paths(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     // 15-byte quota. First write: 11 bytes ("hello world") via write_file.
-    // Second write: 8 bytes via stream_to_file — combined 19 bytes > 15 → fails.
+    // Second write: 8 bytes via write_zeroes_to_file_via_stream — combined
+    // 19 bytes > 15 → fails.
     let executor = start_with_agent_storage_quota(deps, &context, 15).await?;
 
     let component = executor
@@ -937,14 +941,14 @@ async fn agent_quota_cumulative_across_write_paths(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "stream_to_file",
+            "write_zeroes_to_file_via_stream",
             data_value!("/stream.bin", 8u64),
         )
         .await;
 
     assert!(
         result.is_err(),
-        "expected stream_to_file to fail: combined writes exceed quota"
+        "expected write_zeroes_to_file_via_stream to fail: combined writes exceed quota"
     );
     let err_str = format!("{result:?}");
     assert!(
