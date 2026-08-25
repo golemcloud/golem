@@ -353,6 +353,85 @@ mod tests {
         assert!(parsed.promise_selection.is_some());
     }
 
+    /// The S6 shape. Same contract as the S3, S7, S10 and S11 tests: the
+    /// investigation report in golem-cloud reads these fields by name.
+    #[test]
+    fn an_s6_result_carries_the_resurrection_fields_the_investigation_report_reads() {
+        use crate::chaos::deletions::DeleteRound;
+        use crate::chaos::resurrection::ResurrectionReport;
+        use crate::chaos::split::{FaultWindow, PodSplit};
+
+        let now = Utc::now();
+        let agent = "chaos-s6-delete-0000".to_string();
+        let split = PodSplit {
+            pod_address: "10.0.1.1:9000".to_string(),
+            pod_ip: "10.0.1.1".to_string(),
+            on_pod: vec![agent.clone()],
+            elsewhere: Vec::new(),
+            targets_per_pod: std::collections::BTreeMap::new(),
+            number_of_shards: 1024,
+        };
+
+        let mut result = sample_result(TerminationReason::Completed);
+        result.scenario_code = "S6".to_string();
+        result.delete = Some(crate::chaos::DeleteConfig {
+            agents: 200,
+            increments_per_round: 3,
+            interval_millis: 500,
+            recovery_budget_secs: 60,
+        });
+        result.delete_selection = Some(split.clone());
+        result.summary = ChaosSummary::build(&[], Vec::new(), Vec::new(), Some(now))
+            .with_resurrection(ResurrectionReport::build(
+                &[DeleteRound {
+                    agent,
+                    round: 0,
+                    before_delete: Some(3),
+                    outcome: crate::chaos::history::Outcome::Confirmed,
+                    submitted_at: now,
+                    completed_at: Some(now),
+                    observed_after: Some(1),
+                }],
+                &split,
+                Some(FaultWindow {
+                    injected_at: now,
+                    recovered_at: None,
+                }),
+                3,
+            ));
+
+        let json = serde_json::to_value(&result).unwrap();
+        let resurrection = &json["summary"]["resurrection"];
+        for key in [
+            "incrementsPerRound",
+            "roundsRecorded",
+            "deletesConfirmed",
+            "deletesIndeterminate",
+            "deletesRejected",
+            "deletedExactly",
+            "indeterminateThatDeleted",
+            "indeterminateThatDidNot",
+            "unjudgeable",
+            "unprobed",
+            "cells",
+            "caughtByTheKill",
+            "findings",
+            "findingsOmitted",
+        ] {
+            assert!(
+                !resurrection[key].is_null(),
+                "summary.resurrection.{key} is what the investigation report reads"
+            );
+        }
+        assert_eq!(json["delete"]["incrementsPerRound"], 3);
+        assert_eq!(json["deleteSelection"]["podIp"], "10.0.1.1");
+
+        let parsed: ChaosResult = serde_json::from_str(&json.to_string()).unwrap();
+        assert_eq!(parsed.scenario_code, "S6");
+        assert!(parsed.summary.resurrection.is_some());
+        assert!(parsed.delete_selection.is_some());
+    }
+
     /// The S7 shape. Same contract as the S3, S10 and S11 tests: the
     /// investigation report in golem-cloud reads these fields by name.
     #[test]
