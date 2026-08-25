@@ -1,6 +1,6 @@
 ---
 name: golem-atomic-block-go
-description: "Using atomic regions, idempotence mode, oplog commit, and durable idempotency keys in a Go Golem project. Use when the user asks about Atomically, idempotence mode, oplog commit, or generating an idempotency key in a Go Golem project."
+description: "Using atomic regions, custom durable operations (DurableOp), idempotence mode, oplog commit, and durable idempotency keys in a Go Golem project. Use when the user asks about Atomically, DurableOp / custom durability, idempotence mode, oplog commit, or generating an idempotency key in a Go Golem project."
 ---
 
 # Atomic Regions and Durability Controls (Go)
@@ -67,6 +67,48 @@ golem.Atomically(func() {
 > have **two or more external side effects** that must not be left half-applied
 > across a crash. For compensating multi-step workflows, prefer the saga helpers in
 > `golem-add-transactions-go`, which build on this primitive.
+
+## Custom Durability for Libraries
+
+The low-level `golem:durability@1.6.0` interface is for **SDK and library authors**,
+not an application tuning knob. It lets a library record several raw host effects
+as one custom durable operation. `golem.DurableOp[In, Out]` owns the live
+invocation: on the live path it runs the body, encodes and persists the typed
+result, and returns it; on replay it returns the recorded result **without
+running the body**.
+
+```go
+result := golem.DurableOp(
+	golem.DurableSpec{
+		Interface: "my-lib",
+		Function:  "fetch",
+		Type:      golem.WriteRemote, // commit/replay policy
+	},
+	request, // recorded alongside the result, so the oplog is self-describing
+	func() FetchResult { // runs only on the live path
+		return doRawSideEffect(request)
+	},
+)
+```
+
+Failure has two distinct channels:
+
+- **Return a value** to record the outcome. If `Out` is a `golem.Result[Ok, Err]`,
+  an `Err` is a *recorded durable failure* — persisted and replayed like any other
+  value, so the operation is **not** retried. There is no separate fallible API:
+  the general schema codec already encodes `golem.Result` as a WIT `result<ok,err>`.
+- **Panic** for a transient defect: the unfinished invocation is dropped without an
+  `End`, so recovery **re-executes** the whole body. Use `panic` / `golem.Must`
+  when the effect should be retried rather than recorded.
+
+`Type` (`golem.DurableFunctionType`) picks the commit/replay policy: `ReadLocal`,
+`WriteLocal`, `ReadRemote`, `WriteRemote` (the usual choice for an external side
+effect), or `WriteRemoteBatched(begin...)` / `WriteRemoteTransaction(begin...)` to
+group writes. Set `DurableSpec.ForcedCommit` to force an efficient oplog commit at
+the end. There is no async variant — a blocking body already suspends the fiber.
+
+Make repeated attempts safe: choose the correct `Type` classification, use external
+idempotency keys, or wrap the work in a transaction (`golem-add-transactions-go`).
 
 ## Idempotence Mode
 
