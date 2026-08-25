@@ -697,6 +697,7 @@ pub mod bindings {
           anyhow: true,
           with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
           },
           wasmtime_crate: ::wasmtime
     });
