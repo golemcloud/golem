@@ -642,18 +642,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             anyhow!("Expected config type for path {path_str} is not a valid schema graph: {e}")
         })?;
 
+        let is_secret_config = self.parsed_agent_id().is_some_and(|agent_id| {
+            self.owner_component_metadata()
+                .metadata
+                .find_agent_type_by_name(&agent_id.agent_type)
+                .is_some_and(|agent_type| {
+                    agent_type.config.iter().any(|entry| {
+                        entry.path == path && entry.source == AgentConfigSource::Secret
+                    })
+                })
+        });
         let is_live = self.state.is_live();
         let denied = if is_live {
-            let is_secret_config = self.parsed_agent_id().is_some_and(|agent_id| {
-                self.owner_component_metadata()
-                    .metadata
-                    .find_agent_type_by_name(&agent_id.agent_type)
-                    .is_some_and(|agent_type| {
-                        agent_type.config.iter().any(|entry| {
-                            entry.path == path && entry.source == AgentConfigSource::Secret
-                        })
-                    })
-            });
             let targets = config_segments_target(agent_owner(self), &path)
                 .map_err(|_| ())
                 .and_then(|target| {
@@ -671,124 +671,94 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             false
         };
 
-        let begun = CallHandle::<GolemAgentGetConfigValue, NotCancellable>::begin(
+        let uses_resolver = is_secret_config;
+        let handle = CallHandle::<GolemAgentGetConfigValue, NotCancellable>::start(
             self,
+            HostRequestGolemAgentGetConfigValue {
+                path: path.clone(),
+                expected_type: expected_graph.clone(),
+            },
             DurableFunctionType::ReadRemote,
         )
         .await?;
-        let request = HostRequestGolemAgentGetConfigValue {
-            path: path.clone(),
-            expected_type: expected_graph.clone(),
-        };
-        let mut handle = if begun.is_live() {
-            begun.start_live(self, request).await?
-        } else {
-            begun.start_replay(self).await?
-        };
-
-        let persisted = 'response: {
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(response) => break 'response (response, true),
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+        let response = handle
+            .run(self, async move |ctx| {
+                if denied {
+                    return Ok(HostResponseGolemAgentGetConfigValue {
+                        result: Err("permission denied".to_string()),
+                    });
                 }
-            }
-            if denied {
-                break 'response (
-                    handle
-                        .complete(
-                            self,
-                            HostResponseGolemAgentGetConfigValue {
-                                result: Err("permission denied".to_string()),
-                            },
+
+                let agent_id = ctx
+                    .parsed_agent_id()
+                    .ok_or_else(|| anyhow!("only agentic workers can access agent config"))?;
+
+                let agent_type = ctx
+                    .owner_component_metadata()
+                    .metadata
+                    .find_agent_type_by_name(&agent_id.agent_type)
+                    .expect("Active agent type of agent was not declared in component metadata");
+
+                let declaration = agent_type.config.iter().find(|c| c.path == path);
+                let declaration_value_type = declaration.map(|d| d.value_type.clone());
+
+                let schema_value = match declaration {
+                    // Allow reading undeclared optional config keys so that
+                    // newer agents can run against older component schemas.
+                    None if matches!(
+                        resolve_schema_ref(&expected_graph, &expected_graph.root),
+                        SchemaType::Option { .. }
+                    ) =>
+                    {
+                        SchemaValue::Option { inner: None }
+                    }
+                    None => return Err(anyhow!("No config declared for path {path_str}")),
+                    Some(declaration) if declaration.source == AgentConfigSource::Local => ctx
+                        .resolve_local_config(
+                            &path,
+                            &path_str,
+                            &expected_graph,
+                            &expected_graph.root,
+                            &agent_type.schema,
+                            declaration_value_type
+                                .as_ref()
+                                .expect("existing config declaration must have a value type"),
+                        )?,
+                    Some(declaration) if declaration.source == AgentConfigSource::Secret => {
+                        ctx.resolve_secret_config(
+                            path,
+                            &path_str,
+                            expected_graph,
+                            &agent_type.schema,
+                            declaration_value_type
+                                .as_ref()
+                                .expect("existing config declaration must have a value type"),
                         )
-                        .await?,
-                    false,
-                );
-            }
+                        .await?
+                    }
+                    Some(declaration) => {
+                        return Err(anyhow!(
+                            "Unsupported config source {:?} for path {path_str}",
+                            declaration.source
+                        ));
+                    }
+                };
 
-            let agent_id = self
-                .parsed_agent_id()
-                .ok_or_else(|| anyhow!("only agentic workers can access agent config"))?;
+                Ok(HostResponseGolemAgentGetConfigValue {
+                    result: Ok(schema_value),
+                })
+            })
+            .await?;
 
-            let agent_type = self
-                .owner_component_metadata()
-                .metadata
-                .find_agent_type_by_name(&agent_id.agent_type)
-                .expect("Active agent type of agent was not declared in component metadata");
-
-            let declaration = agent_type.config.iter().find(|c| c.path == path);
-
-            let declaration_value_type = declaration.map(|d| d.value_type.clone());
-
-            let (schema_value, uses_resolver): (SchemaValue, bool) = match declaration {
-                // Allow reading undeclared optional config keys so that
-                // newer agents can run against older component schemas.
-                None if matches!(
-                    resolve_schema_ref(&expected_graph, &expected_graph.root),
-                    SchemaType::Option { .. }
-                ) =>
-                {
-                    (SchemaValue::Option { inner: None }, false)
-                }
-                None => return Err(anyhow!("No config declared for path {path_str}")),
-                Some(declaration) if declaration.source == AgentConfigSource::Local => (
-                    self.resolve_local_config(
-                        &path,
-                        &path_str,
-                        &expected_graph,
-                        &expected_graph.root,
-                        &agent_type.schema,
-                        declaration_value_type
-                            .as_ref()
-                            .expect("existing config declaration must have a value type"),
-                    )?,
-                    false,
-                ),
-                Some(declaration) if declaration.source == AgentConfigSource::Secret => (
-                    self.resolve_secret_config(
-                        path,
-                        &path_str,
-                        expected_graph,
-                        &agent_type.schema,
-                        declaration_value_type
-                            .as_ref()
-                            .expect("existing config declaration must have a value type"),
-                    )
-                    .await?,
-                    true,
-                ),
-                Some(declaration) => {
-                    return Err(anyhow!(
-                        "Unsupported config source {:?} for path {path_str}",
-                        declaration.source
-                    ));
-                }
-            };
-
-            // Encode the schema-native value into the wire value tree returned
-            // across the `golem:agent/host@2.0.0` boundary. Secret-backed config is
-            // the only capability-minting source here; local config still uses the
-            // pure encoder so a quota token remains a schema/config error.
-            let response = handle
-                .complete(
-                    self,
-                    HostResponseGolemAgentGetConfigValue {
-                        result: Ok(schema_value),
-                    },
-                )
-                .await?;
-            break 'response (response, uses_resolver);
-        };
-
-        let (schema_value, uses_resolver) = match persisted {
-            (HostResponseGolemAgentGetConfigValue { result: Ok(value) }, uses_resolver) => {
-                (value, uses_resolver)
-            }
-            (HostResponseGolemAgentGetConfigValue { result: Err(_) }, _) => {
+        let schema_value = match response {
+            HostResponseGolemAgentGetConfigValue { result: Ok(value) } => value,
+            HostResponseGolemAgentGetConfigValue { result: Err(_) } => {
                 return Ok(Err(ConfigValueError::PermissionDenied));
             }
         };
+
+        // Secret-backed config is the only capability-minting source here. Local config uses the
+        // pure encoder so a quota token remains a schema/config error.
         let encoded = if uses_resolver {
             encode_value_with(&schema_value, self)
         } else {

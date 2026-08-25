@@ -31,6 +31,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::application::{Application, ApplicationId};
+use golem_common::model::card::parse_polymorphic_permission;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
@@ -902,13 +903,31 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
-    /// Starts an agent type without default host permissions.
+    /// Starts an agent type without default host permissions except Golem-provided runtime
+    /// metadata.
     pub fn without_default_host_permissions(mut self, agent_type: &str) -> Self {
+        let recipient = RecipientPattern::Account {
+            account: self.dsl.account_email(),
+        }
+        .render();
+        let runtime_metadata = [
+            "GOLEM_AGENT_ID",
+            "GOLEM_AGENT_TYPE",
+            "GOLEM_WORKER_NAME",
+            "GOLEM_COMPONENT_ID",
+            "GOLEM_COMPONENT_REVISION",
+        ]
+        .into_iter()
+        .map(|name| {
+            parse_polymorphic_permission(&format!("env(?agent) @ {recipient} : read : {name}"))
+                .expect("valid Golem-provided runtime metadata permission")
+        })
+        .collect();
         self.agent_type_provision_configs.insert(
             AgentTypeName(agent_type.to_string()),
             AgentTypeProvisionConfigCreation {
                 initial_permissions: AgentTypeInitialPermissions::from_patterns(
-                    Vec::new(),
+                    runtime_metadata,
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
