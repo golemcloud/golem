@@ -86,7 +86,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
+use wasmtime::{AsContextMut, MemoryKind, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 
 pub struct DebugContext {
@@ -390,16 +390,22 @@ impl ResourceLimiterAsync for DebugContext {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
+        kind: MemoryKind,
     ) -> wasmtime::Result<bool> {
-        self.durable_memory_growing(current, desired, maximum).await
+        self.durable_memory_growing(current, desired, maximum, kind)
+            .await
     }
 
-    fn memory_grown(&mut self, current: usize, desired: usize) {
-        self.durable_memory_grown(current, desired);
+    fn memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) {
+        self.durable_memory_grown(current, desired, kind);
     }
 
-    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
-        self.durable_memory_grow_failed()
+    fn memory_grow_failed(
+        &mut self,
+        _error: wasmtime::Error,
+        kind: MemoryKind,
+    ) -> wasmtime::Result<()> {
+        self.durable_memory_grow_failed(kind)
     }
 
     async fn table_growing(

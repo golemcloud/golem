@@ -76,8 +76,8 @@ pub fn wasmtime_artifact_fingerprint(engine: &Engine) -> String {
 mod tests {
     use super::*;
     use test_r::test;
-    use wasmtime::OptLevel;
     use wasmtime::component::Component;
+    use wasmtime::{Engine, Module, OptLevel};
 
     #[test]
     fn precompiled_components_are_compatible_across_engines() -> anyhow::Result<()> {
@@ -121,5 +121,25 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    /// Golem leaves the WebAssembly GC proposal disabled, so Wasmtime never allocates a GC
+    /// heap and `MemoryKind::GcHeap` never reaches a resource limiter.
+    ///
+    /// `DurableResourceLimiter` in golem-worker-executor relies on that: it admits GC heap
+    /// growth without taking a linear-memory admission grant, because the collector's capacity
+    /// is not memory the guest declared and Golem's per-agent memory accounting is keyed to
+    /// guest linear memory. Enabling GC would make this test fail, which is the point -- that
+    /// accounting decision has to be revisited before agents can allocate GC objects.
+    #[test]
+    fn gc_proposal_is_disabled() {
+        let engine = Engine::new(&create_wasmtime_config_without_fs_cache()).unwrap();
+        // A `struct` type definition is only valid with the GC proposal enabled.
+        let error = Module::new(&engine, "(module (type (struct (field i32))))")
+            .expect_err("the GC proposal is expected to be disabled");
+        assert!(
+            format!("{error:?}").contains("gc"),
+            "expected a GC-proposal rejection, got: {error:?}"
+        );
     }
 }
