@@ -209,11 +209,19 @@ struct AttemptResult {
 /// reports, so it needs each operation's answer in hand rather than having to
 /// go looking for its own record in a history every other emitter is also
 /// appending to.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct OperationOutcome {
     pub outcome: Outcome,
     /// The value the operation returned, for the methods that return one.
     pub value: Option<u32>,
+    /// The last error, verbatim, for callers that need to tell one refusal from
+    /// another. [`crate::chaos::deletions`] does: a delete refused because the
+    /// agent was not there means something quite different from any other
+    /// refusal.
+    ///
+    /// Only ever `Some` on a failure, so the clone costs nothing on the path
+    /// every scenario actually runs.
+    pub error: Option<String>,
 }
 
 /// Runs one operation with the configured bounded, same-key retry, and records
@@ -334,6 +342,7 @@ where
         );
     }
 
+    let error = last.error.as_ref().map(|e| format!("{e:#}"));
     ctx.history.record(OperationRecord {
         op_id,
         stream,
@@ -348,7 +357,7 @@ where
         duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
         returned_value: last.value,
         first_attempt_value,
-        error: last.error.as_ref().map(|e| format!("{e:#}")),
+        error: error.clone(),
         error_class: last.class,
         attempt_log,
     });
@@ -356,6 +365,7 @@ where
     OperationOutcome {
         outcome,
         value: last.value,
+        error,
     }
 }
 

@@ -388,9 +388,10 @@ mod tests {
                     round: 0,
                     before_delete: Some(3),
                     outcome: crate::chaos::history::Outcome::Confirmed,
+                    rejected_as_not_found: false,
                     submitted_at: now,
                     completed_at: Some(now),
-                    observed_after: Some(1),
+                    observed_after: Some(0),
                 }],
                 &split,
                 Some(FaultWindow {

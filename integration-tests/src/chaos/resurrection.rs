@@ -17,10 +17,10 @@
 //! The same two-value oracle [`crate::chaos::truncation`] uses, one step
 //! further. There a round asked the platform to forget some of an agent's work;
 //! here it asks it to forget the agent. Invoking a deleted id creates a **new**
-//! agent, so the next round's first increment has exactly two legal answers:
+//! agent, so the counter a deletion leaves behind has exactly two legal values:
 //!
-//! * `1` — the deletion took, and this is a fresh agent counting from nothing
-//! * `V + 1` — the deletion did not take, and the old agent is still there
+//! * `0` — the deletion took, and the id is a fresh agent counting from nothing
+//! * `V` — the deletion did not take, and the old agent is still there
 //!
 //! Anything else means an agent came back carrying part of a state it was
 //! supposed to have lost.
@@ -46,7 +46,7 @@
 //! leaves an agent marked for deletion that was never removed. Whoever picks up
 //! its shard next decides what that means.
 
-use crate::chaos::deletions::{DeleteRound, FIRST_VALUE_OF_A_NEW_AGENT};
+use crate::chaos::deletions::{COUNTER_OF_A_NEW_AGENT, DeleteRound};
 use crate::chaos::history::Outcome;
 use crate::chaos::split::{FaultWindow, Group, PodSplit, Window};
 use serde::{Deserialize, Serialize};
@@ -65,7 +65,11 @@ pub enum ResurrectionViolation {
     /// The agent came back worth neither nothing nor what it had been: part of
     /// a state it was supposed to have lost survived.
     PartialState,
-    /// The platform refused the deletion and the agent is gone anyway.
+    /// The platform refused the deletion and the agent is gone anyway, for a
+    /// reason other than not finding it.
+    ///
+    /// A refusal that says the agent was not there is **not** this: see
+    /// [`ResurrectionReport::deleted_despite_not_found`].
     RefusedButDeleted,
 }
 
@@ -142,6 +146,18 @@ pub struct ResurrectionReport {
     pub indeterminate_that_deleted: u64,
     /// Deletes the driver never heard back about that did not.
     pub indeterminate_that_did_not: u64,
+    /// Deletions the platform reported as `AGENT_NOT_FOUND` whose agent was
+    /// nonetheless gone afterwards.
+    ///
+    /// Not a violation, and the distinction matters. Deleting is not
+    /// idempotent — `delete_worker_internal` opens with a metadata lookup and
+    /// returns not-found when there is nothing there — and worker-service's
+    /// routing layer retries a call whose executor became unreachable. So a
+    /// delete that succeeded, on an executor that then died, is retried against
+    /// the new owner and comes back as not-found. The work happened; the answer
+    /// is misleading. That is worth an operator's attention and is not the
+    /// platform resurrecting anything.
+    pub deleted_despite_not_found: u64,
     pub unjudgeable: u64,
     pub unprobed: u64,
     pub cells: Vec<ResurrectionCell>,
@@ -153,6 +169,8 @@ pub struct ResurrectionReport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {
     Deleted,
+    /// Gone, but reported to the caller as "no such agent".
+    DeletedDespiteNotFound,
     Survived,
     Violation(ResurrectionViolation),
     Unjudgeable,
@@ -168,14 +186,18 @@ fn judge(round: &DeleteRound) -> Verdict {
         return Verdict::Unprobed;
     };
 
-    if observed == FIRST_VALUE_OF_A_NEW_AGENT {
-        // Gone. Legitimate unless the platform said it refused.
+    if observed == COUNTER_OF_A_NEW_AGENT {
+        // Gone. Legitimate unless the platform said it refused — and even then,
+        // one refusal means the opposite of what it looks like. See below.
         if round.outcome == Outcome::Rejected {
+            if round.rejected_as_not_found {
+                return Verdict::DeletedDespiteNotFound;
+            }
             return Verdict::Violation(ResurrectionViolation::RefusedButDeleted);
         }
         return Verdict::Deleted;
     }
-    if observed == before + 1 {
+    if observed == before {
         // Still there. Legitimate unless the platform said it was gone.
         if round.outcome == Outcome::Confirmed {
             return Verdict::Violation(ResurrectionViolation::ResurrectedWithState);
@@ -204,6 +226,7 @@ impl ResurrectionReport {
             deleted_exactly: 0,
             indeterminate_that_deleted: 0,
             indeterminate_that_did_not: 0,
+            deleted_despite_not_found: 0,
             unjudgeable: 0,
             unprobed: 0,
             cells: Vec::new(),
@@ -243,6 +266,10 @@ impl ResurrectionReport {
                     } else {
                         report.indeterminate_that_deleted += 1;
                     }
+                }
+                Verdict::DeletedDespiteNotFound => {
+                    cell.deleted += 1;
+                    report.deleted_despite_not_found += 1;
                 }
                 Verdict::Survived => {
                     cell.survived += 1;
@@ -332,6 +359,17 @@ impl ResurrectionReport {
             ));
         }
 
+        if self.deleted_despite_not_found > 0 {
+            lines.push(format!(
+                "S6: {} deletion(s) came back as AGENT_NOT_FOUND and had in fact taken effect. \
+                 Deleting is not idempotent and worker-service retries a call whose executor \
+                 became unreachable, so a delete that succeeded on a dying pod is reported to \
+                 the caller as though the agent had never existed. The work happened; the \
+                 answer did not say so.",
+                self.deleted_despite_not_found
+            ));
+        }
+
         let caught: u64 = self
             .caught_by_the_kill
             .iter()
@@ -413,9 +451,8 @@ fn detail_for(violation: ResurrectionViolation, before: u64, observed: u64) -> S
         ),
         ResurrectionViolation::PartialState => format!(
             "the agent was worth {before} when it was deleted and the slot came back worth \
-             {observed}, which is neither a new agent ({FIRST_VALUE_OF_A_NEW_AGENT}) nor the \
-             old one ({}): part of a state it was supposed to have lost survived",
-            before + 1
+             {observed}, which is neither a new agent ({COUNTER_OF_A_NEW_AGENT}) nor the old \
+             one ({before}): part of a state it was supposed to have lost survived"
         ),
         ResurrectionViolation::RefusedButDeleted => format!(
             "the platform refused to delete an agent worth {before} and it is gone anyway — the \
@@ -472,6 +509,7 @@ mod tests {
             round: 0,
             before_delete: before,
             outcome,
+            rejected_as_not_found: false,
             submitted_at,
             completed_at: Some(submitted_at + TimeDelta::milliseconds(90)),
             observed_after: observed,
@@ -495,7 +533,7 @@ mod tests {
             -10,
             Some(BEFORE),
             Outcome::Confirmed,
-            Some(1),
+            Some(0),
         )]);
         assert!(violations(&report).is_empty(), "{:?}", report.findings);
         assert_eq!(report.deleted_exactly, 1);
@@ -511,7 +549,7 @@ mod tests {
             -10,
             Some(BEFORE),
             Outcome::Confirmed,
-            Some(BEFORE + 1),
+            Some(BEFORE),
         )]);
         assert_eq!(
             violations(&report),
@@ -520,13 +558,13 @@ mod tests {
         assert!(report.has_violations(), "this must be able to fail the run");
         let finding = &report.findings[0];
         assert_eq!(finding.before, BEFORE);
-        assert_eq!(finding.observed, BEFORE + 1);
+        assert_eq!(finding.observed, BEFORE);
     }
 
     /// Its opposite: refused, and gone regardless.
     #[test]
     fn a_refused_deletion_that_happened_anyway_is_a_finding() {
-        let report = build(&[round(ON_POD, -10, Some(BEFORE), Outcome::Rejected, Some(1))]);
+        let report = build(&[round(ON_POD, -10, Some(BEFORE), Outcome::Rejected, Some(0))]);
         assert_eq!(
             violations(&report),
             vec![ResurrectionViolation::RefusedButDeleted]
@@ -537,13 +575,13 @@ mod tests {
     /// to be gone survived.
     #[test]
     fn a_slot_that_came_back_part_way_is_a_finding() {
-        // Worth 3, so 1 or 4 were legal. It reported 3.
+        // Worth 3, so the delete was allowed to leave 0 or 3. It left 2.
         let report = build(&[round(
             ON_POD,
             -10,
             Some(BEFORE),
             Outcome::Confirmed,
-            Some(3),
+            Some(2),
         )]);
         assert_eq!(
             violations(&report),
@@ -561,13 +599,13 @@ mod tests {
     #[test]
     fn a_deletion_in_doubt_may_land_either_way_without_being_a_finding() {
         let report = build(&[
-            round(ON_POD, -10, Some(BEFORE), Outcome::Indeterminate, Some(1)),
+            round(ON_POD, -10, Some(BEFORE), Outcome::Indeterminate, Some(0)),
             round(
                 CONTROL,
                 -10,
                 Some(BEFORE),
                 Outcome::Indeterminate,
-                Some(BEFORE + 1),
+                Some(BEFORE),
             ),
         ]);
         assert!(violations(&report).is_empty(), "{:?}", report.findings);
@@ -591,7 +629,7 @@ mod tests {
         // At before = 1 every value is one of the two legal answers, so no
         // observation can ever produce this finding. `require_delete` refuses
         // the configuration rather than shipping a blind third of the oracle.
-        for observed in [1, 2] {
+        for observed in [0, 1] {
             let report = build(&[round(
                 ON_POD,
                 -10,
@@ -608,7 +646,7 @@ mod tests {
 
     #[test]
     fn a_round_whose_increments_never_answered_is_not_judged() {
-        let report = build(&[round(ON_POD, -10, None, Outcome::Confirmed, Some(1))]);
+        let report = build(&[round(ON_POD, -10, None, Outcome::Confirmed, Some(0))]);
         assert_eq!(report.unjudgeable, 1);
         assert!(report.findings.is_empty());
     }
@@ -629,7 +667,7 @@ mod tests {
             -100,
             Some(BEFORE),
             Outcome::Confirmed,
-            Some(1),
+            Some(0),
         )]);
         assert!(report.caught_by_the_kill.is_empty());
         assert!(
@@ -646,7 +684,7 @@ mod tests {
     /// scenario is about.
     #[test]
     fn deletes_unresolved_when_the_pod_died_are_reported_separately() {
-        let mut caught = round(ON_POD, -1, Some(BEFORE), Outcome::Indeterminate, Some(1));
+        let mut caught = round(ON_POD, -1, Some(BEFORE), Outcome::Indeterminate, Some(0));
         caught.completed_at = Some(t0() + TimeDelta::seconds(30));
         let report = build(&[caught]);
 
@@ -668,9 +706,9 @@ mod tests {
     #[test]
     fn rounds_are_split_by_group_and_window() {
         let report = build(&[
-            round(ON_POD, -10, Some(BEFORE), Outcome::Confirmed, Some(1)),
-            round(ON_POD, 10, Some(BEFORE), Outcome::Confirmed, Some(1)),
-            round(CONTROL, 10, Some(BEFORE), Outcome::Confirmed, Some(1)),
+            round(ON_POD, -10, Some(BEFORE), Outcome::Confirmed, Some(0)),
+            round(ON_POD, 10, Some(BEFORE), Outcome::Confirmed, Some(0)),
+            round(CONTROL, 10, Some(BEFORE), Outcome::Confirmed, Some(0)),
         ]);
         let cell = |g, w| {
             report
@@ -687,18 +725,100 @@ mod tests {
         );
     }
 
+    /// The bug the first S6 run reported 125 times, pinned.
+    ///
+    /// A slot's last round has no increment after it and is closed by a plain
+    /// read instead. A read reports the counter directly; an increment reports
+    /// the counter it just raised. `observed_after` means the counter the
+    /// deletion left behind, so the *workload* subtracts one from the increment
+    /// and the final read stores its value as-is. Get that backwards and every
+    /// slot's last round reads as a partial state — 125 findings out of 138,275
+    /// rounds, all in `after-fault`, all with the same shape.
+    #[test]
+    fn a_round_closed_by_the_final_read_is_judged_on_the_same_scale() {
+        // A deleted agent reads 0. That is the fresh value, not a partial one.
+        let closed_by_read = build(&[round(
+            ON_POD,
+            -10,
+            Some(BEFORE),
+            Outcome::Confirmed,
+            Some(COUNTER_OF_A_NEW_AGENT),
+        )]);
+        assert!(
+            violations(&closed_by_read).is_empty(),
+            "a final read of a deleted agent must not read as a partial state: {:?}",
+            closed_by_read.findings
+        );
+        assert_eq!(closed_by_read.deleted_exactly, 1);
+
+        // And a survivor read reports what it was worth, not one more.
+        let survivor = build(&[round(
+            ON_POD,
+            -10,
+            Some(BEFORE),
+            Outcome::Indeterminate,
+            Some(BEFORE),
+        )]);
+        assert!(violations(&survivor).is_empty(), "{:?}", survivor.findings);
+        assert_eq!(survivor.indeterminate_that_did_not, 1);
+    }
+
+    /// The other thing the first run found, and the reason it is not a finding.
+    ///
+    /// Deleting is not idempotent, and worker-service retries a call whose
+    /// executor became unreachable. So a delete that succeeded on a pod that
+    /// then died is retried against the new owner and comes back
+    /// `AGENT_NOT_FOUND`. The agent really is gone; only the answer is wrong.
+    #[test]
+    fn a_not_found_refusal_whose_agent_is_gone_is_reported_not_failed() {
+        let mut r = round(
+            ON_POD,
+            -10,
+            Some(BEFORE),
+            Outcome::Rejected,
+            Some(COUNTER_OF_A_NEW_AGENT),
+        );
+        r.rejected_as_not_found = true;
+        let report = build(&[r]);
+
+        assert!(violations(&report).is_empty(), "{:?}", report.findings);
+        assert_eq!(report.deleted_despite_not_found, 1);
+        assert!(
+            report
+                .attention_lines()
+                .iter()
+                .any(|l| l.contains("AGENT_NOT_FOUND") && l.contains("had in fact taken effect")),
+            "the operator still has to be told: {:?}",
+            report.attention_lines()
+        );
+    }
+
+    /// Any *other* refusal with the agent gone is still a finding. The
+    /// not-found case is an exception with a mechanism behind it, not a blanket
+    /// excuse for refusals.
+    #[test]
+    fn a_refusal_that_is_not_about_finding_the_agent_still_fails_the_run() {
+        let mut r = round(
+            ON_POD,
+            -10,
+            Some(BEFORE),
+            Outcome::Rejected,
+            Some(COUNTER_OF_A_NEW_AGENT),
+        );
+        r.rejected_as_not_found = false;
+        let report = build(&[r]);
+
+        assert_eq!(
+            violations(&report),
+            vec![ResurrectionViolation::RefusedButDeleted]
+        );
+        assert!(report.has_violations());
+    }
+
     #[test]
     fn findings_beyond_the_cap_are_counted_rather_than_carried() {
         let rounds: Vec<DeleteRound> = (0..MAX_FINDINGS + 4)
-            .map(|_| {
-                round(
-                    ON_POD,
-                    -10,
-                    Some(BEFORE),
-                    Outcome::Confirmed,
-                    Some(BEFORE + 1),
-                )
-            })
+            .map(|_| round(ON_POD, -10, Some(BEFORE), Outcome::Confirmed, Some(BEFORE)))
             .collect();
         let report = build(&rounds);
         assert_eq!(report.findings.len(), MAX_FINDINGS);

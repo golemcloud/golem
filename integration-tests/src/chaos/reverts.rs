@@ -79,6 +79,16 @@ pub struct RevertRound {
     pub observed_after: Option<u64>,
 }
 
+/// The counter an operation left behind, given what the *next* increment
+/// reported.
+///
+/// Same conversion as [`crate::chaos::deletions::counter_left_by`] and named for
+/// the same reason: the account judges `observed_after` as a counter, and the
+/// increment probe reports one more than that.
+pub fn counter_left_by(increment_returned: u64) -> u64 {
+    increment_returned.saturating_sub(1)
+}
+
 /// A running revert workload.
 pub struct RevertHandle {
     stop: Arc<AtomicU8>,
@@ -168,7 +178,7 @@ pub fn start(ctx: WorkloadContext, config: &RevertConfig) -> RevertHandle {
                         && let Ok(mut rounds) = rounds.lock()
                         && let Some(entry) = rounds.get_mut(slot)
                     {
-                        entry.observed_after = Some(observed.saturating_sub(1));
+                        entry.observed_after = Some(counter_left_by(observed));
                     }
 
                     match value {
@@ -297,6 +307,16 @@ mod tests {
         assert_eq!(config().net_per_round(), 2);
         assert_eq!(expected_after(&config(), 0), 0);
         assert_eq!(expected_after(&config(), 10), 20);
+    }
+
+    /// The increment probe and the final read have to land on the same scale.
+    /// See [`crate::chaos::deletions::counter_left_by`] for the run that proved
+    /// what happens when they do not.
+    #[test]
+    fn the_two_probes_agree_on_what_a_revert_left_behind() {
+        assert_eq!(counter_left_by(9), 8);
+        assert_eq!(counter_left_by(1), 0);
+        assert_eq!(counter_left_by(0), 0);
     }
 
     /// A revert that takes back everything it added is legal and leaves the
