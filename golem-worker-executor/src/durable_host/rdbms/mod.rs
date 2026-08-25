@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::authorization::targets::{RdbmsEngine, rdbms_sql_targets, rdbms_target};
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::durability::{HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::keyvalue::environment_owner;
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
@@ -224,7 +224,7 @@ where
     dyn RdbmsService: RdbmsTypeService<T>,
     E: From<RdbmsError>,
 {
-    let begun = CallHandle::<T::ConnBeginTransaction, NotCancellable>::begin(
+    let begun = DurableCallSession::<T::ConnBeginTransaction, NotCancellable>::begin(
         ctx,
         DurableFunctionType::ReadLocal,
     )
@@ -353,7 +353,7 @@ where
         None
     };
 
-    let mut handle = CallHandle::<T::ConnExecute, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::ConnExecute, NotCancellable>::start(
         ctx,
         request,
         DurableFunctionType::WriteRemote,
@@ -479,7 +479,7 @@ where
         None
     };
 
-    let mut handle = CallHandle::<T::ConnQuery, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::ConnQuery, NotCancellable>::start(
         ctx,
         request,
         DurableFunctionType::WriteRemote,
@@ -595,7 +595,7 @@ where
             "golem::rdbms::db-connection::query-stream",
         )
         .await?;
-    let mut handle = CallHandle::<T::ConnQueryStream, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::ConnQueryStream, NotCancellable>::start(
         ctx,
         HostRequestNoInput {},
         DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
@@ -741,7 +741,7 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx))
     };
 
-    let mut handle = CallHandle::<T::StreamGetColumns, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::StreamGetColumns, NotCancellable>::start(
         ctx,
         HostRequestNoInput {},
         durable_function_type,
@@ -818,7 +818,7 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx))
     };
 
-    let mut handle = CallHandle::<T::StreamGetNext, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::StreamGetNext, NotCancellable>::start(
         ctx,
         HostRequestNoInput {},
         durable_function_type,
@@ -978,7 +978,7 @@ where
         None
     };
 
-    let mut handle = CallHandle::<T::TxnQuery, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::TxnQuery, NotCancellable>::start(
         ctx,
         request,
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
@@ -1099,7 +1099,7 @@ where
         None
     };
 
-    let mut handle = CallHandle::<T::TxnExecute, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::TxnExecute, NotCancellable>::start(
         ctx,
         request,
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
@@ -1176,7 +1176,7 @@ where
     } else {
         None
     };
-    let mut handle = CallHandle::<T::TxnQueryStream, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::TxnQueryStream, NotCancellable>::start(
         ctx,
         HostRequestNoInput {},
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),

@@ -27,7 +27,8 @@ use wasmtime::component::{Accessor, HasSelf, Resource};
 
 use crate::durable_host::authorization::targets::kv_target;
 use crate::durable_host::concurrent::{
-    CallHandle, CallReplayOutcome, Cancellable, authorize_live_permissions_at_serialized_access,
+    CallReplayOutcome, Cancellable, DurableCallSession,
+    authorize_live_permissions_at_serialized_access,
 };
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{
@@ -45,14 +46,14 @@ use crate::preview2::wasi::keyvalue::cache::{
 use crate::workerctx::WorkerCtx;
 
 pub struct CacheFutureGetResultEntry {
-    handle: Option<CallHandle<P3KeyvalueCacheGet, Cancellable>>,
+    handle: Option<DurableCallSession<P3KeyvalueCacheGet, Cancellable>>,
     environment_id: EnvironmentId,
     key: Key,
     denial: Option<String>,
 }
 
 pub struct CacheFutureExistsResultEntry {
-    handle: Option<CallHandle<P3KeyvalueCacheExists, Cancellable>>,
+    handle: Option<DurableCallSession<P3KeyvalueCacheExists, Cancellable>>,
     environment_id: EnvironmentId,
     key: Key,
     denial: Option<String>,
@@ -63,7 +64,7 @@ pub struct CacheFutureResultEntry {
 }
 
 pub struct CacheFutureGetOrSetResultEntry {
-    handle: Option<CallHandle<P3KeyvalueCacheGetOrSet, Cancellable>>,
+    handle: Option<DurableCallSession<P3KeyvalueCacheGetOrSet, Cancellable>>,
     environment_id: EnvironmentId,
     key: Key,
     permit: Option<LiveAuthorizationPermit>,
@@ -79,14 +80,14 @@ pub struct CacheVacancyEntry {
 
 enum CacheFutureResultOperation {
     Set {
-        handle: Option<CallHandle<P3KeyvalueCacheSet, Cancellable>>,
+        handle: Option<DurableCallSession<P3KeyvalueCacheSet, Cancellable>>,
         environment_id: EnvironmentId,
         key: Key,
         value: Vec<u8>,
         denial: Option<String>,
     },
     Delete {
-        handle: Option<CallHandle<P3KeyvalueCacheDelete, Cancellable>>,
+        handle: Option<DurableCallSession<P3KeyvalueCacheDelete, Cancellable>>,
         environment_id: EnvironmentId,
         key: Key,
         denial: Option<String>,
@@ -286,8 +287,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
 {
     async fn drop(accessor: &Accessor<U, Self>, rep: Resource<FutureResult>) -> anyhow::Result<()> {
         enum Handle {
-            Set(CallHandle<P3KeyvalueCacheSet, Cancellable>),
-            Delete(CallHandle<P3KeyvalueCacheDelete, Cancellable>),
+            Set(DurableCallSession<P3KeyvalueCacheSet, Cancellable>),
+            Delete(DurableCallSession<P3KeyvalueCacheDelete, Cancellable>),
         }
 
         let handle = accessor.with(|mut access| {
@@ -322,14 +323,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureResultWithStore<U>
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
         enum Action {
             Set {
-                handle: CallHandle<P3KeyvalueCacheSet, Cancellable>,
+                handle: DurableCallSession<P3KeyvalueCacheSet, Cancellable>,
                 environment_id: EnvironmentId,
                 key: Key,
                 value: Vec<u8>,
                 denial: Option<String>,
             },
             Delete {
-                handle: CallHandle<P3KeyvalueCacheDelete, Cancellable>,
+                handle: DurableCallSession<P3KeyvalueCacheDelete, Cancellable>,
                 environment_id: EnvironmentId,
                 key: Key,
                 denial: Option<String>,
@@ -558,7 +559,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostVacancyWithStore<U> for HasSelf<Dura
                 Ok::<_, anyhow::Error>(())
             })?;
         }
-        let handle = CallHandle::<P3KeyvalueCacheVacancyFill, Cancellable>::start_access(
+        let handle = DurableCallSession::<P3KeyvalueCacheVacancyFill, Cancellable>::start_access(
             accessor,
             accessor.getter(),
             HostRequestKVCacheKeyAndTtl {
@@ -596,13 +597,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostVacancyWithStore<U> for HasSelf<Dura
             Ok::<_, anyhow::Error>((entry.filled, entry.key.clone()))
         })?;
         if !filled {
-            let mut handle = CallHandle::<P3KeyvalueCacheVacancyDrop, Cancellable>::start_access(
-                accessor,
-                accessor.getter(),
-                HostRequestKVCacheKey { key },
-                DurableFunctionType::WriteRemote,
-            )
-            .await?;
+            let mut handle =
+                DurableCallSession::<P3KeyvalueCacheVacancyDrop, Cancellable>::start_access(
+                    accessor,
+                    accessor.getter(),
+                    HostRequestKVCacheKey { key },
+                    DurableFunctionType::WriteRemote,
+                )
+                .await?;
 
             accessor.with(|mut access| {
                 access.get().table().delete(rep)?;
@@ -650,7 +652,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         } else {
             None
         };
-        let handle = CallHandle::<P3KeyvalueCacheGet, Cancellable>::start_access(
+        let handle = DurableCallSession::<P3KeyvalueCacheGet, Cancellable>::start_access(
             accessor,
             accessor.getter(),
             HostRequestKVCacheKey { key: k.clone() },
@@ -681,7 +683,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         } else {
             None
         };
-        let handle = CallHandle::<P3KeyvalueCacheExists, Cancellable>::start_access(
+        let handle = DurableCallSession::<P3KeyvalueCacheExists, Cancellable>::start_access(
             accessor,
             accessor.getter(),
             HostRequestKVCacheKey { key: k.clone() },
@@ -721,7 +723,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         } else {
             Vec::new()
         };
-        let handle = CallHandle::<P3KeyvalueCacheSet, Cancellable>::start_access(
+        let handle = DurableCallSession::<P3KeyvalueCacheSet, Cancellable>::start_access(
             accessor,
             accessor.getter(),
             HostRequestKVCacheKeyValueAndTtl {
@@ -778,7 +780,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         } else {
             (None, None)
         };
-        let handle = CallHandle::<P3KeyvalueCacheGetOrSet, Cancellable>::start_access(
+        let handle = DurableCallSession::<P3KeyvalueCacheGetOrSet, Cancellable>::start_access(
             accessor,
             accessor.getter(),
             HostRequestKVCacheKey { key: k.clone() },
@@ -810,7 +812,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         } else {
             None
         };
-        let handle = CallHandle::<P3KeyvalueCacheDelete, Cancellable>::start_access(
+        let handle = DurableCallSession::<P3KeyvalueCacheDelete, Cancellable>::start_access(
             accessor,
             accessor.getter(),
             HostRequestKVCacheKey { key: k.clone() },

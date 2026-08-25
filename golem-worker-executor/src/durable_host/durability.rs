@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::call_coordinator::{
+    DurableCallAdmission, DurableCallBoundary, DurableCallCoordinator,
+};
 use crate::durable_host::concurrent::{self, DropEvent, Resolution, ResolutionOutcome};
 use crate::metrics::wasm::{
     record_custom_invocation_scope_open, record_host_function_call, record_in_function_retry,
@@ -20,7 +23,7 @@ use crate::metrics::wasm::{
 use crate::model::ExecutionStatus;
 use crate::preview2::golem::durability::durability;
 use crate::services::environment_state::EnvironmentStateService;
-use crate::services::oplog::{CommitLevel, OplogOps};
+use crate::services::oplog::OplogOps;
 use crate::services::{HasOplog, HasWorker};
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
@@ -37,7 +40,6 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_service_base::model::auth::AuthCtx;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display};
 use std::future::Future;
@@ -493,7 +495,7 @@ pub fn find_durable_call_trap_context(error: &anyhow::Error) -> Option<DurableCa
 }
 
 /// An error type that can carry a [`DurableCallTrapContextMarker`] in its chain, used as the error
-/// bound of the Shape-A `CallHandle::run` combinator.
+/// bound of the Shape-A `DurableCallSession::run` combinator.
 ///
 /// Implemented only for `anyhow::Error` / `wasmtime::Error` (which preserve the marker chain). It is
 /// deliberately **not** implemented for typed errors such as `WorkerExecutorError`: converting a
@@ -501,7 +503,7 @@ pub fn find_durable_call_trap_context(error: &anyhow::Error) -> Option<DurableCa
 /// ambient-fallback misclassification under overlap. So a `run` call site that wants a typed error
 /// must instead return `wasmtime::Result`/`anyhow::Result` and map the error at the boundary.
 pub trait DurableCallTrapError: From<WorkerExecutorError> + Into<anyhow::Error> {
-    /// Re-wraps a marked `anyhow::Error` (produced by [`CallHandle::trap`]) back into this error
+    /// Re-wraps a marked `anyhow::Error` (produced by [`DurableCallSession::trap`]) back into this error
     /// type, preserving the marker chain.
     fn from_durable_call_trap(error: anyhow::Error) -> Self;
 }
@@ -518,7 +520,7 @@ impl DurableCallTrapError for wasmtime::Error {
     }
 }
 
-/// A failure escaping a live *terminal* durable-call step — `CallHandle::complete` /
+/// A failure escaping a live *terminal* durable-call step — `DurableCallSession::complete` /
 /// `complete_access` / `cancel` / `cancel_access` and the dropped-call cancellation drain — paired
 /// with that call's own [`DurableCallTrapContext`].
 ///
@@ -1001,7 +1003,7 @@ pub trait DurabilityHost: InFunctionRetryHost {
     /// when the worker is executing a read-only agent method. This is the single, central
     /// place where that guard lives: every host call that wants to perform a write side
     /// effect funnels through `begin_durable_function` (either directly or via the concurrent
-    /// durability `CallHandle`), so the read-only trap is uniformly enforced here without any
+    /// durability `DurableCallSession`), so the read-only trap is uniformly enforced here without any
     /// per-callsite checks.
     async fn begin_durable_function(
         &mut self,
@@ -1848,77 +1850,6 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    pub(crate) async fn begin_durable_function_with_agent_authority(
-        &mut self,
-        function_type: &DurableFunctionType,
-        host_function: &str,
-    ) -> Result<(OplogIndex, Option<AuthCtx>), WorkerExecutorError> {
-        self.begin_durable_function_with_agent_authority_capture(
-            function_type,
-            host_function,
-            |ctx| ctx.agent_auth_ctx(),
-        )
-        .await
-    }
-
-    pub(crate) async fn begin_durable_function_with_agent_authority_capture<T>(
-        &mut self,
-        function_type: &DurableFunctionType,
-        host_function: &str,
-        mut capture: impl FnMut(&mut Self) -> T,
-    ) -> Result<(OplogIndex, Option<T>), WorkerExecutorError> {
-        self.check_durable_function_allowed(function_type, host_function)?;
-        let mut captured = self
-            .capture_live_agent_authority_at_boundary(&mut capture)
-            .await?;
-        let begin_index = self.begin_function(function_type).await?;
-        if captured.is_none() {
-            if self.state.snapshotting_mode && self.state.is_replay() {
-                // Snapshot loading executes guest code without durable host-call records while
-                // replay is positioned at the snapshot. Use the authority reconstructed from the
-                // persisted snapshot rather than consulting current card state.
-                captured = Some(capture(self));
-            } else if self.state.is_live() {
-                captured = self
-                    .capture_live_agent_authority_at_boundary(&mut capture)
-                    .await?;
-            }
-        }
-        Ok((begin_index, captured))
-    }
-
-    fn check_durable_function_allowed(
-        &self,
-        function_type: &DurableFunctionType,
-        host_function: &str,
-    ) -> Result<(), WorkerExecutorError> {
-        // Generic read-only side-effect trap. For any `Write*` durable function type, refuse
-        // the call up front when the worker is executing a read-only agent method. This is the
-        // single, central place that enforces the read-only contract — outgoing HTTP, RPC,
-        // KV/blobstore writes, RDBMS queries/transactions, worker-management calls, websocket
-        // writes, etc. all funnel through `begin_durable_function` (directly or via the
-        // concurrent durability `CallHandle`) and are uniformly rejected here before any oplog
-        // entry is appended. The `GolemSpecificWasmTrap` is folded into
-        // `WorkerExecutorError::ReadOnlyViolation` so the trap survives the conversion chain
-        // (anyhow → wasmtime::Error → StreamError / SocketError) and can later be recognised
-        // by `TrapType::from_error` as `AgentError::ReadOnlyViolation`.
-        if is_write_side_effect(function_type)
-            && let Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
-                method,
-                host_function,
-            }) = DurableWorkerCtx::check_read_only_allows(self, host_function)
-        {
-            return Err(WorkerExecutorError::ReadOnlyViolation {
-                method,
-                host_function,
-            });
-        }
-
-        Ok(())
-    }
-}
-
 #[async_trait]
 impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     fn observe_function_call(&self, interface: &str, function: &str) {
@@ -1930,9 +1861,10 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         host_function: &str,
     ) -> Result<OplogIndex, WorkerExecutorError> {
-        self.check_durable_function_allowed(function_type, host_function)?;
-        self.synchronize_agent_wallet_at_boundary().await?;
-        self.begin_function(function_type).await
+        DurableCallCoordinator::new(self)
+            .admit(DurableCallAdmission::new(function_type, host_function))
+            .await
+            .map(DurableCallBoundary::begin_index)
     }
 
     async fn end_durable_function(
@@ -1941,25 +1873,13 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         begin_index: OplogIndex,
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
-        self.end_function(function_type, begin_index).await?;
-        if !self.state.snapshotting_mode
-            && (function_type == &DurableFunctionType::WriteRemote
-                || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
-                || matches!(
-                    function_type,
-                    DurableFunctionType::WriteRemoteTransaction(_)
-                )
-                || forced_commit)
-        {
-            self.public_state
-                .worker()
-                .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                .await;
-            // Just committed at a durable-op boundary: this is the single safe place to advance the
-            // mid-invocation clean status checkpoint (status now reflects the committed tip).
-            self.maybe_mid_invocation_checkpoint().await;
-        }
-        Ok(())
+        DurableCallCoordinator::new(self)
+            .finish(
+                function_type,
+                DurableCallBoundary::from_begin_index(begin_index),
+                forced_commit,
+            )
+            .await
     }
 
     async fn persist_durable_function_invocation(
@@ -2119,7 +2039,7 @@ pub enum OplogEntryVersion {
 
 /// Holds the in-function retry decision logic for a single durable host call, decoupled from how
 /// the call's request/response is persisted or replayed. Both the sequential [`Durability`] and the
-/// concurrent [`crate::durable_host::concurrent::CallHandle`] own one and route their
+/// concurrent [`crate::durable_host::concurrent::DurableCallSession`] own one and route their
 /// `try_trigger_retry*` methods through it, so the retry logic has a single home.
 ///
 /// Every method takes `&mut impl DurabilityHost`, so the controller stays unit-testable against

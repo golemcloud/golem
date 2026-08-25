@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::authorization::targets::{agent_owner, env_target};
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::model::AgentConfig;
 use crate::services::HasWorker;
@@ -140,7 +140,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn get_durable_environment(
         &mut self,
     ) -> wasmtime::Result<Vec<(String, String)>> {
-        let (begun, captured) = CallHandle::<
+        let (begun, captured) = DurableCallSession::<
             WasiCliEnvironmentGetEnvironment,
             NotCancellable,
         >::begin_with_agent_authority_capture(

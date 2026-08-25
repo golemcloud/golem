@@ -1649,7 +1649,7 @@ async fn replay_resolves_cancelled_without_partial() {
 async fn replay_resolves_cancelled_with_partial_result() {
     // [NoOp, Start, Cancelled { partial: Some(..) }] — a call cancelled live with a partial
     // result replays to a `Cancelled` resolution that preserves the recorded partial
-    // response payload (the CallHandle replay path downloads and converts it).
+    // response payload (the DurableCallSession replay path downloads and converts it).
     let rs = replay_state_over(vec![noop(), start_now(), cancelled_with_partial_for(2, 42)]).await;
     let handle = rs
         .claim_concurrent_start(

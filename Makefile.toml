@@ -1532,7 +1532,7 @@ rm -rf build-out
 '''
 
 [tasks.build-benchmark-components]
-description = "Builds only the benchmark test WASM components"
+description = "Rebuilds only the benchmark test WASM components"
 dependencies = ["wit", "build-sdk-ts"]
 script_runner = "@duckscript"
 script = '''
@@ -1544,7 +1544,7 @@ if ${golem_cli_empty}
     set_env GOLEM_CLI ${golem_cli}
 end
 cd test-components
-exec --fail-on-error ./build-components.sh benchmarks
+exec --fail-on-error ./build-components.sh benchmarks rebuild
 '''
 
 [tasks.run-benchmark-suite-orb]

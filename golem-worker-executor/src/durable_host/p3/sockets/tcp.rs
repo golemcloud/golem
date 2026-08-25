@@ -19,7 +19,7 @@ use std::task::{Context, Poll};
 use crate::durable_host::TcpSocketStreamDirection;
 use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallHandle, CallReplayOutcome, Cancellable, NotCancellable,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
     authorize_live_permissions_at_serialized_access, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
@@ -742,7 +742,7 @@ enum TcpSendMode {
 }
 
 struct TcpSocketSendTask<Ctx> {
-    call: CallHandle<P3SocketsTypesTcpSocketSend, Cancellable>,
+    call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable>,
     mode: TcpSendMode,
     result_tx: oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
     activity: TailActivity,
@@ -751,7 +751,7 @@ struct TcpSocketSendTask<Ctx> {
 
 impl<Ctx> TcpSocketSendTask<Ctx> {
     fn live(
-        call: CallHandle<P3SocketsTypesTcpSocketSend, Cancellable>,
+        call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable>,
         socket_result_rx: oneshot::Receiver<Result<(), types::ErrorCode>>,
         result_tx: oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
         activity: TailActivity,
@@ -766,7 +766,7 @@ impl<Ctx> TcpSocketSendTask<Ctx> {
     }
 
     fn replay(
-        call: CallHandle<P3SocketsTypesTcpSocketSend, Cancellable>,
+        call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable>,
         input_rx: oneshot::Receiver<Vec<u8>>,
         socket: Resource<TcpSocket>,
         result_tx: oneshot::Sender<wasmtime::Result<Result<(), types::ErrorCode>>>,
@@ -818,7 +818,7 @@ where
 /// in the oplog).
 async fn complete_tcp_socket_send<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
-    call: CallHandle<P3SocketsTypesTcpSocketSend, Cancellable>,
+    call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable>,
     socket_result_rx: oneshot::Receiver<Result<(), types::ErrorCode>>,
 ) -> wasmtime::Result<Result<(), types::ErrorCode>>
 where
@@ -847,7 +847,7 @@ where
 /// result.
 async fn replay_tcp_socket_send<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
-    call: CallHandle<P3SocketsTypesTcpSocketSend, Cancellable>,
+    call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable>,
     input_rx: oneshot::Receiver<Vec<u8>>,
     socket: Resource<TcpSocket>,
     activity: &TailActivity,
@@ -1005,7 +1005,7 @@ where
 {
     // Open the parent batched scope. Children nest under its begin index.
     let mut parent =
-        match CallHandle::<P3SocketsTypesTcpSocketReceive, Cancellable>::start_access_with_options(
+        match DurableCallSession::<P3SocketsTypesTcpSocketReceive, Cancellable>::start_access_with_options(
             accessor,
             durable_worker_ctx::<Ctx, U>,
             DurableFunctionType::WriteRemoteBatched(None),
@@ -1077,37 +1077,37 @@ where
         // Safe park: waiting for the guest to demand the next chunk.
         let demand = activity.park(demand_rx.recv()).await;
 
-        let mut child = match CallHandle::<
+        let mut child = match DurableCallSession::<
             P3SocketsTypesTcpSocketReceiveChunk,
             NotCancellable,
         >::start_access_with_options(
-                accessor,
-                durable_worker_ctx::<Ctx, U>,
-                DurableFunctionType::WriteRemoteBatched(Some(parent_begin)),
-                AccessClaimOptions {
-                    observational_owner,
-                    ..Default::default()
-                },
-                async |_| Ok(HostRequestNoInput {}),
-            )
-            .await
-            {
-                Ok(child) => child,
-                Err(error) => {
-                    let trap_context = parent.trap_context();
-                    if let Some(reply_tx) = demand {
-                        let _ = reply_tx.send(TcpReceiveReply::Failed {
-                            message: error.to_string(),
-                            trap_context,
-                        });
-                    }
-                    return fail_tcp_receive_task(
-                        result_tx,
-                        wasmtime::Error::from_anyhow(parent.trap(error)),
-                        Some(trap_context),
-                    );
+            accessor,
+            durable_worker_ctx::<Ctx, U>,
+            DurableFunctionType::WriteRemoteBatched(Some(parent_begin)),
+            AccessClaimOptions {
+                observational_owner,
+                ..Default::default()
+            },
+            async |_| Ok(HostRequestNoInput {}),
+        )
+        .await
+        {
+            Ok(child) => child,
+            Err(error) => {
+                let trap_context = parent.trap_context();
+                if let Some(reply_tx) = demand {
+                    let _ = reply_tx.send(TcpReceiveReply::Failed {
+                        message: error.to_string(),
+                        trap_context,
+                    });
                 }
-            };
+                return fail_tcp_receive_task(
+                    result_tx,
+                    wasmtime::Error::from_anyhow(parent.trap(error)),
+                    Some(trap_context),
+                );
+            }
+        };
 
         // Produce the next item: replay the recorded child (replay) or read the
         // upstream socket and persist it (live).
@@ -1621,7 +1621,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             });
         }
 
-        let call = CallHandle::<P3SocketsTypesTcpSocketSend, Cancellable>::start_access(
+        let call = DurableCallSession::<P3SocketsTypesTcpSocketSend, Cancellable>::start_access(
             accessor,
             durable_worker_ctx::<Ctx, U>,
             HostRequestNoInput {},

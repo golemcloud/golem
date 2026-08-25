@@ -15,7 +15,7 @@
 pub mod types;
 
 use crate::durable_host::authorization::targets::secret_target;
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::secrets::types::SecretEntry;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
@@ -408,7 +408,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
         } else {
             (None, None)
         };
-        let begun = CallHandle::<GolemSecretsReveal, NotCancellable>::begin(
+        let begun = DurableCallSession::<GolemSecretsReveal, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
         )
