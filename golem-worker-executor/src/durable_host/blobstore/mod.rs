@@ -26,7 +26,7 @@ use wasmtime_wasi::IoView;
 use crate::durable_host::LiveAuthorizationPermit;
 use crate::durable_host::authorization::targets::{blob_container_target, blob_target};
 use crate::durable_host::blobstore::types::ContainerEntry;
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::{DurableWorkerCtx, InternalRetryResult};
 use crate::metrics::storage::{STORAGE_TYPE_BLOB_STORE, record_storage_objects_deleted};
@@ -103,15 +103,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             None
         };
-        let mut handle =
-            CallHandle::<host_functions::BlobstoreBlobstoreCreateContainer, NotCancellable>::start(
-                self,
-                HostRequestBlobStoreContainer {
-                    container: name.clone(),
-                },
-                DurableFunctionType::WriteRemote,
-            )
-            .await?;
+        let mut handle = DurableCallSession::<
+            host_functions::BlobstoreBlobstoreCreateContainer,
+            NotCancellable,
+        >::start(
+            self,
+            HostRequestBlobStoreContainer {
+                container: name.clone(),
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
         let result = 'resp: {
             if !handle.is_live() {
                 match handle.replay(self).await? {
@@ -183,15 +185,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             None
         };
-        let mut handle =
-            CallHandle::<host_functions::BlobstoreBlobstoreGetContainer, NotCancellable>::start(
-                self,
-                HostRequestBlobStoreContainer {
-                    container: name.clone(),
-                },
-                DurableFunctionType::ReadRemote,
-            )
-            .await?;
+        let mut handle = DurableCallSession::<
+            host_functions::BlobstoreBlobstoreGetContainer,
+            NotCancellable,
+        >::start(
+            self,
+            HostRequestBlobStoreContainer {
+                container: name.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
         let result = 'resp: {
             if !handle.is_live() {
                 match handle.replay(self).await? {
@@ -257,15 +261,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             None
         };
-        let mut handle =
-            CallHandle::<host_functions::BlobstoreBlobstoreDeleteContainer, NotCancellable>::start(
-                self,
-                HostRequestBlobStoreContainer {
-                    container: name.clone(),
-                },
-                DurableFunctionType::WriteRemote,
-            )
-            .await?;
+        let mut handle = DurableCallSession::<
+            host_functions::BlobstoreBlobstoreDeleteContainer,
+            NotCancellable,
+        >::start(
+            self,
+            HostRequestBlobStoreContainer {
+                container: name.clone(),
+            },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
         let result = 'resp: {
             if !handle.is_live() {
                 match handle.replay(self).await? {
@@ -331,15 +337,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             None
         };
-        let mut handle =
-            CallHandle::<host_functions::BlobstoreBlobstoreContainerExists, NotCancellable>::start(
-                self,
-                HostRequestBlobStoreContainer {
-                    container: name.clone(),
-                },
-                DurableFunctionType::ReadRemote,
-            )
-            .await?;
+        let mut handle = DurableCallSession::<
+            host_functions::BlobstoreBlobstoreContainerExists,
+            NotCancellable,
+        >::start(
+            self,
+            HostRequestBlobStoreContainer {
+                container: name.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
         let result = 'resp: {
             if !handle.is_live() {
                 match handle.replay(self).await? {
@@ -405,13 +413,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             target_container: dest.container,
             target_object: dest.object,
         };
-        let mut handle =
-            CallHandle::<host_functions::BlobstoreBlobstoreCopyObject, NotCancellable>::start(
-                self,
-                input.clone(),
-                DurableFunctionType::WriteRemote,
-            )
-            .await?;
+        let mut handle = DurableCallSession::<
+            host_functions::BlobstoreBlobstoreCopyObject,
+            NotCancellable,
+        >::start(self, input.clone(), DurableFunctionType::WriteRemote)
+        .await?;
         let result = 'resp: {
             if !handle.is_live() {
                 match handle.replay(self).await? {
@@ -484,13 +490,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             target_container: dest.container,
             target_object: dest.object,
         };
-        let mut handle =
-            CallHandle::<host_functions::BlobstoreBlobstoreMoveObject, NotCancellable>::start(
-                self,
-                input.clone(),
-                DurableFunctionType::WriteRemote,
-            )
-            .await?;
+        let mut handle = DurableCallSession::<
+            host_functions::BlobstoreBlobstoreMoveObject,
+            NotCancellable,
+        >::start(self, input.clone(), DurableFunctionType::WriteRemote)
+        .await?;
         let result = 'resp: {
             if !handle.is_live() {
                 match handle.replay(self).await? {

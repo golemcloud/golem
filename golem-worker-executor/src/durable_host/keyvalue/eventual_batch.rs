@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::authorization::targets::{kv_bucket_target, kv_target};
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
 use crate::durable_host::keyvalue::{denial, environment_owner};
@@ -70,7 +70,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             None
         };
-        let begun = CallHandle::<KeyvalueEventualBatchGetMany, NotCancellable>::begin(
+        let begun = DurableCallSession::<KeyvalueEventualBatchGetMany, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
         )
@@ -174,7 +174,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             None
         };
-        let begun = CallHandle::<KeyvalueEventualBatchGetKeys, NotCancellable>::begin(
+        let begun = DurableCallSession::<KeyvalueEventualBatchGetKeys, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
         )
@@ -237,7 +237,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key_values: Vec<(Key, Resource<OutgoingValue>)>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let begun = CallHandle::<KeyvalueEventualBatchSetMany, NotCancellable>::begin(
+        let begun = DurableCallSession::<KeyvalueEventualBatchSetMany, NotCancellable>::begin(
             self,
             DurableFunctionType::WriteRemote,
         )
@@ -427,7 +427,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             None
         };
-        let begun = CallHandle::<KeyvalueEventualBatchDeleteMany, NotCancellable>::begin(
+        let begun = DurableCallSession::<KeyvalueEventualBatchDeleteMany, NotCancellable>::begin(
             self,
             DurableFunctionType::WriteRemote,
         )

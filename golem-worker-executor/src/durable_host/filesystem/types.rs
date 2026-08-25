@@ -29,7 +29,7 @@ use wasmtime_wasi::p2::bindings::filesystem::types::{
 };
 use wasmtime_wasi::runtime::spawn_blocking;
 
-use crate::durable_host::concurrent::{CallHandle, NotCancellable};
+use crate::durable_host::concurrent::{DurableCallSession, NotCancellable};
 use crate::durable_host::filesystem::{
     authorize_paths, descriptor_path, forget_path, remember_path,
 };
@@ -337,8 +337,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         };
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
-        // value), so only the file-times are made durable via `CallHandle::run`.
-        let handle = CallHandle::<FilesystemTypesDescriptorStat, NotCancellable>::start(
+        // value), so only the file-times are made durable via `DurableCallSession::run`.
+        let handle = DurableCallSession::<FilesystemTypesDescriptorStat, NotCancellable>::start(
             self,
             HostRequestFileSystemPath {
                 path: path.to_string_lossy().to_string(),
@@ -420,8 +420,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         };
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
-        // value), so only the file-times are made durable via `CallHandle::run`.
-        let handle = CallHandle::<FilesystemTypesDescriptorStatAt, NotCancellable>::start(
+        // value), so only the file-times are made durable via `DurableCallSession::run`.
+        let handle = DurableCallSession::<FilesystemTypesDescriptorStatAt, NotCancellable>::start(
             self,
             HostRequestFileSystemPath {
                 path: full_path.to_string_lossy().to_string(),

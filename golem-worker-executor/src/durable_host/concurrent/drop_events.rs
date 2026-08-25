@@ -116,7 +116,7 @@ impl DroppedCall {
 /// Deferred work emitted from `Drop` impls that cannot touch the worker store themselves.
 ///
 /// Each worker owns a `dropped_call_events` channel (see `PrivateDurableWorkerState`); `Drop`
-/// impls ([`CallHandle`], [`AccessTerminalGuard`], resource wrappers) enqueue these events, and
+/// impls ([`DurableCallSession`], [`AccessTerminalGuard`], resource wrappers) enqueue these events, and
 /// they are drained from the next safe worker-access window: [`drain_queued_dropped_call_events`]
 /// at the start of every `&mut ctx` durable call and [`drain_dropped_call_events_access`] on the
 /// accessor path (call start and terminals). The drain records durable effects (`Cancelled`
@@ -239,7 +239,7 @@ impl Drop for AccessDropEventDrainGuard {
 /// (cancellable drops as `Cancelled`, deferred terminal joins, scope closes, span finishes).
 ///
 /// Called from the next safe worker-access window after the events were enqueued — the start of
-/// every `&mut ctx` durable call ([`CallHandle::begin`]). The helper deliberately drains only
+/// every `&mut ctx` durable call ([`DurableCallSession::begin`]). The helper deliberately drains only
 /// currently available events; callers decide where to wait for more work.
 pub async fn drain_queued_dropped_call_events<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,

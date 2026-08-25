@@ -19,8 +19,8 @@ use super::serialization::{deserialize_error_code, serialize_error_code};
 use super::serialization::{deserialize_headers, serialize_headers};
 use super::*;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallHandle, Cancellable, CompletionDelivery, DeferredCallReplayOutcome,
-    DropEvent, NotCancellable,
+    AccessClaimOptions, Cancellable, CompletionDelivery, DeferredCallReplayOutcome, DropEvent,
+    DurableCallSession, NotCancellable,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
@@ -649,7 +649,7 @@ pub(super) fn deserialize_consume_body_result(
 /// `Start` rather than observing committed-but-corrupt durable state.
 ///
 /// The `error` must already carry the failing call's [`DurableCallTrapContext`]
-/// (via `CallHandle::trap`, a `TerminalCallError`, or `mark_durable_call_trap_context`)
+/// (via `DurableCallSession::trap`, a `TerminalCallError`, or `mark_durable_call_trap_context`)
 /// so post-trap retry grouping stays owned by that call's scope; this helper does
 /// not stringify it for the returned trap.
 ///
@@ -953,7 +953,7 @@ where
         // agent. Responses that did not come from `client::send` have no span and keep the plain
         // scope name.
         let mut parent =
-            match CallHandle::<P3HttpClientConsumeBody, Cancellable>::start_access_with_options(
+            match DurableCallSession::<P3HttpClientConsumeBody, Cancellable>::start_access_with_options(
                 accessor,
                 durable_worker_ctx::<Ctx, U>,
                 DurableFunctionType::WriteRemoteBatched(None),
@@ -1004,7 +1004,7 @@ where
                 None => break,
             };
 
-            let mut child = match CallHandle::<
+            let mut child = match DurableCallSession::<
                 P3HttpClientConsumeBodyChunk,
                 NotCancellable,
             >::start_access_with_options(

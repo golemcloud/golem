@@ -16,7 +16,7 @@ use super::serialization::{
     deserialize_error_code, deserialize_headers, serialize_error_code, serialize_headers,
 };
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallHandle, CallReplayOutcome, LeaveIncompleteOnDrop,
+    AccessClaimOptions, CallReplayOutcome, DurableCallSession, LeaveIncompleteOnDrop,
 };
 use crate::durable_host::durability::{DurableCallTrapContext, mark_durable_call_trap_context};
 use crate::durable_host::p3::{
@@ -1169,7 +1169,7 @@ where
         // upload outcome (the send itself is the write), so an incomplete
         // `Start` (crash before the upload result was recorded) safely
         // re-executes on replay instead of failing the worker.
-        let mut handle = match CallHandle::<
+        let mut handle = match DurableCallSession::<
             P3HttpClientRequestBodyTransmission,
             LeaveIncompleteOnDrop,
         >::start_access_with_options(

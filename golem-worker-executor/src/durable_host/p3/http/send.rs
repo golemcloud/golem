@@ -20,7 +20,7 @@ use super::serialization::{
 use super::*;
 use crate::durable_host::authorization::targets::http_target;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallHandle, Cancellable, DeferredCallReplayOutcome, DropPolicy,
+    AccessClaimOptions, Cancellable, DeferredCallReplayOutcome, DropPolicy, DurableCallSession,
     LeaveIncompleteOnDrop, authorize_live_permissions_at_serialized_access, finish_span_in_memory,
 };
 use crate::durable_host::durability::{
@@ -221,7 +221,7 @@ where
         parent_start_index: None,
         observational_owner: None,
     };
-    let mut handle = CallHandle::<P3HttpClientSend, P>::start_access_with_options(
+    let mut handle = DurableCallSession::<P3HttpClientSend, P>::start_access_with_options(
         store,
         durable_worker_ctx::<Ctx, U>,
         function_type.clone(),

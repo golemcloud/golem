@@ -295,7 +295,7 @@ fn tail_work_settled(active_spawned_tasks: usize, replay_cursor_open: bool) -> b
 /// future is dropped, no `AgentInvocationFinished` entry is written, and normal retry handling
 /// replays any calls left incomplete — the same contract as a crash at this point.
 ///
-/// The event loop future itself is never dropped while unfinished: durable `CallHandle`s owned
+/// The event loop future itself is never dropped while unfinished: durable `DurableCallSession`s owned
 /// by parked host futures are not cancellation-safe (`NotCancellable` handles panic when dropped
 /// unfinished, and even `Cancellable` drops may leave terminal oplog effects unwritten).
 /// External cancellation — worker interruption and the optional max-invocation-duration limit —
