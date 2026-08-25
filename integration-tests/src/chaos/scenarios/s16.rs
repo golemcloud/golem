@@ -92,7 +92,7 @@
 
 use crate::chaos::fires::{FaultWindow, ScheduleFireReport};
 use crate::chaos::history::{OperationHistory, OperationRecord, Outcome, Phase, Stream};
-use crate::chaos::outage::{OutageViolation, StorageOutageReport};
+use crate::chaos::outage::StorageOutageReport;
 use crate::chaos::prep::ChaosPrepManifest;
 use crate::chaos::probe;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
@@ -603,23 +603,11 @@ async fn sample_fire_count(ctx: &WorkloadContext, targets: &[String]) -> u64 {
     total
 }
 
-/// Whether the storage account found the outage never landed.
-///
-/// Exposed for the runbook's benefit as much as the tests': "did this run test
-/// anything" is the first question anyone asks of an S16 artifact, and it
-/// should not need a reader to scan the findings list by eye.
-pub fn outage_was_observed(report: &StorageOutageReport) -> bool {
-    !report
-        .findings
-        .iter()
-        .any(|f| f.violation == OutageViolation::OutageNotObserved)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::chaos::history::{AttemptRecord, FireRecord, TargetFireLog};
-    use crate::chaos::outage::OutageFinding;
+    use crate::chaos::outage::{OutageFinding, OutageViolation};
     use chrono::{DateTime, TimeDelta};
     use test_r::test;
 
@@ -762,29 +750,27 @@ mod tests {
         assert_eq!(reason, TerminationReason::Completed);
     }
 
-    /// The question every reader asks an S16 artifact first, answered without
-    /// scanning the findings list by eye.
+    /// The storage account's findings never reach the termination reason. An
+    /// outage that failed to land is the loudest thing S16 can report and it is
+    /// deliberately not fatal: turning the job red would say the platform did
+    /// something wrong, and what actually went wrong is the experiment.
     #[test]
-    fn outage_observed_reads_the_verdict_off_the_findings() {
-        let mut report =
+    fn a_storage_finding_does_not_change_the_termination_reason() {
+        let mut outage =
             StorageOutageReport::build(&[], None, "db.example", 15.0, Duration::from_secs(120));
-        assert!(outage_was_observed(&report));
-
-        report.findings.push(OutageFinding {
-            violation: OutageViolation::StreamNeverRecovered,
-            stream: Some(Stream::Durable),
-            detail: "unrelated".to_string(),
-        });
-        assert!(
-            outage_was_observed(&report),
-            "only the outage verdict answers this question"
-        );
-
-        report.findings.push(OutageFinding {
+        outage.findings.push(OutageFinding {
             violation: OutageViolation::OutageNotObserved,
             stream: None,
             detail: "kept working".to_string(),
         });
-        assert!(!outage_was_observed(&report));
+        assert!(outage.has_findings());
+
+        let records = vec![registration("token-a", Outcome::Confirmed)];
+        let reason = termination(
+            &fires(&records, &[log(&["token-a"])]),
+            &clean_exactly_once(),
+            &records,
+        );
+        assert_eq!(reason, TerminationReason::Completed);
     }
 }
