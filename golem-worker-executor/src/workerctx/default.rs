@@ -89,7 +89,7 @@ use std::sync::{Arc, Weak};
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
+use wasmtime::{AsContextMut, MemoryKind, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 
 /// Tracks the wasmtime fuel gauge state for a single worker store.
@@ -515,26 +515,33 @@ impl ResourceLimiterAsync for Context {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
+        kind: MemoryKind,
     ) -> wasmtime::Result<bool> {
         debug!(
-            "memory_growing: current={}, desired={}, maximum={:?}, account limit={}",
+            "memory_growing: current={}, desired={}, maximum={:?}, kind={:?}, account limit={}",
             current,
             desired,
             maximum,
+            kind,
             self.get_max_memory()
         );
 
-        self.durable_memory_growing(current, desired, maximum).await
+        self.durable_memory_growing(current, desired, maximum, kind)
+            .await
     }
 
-    fn memory_grown(&mut self, current: usize, desired: usize) {
-        if self.durable_memory_grown(current, desired) {
+    fn memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) {
+        if self.durable_memory_grown(current, desired, kind) {
             record_allocated_memory(self.durable_ctx.total_linear_memory_size() as usize);
         }
     }
 
-    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
-        self.durable_memory_grow_failed()
+    fn memory_grow_failed(
+        &mut self,
+        _error: wasmtime::Error,
+        kind: MemoryKind,
+    ) -> wasmtime::Result<()> {
+        self.durable_memory_grow_failed(kind)
     }
 
     async fn table_growing(
