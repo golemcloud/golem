@@ -32,6 +32,7 @@ pub mod s12;
 pub mod s13;
 pub mod s3;
 pub mod s5;
+pub mod s6;
 pub mod s7;
 pub mod s8;
 
@@ -93,6 +94,9 @@ pub struct ScenarioOutcome {
     /// Present only for S7, which divides the agents whose state is being
     /// reverted around the executor the kill is aimed at.
     pub revert_selection: Option<crate::chaos::split::PodSplit>,
+    /// Present only for S6, which divides the agent slots being deleted around
+    /// the executor the kill is aimed at.
+    pub delete_selection: Option<crate::chaos::split::PodSplit>,
 }
 
 /// Assembles the archived result.
@@ -124,6 +128,8 @@ pub fn build_result(config: &ScenarioConfig, outcome: ScenarioOutcome) -> ChaosR
         isolation_selection: outcome.isolation_selection,
         revert: config.revert.clone(),
         revert_selection: outcome.revert_selection,
+        delete: config.delete.clone(),
+        delete_selection: outcome.delete_selection,
         retry_policy: config.retry_policy.clone(),
         scope: outcome.scope,
         summary: outcome.summary,

@@ -29,8 +29,8 @@ use crate::chaos::scheduled::ScheduledSelection;
 use crate::chaos::split::PodSplit;
 use crate::chaos::summary::{ChaosSummary, TerminationReason};
 use crate::chaos::{
-    FaultConfig, IsolationConfig, PinnedConfig, PromiseConfig, RetryPolicy, RevertConfig,
-    ScheduledConfig, WorkloadConfig,
+    DeleteConfig, FaultConfig, IsolationConfig, PinnedConfig, PromiseConfig, RetryPolicy,
+    RevertConfig, ScheduledConfig, WorkloadConfig,
 };
 use chrono::{DateTime, Utc};
 use golem_test_framework::benchmark::RunMetadata;
@@ -169,6 +169,13 @@ pub struct ChaosResult {
     /// Present only for S7.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revert_selection: Option<PodSplit>,
+    /// The deletion workload the run was configured with, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete: Option<DeleteConfig>,
+    /// How the agent slots divided around the executor the kill was aimed at.
+    /// Present only for S6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_selection: Option<PodSplit>,
     pub retry_policy: RetryPolicy,
     pub scope: RunScope,
     pub summary: ChaosSummary,
@@ -244,6 +251,8 @@ mod tests {
             isolation_selection: None,
             revert: None,
             revert_selection: None,
+            delete: None,
+            delete_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "env-1".to_string(),
@@ -839,6 +848,8 @@ mod sample_artifact {
             isolation_selection: None,
             revert: None,
             revert_selection: None,
+            delete: None,
+            delete_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),
@@ -1057,6 +1068,8 @@ mod sample_artifact {
             isolation_selection: None,
             revert: None,
             revert_selection: None,
+            delete: None,
+            delete_selection: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),

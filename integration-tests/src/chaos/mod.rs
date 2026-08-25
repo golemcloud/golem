@@ -34,6 +34,7 @@
 //!    engine here — see [`summary`] for what is measured and the narrow set of
 //!    conditions that fail a run outright.
 
+pub mod deletions;
 pub mod errors;
 pub mod fires;
 pub mod history;
@@ -43,6 +44,7 @@ pub mod prep;
 pub mod probe;
 pub mod reachability;
 pub mod result;
+pub mod resurrection;
 pub mod reverts;
 pub mod scenarios;
 pub mod scheduled;
@@ -82,6 +84,8 @@ pub enum ScenarioCode {
     S3,
     /// Executor pod kill while agents are having their state reverted.
     S7,
+    /// Executor pod kill while agents are being deleted.
+    S6,
 }
 
 impl ScenarioCode {
@@ -96,16 +100,18 @@ impl ScenarioCode {
             ScenarioCode::S11 => "S11",
             ScenarioCode::S3 => "S3",
             ScenarioCode::S7 => "S7",
+            ScenarioCode::S6 => "S6",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 9] = [
+    pub const ALL: [ScenarioCode; 10] = [
         ScenarioCode::S1,
         ScenarioCode::S3,
         ScenarioCode::S5,
+        ScenarioCode::S6,
         ScenarioCode::S7,
         ScenarioCode::S8,
         ScenarioCode::S10,
@@ -535,6 +541,52 @@ impl RevertConfig {
     }
 }
 
+/// Shape of the deletion workload (GOL-372).
+///
+/// The seventh experiment shape, and one step past [`RevertConfig`]. A revert
+/// asks the platform to forget some of an agent's work; this asks it to forget
+/// the agent. Each slot builds a counter up, deletes it, and is used again —
+/// invoking a deleted id creates a new agent, so the next round's first
+/// increment says which of the two things happened.
+///
+/// The failure mode it is named for has a defence in the executor already:
+/// `start_deleting` stops a background status flush from "resurrecting the
+/// cached status" after the durable removal. So the question is not whether
+/// anyone thought about it, but whether the defence survives the pod dying
+/// between the mark and the removal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteConfig {
+    /// Agent slots running rounds, split by shard ownership around the executor
+    /// the kill is aimed at. Also the resolution of the report: a resurrection
+    /// localises to one slot out of this many.
+    pub agents: u32,
+    /// Increments before each delete.
+    ///
+    /// More than one, so that a *partial* survival is observable at all. The
+    /// two legal answers are always distinguishable — a fresh agent reports 1
+    /// and a survivor reports `before + 1`, which never collide — but at one
+    /// increment there is no value *between* them, so a slot that came back
+    /// carrying some of a state it should have lost has nowhere to land and
+    /// [`crate::chaos::resurrection::ResurrectionViolation::PartialState`] can
+    /// never fire. Three of them leaves room for it.
+    pub increments_per_round: u32,
+    /// Milliseconds a slot waits between rounds.
+    pub interval_millis: u64,
+    /// What recovering a deleted agent's slot may cost. Recorded rather than
+    /// asserted, like every other budget in the suite.
+    pub recovery_budget_secs: u64,
+}
+
+impl DeleteConfig {
+    pub fn interval(&self) -> Duration {
+        Duration::from_millis(self.interval_millis)
+    }
+    pub fn recovery_budget(&self) -> Duration {
+        Duration::from_secs(self.recovery_budget_secs)
+    }
+}
+
 /// One step of the executor scale schedule the workflow runs during the fault.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -619,6 +671,9 @@ pub struct ScenarioConfig {
     /// The revert workload. Absent for scenarios that do not run one.
     #[serde(default)]
     pub revert: Option<RevertConfig>,
+    /// The deletion workload. Absent for scenarios that do not run one.
+    #[serde(default)]
+    pub delete: Option<DeleteConfig>,
     /// Shard-ownership oracle settings. Absent for scenarios that do not sample
     /// executor assignments.
     #[serde(default)]
@@ -727,6 +782,29 @@ impl ScenarioConfig {
             anyhow::bail!(
                 "chaos scenario {}: revertInvocations is 0, so the scenario would revert nothing",
                 self.code
+            );
+        }
+        Ok(config)
+    }
+
+    /// The deletion workload block. See [`Self::require_workload`].
+    pub fn require_delete(&self) -> anyhow::Result<&DeleteConfig> {
+        let config = self.delete.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs a `delete` block in the suite YAML",
+                self.code
+            )
+        })?;
+        // At one increment the two legal answers are adjacent — 1 and 2 — so
+        // nothing can land between them and the partial-state violation is
+        // structurally unobservable. A third of the oracle would be blind, and
+        // every run would look clean on that axis by construction.
+        if config.increments_per_round < 2 {
+            anyhow::bail!(
+                "chaos scenario {}: incrementsPerRound is {}, which leaves no value between \
+                 a fresh agent and a survivor, so a partial state could never be observed",
+                self.code,
+                config.increments_per_round
             );
         }
         Ok(config)
@@ -869,6 +947,7 @@ mod tests {
                 promise: None,
                 isolation: None,
                 revert: None,
+                delete: None,
                 ownership: None,
                 scale_during_fault: None,
                 retry_policy: RetryPolicy::default(),
@@ -903,6 +982,7 @@ mod tests {
             scheduled: None,
             promise: None,
             isolation: None,
+            delete: None,
             revert: Some(RevertConfig {
                 agents: 10,
                 increments_per_round: increments,
@@ -1009,6 +1089,7 @@ mod tests {
         assert_eq!(ScenarioCode::parse("s1"), Some(ScenarioCode::S1));
         assert_eq!(ScenarioCode::parse("s3"), Some(ScenarioCode::S3));
         assert_eq!(ScenarioCode::parse("s7"), Some(ScenarioCode::S7));
+        assert_eq!(ScenarioCode::parse("s6"), Some(ScenarioCode::S6));
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
@@ -1046,6 +1127,9 @@ mod tests {
                 }
                 ScenarioCode::S7 => {
                     entry.require_revert().unwrap();
+                }
+                ScenarioCode::S6 => {
+                    entry.require_delete().unwrap();
                 }
             }
         }

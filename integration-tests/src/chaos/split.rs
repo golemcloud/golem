@@ -348,6 +348,16 @@ pub fn revert_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
     }
 }
 
+/// The counters component's delete slots, as S6 aims at them.
+pub fn delete_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
+    Subject {
+        scenario: "S6",
+        component: &ctx.counters,
+        agent_type: crate::chaos::workload::COUNTER_AGENT,
+        noun: "delete agents",
+    }
+}
+
 /// The promise component's waiters, as S11 aims at them.
 pub fn waiter_subject<'a>(ctx: &'a WorkloadContext) -> Subject<'a> {
     Subject {

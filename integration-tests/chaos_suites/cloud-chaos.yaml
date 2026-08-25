@@ -700,3 +700,70 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # S6 — executor pod kill during agent deletion (GOL-372).
+  #
+  # S7 asks the platform to forget some of an agent's work. S6 asks it to forget
+  # the agent, and kills the executor while it is doing so.
+  #
+  # The same two-value oracle, one step further: invoking a deleted id creates a
+  # *new* agent, so when a slot is used again it must report either 1 (the
+  # deletion took) or its old value plus one (it did not). Neither is a defect
+  # alone — a lost response leaves the question open — but "the platform
+  # confirmed the deletion and the agent is still worth what it was" is the
+  # resurrection this scenario is named for, and it fails the run.
+  #
+  # Worth knowing before reading a result: the happy path is already defended.
+  # `Worker::start_deleting` stops the background status flush and checkpointer
+  # first, specifically so neither can resurrect the cached status after the
+  # durable removal. The question is whether that defence survives the pod dying
+  # between the mark and the removal.
+  - code: S6
+    name: executor-crash-during-deletion
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # The workflow narrows the selector to the pod the driver named; `one`
+      # stays as the belt-and-braces bound, as in every other pinned scenario.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      baselineSecs: 180
+      faultSecs: 120
+      # Rounds continue throughout, so every slot is reused several times after
+      # the kill and a round it disturbed is followed by ones it did not.
+      recoverySecs: 300
+
+    delete:
+      # 200 slots, split by shard ownership. Also the resolution of the report:
+      # a resurrection localises to one slot out of two hundred.
+      agents: 200
+      # Three increments before each delete, so an agent is worth 3 when it
+      # goes. More than one is load-bearing rather than arbitrary: with a single
+      # increment a fresh agent and a resurrected one both read 1 and the oracle
+      # cannot tell them apart. The driver refuses to start below 2.
+      incrementsPerRound: 3
+      # Between rounds. A round is four operations, so this keeps the delete a
+      # meaningful share of each slot's cycle and gives the kill something to
+      # land in.
+      intervalMillis: 500
+      # What recovering a slot may cost once its executor is back. Recorded, not
+      # asserted.
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      # Applies to the increments only. **The delete is never retried**, for a
+      # reason specific to this scenario: `delete_worker_internal` starts with a
+      # metadata lookup and returns `worker_not_found` when there is nothing
+      # there, so deleting twice does not succeed twice. A delete whose response
+      # was lost but which landed would come back on retry as a refusal, and the
+      # run would record "refused, and gone anyway" — one of the violations this
+      # scenario exists to detect. See `chaos/deletions.rs`.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

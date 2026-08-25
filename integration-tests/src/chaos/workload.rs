@@ -550,6 +550,12 @@ pub(crate) async fn submit_one(ctx: &WorkloadContext, stream: Stream, index: u32
         Stream::PromiseWait => {
             warn!("Chaos mixed workload cannot drive the waiter stream; see chaos::waiters");
         }
+        // Driven by `crate::chaos::deletions`: a round builds an agent up and
+        // then deletes it outright, and the value the *next* round's first
+        // increment returns says whether it stayed deleted.
+        Stream::Delete => {
+            warn!("Chaos mixed workload cannot drive the delete stream; see chaos::deletions");
+        }
         // Driven by `crate::chaos::reverts`: a round is a run of increments
         // followed by a revert that takes some of them back, and the value the
         // *next* round's first increment returns is what says whether that

@@ -67,6 +67,15 @@ pub enum Stream {
     /// one known executor, so mixing them into the durable population would
     /// blur two different experiments.
     PinnedHttp,
+    /// `Counter.increment` rounds on agents that are then deleted outright
+    /// (GOL-372).
+    ///
+    /// Excluded from the generic read-back for the same reason as
+    /// [`Stream::Revert`], one step further: a deleted agent's counter is
+    /// *supposed* to be gone, so comparing it against everything confirmed
+    /// against it would report the whole agent as lost work. See
+    /// [`crate::chaos::resurrection`].
+    Delete,
     /// `Counter.increment` rounds that are deliberately taken back again, and
     /// the `revert` calls that take them (GOL-371).
     ///
@@ -96,6 +105,7 @@ impl Stream {
             Stream::Quota => "quota",
             Stream::PinnedHttp => "pinned-http",
             Stream::PromiseWait => "promise-wait",
+            Stream::Delete => "delete",
             Stream::Revert => "revert",
         }
     }
@@ -122,7 +132,7 @@ impl Stream {
         )
     }
 
-    pub const ALL: [Stream; 8] = [
+    pub const ALL: [Stream; 9] = [
         Stream::Durable,
         Stream::Ephemeral,
         Stream::Scheduled,
@@ -131,6 +141,7 @@ impl Stream {
         Stream::PinnedHttp,
         Stream::PromiseWait,
         Stream::Revert,
+        Stream::Delete,
     ];
 }
 

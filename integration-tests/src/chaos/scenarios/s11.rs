@@ -199,6 +199,7 @@ pub async fn run(
                     promise_selection: selection.clone(),
                     isolation_selection: None,
                     revert_selection: None,
+                    delete_selection: None,
                 },
             );
             write_outputs(&result, &history, outputs)?;

@@ -250,6 +250,8 @@ pub enum ChaosScenarioArg {
     S3,
     /// Executor pod kill while agents are having their state reverted.
     S7,
+    /// Executor pod kill while agents are being deleted.
+    S6,
 }
 
 /// Density subcommand action.

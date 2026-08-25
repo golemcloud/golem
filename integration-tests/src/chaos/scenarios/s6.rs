@@ -12,48 +12,61 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S7 — executor pod kill during agent state revert (GOL-371).
+//! S6 — executor pod kill during agent deletion (GOL-372).
 //!
-//! Every other scenario in this suite disturbs work that is trying to happen.
-//! S7 disturbs work that is trying to be **undone**: each agent builds its
-//! counter up with a run of increments and then asks the platform to take some
-//! of them back, over and over, while an executor is killed underneath.
+//! S7 asks the platform to forget some of an agent's work. S6 asks it to forget
+//! the agent, and then kills the executor while it is doing so.
 //!
 //! ### Why this one can assert
 //!
-//! Read-backs elsewhere compare a counter against a range, and the width of the
-//! range is the operations whose fate the driver could not determine. Here
-//! there is no range. The last increment of a round *returns* the counter's
-//! value, so the driver knows exactly what the agent was worth immediately
-//! before the revert, and it asked for an exact number of invocations back. So
-//! afterwards there are two legal values, `V` and `V - N`, and nothing between
-//! them. See [`crate::chaos::truncation`] for what each other answer means.
+//! Invoking a deleted agent id creates a **new** agent, and a new counter starts
+//! from nothing. So a round — increments to a known `V`, then a delete — has
+//! exactly two legal answers when the slot is next used:
 //!
-//! That is why S7 is one of the few scenarios whose read-back can fail the run
-//! outright rather than being reported for a human to weigh.
+//! * `1`, a fresh agent, meaning the deletion took
+//! * `V + 1`, meaning the old agent is still there
+//!
+//! Neither is a defect on its own; a delete whose response was lost leaves the
+//! question genuinely open. What makes one a defect is the platform's own answer
+//! beside it. Confirmed, and the agent is still worth `V`, is the resurrection
+//! this scenario is named for. See [`crate::chaos::resurrection`].
 //!
 //! ### What is actually being killed into
 //!
-//! The truncation itself cannot tear: `RevertLastInvocations` commits a single
-//! `OplogEntry::revert` marking a region deleted. The window worth aiming at is
-//! the one around it — reverting takes `lock_stopped_worker`, so the worker is
-//! stopped, the entry is committed, and only then is the worker status
-//! reattached. An executor that dies between the commit and the reattach has
-//! changed durable state and lost the thing that tells anyone about it.
+//! Deleting is four steps in `delete_worker_internal`: interrupt the running
+//! worker, `start_deleting`, remove it from the worker service, remove it from
+//! the active set. Only the third is durable.
+//!
+//! The interesting part is that the happy path is **already defended**.
+//! `Worker::start_deleting` stops the background status flush and the
+//! checkpointer first, specifically so neither can — in the executor's own
+//! comment — "resurrect the cached status" after the removal. So the question
+//! S6 asks is not whether anyone thought about resurrection, but whether that
+//! defence survives the pod dying between the mark and the removal, when
+//! whoever picks up the shard next has to decide what a worker marked for
+//! deletion but never removed means.
+//!
+//! ### A smoke round before anything else
+//!
+//! The whole account rests on "a deleted id comes back as a new agent". If that
+//! is not true, every round in the run reports a resurrection and the report is
+//! worthless. So one throwaway agent is built, deleted and re-invoked before the
+//! baseline starts, and a run whose premise is wrong aborts in seconds instead
+//! of spending the maintenance window discovering it. That lesson is S11's.
 //!
 //! ### The choreography
 //!
-//! Like S8, S10, S11 and S3 the driver names the pod: it picks the executor
-//! owning the largest share of its agents and keeps driving the rest as a
-//! control group. Unlike them, the last thing it does before read-back is a
-//! single read per agent, which answers the one round per agent that no
-//! following increment ever probed.
+//! Like S8, S10, S11, S3 and S7 the driver names the pod: it picks the executor
+//! owning the largest share of its agent slots and keeps driving the rest as a
+//! control group. As in S7 the last thing before read-back is one read per slot,
+//! which answers the round no following increment ever probed.
 
+use crate::chaos::deletions::{self, DeleteRound};
 use crate::chaos::history::{OperationHistory, Outcome, Phase, Stream};
 use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::prep::ChaosPrepManifest;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
-use crate::chaos::reverts::{self, RevertRound};
+use crate::chaos::resurrection::ResurrectionReport;
 use crate::chaos::scenarios::{
     OutputPaths, ScenarioOutcome, WARMUP_SETTLE, build_result, sample_ownership,
     signal_termination, snapshot_routing, wait_for_settled_routing, write_outputs,
@@ -61,7 +74,6 @@ use crate::chaos::scenarios::{
 use crate::chaos::signal::{BaselineReady, FaultSignals, FaultTarget};
 use crate::chaos::split::{self, FaultWindow, PodSplit};
 use crate::chaos::summary::{ChaosSummary, Note, TerminationReason};
-use crate::chaos::truncation::TruncationReport;
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
 use chrono::Utc;
@@ -74,14 +86,14 @@ use tracing::{info, warn};
 ///
 /// Shorter than the other scenarios' settle: nothing here is queued or
 /// scheduled, and `stop` already waits for every operation in flight to record
-/// itself. This only covers a worker still coming back from the last revert.
+/// itself. This only covers a slot still coming back from the last delete.
 const SETTLE_BEFORE_READBACK: Duration = Duration::from_secs(20);
 
 /// How far into the fault window the assignment is sampled.
 const DURING_FAULT_SAMPLE_FRACTION: f64 = 0.6;
 const DURING_FAULT_SAMPLE_CAP: Duration = Duration::from_secs(120);
 
-/// Runs S7 end to end.
+/// Runs S6 end to end.
 pub async fn run(
     config: &ScenarioConfig,
     manifest: &ChaosPrepManifest,
@@ -90,9 +102,9 @@ pub async fn run(
     outputs: &OutputPaths,
 ) -> anyhow::Result<ChaosResult> {
     let started_at = Utc::now();
-    let revert_config = config.require_revert()?;
-    let history = OperationHistory::new(ScenarioCode::S7.as_str());
-    let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S7);
+    let delete_config = config.require_delete()?;
+    let history = OperationHistory::new(ScenarioCode::S6.as_str());
+    let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S6);
 
     let user = manifest.user_context(deps);
     let counters = user
@@ -119,7 +131,7 @@ pub async fn run(
         idempotency_key_prefix: format!("{key_prefix}-"),
     };
 
-    let agents = reverts::agent_names(&ctx, revert_config.agents);
+    let agents = deletions::agent_names(&ctx, delete_config.agents);
 
     let mut phases = Phases::default();
     let mut routing_snapshots = Vec::new();
@@ -132,7 +144,7 @@ pub async fn run(
     let mut attention_extra: Vec<Note> = Vec::new();
 
     macro_rules! finish {
-        ($reason:expr, $records:expr, $truncation:expr) => {{
+        ($reason:expr, $records:expr, $resurrection:expr) => {{
             let mut summary = ChaosSummary::build(
                 $records,
                 Vec::new(),
@@ -141,8 +153,8 @@ pub async fn run(
             )
             .with_ownership(ownership.clone());
             summary.absorb(attention_extra.clone());
-            if let Some(report) = $truncation {
-                summary = summary.with_truncation(report);
+            if let Some(report) = $resurrection {
+                summary = summary.with_resurrection(report);
             }
             let result = build_result(
                 config,
@@ -160,8 +172,8 @@ pub async fn run(
                     scheduled_selection: None,
                     promise_selection: None,
                     isolation_selection: None,
-                    revert_selection: selection.clone(),
-                    delete_selection: None,
+                    revert_selection: None,
+                    delete_selection: selection.clone(),
                 },
             );
             write_outputs(&result, &history, outputs)?;
@@ -172,14 +184,14 @@ pub async fn run(
     // ── Warm-up ─────────────────────────────────────────────────────────────
     //
     // Constructing an agent is itself recorded in its oplog, so doing it inside
-    // a measured round would put an entry between the increments and the revert
-    // that counts them. Reads here rather than increments, for the same reason
-    // every other scenario warms with reads: an increment would be invisible to
-    // the round arithmetic the whole oracle rests on.
+    // a measured round would leave a slot holding an agent the round did not
+    // build. Reads here rather than increments, for the same reason every other
+    // scenario warms with reads: an increment would be invisible to the round
+    // arithmetic the whole oracle rests on.
     routing_snapshots.push(snapshot_routing(deps, "before-warmup").await);
     attention_extra.push(wait_for_settled_routing(deps, &mut routing_snapshots).await);
 
-    info!("S7: warming up {} revert agents", agents.len());
+    info!("S6: warming up {} delete agents", agents.len());
     let mut warmed = 0usize;
     for agent in &agents {
         if workload::read_counter(&ctx, agent).await.is_ok() {
@@ -187,17 +199,36 @@ pub async fn run(
         }
     }
     info!(
-        "S7: warmed {warmed} of {} agents, settling {WARMUP_SETTLE:?}",
+        "S6: warmed {warmed} of {} agents, settling {WARMUP_SETTLE:?}",
         agents.len()
     );
     tokio::time::sleep(WARMUP_SETTLE).await;
 
+    // ── Smoke round ─────────────────────────────────────────────────────────
+    //
+    // Everything below assumes a deleted id comes back as a new agent. If that
+    // is not true, every round reports a resurrection and the artifact is
+    // worthless — so one throwaway agent proves it before the baseline starts.
+    // The first S11 run is why this is here: a wrong premise otherwise costs
+    // the whole maintenance window before the numbers say so.
+    if let Err(e) = deletions::smoke_round(&ctx, delete_config).await {
+        warn!("S6: smoke round failed, aborting before the baseline: {e:#}");
+        let records = history.snapshot();
+        finish!(
+            TerminationReason::PlatformUnreachable {
+                detail: format!("{e:#}"),
+            },
+            &records,
+            None
+        );
+    }
+
     // ── Aim ─────────────────────────────────────────────────────────────────
-    let subject = split::revert_subject(&ctx);
+    let subject = split::delete_subject(&ctx);
     let split = match split::select(subject, deps, &agents).await {
         Ok(split) => split,
         Err(e) => {
-            warn!("S7: cannot aim the kill: {e:#}");
+            warn!("S6: cannot aim the kill: {e:#}");
             let records = history.snapshot();
             finish!(
                 TerminationReason::FaultTargetUnverified {
@@ -212,12 +243,12 @@ pub async fn run(
 
     // ── Baseline ────────────────────────────────────────────────────────────
     info!(
-        "S7: baseline phase, running {} revert emitters for {:?}",
+        "S6: baseline phase, running {} delete emitters for {:?}",
         agents.len(),
         config.phases.baseline()
     );
     phases.baseline = Some(PhaseWindow::started(Utc::now()));
-    let handle = reverts::start(ctx.clone(), revert_config);
+    let handle = deletions::start(ctx.clone(), delete_config);
     tokio::time::sleep(config.phases.baseline()).await;
     routing_snapshots.push(snapshot_routing(deps, "before-fault").await);
     ownership.push(sample_ownership(deps, "before-fault", ownership.last(), false).await);
@@ -227,7 +258,7 @@ pub async fn run(
 
     let baseline_operations = history.confirmed_in_phase(Phase::Baseline);
     if baseline_operations == 0 {
-        warn!("S7: baseline produced no confirmed operations, aborting before injection");
+        warn!("S6: baseline produced no confirmed operations, aborting before injection");
         let rounds = handle.stop().await;
         let records = history.snapshot();
         finish!(
@@ -235,12 +266,12 @@ pub async fn run(
                 detail: "no operation succeeded during the baseline phase".to_string(),
             },
             &records,
-            Some(build_truncation(&rounds, &split, None, revert_config))
+            Some(build_resurrection(&rounds, &split, None, delete_config))
         );
     }
 
     if let Err(e) = split::verify_ownership(subject, deps, &split).await {
-        warn!("S7: ownership drifted between selection and injection: {e:#}");
+        warn!("S6: ownership drifted between selection and injection: {e:#}");
         let rounds = handle.stop().await;
         let records = history.snapshot();
         finish!(
@@ -248,18 +279,18 @@ pub async fn run(
                 detail: format!("{e:#}"),
             },
             &records,
-            Some(build_truncation(&rounds, &split, None, revert_config))
+            Some(build_resurrection(&rounds, &split, None, delete_config))
         );
     }
 
     info!(
-        "S7: baseline complete ({baseline_operations} confirmed ops, {} rounds), naming {} and \
+        "S6: baseline complete ({baseline_operations} confirmed ops, {} rounds), naming {} and \
          signalling readiness",
         handle.rounds().len(),
         split.pod_address
     );
     signals.write_baseline_ready(&BaselineReady {
-        scenario_code: ScenarioCode::S7.as_str().to_string(),
+        scenario_code: ScenarioCode::S6.as_str().to_string(),
         ready_at: Utc::now(),
         baseline_operations,
         fault_target: Some(FaultTarget {
@@ -273,18 +304,18 @@ pub async fn run(
     let injected = match signals.await_fault_injected(config.signal_timeout()).await {
         Ok(injected) => injected,
         Err(e) => {
-            warn!("S7: no fault-injected signal arrived: {e}");
+            warn!("S6: no fault-injected signal arrived: {e}");
             let rounds = handle.stop().await;
             let records = history.snapshot();
             finish!(
                 signal_termination(&e),
                 &records,
-                Some(build_truncation(&rounds, &split, None, revert_config))
+                Some(build_resurrection(&rounds, &split, None, delete_config))
             );
         }
     };
     info!(
-        "S7: fault {} ({} on {}) reported active at {}",
+        "S6: fault {} ({} on {}) reported active at {}",
         injected.fault_id, injected.kind, injected.target, injected.injected_at
     );
     fault_injected_at = Some(injected.injected_at);
@@ -304,23 +335,23 @@ pub async fn run(
     let recovered = match signals.await_fault_recovered(config.signal_timeout()).await {
         Ok(recovered) => recovered,
         Err(e) => {
-            warn!("S7: no fault-recovered signal arrived: {e}");
+            warn!("S6: no fault-recovered signal arrived: {e}");
             let rounds = handle.stop().await;
             let records = history.snapshot();
             finish!(
                 signal_termination(&e),
                 &records,
-                Some(build_truncation(
+                Some(build_resurrection(
                     &rounds,
                     &split,
                     fault_window(fault_injected_at, None),
-                    revert_config
+                    delete_config
                 ))
             );
         }
     };
     info!(
-        "S7: executor back at {} ({})",
+        "S6: executor back at {} ({})",
         recovered.recovered_at, recovered.termination_reason
     );
     fault_recovered_at = Some(recovered.recovered_at);
@@ -332,7 +363,7 @@ pub async fn run(
     ctx.phase.set(Phase::Recovery);
     phases.recovery = Some(PhaseWindow::started(Utc::now()));
     info!(
-        "S7: recovery phase, running for {:?}",
+        "S6: recovery phase, running for {:?}",
         config.phases.recovery()
     );
     tokio::time::sleep(config.phases.recovery()).await;
@@ -345,7 +376,7 @@ pub async fn run(
     ownership.push(sample_ownership(deps, "after-recovery", ownership.last(), true).await);
 
     // ── Read-back ───────────────────────────────────────────────────────────
-    info!("S7: settling {SETTLE_BEFORE_READBACK:?} before the final read");
+    info!("S6: settling {SETTLE_BEFORE_READBACK:?} before the final read");
     tokio::time::sleep(SETTLE_BEFORE_READBACK).await;
 
     // The one read per agent, which answers the last round it ran. Every other
@@ -354,38 +385,38 @@ pub async fn run(
     close_last_rounds(&ctx, &agents, &mut rounds).await;
 
     let records = history.snapshot();
-    let truncation = build_truncation(
+    let resurrection = build_resurrection(
         &rounds,
         &split,
         fault_window(fault_injected_at, fault_recovered_at),
-        revert_config,
+        delete_config,
     );
     info!(
-        "S7: truncation account — {} rounds, {} applied exactly, {} findings",
-        truncation.rounds_recorded,
-        truncation.applied_exactly,
-        truncation.findings.len()
+        "S6: resurrection account — {} rounds, {} deleted exactly, {} findings",
+        resurrection.rounds_recorded,
+        resurrection.deleted_exactly,
+        resurrection.findings.len()
     );
 
-    let reason = if truncation.has_violations() {
-        let first = truncation
+    let reason = if resurrection.has_violations() {
+        let first = resurrection
             .findings
             .first()
             .map(|f| format!("{} round {}: {}", f.agent, f.round, f.detail))
             .unwrap_or_default();
-        TerminationReason::RevertTruncationViolated {
-            findings: truncation.findings.len() as u64 + truncation.findings_omitted,
+        TerminationReason::AgentResurrected {
+            findings: resurrection.findings.len() as u64 + resurrection.findings_omitted,
             first,
         }
     } else if records.iter().all(|r| r.outcome != Outcome::Confirmed) {
         TerminationReason::StreamNeverSucceeded {
-            stream: Stream::Revert.to_string(),
+            stream: Stream::Delete.to_string(),
         }
     } else {
         TerminationReason::Completed
     };
 
-    finish!(reason, &records, Some(truncation));
+    finish!(reason, &records, Some(resurrection));
 }
 
 fn fault_window(
@@ -398,28 +429,22 @@ fn fault_window(
     })
 }
 
-fn build_truncation(
-    rounds: &[RevertRound],
+fn build_resurrection(
+    rounds: &[DeleteRound],
     split: &PodSplit,
     fault: Option<FaultWindow>,
-    config: &crate::chaos::RevertConfig,
-) -> TruncationReport {
-    TruncationReport::build(
-        rounds,
-        split,
-        fault,
-        config.increments_per_round,
-        config.revert_invocations,
-    )
+    config: &crate::chaos::DeleteConfig,
+) -> ResurrectionReport {
+    ResurrectionReport::build(rounds, split, fault, config.increments_per_round)
 }
 
 /// Reads each agent once and uses the value to judge the last round it ran.
 ///
 /// A read is an invocation and would shift what "the last N invocations" means
-/// for any revert after it — which is exactly why the workload never reads
+/// for any delete after it — which is exactly why the workload never reads
 /// mid-round. Here there is nothing after it, so it is safe, and it recovers a
 /// round per agent that would otherwise be unjudgeable.
-async fn close_last_rounds(ctx: &WorkloadContext, agents: &[String], rounds: &mut [RevertRound]) {
+async fn close_last_rounds(ctx: &WorkloadContext, agents: &[String], rounds: &mut [DeleteRound]) {
     let mut last_of: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for (index, round) in rounds.iter().enumerate() {
         if round.observed_after.is_none() {
@@ -435,7 +460,7 @@ async fn close_last_rounds(ctx: &WorkloadContext, agents: &[String], rounds: &mu
         .collect();
 
     info!(
-        "S7: closing {} unprobed rounds with a final read",
+        "S6: closing {} unprobed rounds with a final read",
         pending.len()
     );
     for (agent, index) in pending {
@@ -444,7 +469,7 @@ async fn close_last_rounds(ctx: &WorkloadContext, agents: &[String], rounds: &mu
         }
         match workload::read_counter(ctx, &agent).await {
             Ok(value) => rounds[index].observed_after = Some(value),
-            Err(e) => warn!("S7: could not read {agent} to close its last round: {e}"),
+            Err(e) => warn!("S6: could not read {agent} to close its last round: {e}"),
         }
     }
 }

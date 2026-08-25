@@ -225,6 +225,7 @@ pub async fn run(
                     promise_selection: None,
                     isolation_selection: None,
                     revert_selection: None,
+                    delete_selection: None,
                 },
             );
             write_outputs(&result, &history, outputs)?;

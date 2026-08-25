@@ -53,6 +53,7 @@ use crate::chaos::history::{Outcome, Phase, Stream};
 use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::probe::KeyProbe;
 use crate::chaos::reachability::ReachabilityReport;
+use crate::chaos::resurrection::ResurrectionReport;
 use crate::chaos::truncation::TruncationReport;
 use crate::chaos::wakeups::WakeupReport;
 use serde::{Deserialize, Serialize};
@@ -583,6 +584,10 @@ pub struct ChaosSummary {
     /// for scenarios that do not, for the same reason as `scheduleFires`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncation: Option<TruncationReport>,
+    /// The resurrection account, for scenarios that delete agents. Absent for
+    /// scenarios that do not, for the same reason as `scheduleFires`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resurrection: Option<ResurrectionReport>,
     /// Shard-ownership samples, in the order they were taken. Empty for
     /// scenarios that do not sample executor assignments.
     ///
@@ -716,6 +721,7 @@ impl ChaosSummary {
             promise_wakeups: None,
             reachability: None,
             truncation: None,
+            resurrection: None,
             ownership: Vec::new(),
             attention,
             notes: Vec::new(),
@@ -803,6 +809,19 @@ impl ChaosSummary {
         self
     }
 
+    /// Attaches the resurrection account and hoists everything it wants a human
+    /// to see into [`Self::attention`].
+    ///
+    /// Same split as [`Self::with_truncation`], including the inconclusive line:
+    /// a kill that caught no delete in flight proves nothing about crashing
+    /// during a deletion.
+    pub fn with_resurrection(mut self, report: ResurrectionReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.resurrection = Some(report);
+        self
+    }
+
     /// Attaches the shard-ownership samples and hoists their findings into
     /// [`Self::attention`].
     ///
@@ -851,6 +870,12 @@ pub enum TerminationReason {
     /// owners is an agent whose state can fork, and there is no instant at
     /// which that is legitimate.
     ShardOwnershipViolated { findings: u64, first: String },
+    /// An agent the platform said it had deleted came back with its state, or a
+    /// deletion landed somewhere other than the two answers it was allowed.
+    /// Asserted for the same reason as `RevertTruncationViolated`: invoking a
+    /// deleted id creates a new agent, so there are exactly two legal values and
+    /// no band of doubt. See [`crate::chaos::resurrection`].
+    AgentResurrected { findings: u64, first: String },
     /// A revert landed somewhere other than the two values it was allowed to.
     /// Asserted rather than reported, and the only read-back in the suite that
     /// earns that: the driver knows the counter's value before the revert and
@@ -1163,7 +1188,8 @@ mod tests {
                 Stream::Ephemeral,
                 Stream::Promise,
                 Stream::PromiseWait,
-                Stream::Revert
+                Stream::Revert,
+                Stream::Delete
             ]
         );
     }
