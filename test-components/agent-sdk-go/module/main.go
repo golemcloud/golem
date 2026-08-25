@@ -16,6 +16,9 @@ import (
 	_ "agent-sdk-go/agents/promises/impl"
 	_ "agent-sdk-go/agents/richtypes/impl"
 	_ "agent-sdk-go/agents/rpccaller/impl"
+	_ "agent-sdk-go/agents/saga/impl"
+	_ "agent-sdk-go/agents/snapstate/impl"
+	_ "agent-sdk-go/agents/wsecho/impl"
 
 	_ "github.com/golemcloud/golem/sdks/go/golem"
 )
