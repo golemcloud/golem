@@ -1379,6 +1379,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
     }
 
+    /// Resolves a pending interruption without going through the worker's store, releasing
+    /// whoever is awaiting it via the receiver handed out by `set_interrupting`. Used when the
+    /// invocation loop unloads the worker instead of restarting it, which is the one exit that
+    /// does not pass through the store's `set_suspended`.
+    pub(crate) fn acknowledge_interruption(&self) {
+        let mut execution_status = self.execution_status.write().unwrap();
+        if let ExecutionStatus::Interrupting {
+            agent_mode,
+            await_interruption,
+            ..
+        } = execution_status.clone()
+        {
+            *execution_status = ExecutionStatus::Suspended {
+                agent_mode,
+                timestamp: Timestamp::now_utc(),
+            };
+            await_interruption.send(()).ok();
+        }
+    }
+
     pub fn get_initial_worker_metadata(&self) -> AgentMetadata {
         self.initial_worker_metadata.clone()
     }

@@ -6011,8 +6011,15 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 continue;
             };
 
-            // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
+            // The shard set is re-checked right before starting: the assignment may have changed
+            // again since `get_running_workers_in_shards` read it (the shard manager moves on after
+            // its RPC deadline, so a revoke can land while this recovery is still running), and a
+            // worker must never be started on an executor that no longer owns its shard.
             if should_restart_after_shard_assignment_change(&latest_worker_status)
+                && this
+                    .shard_service()
+                    .check_worker(&owned_agent_id.agent_id)
+                    .is_ok()
                 && let Err(err) = Worker::get_or_create_running(
                     this,
                     &owned_agent_id,

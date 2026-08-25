@@ -143,7 +143,7 @@ impl ShardManagement {
             //   - the rebalance plan is calculated,
             //   - new and removed pods are added to the routing table and got persisted,
             // but the rebalance plan is NOT applied yet. The lock is then release for apply.
-            let (mut rebalance, full_assignment_pods) = {
+            let (mut rebalance, mut full_assignment_pods) = {
                 let mut current_routing_table = routing_table.write().await;
 
                 for pod in removed_pods {
@@ -203,12 +203,12 @@ impl ShardManagement {
                     "Some shards could not be assigned and will be left unassigned for retry"
                 );
 
+                // The executor may have applied the assignment even though the call failed
+                // (for example a timeout), so it always gets the authoritative assignment next.
                 {
                     let mut updates_guard = updates.lock().await;
                     for (pod, _) in &rebalance_failures.failed_assignments {
-                        if full_assignment_pods.contains(pod) {
-                            updates_guard.retry_full_assignment(*pod);
-                        }
+                        updates_guard.retry_full_assignment(*pod);
                     }
                 }
                 needs_retry = true;
@@ -221,8 +221,16 @@ impl ShardManagement {
                         .iter()
                         .map(|(pod, _)| pod)
                         .join(", "),
-                    "Some shards could not be unassigned and rebalance will be retried"
+                    "Some shards could not be unassigned; they are left unassigned and the pods get their authoritative assignment"
                 );
+                // A failed revoke does not mean the executor still holds the shards - it may have
+                // dropped them and only the response was lost. The shards are left unassigned in
+                // the routing table (the unassignment stays in the plan), and the pod receives its
+                // authoritative assignment in this pass, before the next pass hands the shards to
+                // another pod. If that reconciliation fails too, it is re-queued below.
+                for (pod, _) in &rebalance_failures.failed_unassignments {
+                    full_assignment_pods.insert(*pod);
+                }
                 needs_retry = true;
             }
 
@@ -294,15 +302,15 @@ impl ShardManagement {
         }
         let failed_unassignments =
             revoke_shards(worker_executors.clone(), rebalance.get_unassignments()).await;
-        let failed_shards = failed_unassignments
+        let failed_shards: HashSet<ShardId> = failed_unassignments
             .iter()
             .flat_map(|(_, shard_ids)| shard_ids.clone())
             .collect();
-        rebalance.remove_shards(&failed_shards);
+        rebalance.remove_assignment_shards(&failed_shards);
         if !failed_shards.is_empty() {
             warn!(
                 failed_shards = failed_shards.iter().join(", "),
-                "Some shards could not be unassigned and have been removed from rebalance"
+                "Some shards could not be unassigned and are left unassigned for retry"
             );
         }
 
