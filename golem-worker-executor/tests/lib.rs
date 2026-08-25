@@ -153,6 +153,16 @@ test_component!(
     "it_agent_counters_release",
     "it:agent-counters"
 );
+// The same component with `Counter::component_version` returning 2 instead of
+// 1, and nothing else different. Declared under the same component name on
+// purpose: an update can only swap one build for the other underneath running
+// agents if the agent types match exactly.
+test_component!(
+    agent_counters_v2,
+    "agent_counters_v2",
+    "it_agent_counters_v2_release",
+    "it:agent-counters"
+);
 test_component!(
     http_tests,
     "http_tests",
