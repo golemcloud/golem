@@ -24,6 +24,9 @@ pub mod promise;
 pub mod rich_types;
 pub mod revert;
 pub mod rpc;
+pub mod snapshot;
+pub mod transactions;
+pub mod websocket;
 
 use crate::Tracing;
 use golem_common::{agent_id, data_value};
