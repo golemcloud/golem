@@ -591,13 +591,20 @@ mod tests {
 
         async fn set_many(
             &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _pairs: &[(&str, &[u8])],
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: KeyValueStorageNamespace,
+            pairs: &[(&str, &[u8])],
         ) -> Result<(), KeyValueStorageError> {
-            unimplemented!()
+            match self.fail_now() {
+                Some(err) => Err(err),
+                None => {
+                    self.inner
+                        .set_many(svc_name, api_name, entity_name, namespace, pairs)
+                        .await
+                }
+            }
         }
 
         async fn set_if_not_exists(
@@ -655,62 +662,92 @@ mod tests {
 
         async fn get_many(
             &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _keys: Vec<String>,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: KeyValueStorageNamespace,
+            keys: Vec<String>,
         ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
-            unimplemented!()
+            match self.fail_now() {
+                Some(err) => Err(err),
+                None => {
+                    self.inner
+                        .get_many(svc_name, api_name, entity_name, namespace, keys)
+                        .await
+                }
+            }
         }
 
         async fn get_all(
             &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: KeyValueStorageNamespace,
         ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
-            unimplemented!()
+            match self.fail_now() {
+                Some(err) => Err(err),
+                None => {
+                    self.inner
+                        .get_all(svc_name, api_name, entity_name, namespace)
+                        .await
+                }
+            }
         }
 
         async fn del(
             &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: KeyValueStorageNamespace,
+            key: &str,
         ) -> Result<(), KeyValueStorageError> {
-            unimplemented!()
+            match self.fail_now() {
+                Some(err) => Err(err),
+                None => self.inner.del(svc_name, api_name, namespace, key).await,
+            }
         }
 
         async fn del_many(
             &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _keys: Vec<String>,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: KeyValueStorageNamespace,
+            keys: Vec<String>,
         ) -> Result<(), KeyValueStorageError> {
-            unimplemented!()
+            match self.fail_now() {
+                Some(err) => Err(err),
+                None => {
+                    self.inner
+                        .del_many(svc_name, api_name, namespace, keys)
+                        .await
+                }
+            }
         }
 
         async fn exists(
             &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: KeyValueStorageNamespace,
+            key: &str,
         ) -> Result<bool, KeyValueStorageError> {
-            unimplemented!()
+            match self.fail_now() {
+                Some(err) => Err(err),
+                None => self.inner.exists(svc_name, api_name, namespace, key).await,
+            }
         }
 
         async fn keys(
             &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: KeyValueStorageNamespace,
         ) -> Result<Vec<String>, KeyValueStorageError> {
-            unimplemented!()
+            match self.fail_now() {
+                Some(err) => Err(err),
+                None => self.inner.keys(svc_name, api_name, namespace).await,
+            }
         }
 
         async fn add_to_set(
@@ -734,14 +771,21 @@ mod tests {
 
         async fn remove_from_set(
             &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-            _value: &[u8],
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: KeyValueStorageNamespace,
+            key: &str,
+            value: &[u8],
         ) -> Result<(), KeyValueStorageError> {
-            unimplemented!()
+            match self.fail_now() {
+                Some(err) => Err(err),
+                None => {
+                    self.inner
+                        .remove_from_set(svc_name, api_name, entity_name, namespace, key, value)
+                        .await
+                }
+            }
         }
 
         async fn members_of_set(
@@ -764,51 +808,94 @@ mod tests {
 
         async fn add_to_sorted_set(
             &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-            _score: f64,
-            _value: &[u8],
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: KeyValueStorageNamespace,
+            key: &str,
+            score: f64,
+            value: &[u8],
         ) -> Result<(), KeyValueStorageError> {
-            unimplemented!()
+            match self.fail_now() {
+                Some(err) => Err(err),
+                None => {
+                    self.inner
+                        .add_to_sorted_set(
+                            svc_name,
+                            api_name,
+                            entity_name,
+                            namespace,
+                            key,
+                            score,
+                            value,
+                        )
+                        .await
+                }
+            }
         }
 
         async fn remove_from_sorted_set(
             &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-            _value: &[u8],
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: KeyValueStorageNamespace,
+            key: &str,
+            value: &[u8],
         ) -> Result<(), KeyValueStorageError> {
-            unimplemented!()
+            match self.fail_now() {
+                Some(err) => Err(err),
+                None => {
+                    self.inner
+                        .remove_from_sorted_set(
+                            svc_name,
+                            api_name,
+                            entity_name,
+                            namespace,
+                            key,
+                            value,
+                        )
+                        .await
+                }
+            }
         }
 
         async fn get_sorted_set(
             &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: KeyValueStorageNamespace,
+            key: &str,
         ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
-            unimplemented!()
+            match self.fail_now() {
+                Some(err) => Err(err),
+                None => {
+                    self.inner
+                        .get_sorted_set(svc_name, api_name, entity_name, namespace, key)
+                        .await
+                }
+            }
         }
 
         async fn query_sorted_set(
             &self,
-            _svc_name: &'static str,
-            _api_name: &'static str,
-            _entity_name: &'static str,
-            _namespace: KeyValueStorageNamespace,
-            _key: &str,
-            _min: f64,
-            _max: f64,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: KeyValueStorageNamespace,
+            key: &str,
+            min: f64,
+            max: f64,
         ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
-            unimplemented!()
+            match self.fail_now() {
+                Some(err) => Err(err),
+                None => {
+                    self.inner
+                        .query_sorted_set(svc_name, api_name, entity_name, namespace, key, min, max)
+                        .await
+                }
+            }
         }
     }
 
@@ -957,5 +1044,214 @@ mod tests {
 
         assert_eq!(result, Ok(true));
         assert_eq!(flaky.attempts(), 3);
+    }
+
+    /// Every method of the [`KeyValueStorage`] interface, so a test can assert a property across
+    /// the whole surface instead of the handful of methods a hand-written test happens to reach.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Op {
+        Set,
+        SetMany,
+        SetIfNotExists,
+        Get,
+        GetMany,
+        GetAll,
+        Del,
+        DelMany,
+        Exists,
+        Keys,
+        AddToSet,
+        RemoveFromSet,
+        MembersOfSet,
+        AddToSortedSet,
+        RemoveFromSortedSet,
+        GetSortedSet,
+        QuerySortedSet,
+    }
+
+    impl Op {
+        const ALL: [Op; 17] = [
+            Op::Set,
+            Op::SetMany,
+            Op::SetIfNotExists,
+            Op::Get,
+            Op::GetMany,
+            Op::GetAll,
+            Op::Del,
+            Op::DelMany,
+            Op::Exists,
+            Op::Keys,
+            Op::AddToSet,
+            Op::RemoveFromSet,
+            Op::MembersOfSet,
+            Op::AddToSortedSet,
+            Op::RemoveFromSortedSet,
+            Op::GetSortedSet,
+            Op::QuerySortedSet,
+        ];
+
+        async fn run(self, storage: &RetryingKeyValueStorage) -> Result<(), KeyValueStorageError> {
+            let ns = namespace();
+            match self {
+                Op::Set => {
+                    storage
+                        .set("test", "api", "entity", ns, "key", b"value")
+                        .await
+                }
+                Op::SetMany => {
+                    storage
+                        .set_many("test", "api", "entity", ns, &[("key", b"value".as_slice())])
+                        .await
+                }
+                Op::SetIfNotExists => storage
+                    .set_if_not_exists("test", "api", "entity", ns, "key", b"value")
+                    .await
+                    .map(|_| ()),
+                Op::Get => storage
+                    .get("test", "api", "entity", ns, "key")
+                    .await
+                    .map(|_| ()),
+                Op::GetMany => storage
+                    .get_many("test", "api", "entity", ns, vec!["key".to_string()])
+                    .await
+                    .map(|_| ()),
+                Op::GetAll => storage
+                    .get_all("test", "api", "entity", ns)
+                    .await
+                    .map(|_| ()),
+                Op::Del => storage.del("test", "api", ns, "key").await,
+                Op::DelMany => {
+                    storage
+                        .del_many("test", "api", ns, vec!["key".to_string()])
+                        .await
+                }
+                Op::Exists => storage.exists("test", "api", ns, "key").await.map(|_| ()),
+                Op::Keys => storage.keys("test", "api", ns).await.map(|_| ()),
+                Op::AddToSet => {
+                    storage
+                        .add_to_set("test", "api", "entity", ns, "key", b"value")
+                        .await
+                }
+                Op::RemoveFromSet => {
+                    storage
+                        .remove_from_set("test", "api", "entity", ns, "key", b"value")
+                        .await
+                }
+                Op::MembersOfSet => storage
+                    .members_of_set("test", "api", "entity", ns, "key")
+                    .await
+                    .map(|_| ()),
+                Op::AddToSortedSet => {
+                    storage
+                        .add_to_sorted_set("test", "api", "entity", ns, "key", 1.0, b"value")
+                        .await
+                }
+                Op::RemoveFromSortedSet => {
+                    storage
+                        .remove_from_sorted_set("test", "api", "entity", ns, "key", b"value")
+                        .await
+                }
+                Op::GetSortedSet => storage
+                    .get_sorted_set("test", "api", "entity", ns, "key")
+                    .await
+                    .map(|_| ()),
+                Op::QuerySortedSet => storage
+                    .query_sorted_set("test", "api", "entity", ns, "key", 0.0, 2.0)
+                    .await
+                    .map(|_| ()),
+            }
+        }
+    }
+
+    fn flaky(error: KeyValueStorageError, failures: u32) -> Arc<FlakyKeyValueStorage> {
+        Arc::new(FlakyKeyValueStorage::new(error, failures))
+    }
+
+    /// The decorator delegates rather than answering by itself: every operation reaches the
+    /// backend exactly once when nothing fails.
+    #[test]
+    async fn every_operation_reaches_the_backend() {
+        for op in Op::ALL {
+            let inner = flaky(KeyValueStorageError::Other("unused".to_string()), 0);
+            let storage = RetryingKeyValueStorage::new(inner.clone(), fast_retry(5));
+
+            assert_eq!(op.run(&storage).await, Ok(()), "{op:?}");
+            assert_eq!(inner.attempts(), 1, "{op:?}");
+        }
+    }
+
+    /// A failure the backend never attempted is retried for every operation.
+    #[test]
+    async fn every_operation_retries_a_failure_that_was_never_attempted() {
+        for op in Op::ALL {
+            let inner = flaky(
+                KeyValueStorageError::NotAttempted("pool timed out".to_string()),
+                2,
+            );
+            let storage = RetryingKeyValueStorage::new(inner.clone(), fast_retry(5));
+
+            assert_eq!(op.run(&storage).await, Ok(()), "{op:?}");
+            assert_eq!(inner.attempts(), 3, "{op:?}");
+        }
+    }
+
+    /// A failure that may already have been applied is retried for every idempotent operation.
+    /// `set_if_not_exists` is left out: whether it may be retried after a possibly applied write
+    /// is a policy decision owned by the decorator, and the tests above already pin that it is
+    /// routed through the same retry helper as everything else.
+    #[test]
+    async fn every_idempotent_operation_retries_a_transient_failure() {
+        for op in Op::ALL.into_iter().filter(|op| *op != Op::SetIfNotExists) {
+            let inner = flaky(
+                KeyValueStorageError::Transient("connection reset".to_string()),
+                2,
+            );
+            let storage = RetryingKeyValueStorage::new(inner.clone(), fast_retry(5));
+
+            assert_eq!(op.run(&storage).await, Ok(()), "{op:?}");
+            assert_eq!(inner.attempts(), 3, "{op:?}");
+        }
+    }
+
+    /// Nothing outside the two transient classifications is retried, whatever the operation.
+    #[test]
+    async fn no_operation_retries_an_unclassified_failure() {
+        for op in Op::ALL {
+            let inner = flaky(
+                KeyValueStorageError::Other("bad request".to_string()),
+                u32::MAX,
+            );
+            let storage = RetryingKeyValueStorage::new(inner.clone(), fast_retry(5));
+
+            assert_eq!(
+                op.run(&storage).await,
+                Err(KeyValueStorageError::Other("bad request".to_string())),
+                "{op:?}"
+            );
+            assert_eq!(inner.attempts(), 1, "{op:?}");
+        }
+    }
+
+    /// `max_attempts` counts calls made to the backend, not retries after the first one.
+    #[test]
+    async fn retries_are_bounded_by_max_attempts() {
+        for max_attempts in [1u32, 2, 3, 5] {
+            let inner = flaky(
+                KeyValueStorageError::NotAttempted("pool timed out".to_string()),
+                u32::MAX,
+            );
+            let storage = RetryingKeyValueStorage::new(inner.clone(), fast_retry(max_attempts));
+
+            let result = storage
+                .set("test", "api", "entity", namespace(), "key", b"value")
+                .await;
+
+            assert!(result.is_err(), "max_attempts={max_attempts}");
+            assert_eq!(
+                inner.attempts(),
+                max_attempts,
+                "max_attempts={max_attempts}"
+            );
+        }
     }
 }

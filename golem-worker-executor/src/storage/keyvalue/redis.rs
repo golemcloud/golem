@@ -527,3 +527,62 @@ impl KeyValueStorage for RedisKeyValueStorage {
             .collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    /// Backpressure means the client refused to queue the command, so it never left the process.
+    #[test]
+    fn backpressure_is_classified_as_not_attempted() {
+        let error =
+            KeyValueStorageError::from(RedisError::new(ErrorKind::Backpressure, "too many"));
+        assert!(
+            matches!(error, KeyValueStorageError::NotAttempted(_)),
+            "{error:?}"
+        );
+    }
+
+    /// Everything that can fail with the command already on the wire stays `Transient`.
+    #[test]
+    fn connection_failures_are_classified_as_transient() {
+        for kind in [
+            ErrorKind::IO,
+            ErrorKind::Timeout,
+            ErrorKind::Canceled,
+            ErrorKind::Cluster,
+            ErrorKind::Routing,
+        ] {
+            let error = KeyValueStorageError::from(RedisError::new(kind.clone(), "boom"));
+            assert!(
+                matches!(error, KeyValueStorageError::Transient(_)),
+                "{kind:?}: {error:?}"
+            );
+        }
+    }
+
+    /// Everything else is permanent, so the retry policy leaves it alone.
+    #[test]
+    fn other_redis_errors_are_not_retried() {
+        for kind in [
+            ErrorKind::Auth,
+            ErrorKind::Config,
+            ErrorKind::InvalidArgument,
+            ErrorKind::InvalidCommand,
+            ErrorKind::NotFound,
+            ErrorKind::Parse,
+            ErrorKind::Protocol,
+            ErrorKind::Sentinel,
+            ErrorKind::Tls,
+            ErrorKind::Unknown,
+            ErrorKind::Url,
+        ] {
+            let error = KeyValueStorageError::from(RedisError::new(kind.clone(), "boom"));
+            assert!(
+                matches!(error, KeyValueStorageError::Other(_)),
+                "{kind:?}: {error:?}"
+            );
+        }
+    }
+}

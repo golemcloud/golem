@@ -174,3 +174,39 @@ impl<'q, DB: Database, R> BindingsStack<'q, DB, R> {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::RepoError;
+    use test_r::test;
+
+    #[test]
+    fn pool_timeout_is_transient_and_a_pool_timeout() {
+        let error = RepoError::from(sqlx::Error::PoolTimedOut);
+        assert!(error.is_transient());
+        assert!(error.is_pool_timeout());
+    }
+
+    /// The distinction callers depend on: an I/O error may have reached the database, a pool
+    /// acquisition timeout cannot have.
+    #[test]
+    fn mid_query_io_error_is_transient_but_not_a_pool_timeout() {
+        let error = RepoError::from(sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset",
+        )));
+        assert!(error.is_transient());
+        assert!(!error.is_pool_timeout());
+    }
+
+    #[test]
+    fn other_errors_are_neither() {
+        let error = RepoError::from(sqlx::Error::RowNotFound);
+        assert!(!error.is_transient());
+        assert!(!error.is_pool_timeout());
+
+        let error = RepoError::UniqueViolation("duplicate".to_string());
+        assert!(!error.is_transient());
+        assert!(!error.is_pool_timeout());
+    }
+}
