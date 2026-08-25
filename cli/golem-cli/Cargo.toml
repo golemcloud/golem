@@ -101,6 +101,7 @@ tracing = { workspace = true }
 tracing-log = "0.2.0"
 tracing-subscriber = { workspace = true }
 tree-sitter = { workspace = true }
+tree-sitter-go = { workspace = true }
 tree-sitter-json = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-typescript = { workspace = true }

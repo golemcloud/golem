@@ -14,6 +14,7 @@ const CATEGORIES: Record<string, string> = {
   ts: "TypeScript",
   scala: "Scala",
   moonbit: "MoonBit",
+  go: "Go",
 }
 
 type Skill = {
@@ -199,7 +200,7 @@ function parseSkillFile(raw: string, fallbackName: string): { title: string; con
 function humanize(slug: string): string {
   return slug
     .replace(/^golem-/, "")
-    .replace(/-(rust|ts|scala)$/, "")
+    .replace(/-(rust|ts|scala|moonbit|go)$/, "")
     .split("-")
     .map(w => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ")

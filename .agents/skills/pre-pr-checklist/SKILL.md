@@ -32,6 +32,7 @@ Choose tests based on what you changed. **Do not run `cargo make test`** — it 
 | Rust SDK (`sdks/rust/`) | `cargo test -p golem-rust` + `cargo make worker-executor-tests` |
 | TypeScript SDK (`sdks/ts/`) | `npx pnpm run test` (in `sdks/ts/`) + `cargo make cli-integration-tests` |
 | MoonBit SDK (`sdks/moonbit/`) | `moon test` (in `sdks/moonbit/golem_sdk/`) |
+| Go SDK (`sdks/go/golem/`) | `go test ./...` (in `sdks/go/golem/`); host-call paths only build under a generated app — see the `sdk-development` skill |
 | CLI structured output/schema | `cargo test -p golem-cli cli_output_schema_ --lib` + `cargo make check-cli-output-schema` |
 | CLI JSON output affecting skill tests | Update affected `golem-skills/tests/harness` code, tests, or scenarios. Run `npm run build && npm test` in `golem-skills/tests/harness` only if harness TypeScript code/tests changed. |
 
@@ -54,6 +55,7 @@ cargo make worker-executor-tests-misc
 | HTTP API endpoints | `cargo make generate-openapi` then `cargo clean -p golem-client && cargo build -p golem-client` (also refreshes `docs/src/content/rest-api/*.mdx`) |
 | Service config structs/defaults | `cargo make generate-configs` |
 | WIT interfaces | `cargo make wit` |
+| Go SDK WIT bindings (after a WIT change) | `cargo make generate-sdk-go-bindings` |
 | TS SDK runtime code | `npx pnpm run build-agent-template` (in `sdks/ts/`) |
 | Skill catalog (`golem-skills/skills/**`) | `cargo make generate-docs-skills` (refreshes `docs/src/content/how-to-guides/*.mdx`) |
 | CLI output schema summary | `cargo make update-cli-output-schema-summary` |

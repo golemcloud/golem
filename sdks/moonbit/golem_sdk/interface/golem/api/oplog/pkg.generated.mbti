@@ -175,6 +175,11 @@ pub(all) struct CompletionDeliveredParameters {
   start_index : UInt64
 } derive(Eq, Show)
 
+pub(all) struct CompletionDeliveredParameters {
+  timestamp : @system-clock.Instant
+  start_index : UInt64
+} derive(Eq, Show)
+
 pub(all) struct CompletionDiscardedParameters {
   timestamp : @system-clock.Instant
   start_index : UInt64

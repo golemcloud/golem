@@ -1,0 +1,82 @@
+package golem:permissions@0.1.0;
+
+/// The permission-card resource's shared data model and inspection operations.
+///
+/// The `permission-card` capability itself is defined as a bare resource in
+/// `golem:core/types` so that it can travel inside a `schema-value-tree` as an
+/// opaque, unforgeable handle. This interface exposes only safe inspection
+/// operations over that handle plus the records and variants the other
+/// permissions interfaces reference. Components that only need to *hold and
+/// pass* cards — most tools and middleware — import only this interface.
+interface types {
+    use golem:core/types@2.0.0.{permission-card, card-id, agent-id, uuid};
+
+    record timestamp {
+        seconds: s64,
+        nanoseconds: u32,
+    }
+
+    /// ISO-8601 duration string (e.g. `"P30D"` for 30 days).
+    record duration {
+        iso-8601: string,
+    }
+
+    variant holder {
+        account(uuid),
+        app(uuid),
+        agent(agent-id),
+    }
+
+    record pattern-grant {
+        class: string,
+        owner: string,
+        recipient: string,
+        verb: string,
+        resource-id: string,
+    }
+
+    record card-view {
+        lower-positive:  list<pattern-grant>,
+        lower-negative:  list<pattern-grant>,
+        upper-positive:  list<pattern-grant>,
+        upper-negative:  list<pattern-grant>,
+    }
+
+    record wallet-version-token {
+        /// 32 bytes — BLAKE3 of (holder-kind, holder-id).
+        wallet-id-hash: list<u8>,
+        generation:     u64,
+    }
+
+    variant permission-error {
+        not-permitted(string),
+        lower-bound-too-broad(string),
+        upper-bound-too-broad(string),
+        wallet-multi-source-required(string),
+        card-revoked(string),
+        card-expired(string),
+        install-recipient-mismatch(string),
+        card-polymorphic-not-usable(string),
+        unknown-resource-class(string),
+        invalid-pattern(string),
+        invalid-verb(string),
+        invalid-owner(string),
+        invalid-recipient(string),
+    }
+
+    // --- Card inspection ---
+    // Free functions on a borrowed handle, because the resource itself is
+    // bare in core (matching secret/quota-token).
+
+    /// Stable identifier of this card.
+    id: func(c: borrow<permission-card>) -> card-id;
+
+    /// Parent card identifiers in the derivation DAG.
+    parents: func(c: borrow<permission-card>) -> list<card-id>;
+
+    /// Expiry timestamp, if the card has a bounded lifespan.
+    expires-at: func(c: borrow<permission-card>) -> option<timestamp>;
+
+    /// `true` if the card is polymorphic (carries slot variables).
+    is-polymorphic: func(c: borrow<permission-card>) -> bool;
+}

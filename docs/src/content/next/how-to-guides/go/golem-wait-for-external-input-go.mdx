@@ -1,0 +1,162 @@
+# Waiting for External Input with Golem Promises (Go)
+
+## Overview
+
+A **Golem promise** lets an agent suspend its execution until an external event completes it. The agent creates a promise, hands the promise ID to an external system (another agent, a webhook, a UI, an HTTP API call), and then awaits the result. The Golem runtime **durably suspends** the invocation — consuming no resources, surviving restarts, exactly-once via oplog replay — until the promise is fulfilled.
+
+In Go a promise is a typed handle `golem.Promise[T]`: the completion payload is decoded as `T` via JSON (or passed through unchanged when `T` is `[]byte`).
+
+## Steps
+
+1. **Create a promise** inside a handler with `golem.NewPromise[T]()`.
+2. **Persist its ID** (`p.ID()`) in the agent's state, and/or hand it to the outside world so someone can complete it later.
+3. **Await it** with `golem.PromiseByID[T](id).Await()` (or `p.Await()` in the same invocation) — the invocation durably suspends here.
+4. **Complete it** from another agent with `golem.CompletePromise(id, value)`, or from off-platform via the worker REST endpoint / a minted `WebhookURL()`.
+
+## API (from `promise.go`)
+
+| Function / Method | Signature | Description |
+|-------------------|-----------|-------------|
+| `golem.NewPromise[T]` | `func NewPromise[T any]() *Promise[T]` | Create a fresh promise owned by the current agent |
+| `golem.PromiseByID[T]` | `func PromiseByID[T any](id PromiseID) *Promise[T]` | Rebuild a handle from a stored `PromiseID` |
+| `(*Promise[T]).ID` | `func (p *Promise[T]) ID() PromiseID` | The durable identity to persist or hand out |
+| `(*Promise[T]).Await` | `func (p *Promise[T]) Await() T` | Durably block until completed; returns the payload as `T` |
+| `(*Promise[T]).WebhookURL` | `func (p *Promise[T]) WebhookURL() string` | Mint an external URL whose POST body completes the promise |
+| `golem.CompletePromise[T]` | `func CompletePromise[T any](id PromiseID, value T) bool` | Complete a promise from another agent; returns `false` if already completed |
+
+`Await` is **fail-loud**: an infra failure traps and surfaces as an agent-error rather than returning an `error`. Only the agent that created the promise may `Await` it — awaiting from another agent traps in the host.
+
+## `PromiseID` structure
+
+`golem.PromiseID` has three exported (JSON-marshalable) fields, which are exactly what the REST complete endpoint needs:
+
+```go
+type PromiseID struct {
+    ComponentID golem.UUID // the component the owning agent belongs to
+    AgentID     string     // agent type + constructor params (the ":agent" path segment)
+    OplogIndex  uint64     // disambiguates promises from the same agent ("oplogIdx")
+}
+```
+
+## Full example: human-in-the-loop approval
+
+### Definition (`agents/approval/approval.go`)
+
+```go
+// Package approval is the DEFINITION of the human-in-the-loop approval agent.
+package approval
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+// Verdict is the promise payload, typed as JSON by golem.Promise.
+type Verdict struct {
+    Approved bool
+    Reason   string
+}
+
+type ID struct{ Queue string }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{
+    Name:        "ApprovalAgent",
+    Description: "Human-in-the-loop approvals via durable promises",
+})
+
+var (
+    // Request opens the promise and returns its id for an external completer.
+    Request = golem.DefineMethod[ID, golem.Unit, golem.PromiseID]("request",
+        golem.Desc("Open an approval request, returning the promise id to complete"))
+    // Await durably blocks until the open request is completed.
+    Await = golem.DefineMethod[ID, golem.Unit, Verdict]("await",
+        golem.Desc("Durably block until the open request is completed"))
+)
+```
+
+### Implementation (`agents/approval/impl/impl.go`)
+
+```go
+// Package impl is the IMPLEMENTATION of the approval agent. Await durably
+// SUSPENDS the invocation until the promise is completed.
+package impl
+
+import (
+    "myapp/agents/approval"
+
+    "github.com/golemcloud/golem/sdks/go/golem"
+)
+
+// state remembers the open promise across invocations.
+type state struct {
+    pending golem.PromiseID
+    open    bool
+}
+
+var agent = golem.Implement(approval.Agent, func(approval.ID) *state { return &state{} })
+
+func init() {
+    golem.Handle(agent, approval.Request, func(ctx *golem.Context[state], _ golem.Unit) golem.PromiseID {
+        p := golem.NewPromise[approval.Verdict]()
+        ctx.State.pending = p.ID() // persist so a later invocation can Await it
+        ctx.State.open = true
+        return p.ID()
+    })
+
+    golem.Handle(agent, approval.Await, func(ctx *golem.Context[state], _ golem.Unit) approval.Verdict {
+        if !ctx.State.open {
+            panic("no open approval request — call request first")
+        }
+        // Rebuild the handle from the stored id and durably suspend until completion.
+        return golem.PromiseByID[approval.Verdict](ctx.State.pending).Await()
+    })
+}
+```
+
+## Completing from another agent
+
+```go
+// From any agent — agent-to-agent completion:
+ok := golem.CompletePromise(pendingID, approval.Verdict{Approved: true, Reason: "looks good"})
+_ = ok // false means it was already completed (idempotency signal)
+```
+
+## Completing from outside Golem (REST)
+
+Hand the three `PromiseID` fields to the external system; it POSTs to the worker-service complete endpoint:
+
+```shell
+curl -X POST \
+  "$GOLEM_URL/v1/components/$COMPONENT_ID/workers/$AGENT_ID/complete" \
+  -H 'Content-Type: application/json' \
+  -d '{"oplogIdx": <oplog_index>, "data": [<bytes>]}'
+```
+
+The `data` bytes become the payload `Await` decodes as `T` (JSON when `T` is a struct).
+
+## Webhook-style callback
+
+When the agent type is HTTP-API-deployed (its `Spec.HTTP` is set and it is declared in the manifest's `httpApi` deployment), mint a URL whose POST body completes the promise:
+
+```go
+p := golem.NewPromise[Event]()
+url := p.WebhookURL() // hand this to an off-platform system; its POST body completes the promise
+ctx.State.pending = p.ID()
+// later, in another invocation:
+event := golem.PromiseByID[Event](ctx.State.pending).Await()
+```
+
+`WebhookURL` is fail-loud: it traps if the agent is not HTTP-API-deployed.
+
+## Key Constraints
+
+- The promise payload is typed as `T` via JSON. Use `golem.Promise[[]byte]` as an escape hatch to carry raw, non-JSON bytes through unchanged.
+- Only the **creating** agent may `Await` a promise; awaiting from a different agent traps.
+- Persist `p.ID()` in the agent's state if the promise is created in one invocation and awaited in another — a single agent processes invocations sequentially, so `Request` returns before `Await` runs.
+- `Await` is fail-loud (traps on infra failure), matching Golem's exactly-once model — do not expect an `error` return.
+- `CompletePromise` returns `false` if the promise was already completed; treat it as the idempotency signal, not a failure.
+
+### Related Guides
+| Guide | Description |
+|-------|--------------|
+| [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go) | An agent completes another agent's promise via RPC |
+| [`golem-parallel-workers-go`](/next/how-to-guides/go/golem-parallel-workers-go) | Fan out work and collect results via promises |
+| [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go) | Expose the agent over HTTP so `WebhookURL` works |
+| [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go) | Define the agent that creates the promise |

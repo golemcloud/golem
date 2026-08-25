@@ -1,0 +1,126 @@
+# Calling Go Agents from Outside Golem
+
+## Overview
+
+Agents defined with the Go SDK are reached from outside the platform through **language-agnostic** entry points:
+
+1. **The `golem` CLI** — `golem agent invoke` calls a method and waits for the result.
+2. **HTTP endpoints** — if the agent declares an HTTP mount, external clients (including a Go `net/http` client) call its methods over plain HTTP.
+3. **The worker REST API** — invoke methods and complete promises directly over HTTP against the Golem server.
+
+> **No Go bridge SDK.** The `bridge:` generator produces typed external client crates/packages for TypeScript, Rust, MoonBit, and Scala — there is **no Go external bridge generator**. From an external **Go** program, call agents over the REST API or the agent's HTTP endpoints with the standard library (`net/http`), as shown below.
+
+Throughout, the example is a `CounterAgent` whose Go `ID` is `struct{ Name string }` with methods `increment`, `add`, and `value`.
+
+## Approach 1: the CLI
+
+`golem agent invoke` calls a method on a deployed agent and blocks for the result. The agent is created automatically on first invocation. Both `golem` and `golem-cli` work for every command.
+
+```shell
+golem agent invoke <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
+```
+
+### Agent ID format
+
+The agent ID is the agent type name plus its constructor parameters — the fields of the Go `ID` struct, in declaration order:
+
+```
+AgentTypeName(param1, param2, ...)
+```
+
+`CounterAgent`'s `ID` is `struct{ Name string }`, so its ID is `CounterAgent("my-counter")`. A singleton (`type ID struct{}`) uses empty parentheses: `CounterAgent()`. IDs may be prefixed with `env/`, `app/env/`, or `account/app/env/`.
+
+### Examples
+
+```shell
+# No-parameter method
+golem agent invoke 'CounterAgent("my-counter")' increment
+
+# add takes one parameter (the By field of AddIn), passed positionally
+golem agent invoke 'CounterAgent("my-counter")' add 5
+
+# Read the current value
+golem agent invoke 'CounterAgent("my-counter")' value
+
+# In a specific environment
+golem agent invoke 'staging/CounterAgent("my-counter")' value
+
+# With an explicit idempotency key
+golem agent invoke -i my-unique-key 'CounterAgent("my-counter")' increment
+
+# Machine-readable output
+golem agent invoke --format json 'CounterAgent("my-counter")' value
+```
+
+### CLI options
+
+| Option | Description |
+|--------|-------------|
+| `-t, --trigger` | Only trigger the invocation without waiting (fire-and-forget) |
+| `-i, --idempotency-key <KEY>` | Set a specific idempotency key; use `"-"` for auto-generated |
+| `--no-stream` | Disable live streaming of agent stdout/stderr/log |
+| `--schedule-at <DATETIME>` | Schedule the invocation (requires `--trigger`; ISO 8601) |
+| `--format json` / `--format yaml` | Machine-readable output |
+
+Method arguments use the CLI's WIT value syntax: strings quoted (`"my-counter"`), integers bare (`5`), booleans `true`/`false`, options `some(v)`/`none`, results `ok(v)`/`err(v)`, records `{ field-one: 1 }`. Each exported field of a Go input struct is one positional parameter, named by lower-camel-casing the Go field name (`AmountCents` → `amountCents`).
+
+## Approach 2: HTTP endpoints
+
+If the agent declares an HTTP mount, its methods are reachable over plain HTTP from any client. Declare the mount on the `Spec` and per-method routes with `golem.HTTP`:
+
+```go
+var Agent = golem.DefineAgent[ID](golem.Spec{
+    Name: "CounterAgent",
+    HTTP: &golem.Mount{Path: "/counters/{name}"}, // {name} binds the ID field
+})
+
+var Add = golem.DefineMethod[ID, AddIn, int64]("add",
+    golem.HTTP(golem.POST("/add?by={by}")))
+```
+
+The agent must also be declared in the manifest's `httpApi` deployment. External clients then POST to the deployed route — from a Go program with the standard library:
+
+```go
+resp, err := http.Post(
+    "https://my-golem.example.com/counters/my-counter/add?by=5",
+    "application/json", nil,
+)
+```
+
+See [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go) for the full mount/route model.
+
+## Approach 3: the worker REST API
+
+Call methods (or complete promises) directly against the Golem server over HTTP — usable from any language, including external Go:
+
+```shell
+# Invoke and await a method
+curl -X POST \
+  "$GOLEM_URL/v1/components/$COMPONENT_ID/workers/$AGENT_ID/invoke-and-await?function=add" \
+  -H 'Content-Type: application/json' \
+  -d '{"params": [5]}'
+
+# Complete a promise an agent is awaiting (see golem-wait-for-external-input-go)
+curl -X POST \
+  "$GOLEM_URL/v1/components/$COMPONENT_ID/workers/$AGENT_ID/complete" \
+  -H 'Content-Type: application/json' \
+  -d '{"oplogIdx": <oplog_index>, "data": [<bytes>]}'
+```
+
+`$AGENT_ID` is the same `AgentTypeName(params)` string the CLI uses. This is the mechanism a promise's `PromiseID` fields (`ComponentID`, `AgentID`, `OplogIndex`) feed into for external completion.
+
+## Key Constraints
+
+- `golem agent invoke` **blocks** until the agent returns; use `-t/--trigger` for fire-and-forget.
+- Every invocation carries an idempotency key (auto-generated if not supplied), giving at-most-once execution even if the client retries.
+- Constructor arguments in the agent ID must match the Go `ID` struct fields in order.
+- There is **no generated Go external client** — from external Go, use the REST API / HTTP endpoints with `net/http`. Typed generated clients exist only for TypeScript, Rust, MoonBit, and Scala via `bridge:`.
+- HTTP-endpoint access requires both a `Spec.HTTP` mount and an `httpApi` deployment declaration.
+
+### Related Guides
+| Guide | Description |
+|-------|--------------|
+| [`golem-invoke-agent-go`](/next/how-to-guides/go/golem-invoke-agent-go) | Full `golem agent invoke` reference and options |
+| [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go) | Expose the agent's methods over HTTP |
+| [`golem-wait-for-external-input-go`](/next/how-to-guides/go/golem-wait-for-external-input-go) | Complete a promise from outside via REST |
+| [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go) | Define the agent being called |

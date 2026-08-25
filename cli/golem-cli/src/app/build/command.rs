@@ -14,8 +14,9 @@
 
 use crate::app::build::task_result_marker::{
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
-    InjectToPrebuiltQuickJsCommandMarkerHash, MoonInstallDepsMarkerHash, NpmInstallDepsMarkerHash,
-    PreinitializeJsCommandMarkerHash, ResolvedExternalCommandMarkerHash, TaskResultMarker,
+    GoModDepsMarkerHash, InjectToPrebuiltQuickJsCommandMarkerHash, MoonInstallDepsMarkerHash,
+    NpmInstallDepsMarkerHash, PreinitializeJsCommandMarkerHash, ResolvedExternalCommandMarkerHash,
+    TaskResultMarker,
 };
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
@@ -471,6 +472,22 @@ pub async fn ensure_common_deps_for_tool(
                 })
                 .await
         }
+        "go" => {
+            // Each Go component is its own module, rooted exactly at build_dir
+            // (the componentDir), so there is no ancestor walk like moon needs.
+            let go_mod_path = build_dir.join("go.mod");
+            if !go_mod_path.exists() {
+                return Ok(());
+            }
+
+            let module_root = build_dir.to_path_buf();
+            let ensure_key = format!("go:{}", module_root.display());
+            ctx.tools_with_ensured_common_deps()
+                .ensure_common_deps_for_tool_once(&ensure_key, || async {
+                    ensure_go_dependencies(ctx, &module_root).await
+                })
+                .await
+        }
         _ => Ok(()),
     }
 }
@@ -601,6 +618,76 @@ async fn run_moon_install(app_root_dir: &Path) -> anyhow::Result<()> {
         .args(["install"])
         .current_dir(app_root_dir)
         .stream_and_run("moon")
+        .await
+}
+
+async fn ensure_go_dependencies(ctx: &BuildContext<'_>, module_root: &Path) -> anyhow::Result<()> {
+    let go_sum_path = module_root.join("go.sum");
+    let marker_dir = ctx.application().task_result_marker_dir();
+
+    // `go mod tidy` rewrites go.mod (indirect requires, block form) and writes
+    // go.sum, so the marker is checked against the CURRENT state but recorded
+    // against the POST-tidy state — otherwise every build would see a changed
+    // go.mod and re-run tidy forever.
+    let go_mod_deps_marker = |root: &Path| -> anyhow::Result<TaskResultMarker> {
+        let go_mod_hash = blake3::hash(&std::fs::read(root.join("go.mod"))?)
+            .to_hex()
+            .to_string();
+        let go_sum_hash = if root.join("go.sum").exists() {
+            Some(
+                blake3::hash(&std::fs::read(root.join("go.sum"))?)
+                    .to_hex()
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        TaskResultMarker::new(
+            &marker_dir,
+            GoModDepsMarkerHash {
+                go_module_root: root,
+                go_mod_hash: &go_mod_hash,
+                go_sum_hash: go_sum_hash.as_deref(),
+            },
+        )
+    };
+
+    // Up to date only if go.sum exists too: a fresh module has a go.mod but no
+    // go.sum, and componentize-go refuses to build without it.
+    if go_mod_deps_marker(module_root)?.is_up_to_date() && go_sum_path.exists() {
+        return Ok(());
+    }
+
+    if go_sum_path.exists() {
+        log_warn_action(
+            "Detected",
+            format!(
+                "dependency changes, executing {}",
+                "go mod tidy".log_color_highlight()
+            ),
+        );
+    } else {
+        log_warn_action(
+            "Detected",
+            format!(
+                "missing {}, executing {}",
+                "go.sum".log_color_highlight(),
+                "go mod tidy".log_color_highlight()
+            ),
+        );
+    }
+
+    run_go_mod_tidy(module_root).await?;
+
+    // Record success against the post-tidy go.mod/go.sum so the next build skips.
+    go_mod_deps_marker(module_root)?.result(Ok(()))
+}
+
+async fn run_go_mod_tidy(module_root: &Path) -> anyhow::Result<()> {
+    Command::new(which("go")?)
+        .args(["mod", "tidy"])
+        .current_dir(module_root)
+        .stream_and_run("go")
         .await
 }
 

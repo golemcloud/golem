@@ -422,6 +422,9 @@ pub fn preferred_source_language_for_setup(
         Some(GuestLanguage::TypeScript) => SourceLanguage::TypeScript,
         Some(GuestLanguage::Scala) => SourceLanguage::Scala,
         Some(GuestLanguage::MoonBit) => SourceLanguage::MoonBit,
+        // The Go SDK reports "go" as its source-language; there is no dedicated
+        // agent-id renderer/parser for it yet, so it takes the Other(_) path.
+        Some(GuestLanguage::Go) => SourceLanguage::Other("go".to_string()),
         None => SourceLanguage::Other(String::new()),
     }
 }

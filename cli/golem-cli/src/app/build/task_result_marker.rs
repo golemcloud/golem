@@ -125,6 +125,30 @@ impl TaskResultMarkerHashSource for MoonInstallDepsMarkerHash<'_> {
     }
 }
 
+#[derive(Serialize)]
+pub struct GoModDepsMarkerHash<'a> {
+    pub go_module_root: &'a Path,
+    pub go_mod_hash: &'a str,
+    pub go_sum_hash: Option<&'a str>,
+}
+
+impl TaskResultMarkerHashSource for GoModDepsMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "GoModDepsMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(Some(format!(
+            "go-mod-deps:{}",
+            self.go_module_root.display()
+        )))
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
+    }
+}
+
 impl TaskResultMarkerHashSource for ResolvedExternalCommandMarkerHash<'_> {
     fn kind() -> &'static str {
         "ResolvedExternalCommandMarkerHash"
