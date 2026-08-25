@@ -20,7 +20,7 @@
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallHandle, Cancellable, ReconstructionReplayOutcome,
+    AccessClaimOptions, Cancellable, DurableCallSession, ReconstructionReplayOutcome,
 };
 use crate::worker::entity_invocation::EntityInvocationHandle;
 use crate::worker::instance::HistoricalReconstruction;
@@ -63,7 +63,7 @@ enum EntityReconstructionOutcome<R, H> {
 /// Task-owned durable state for one entity body. Its `Start` index is the entity invocation ID;
 /// dropping it before a terminal records cancellation through the generic concurrent-call path.
 pub struct EntityInvocationDurability {
-    handle: CallHandle<GolemEntityInvoke, Cancellable>,
+    handle: DurableCallSession<GolemEntityInvoke, Cancellable>,
     scope: EntityInvocationScope,
     parent: OwnerInvocationId,
     call_mode: EntityCallMode,
@@ -100,18 +100,19 @@ impl EntityInvocationDurability {
         })?;
         let request = HostRequestEntityInvocation { metadata, input };
         let request_identity: HostRequest = request.clone().into();
-        let handle = CallHandle::<GolemEntityInvoke, Cancellable>::start_access_with_options(
-            store,
-            get_ctx,
-            DurableFunctionType::WriteLocal,
-            AccessClaimOptions {
-                request_identity: Some(request_identity),
-                parent_start_index: Some(parent_start_index),
-                ..AccessClaimOptions::default()
-            },
-            async move |_| Ok(request),
-        )
-        .await?;
+        let handle =
+            DurableCallSession::<GolemEntityInvoke, Cancellable>::start_access_with_options(
+                store,
+                get_ctx,
+                DurableFunctionType::WriteLocal,
+                AccessClaimOptions {
+                    request_identity: Some(request_identity),
+                    parent_start_index: Some(parent_start_index),
+                    ..AccessClaimOptions::default()
+                },
+                async move |_| Ok(request),
+            )
+            .await?;
         let owner =
             store.with(|mut access| get_ctx(access.data_mut()).state.owned_agent_id.clone());
         let invocation_id =

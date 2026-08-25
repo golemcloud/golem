@@ -14,8 +14,8 @@
 
 use crate::durable_host::authorization::targets::{agent_worker_target, oplog_target};
 use crate::durable_host::concurrent::{
-    CallHandle, CallReplayOutcome, Cancellable, NotCancellable, drain_dropped_call_events_access,
-    drain_queued_dropped_call_events,
+    CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
+    drain_dropped_call_events_access, drain_queued_dropped_call_events,
 };
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::suspendable_wait::{
@@ -391,7 +391,7 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
         if let Some(cursor) = cursor {
             let denied =
                 self.state.is_live() && component_agents_view_denied(self, &component_id).await?;
-            let handle = CallHandle::<GolemApiGetAgents, NotCancellable>::start(
+            let handle = DurableCallSession::<GolemApiGetAgents, NotCancellable>::start(
                 self,
                 HostRequestGolemApiGetAgents { component_id },
                 DurableFunctionType::ReadRemote,
@@ -452,7 +452,7 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
-        let mut handle = CallHandle::<GolemApiCreatePromise, NotCancellable>::start(
+        let mut handle = DurableCallSession::<GolemApiCreatePromise, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::WriteLocal,
@@ -515,14 +515,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             promise_id: promise_id.clone(),
         };
         let mut handle = if initial_is_local_worker == Some(false) {
-            CallHandle::<GolemApiCompletePromise, NotCancellable>::start_with_agent_authority(
+            DurableCallSession::<GolemApiCompletePromise, NotCancellable>::start_with_agent_authority(
                 self,
                 request,
                 DurableFunctionType::WriteLocal,
             )
             .await?
         } else {
-            CallHandle::<GolemApiCompletePromise, NotCancellable>::start(
+            DurableCallSession::<GolemApiCompletePromise, NotCancellable>::start(
                 self,
                 request,
                 DurableFunctionType::WriteLocal,
@@ -892,7 +892,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem_api_1_x::host::Uuid> {
-        let handle = CallHandle::<GolemApiGenerateIdempotencyKey, NotCancellable>::start(
+        let handle = DurableCallSession::<GolemApiGenerateIdempotencyKey, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::WriteRemote,
@@ -950,7 +950,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .await?;
 
         let mut handle =
-            CallHandle::<GolemApiUpdateWorker, NotCancellable>::start_with_agent_authority(
+            DurableCallSession::<GolemApiUpdateWorker, NotCancellable>::start_with_agent_authority(
                 self,
                 HostRequestGolemApiUpdateAgent {
                     agent_id,
@@ -1029,7 +1029,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 AgentResourcePattern::Empty,
             )
             .await?;
-        let handle = CallHandle::<GolemApiGetSelfMetadata, NotCancellable>::start(
+        let handle = DurableCallSession::<GolemApiGetSelfMetadata, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
@@ -1073,7 +1073,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             )
             .await?;
 
-        let handle = CallHandle::<GolemApiGetAgentMetadata, NotCancellable>::start(
+        let handle = DurableCallSession::<GolemApiGetAgentMetadata, NotCancellable>::start(
             self,
             HostRequestGolemApiAgentId {
                 agent_id: agent_id.clone(),
@@ -1145,7 +1145,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .await?;
 
         let mut handle =
-            CallHandle::<GolemApiForkWorker, NotCancellable>::start_with_agent_authority(
+            DurableCallSession::<GolemApiForkWorker, NotCancellable>::start_with_agent_authority(
                 self,
                 HostRequestGolemApiForkAgent {
                     source_agent_id: source_agent_id.clone(),
@@ -1265,7 +1265,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             && agent_operation_denied(self, &agent_id, AgentVerb::Revert, resource).await?;
 
         let mut handle =
-            CallHandle::<GolemApiRevertWorker, NotCancellable>::start_with_agent_authority(
+            DurableCallSession::<GolemApiRevertWorker, NotCancellable>::start_with_agent_authority(
                 self,
                 HostRequestGolemApiRevertAgent {
                     agent_id: agent_id.clone(),
@@ -1336,7 +1336,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         component_slug: String,
     ) -> anyhow::Result<Option<golem_api_1_x::host::ComponentId>> {
-        let mut handle = CallHandle::<GolemApiResolveComponentId, NotCancellable>::start(
+        let mut handle = DurableCallSession::<GolemApiResolveComponentId, NotCancellable>::start(
             self,
             HostRequestGolemApiComponentSlug {
                 component_slug: component_slug.clone(),
@@ -1424,7 +1424,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 AgentResourcePattern::Empty,
             )
             .await?;
-        let mut handle = CallHandle::<GolemApiResolveAgentIdStrict, NotCancellable>::start(
+        let mut handle = DurableCallSession::<GolemApiResolveAgentIdStrict, NotCancellable>::start(
             self,
             HostRequestGolemApiComponentSlugAndAgentName {
                 component_slug,
@@ -1496,12 +1496,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 AgentResourcePattern::Empty,
             )
             .await?;
-        let mut handle = CallHandle::<GolemApiFork, NotCancellable>::start_with_agent_authority(
-            self,
-            HostRequestNoInput {},
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut handle =
+            DurableCallSession::<GolemApiFork, NotCancellable>::start_with_agent_authority(
+                self,
+                HostRequestNoInput {},
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
         let result = 'result: {
             if !handle.is_live() {
@@ -1648,7 +1649,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     {
         self.observe_function_call("golem::api::get-oplog", "get-next");
 
-        let begun = CallHandle::<GolemApiGetOplogNext, NotCancellable>::begin(
+        let begun = DurableCallSession::<GolemApiGetOplogNext, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
         )
@@ -1807,7 +1808,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
             .await
             .map_err(anyhow::Error::from)?;
 
-        let mut handle = CallHandle::<GolemApiGetPromiseResult, Cancellable>::start_access(
+        let mut handle = DurableCallSession::<GolemApiGetPromiseResult, Cancellable>::start_access(
             accessor,
             accessor.getter(),
             HostRequestNoInput {},
@@ -2003,7 +2004,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     > {
         self.observe_function_call("golem::api::search-oplog", "get-next");
 
-        let begun = CallHandle::<GolemApiSearchOplogNext, NotCancellable>::begin(
+        let begun = DurableCallSession::<GolemApiSearchOplogNext, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
         )
@@ -2165,7 +2166,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Vec<golem_api_1_x::oplog::PublicOplogEntry>, String>> {
         self.observe_function_call("golem::api::oplog", "enrich-oplog-entries");
 
-        let begun = CallHandle::<GolemApiEnrichOplogEntries, NotCancellable>::begin(
+        let begun = DurableCallSession::<GolemApiEnrichOplogEntries, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
         )

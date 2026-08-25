@@ -321,7 +321,7 @@ struct CursorState {
     /// trip us up.
     pending_fork_starts: HashSet<OplogIndex>,
     /// Matches replayed `End`/`Cancelled` entries to the concurrent
-    /// [`crate::durable_host::concurrent::CallHandle`]s awaiting them, keyed by their `Start` index.
+    /// [`crate::durable_host::concurrent::DurableCallSession`]s awaiting them, keyed by their `Start` index.
     /// Fed only from the committed-consume hook. Lives under the cursor lock because awaited-terminal
     /// detection, terminal resolution, and `Start`-claim registration are all part of the cursor
     /// transaction; the rare slow-path `unregister` re-acquires the lock from outside a transaction.

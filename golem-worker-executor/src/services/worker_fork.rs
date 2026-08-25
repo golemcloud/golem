@@ -867,7 +867,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // If the copied cutoff is the source call's outer `WriteRemote` scope `Start`, complete
         // that scope after the synthetic child call so the forked worker can replay the same shape
         // as the source call. This is a synthetic write into another worker's oplog, not an
-        // in-context host call, so it uses the atomic-pair primitive directly (no `CallHandle`);
+        // in-context host call, so it uses the atomic-pair primitive directly (no `DurableCallSession`);
         // atomicity matters because a split `Start`/`End` would corrupt the forked worker's replay.
         let request = HostRequest::NoInput(HostRequestNoInput {});
         let response = HostResponse::GolemApiFork(HostResponseGolemApiFork {

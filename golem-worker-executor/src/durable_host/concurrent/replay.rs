@@ -15,7 +15,7 @@
 use super::*;
 
 /// Replayable single-shot channel used to deliver a call's [`Resolution`] from the replay cursor
-/// to the awaiting [`CallHandle`].
+/// to the awaiting [`DurableCallSession`].
 ///
 /// `tokio::sync::oneshot` already supports send-before-await, which is all this currently needs.
 /// The only "resolve happened before the awaiter registered" case is handled by the resolver's
@@ -54,7 +54,7 @@ pub enum Resolution {
     /// Replay must not deliver the response to the *guest* either — the replaying guest parks
     /// (at the recorded delivery boundary) until it drops the future at the same point it did
     /// live. The recorded response payload is still carried: deferred-delivery replay sites
-    /// ([`CallHandle::replay_access_deferred`]) must decode it to reconstruct deterministic
+    /// ([`DurableCallSession::replay_access_deferred`]) must decode it to reconstruct deterministic
     /// host-side state (span finishes, terminal-child bookkeeping) executed between the `End`
     /// and the point where delivery would have happened.
     CompletedButDiscarded {
@@ -79,7 +79,7 @@ pub enum ResolutionOutcome {
     Incomplete,
 }
 
-/// The result of [`CallHandle::replay`].
+/// The result of [`DurableCallSession::replay`].
 ///
 /// Transient: callers destructure it immediately, so the size difference between the variants
 /// never lives beyond the replay call itself.
@@ -89,9 +89,9 @@ pub enum CallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     Replayed(Pair::Resp),
     /// The call's `Start` was committed but its `End` never was. The returned handle has been
     /// switched to live completion of that existing `Start`: the caller must re-run the side effect
-    /// and call [`CallHandle::complete`] (which appends the missing `End`). Only produced for
+    /// and call [`DurableCallSession::complete`] (which appends the missing `End`). Only produced for
     /// function types that are safe to re-execute.
-    Incomplete(CallHandle<Pair, P>),
+    Incomplete(DurableCallSession<Pair, P>),
 }
 
 /// Replay outcome used by executor-owned entity reconstruction tasks. Cancellation is observable
@@ -101,10 +101,10 @@ pub enum CallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
 pub enum ReconstructionReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     Replayed(Pair::Resp),
     Cancelled,
-    Incomplete(CallHandle<Pair, P>),
+    Incomplete(DurableCallSession<Pair, P>),
 }
 
-/// The result of [`CallHandle::replay_access_deferred`]: like [`CallReplayOutcome`], but each
+/// The result of [`DurableCallSession::replay_access_deferred`]: like [`CallReplayOutcome`], but each
 /// replayed response carries the [`CompletionDelivery`] token describing the recorded delivery
 /// status the caller must mirror.
 #[allow(clippy::large_enum_variant)]
@@ -115,11 +115,11 @@ pub enum DeferredCallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     /// its deterministic post-`End` continuation.
     Replayed(Pair::Resp, CompletionDelivery),
     /// See [`CallReplayOutcome::Incomplete`]; the caller re-runs the side effect and completes
-    /// via [`CallHandle::complete_access_deferred`].
-    Incomplete(CallHandle<Pair, P>),
+    /// via [`DurableCallSession::complete_access_deferred`].
+    Incomplete(DurableCallSession<Pair, P>),
 }
 
-/// Matches replayed `End`/`Cancelled` entries back to the [`CallHandle`]s awaiting them, keyed by
+/// Matches replayed `End`/`Cancelled` entries back to the [`DurableCallSession`]s awaiting them, keyed by
 /// the `OplogIndex` of the call's `Start`.
 ///
 /// Lives inside the replay state behind its lock. It is fed **only** from the committed-consume
