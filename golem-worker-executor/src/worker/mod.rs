@@ -19,12 +19,15 @@ pub mod entity_slot;
 pub mod instance;
 pub mod invocation;
 mod invocation_loop;
+mod lifecycle;
 pub mod owner_lane;
 pub mod read_only_cache;
 mod state_actor;
 pub mod status;
 pub mod status_checkpointer;
 pub mod status_flusher;
+
+pub use lifecycle::UpdateMode as WorkerUpdateMode;
 
 use self::agent_config::{
     effective_agent_config, ensure_required_agent_secrets_are_configured,
@@ -45,7 +48,7 @@ use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR};
 use crate::services::oplog::plugin::ForwardingOplog;
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService, downcast_oplog};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps, downcast_oplog};
 use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
@@ -116,47 +119,6 @@ use wasmtime::component::Instance;
 pub const PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT: &str =
     "permission card transfer payload conflict";
 pub const PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH: &str = "install-recipient-mismatch";
-
-pub async fn resolve_revert_last_invocations(
-    oplog_service: &dyn OplogService,
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
-    number_of_invocations: u64,
-) -> Result<ResolvedRevert, WorkerExecutorError> {
-    let observed_oplog_index = oplog_service
-        .get_last_index(owned_agent_id, agent_mode)
-        .await;
-    let mut current = observed_oplog_index;
-    let mut found = 0;
-
-    loop {
-        let entries = oplog_service
-            .read(owned_agent_id, agent_mode, current, 1)
-            .await;
-        let entry = entries.get(&current).ok_or_else(|| {
-            WorkerExecutorError::invalid_request(format!(
-                "Could not read oplog entry {current} while resolving revert"
-            ))
-        })?;
-
-        if matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
-            found += 1;
-            if found == number_of_invocations {
-                return Ok(ResolvedRevert {
-                    last_oplog_index: current.previous(),
-                    observed_oplog_index,
-                });
-            }
-        }
-
-        if current == OplogIndex::INITIAL {
-            return Err(WorkerExecutorError::invalid_request(format!(
-                "Could not find {number_of_invocations} invocations to revert"
-            )));
-        }
-        current = current.previous();
-    }
-}
 
 /// Resolved read-only `AgentMethod` invocation data needed to build the
 /// cache key and entry.
@@ -1132,7 +1094,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Transition the worker into a deleting state.
     /// Rejects all new invocations and stops any running execution.
-    pub async fn start_deleting(&self) -> Result<(), WorkerExecutorError> {
+    async fn start_deleting_internal(&self) -> Result<(), WorkerExecutorError> {
         self.queue_interrupt(InterruptKind::Interrupt(Timestamp::now_utc()), false)
             .await;
         if let Some(active_agent) = self
@@ -3064,7 +3026,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         result
     }
 
-    pub async fn activate_plugin(
+    async fn activate_plugin_internal(
         &self,
         plugin_grant_id: EnvironmentPluginGrantId,
     ) -> Result<(), WorkerExecutorError> {
@@ -3089,7 +3051,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(())
     }
 
-    pub async fn deactivate_plugin(
+    async fn deactivate_plugin_internal(
         &self,
         plugin_grant_id: EnvironmentPluginGrantId,
     ) -> Result<(), WorkerExecutorError> {
@@ -3119,7 +3081,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// The revert operations is implemented by inserting a special oplog entry that
     /// extends the worker's deleted oplog regions, skipping entries from the end of the oplog.
-    pub async fn revert(
+    async fn revert_internal(
         &self,
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
