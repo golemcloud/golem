@@ -778,3 +778,87 @@ pub enum KeyValueStorageNamespace {
         bucket: String,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::KeyValueStorageError;
+    use golem_service_base::repo::RepoError;
+    use test_r::test;
+
+    /// A failure the backend never attempted may be retried whatever the operation is: repeating
+    /// it cannot observe a write the first attempt made.
+    #[test]
+    fn not_attempted_is_retryable_for_every_operation() {
+        let error = KeyValueStorageError::NotAttempted("pool timed out".to_string());
+        assert!(error.is_retryable(true));
+        assert!(error.is_retryable(false));
+    }
+
+    #[test]
+    fn transient_is_retryable_only_for_idempotent_operations() {
+        let error = KeyValueStorageError::Transient("connection reset".to_string());
+        assert!(error.is_retryable(true));
+        assert!(!error.is_retryable(false));
+    }
+
+    #[test]
+    fn other_is_never_retryable() {
+        let error = KeyValueStorageError::Other("bad request".to_string());
+        assert!(!error.is_retryable(true));
+        assert!(!error.is_retryable(false));
+    }
+
+    /// A pool acquisition timeout happens before any statement runs, so nothing reached the
+    /// database and the operation is known not to have been applied.
+    #[test]
+    fn pool_timeout_is_classified_as_not_attempted() {
+        let error = KeyValueStorageError::from(RepoError::from(sqlx::Error::PoolTimedOut));
+        assert!(
+            matches!(error, KeyValueStorageError::NotAttempted(_)),
+            "{error:?}"
+        );
+    }
+
+    /// A mid-query I/O error may have reached the database, so it must not be promoted to
+    /// `NotAttempted`.
+    #[test]
+    fn mid_query_io_error_is_classified_as_transient() {
+        let error = KeyValueStorageError::from(RepoError::from(sqlx::Error::Io(
+            std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset"),
+        )));
+        assert!(
+            matches!(error, KeyValueStorageError::Transient(_)),
+            "{error:?}"
+        );
+    }
+
+    /// Anything not known to be transient is permanent: retrying it would only delay the failure.
+    #[test]
+    fn other_repo_errors_are_not_retried() {
+        let error = KeyValueStorageError::from(RepoError::UniqueViolation("duplicate".to_string()));
+        assert!(matches!(error, KeyValueStorageError::Other(_)), "{error:?}");
+
+        let error = KeyValueStorageError::from(RepoError::from(sqlx::Error::RowNotFound));
+        assert!(matches!(error, KeyValueStorageError::Other(_)), "{error:?}");
+    }
+
+    #[test]
+    fn conversion_to_string_keeps_the_message() {
+        assert_eq!(
+            String::from(KeyValueStorageError::Other("bad request".to_string())),
+            "bad request"
+        );
+        assert!(
+            String::from(KeyValueStorageError::NotAttempted(
+                "pool timed out".to_string()
+            ))
+            .contains("pool timed out")
+        );
+        assert!(
+            String::from(KeyValueStorageError::Transient(
+                "connection reset".to_string()
+            ))
+            .contains("connection reset")
+        );
+    }
+}
