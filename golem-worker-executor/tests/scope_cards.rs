@@ -1707,7 +1707,7 @@ async fn filesystem_admitted_write_stream_survives_revocation_and_crash_replay(
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "stream_to_file",
+            "write_zeroes_to_file_via_stream",
             data_value!("/denied.txt", 1u64),
         )
         .await?
@@ -3320,6 +3320,7 @@ async fn remaining_host_facing_permission_classes_allow_their_backends(
         })
         .try_update_agent_provision_config("GolemHostApi", |config| {
             for grant in [
+                "agent(?agent) @ * : view : *",
                 "config(?agent) @ * : read : private",
                 "oplog(?agent) @ * : read : *",
                 "tool(?env/*/*) @ * : invoke : *",
@@ -4202,13 +4203,6 @@ async fn assert_environment_observes_revocation_at_the_next_host_boundary(
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .without_default_host_permissions("Environment")
-        .update_agent_provision_config("Environment", |config| {
-            config
-                .initial_permissions
-                .lower_bound
-                .positive
-                .push(env_permission("GOLEM_AGENT_ID"));
-        })
         .store()
         .await?;
     let agent = agent_id!(
@@ -4257,10 +4251,18 @@ async fn assert_environment_observes_revocation_at_the_next_host_boundary(
         .await?
         .into_typed::<Result<Vec<(String, String)>, String>>()?
         .map_err(anyhow::Error::msg)?;
-    assert!(
-        environment.iter().all(|(name, _)| name != "GOLEM_AGENT_ID"),
-        "revoked environment authority must disappear at the next host boundary"
-    );
+    for metadata_name in [
+        "GOLEM_AGENT_ID",
+        "GOLEM_AGENT_TYPE",
+        "GOLEM_WORKER_NAME",
+        "GOLEM_COMPONENT_ID",
+        "GOLEM_COMPONENT_REVISION",
+    ] {
+        assert!(
+            environment.iter().all(|(name, _)| name != metadata_name),
+            "revoked environment authority for {metadata_name} must disappear at the next host boundary"
+        );
+    }
     Ok(())
 }
 
@@ -4301,13 +4303,6 @@ async fn assert_environment_replay_uses_the_recorded_filtered_result(
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .without_default_host_permissions("Environment")
-        .update_agent_provision_config("Environment", |config| {
-            config
-                .initial_permissions
-                .lower_bound
-                .positive
-                .push(env_permission("GOLEM_AGENT_ID"));
-        })
         .store()
         .await?;
     let agent = agent_id!(
@@ -4356,11 +4351,23 @@ async fn assert_environment_replay_uses_the_recorded_filtered_result(
         .await?
         .into_typed::<Result<Vec<(String, String)>, String>>()?
         .map_err(anyhow::Error::msg)?;
+    for metadata_name in [
+        "GOLEM_AGENT_ID",
+        "GOLEM_AGENT_TYPE",
+        "GOLEM_WORKER_NAME",
+        "GOLEM_COMPONENT_ID",
+        "GOLEM_COMPONENT_REVISION",
+    ] {
+        assert!(
+            environment.iter().any(|(name, _)| name == metadata_name),
+            "replay must return the {metadata_name} value recorded before revocation"
+        );
+    }
     assert!(
         environment
             .iter()
             .any(|(name, value)| { name == "GOLEM_AGENT_ID" && value == &agent.to_string() }),
-        "replay must return the environment response recorded before revocation"
+        "replay must return the expected GOLEM_AGENT_ID value"
     );
     Ok(())
 }
