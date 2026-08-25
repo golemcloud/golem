@@ -272,7 +272,7 @@ impl DefaultPromiseService {
         }
     }
 
-    async fn exists(&self, promise_id: &PromiseId) -> bool {
+    async fn exists(&self, promise_id: &PromiseId) -> Result<bool, WorkerExecutorError> {
         self.key_value_storage
             .with("promise", "complete")
             .exists(
@@ -282,13 +282,19 @@ impl DefaultPromiseService {
                 &get_promise_redis_key(promise_id),
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to check if promise {promise_id} exists in storage: {err}")
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to check if promise {promise_id} exists in storage: {err}"
+                ))
             })
     }
 
-    async fn completed_data(&self, promise_id: &PromiseId) -> Option<Vec<u8>> {
-        self.key_value_storage
+    async fn completed_data(
+        &self,
+        promise_id: &PromiseId,
+    ) -> Result<Option<Vec<u8>>, WorkerExecutorError> {
+        let state = self
+            .key_value_storage
             .with_entity("promise", "get-completed", "promise")
             .get(
                 KeyValueStorageNamespace::Promise {
@@ -297,11 +303,16 @@ impl DefaultPromiseService {
                 &get_promise_result_redis_key(promise_id),
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to get promise {promise_id} from storage: {err}"))
-            .and_then(|state| match state {
-                RedisPromiseState::Complete(data) => Some(data),
-                RedisPromiseState::Pending => None,
-            })
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to get promise {promise_id} from storage: {err}"
+                ))
+            })?;
+
+        Ok(state.and_then(|state| match state {
+            RedisPromiseState::Complete(data) => Some(data),
+            RedisPromiseState::Pending => None,
+        }))
     }
 }
 
@@ -345,7 +356,7 @@ impl PromiseService for DefaultPromiseService {
             return Ok(handle.clone());
         }
 
-        if !self.exists(&promise_id).await {
+        if !self.exists(&promise_id).await? {
             return Err(WorkerExecutorError::PromiseNotFound { promise_id });
         }
 
@@ -355,7 +366,7 @@ impl PromiseService for DefaultPromiseService {
         };
 
         // Check if already completed in storage
-        if let Some(data) = self.completed_data(&promise_id).await {
+        if let Some(data) = self.completed_data(&promise_id).await? {
             let _ = handle.complete(data).await;
         }
 
@@ -369,7 +380,7 @@ impl PromiseService for DefaultPromiseService {
     ) -> Result<bool, WorkerExecutorError> {
         let key = get_promise_result_redis_key(&promise_id);
 
-        if !self.exists(&promise_id).await {
+        if !self.exists(&promise_id).await? {
             return Err(WorkerExecutorError::PromiseNotFound { promise_id });
         };
 
@@ -384,7 +395,11 @@ impl PromiseService for DefaultPromiseService {
                 &RedisPromiseState::Complete(data.clone()),
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in storage: {err}"));
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to set promise {promise_id} in storage: {err}"
+                ))
+            })?;
 
         // Also wake any in-memory handle, ensuring that still running workers that wait on the pollable can continue
         let completed_data = if written {
@@ -392,7 +407,7 @@ impl PromiseService for DefaultPromiseService {
         } else {
             // A duplicate must wake waiters with the payload stored by the
             // original completion, not its own payload.
-            self.completed_data(&promise_id).await
+            self.completed_data(&promise_id).await?
         };
         let handle = {
             let mut reg = self.registry.lock().await;
