@@ -124,6 +124,9 @@ pub fn resolve_generated_sdk_paths(
     canonical: &Ident,
     preserved_canonical: &Ident,
 ) -> TokenStream {
+    if identifiers_match(resolved, canonical) {
+        return tokens;
+    }
     let tokens = replace_ident(tokens, canonical, resolved);
     restore_internal_marker(tokens, preserved_canonical, canonical)
 }
@@ -492,6 +495,22 @@ mod tests {
         assert!(replaced.contains("sdk_alias :: TypedSchemaValue"));
         assert!(replaced.contains("sdk_alias :: tool :: ToolInvokeError"));
         assert!(!replaced.contains("golem_rust"));
+    }
+
+    #[test]
+    fn generated_sdk_paths_skip_rewriting_for_the_canonical_dependency_name() {
+        let canonical = Ident::new("golem_rust", Span::call_site());
+        let preserved = Ident::new("__preserved_golem_rust", Span::call_site());
+        let tokens = quote! {
+            fn generated(value: golem_rust::TypedSchemaValue) {
+                let __preserved_golem_rust = value;
+            }
+        };
+
+        let resolved =
+            resolve_generated_sdk_paths(tokens.clone(), &canonical, &canonical, &preserved);
+
+        assert_eq!(resolved.to_string(), tokens.to_string());
     }
 
     #[test]

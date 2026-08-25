@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::tool_metadata_wire::{decode_tool, encode_tool};
 use super::tool_middleware_registry::{
     get_all_tool_middlewares, get_tool_middleware_by_name, get_tool_middleware_invoker_by_name,
 };
@@ -22,6 +21,7 @@ use super::{
     UnderlyingTool,
 };
 use crate::schema::tool as native;
+use crate::schema::tool::wit::{decode_tool, encode_tool};
 use crate::{decode_typed_schema_value_owned, encode_typed_schema_value_owned};
 
 pub(crate) fn discover_tool_middlewares() -> Result<Vec<wire::ToolMiddleware>, wire::ToolError> {

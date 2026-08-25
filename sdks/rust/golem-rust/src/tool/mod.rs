@@ -36,25 +36,8 @@ pub use tool_middleware_registry::{
     get_tool_middleware_invoker_by_name, register_tool_middleware,
 };
 
-#[cfg(not(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-)))]
-pub(crate) use crate::bindings::golem::tool::common as wire;
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
-pub(crate) use crate::golem_agentic::golem::tool::common as wire;
+pub(crate) use crate::schema::tool::wit::wire;
 
-#[cfg_attr(
-    not(any(
-        feature = "export_golem_tool_middleware",
-        feature = "export_golem_agentic_tool_middleware"
-    )),
-    allow(dead_code)
-)]
-mod tool_metadata_wire;
 mod tool_middleware;
 #[cfg(any(
     feature = "export_golem_tool_middleware",

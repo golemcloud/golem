@@ -256,6 +256,12 @@ impl<'a> GraphDecoder<'a> {
 /// move owned `quota-token` handles out of it; see the guest definition below.
 #[cfg(not(all(feature = "guest", not(feature = "host"))))]
 pub fn decode_value(wire_tree: &wire::SchemaValueTree) -> Result<SchemaValue, DecodeError> {
+    decode_value_by_ref(wire_tree)
+}
+
+pub(crate) fn decode_value_by_ref(
+    wire_tree: &wire::SchemaValueTree,
+) -> Result<SchemaValue, DecodeError> {
     reject_handles_in_pure_value_tree(wire_tree)?;
     decode_value_at(wire_tree, wire_tree.root, &mut HashSet::new())
 }

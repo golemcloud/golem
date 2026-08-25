@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::tool_metadata_wire::encode_tool;
 use super::{
     InputStream, Principal, Tool, ToolMiddleware, ToolMiddlewareInvokeFuture, ToolMiddlewareScope,
     UnderlyingTool,
 };
 use crate::TypedSchemaValue;
 use crate::schema::tool::validation::validate_tool;
+use crate::schema::tool::wit::encode_tool;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
@@ -320,8 +320,8 @@ mod tests {
         fn generated_tool_metadata_round_trips_through_the_guest_wire_model() {
             let tool =
                 <RegistryDispatchEchoUnderlying as ToolUnderlying>::__golem_tool_descriptor();
-            let encoded = super::super::super::tool_metadata_wire::encode_tool(&tool).unwrap();
-            let decoded = super::super::super::tool_metadata_wire::decode_tool(encoded).unwrap();
+            let encoded = crate::schema::tool::wit::encode_tool(&tool).unwrap();
+            let decoded = crate::schema::tool::wit::decode_tool(encoded).unwrap();
 
             assert_eq!(decoded, tool);
         }
@@ -495,11 +495,11 @@ mod tests {
         match encoded.scope {
             crate::tool::wire::ToolMiddlewareScope::Monomorphic(scope) => {
                 assert_eq!(
-                    super::super::tool_metadata_wire::decode_tool(scope.presented).unwrap(),
+                    crate::schema::tool::wit::decode_tool(scope.presented).unwrap(),
                     presented
                 );
                 assert_eq!(
-                    super::super::tool_metadata_wire::decode_tool(scope.expected.unwrap()).unwrap(),
+                    crate::schema::tool::wit::decode_tool(scope.expected.unwrap()).unwrap(),
                     expected
                 );
             }

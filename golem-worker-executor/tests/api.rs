@@ -917,20 +917,20 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
         "reinstalling the same card through another transfer must not bump the target generation"
     );
 
-    let read_many_before = executor.oplog_service_call_count("read_many");
-    let commit_before = executor.oplog_service_call_count("commit");
+    let read_many_before = executor.oplog_service_call_count(&target_agent_id, "read_many");
+    let commit_before = executor.oplog_service_call_count(&target_agent_id, "commit");
     assert_eq!(
         deliver_card_transfer(&executor, request.clone()).await?,
         Ok(()),
         "an exact retry after target admission must reuse the terminal receipt"
     );
     assert_eq!(
-        executor.oplog_service_call_count("read_many"),
+        executor.oplog_service_call_count(&target_agent_id, "read_many"),
         read_many_before,
         "an indexed terminal duplicate lookup must not scan the worker oplog"
     );
     assert_eq!(
-        executor.oplog_service_call_count("commit"),
+        executor.oplog_service_call_count(&target_agent_id, "commit"),
         commit_before,
         "an indexed terminal duplicate lookup must not force an empty oplog commit"
     );
@@ -1095,6 +1095,7 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
     let started_transfer_id = uuid::Uuid::new_v4();
     let completed_transfer_id = uuid::Uuid::new_v4();
 
+    let commit_count_before = executor.oplog_service_call_count(&source_agent_id, "commit");
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,
@@ -1106,6 +1107,11 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
             )),
         )
         .await?;
+    assert_eq!(
+        executor.oplog_service_call_count(&source_agent_id, "commit"),
+        commit_count_before + 1,
+        "an oplog call counter used to enforce no-commit invariants must observe commits through the Worker's oplog"
+    );
     executor
         .commit_oplog_entry_bypassing_worker_status(
             &source_agent_id,

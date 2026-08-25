@@ -112,6 +112,7 @@ mod raw_bindings {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
             "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
         }
@@ -155,7 +156,8 @@ pub mod bindings {
         }
 
         pub mod tool {
-            pub use crate::raw_bindings::golem::tool::{common, host};
+            pub use crate::raw_bindings::golem::tool::host;
+            pub use crate::schema::tool::wit::wire as common;
         }
 
         pub use crate::raw_bindings::golem::{rdbms, websocket};
@@ -175,6 +177,7 @@ pub mod load_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
             "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 
@@ -217,6 +220,7 @@ pub mod save_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
             "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 
@@ -270,6 +274,7 @@ pub mod golem_agentic {
 
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
             "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 
@@ -318,7 +323,7 @@ pub mod golem_tool_middleware {
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:agent/common@2.0.0": crate::golem_agentic::golem::agent::common,
-            "golem:tool/common@0.1.0": crate::golem_agentic::golem::tool::common,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
         }
     });
 
@@ -343,6 +348,7 @@ pub mod golem_agentic_tool_middleware {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
             "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 
@@ -409,6 +415,7 @@ pub mod oplog_processor {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
             "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 

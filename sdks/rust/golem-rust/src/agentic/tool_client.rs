@@ -216,7 +216,6 @@ impl ToolRpcClient for crate::golem_agentic::golem::tool::host::ToolRpc {
     ) -> Result<host::InvocationResult, WitRpcError> {
         self.invoke_and_await(command_path.to_vec(), input, stdin)
             .await
-            .map(Into::into)
             .map_err(Into::into)
     }
 }
@@ -303,15 +302,6 @@ pub async fn invoke_and_await_infallible(
     })
 }
 
-impl From<crate::golem_agentic::golem::tool::host::InvocationResult> for host::InvocationResult {
-    fn from(result: crate::golem_agentic::golem::tool::host::InvocationResult) -> Self {
-        Self {
-            result: result.result,
-            stdout: result.stdout,
-        }
-    }
-}
-
 impl From<crate::golem_agentic::golem::tool::host::RpcError> for WitRpcError {
     fn from(error: crate::golem_agentic::golem::tool::host::RpcError) -> Self {
         use crate::golem_agentic::golem::tool::host as agentic_host;
@@ -323,24 +313,7 @@ impl From<crate::golem_agentic::golem::tool::host::RpcError> for WitRpcError {
             agentic_host::RpcError::RemoteInternalError(message) => {
                 Self::RemoteInternalError(message)
             }
-            agentic_host::RpcError::RemoteToolError(error) => Self::RemoteToolError(error.into()),
-        }
-    }
-}
-
-impl From<crate::golem_agentic::golem::tool::host::ToolError> for host::ToolError {
-    fn from(error: crate::golem_agentic::golem::tool::host::ToolError) -> Self {
-        use crate::golem_agentic::golem::tool::host as agentic_host;
-
-        match error {
-            agentic_host::ToolError::InvalidToolName(name) => Self::InvalidToolName(name),
-            agentic_host::ToolError::InvalidCommandPath(path) => Self::InvalidCommandPath(path),
-            agentic_host::ToolError::InvalidInput(message) => Self::InvalidInput(message),
-            agentic_host::ToolError::ConstraintViolation(message) => {
-                Self::ConstraintViolation(message)
-            }
-            agentic_host::ToolError::InvalidResult(message) => Self::InvalidResult(message),
-            agentic_host::ToolError::CustomError(value) => Self::CustomError(value),
+            agentic_host::RpcError::RemoteToolError(error) => Self::RemoteToolError(error),
         }
     }
 }

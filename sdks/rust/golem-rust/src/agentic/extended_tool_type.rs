@@ -14,9 +14,9 @@
 
 use crate::agentic::schema_graph_root;
 use crate::agentic::tool_literal::{ToolLiteral, value_is_literal_to_schema_value};
-use crate::golem_agentic::golem::tool::common as wire;
 use crate::schema::tool as native;
 use crate::schema::tool::validation::ToolValidationError;
+use crate::schema::tool::wit::wire;
 use crate::schema::validation::validate_value;
 use crate::schema::wit::GraphEncoder;
 use crate::schema::{SchemaGraph, SchemaType, SchemaValue, merge_agent_graphs};
