@@ -1354,7 +1354,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_mode = self
             .worker_service()
             .get_agent_mode(&owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "agent {owned_agent_id} does not exist"
@@ -1458,7 +1458,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_mode = self
             .worker_service()
             .get_agent_mode(&owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "agent {owned_agent_id} does not exist"

@@ -230,7 +230,14 @@ pub trait WorkerService: Send + Sync {
     /// cached status record (which exists for active durable workers) and, on cache miss,
     /// probes both oplog namespaces (durable and ephemeral). Returns `None` if no oplog
     /// exists in either namespace.
-    async fn get_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode>;
+    ///
+    /// Returns `Err` when the underlying storage could not be read (after the storage layer's
+    /// own retries), so callers can surface the failure instead of mistaking it for a missing
+    /// worker.
+    async fn get_agent_mode(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<AgentMode>, WorkerExecutorError>;
 
     /// Writes the cached status *blob* for the worker (no `RunningWorkers` index maintenance).
     ///
@@ -618,7 +625,10 @@ impl DefaultWorkerService {
 
     /// Reads the dedicated `agent_mode` key, if present. Returns `None` on a cache miss or if the
     /// stored value cannot be deserialized in the current format (treated as a miss).
-    async fn read_cached_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
+    async fn read_cached_agent_mode(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<AgentMode>, WorkerExecutorError> {
         let value: Option<Result<AgentMode, String>> = self
             .key_value_storage
             .with_entity("worker", "read_cached_agent_mode", "agent_mode")
@@ -629,20 +639,29 @@ impl DefaultWorkerService {
                 &Self::agent_mode_key(&owned_agent_id.agent_id),
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to get agent mode for {owned_agent_id} from KV storage: {err}")
-            });
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to get agent mode for {owned_agent_id} from KV storage: {err}"
+                ))
+            })?;
 
-        match value {
+        Ok(match value {
             Some(Ok(agent_mode)) => Some(agent_mode),
             Some(Err(_)) | None => None,
-        }
+        })
     }
 
     /// Populates the dedicated `agent_mode` key. Only called on a `get_agent_mode` cache miss for
     /// durable workers, never on the per-commit hot path. The value is immutable for the life of
     /// the worker, so concurrent writers would write the same value.
-    async fn write_cached_agent_mode(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+    ///
+    /// Returns `Err` instead of panicking so the caller can treat the write as best-effort: the
+    /// key is purely an optimisation that lets later lookups skip the oplog probe.
+    async fn write_cached_agent_mode(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<(), String> {
         self.key_value_storage
             .with_entity("worker", "write_cached_agent_mode", "agent_mode")
             .set(
@@ -653,7 +672,7 @@ impl DefaultWorkerService {
                 &agent_mode,
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to set agent mode in KV storage: {err}"));
+            .map_err(|err| format!("failed to set agent mode in KV storage: {err}"))
     }
 
     pub(crate) fn should_track_for_assignment_recovery(status: &AgentStatusRecord) -> bool {
@@ -669,7 +688,10 @@ impl WorkerService for DefaultWorkerService {
     async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
         record_worker_call("get");
 
-        let agent_mode = self.get_agent_mode(owned_agent_id).await?;
+        let agent_mode = self
+            .get_agent_mode(owned_agent_id)
+            .await
+            .unwrap_or_else(|err| panic!("failed to get agent mode for {owned_agent_id}: {err}"))?;
 
         let initial_oplog_entry = self
             .oplog_service
@@ -808,7 +830,11 @@ impl WorkerService for DefaultWorkerService {
     async fn remove(&self, owned_agent_id: &OwnedAgentId) {
         record_worker_call("remove");
 
-        if let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await {
+        let agent_mode = self
+            .get_agent_mode(owned_agent_id)
+            .await
+            .unwrap_or_else(|err| panic!("failed to get agent mode for {owned_agent_id}: {err}"));
+        if let Some(agent_mode) = agent_mode {
             self.oplog_service.delete(owned_agent_id, agent_mode).await;
         }
         self.remove_cached_status(owned_agent_id).await;
@@ -859,12 +885,15 @@ impl WorkerService for DefaultWorkerService {
             });
     }
 
-    async fn get_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
+    async fn get_agent_mode(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<AgentMode>, WorkerExecutorError> {
         record_worker_call("get_agent_mode");
 
         // Fast path: dedicated `agent_mode` key (only populated for durable workers).
-        if let Some(agent_mode) = self.read_cached_agent_mode(owned_agent_id).await {
-            return Some(agent_mode);
+        if let Some(agent_mode) = self.read_cached_agent_mode(owned_agent_id).await? {
+            return Ok(Some(agent_mode));
         }
 
         // Cache miss (e.g. ephemeral worker, or durable worker whose dedicated key has not been
@@ -877,17 +906,24 @@ impl WorkerService for DefaultWorkerService {
             // Populate the dedicated key so subsequent lookups skip the oplog probe. Only durable
             // workers are cached (mirrors `update_cached_status`): an ephemeral worker's oplog is
             // transient, so caching its mode could outlive the worker and return a stale `Some`.
-            self.write_cached_agent_mode(owned_agent_id, AgentMode::Durable)
-                .await;
-            Some(AgentMode::Durable)
+            //
+            // The mode is already known here, so a failed cache write is logged and ignored
+            // rather than discarding a correct answer (the oplog probe is the source of truth).
+            if let Err(err) = self
+                .write_cached_agent_mode(owned_agent_id, AgentMode::Durable)
+                .await
+            {
+                error!("Failed to cache the agent mode for {owned_agent_id}: {err}");
+            }
+            Ok(Some(AgentMode::Durable))
         } else if self
             .oplog_service
             .exists(owned_agent_id, AgentMode::Ephemeral)
             .await
         {
-            Some(AgentMode::Ephemeral)
+            Ok(Some(AgentMode::Ephemeral))
         } else {
-            None
+            Ok(None)
         }
     }
 

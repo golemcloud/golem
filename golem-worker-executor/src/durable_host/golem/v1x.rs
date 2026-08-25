@@ -1029,7 +1029,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             .state
             .worker_service
             .get_agent_mode(&owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| anyhow!("agent {} does not exist", owned_agent_id))?;
         let initial_component_version = find_component_revision_at(
             self.state.oplog_service(),
@@ -1060,7 +1060,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             .state
             .worker_service
             .get_agent_mode(&entry.owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| anyhow!("agent {} does not exist", entry.owned_agent_id))?;
 
         let chunk = get_public_oplog_chunk(
@@ -1244,7 +1244,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             .state
             .worker_service
             .get_agent_mode(&owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| anyhow!("agent {} does not exist", owned_agent_id))?;
         let initial_component_version = find_component_revision_at(
             self.state.oplog_service(),
@@ -1283,7 +1283,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             .state
             .worker_service
             .get_agent_mode(&entry.owned_agent_id)
-            .await
+            .await?
             .ok_or_else(|| anyhow!("agent {} does not exist", entry.owned_agent_id))?;
 
         let chunk = search_public_oplog(
@@ -1430,7 +1430,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
             .state
             .worker_service
             .get_agent_mode(&owned_agent_id)
-            .await
+            .await?
         {
             Some(mode) => mode,
             None => return Ok(Err(format!("agent {owned_agent_id} does not exist"))),

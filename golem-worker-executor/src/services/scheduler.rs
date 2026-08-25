@@ -900,8 +900,11 @@ mod tests {
 
         async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
 
-        async fn get_agent_mode(&self, _owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
-            None
+        async fn get_agent_mode(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<AgentMode>, WorkerExecutorError> {
+            Ok(None)
         }
 
         async fn write_cached_status(

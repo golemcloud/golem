@@ -228,6 +228,7 @@ mod tests {
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::regions::OplogRegion;
     use golem_common::model::{AgentId, AgentStatus, AgentStatusRecord};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::sync::Mutex as StdMutex;
     use test_r::test;
     use uuid::Uuid;
@@ -254,8 +255,11 @@ mod tests {
 
         async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
 
-        async fn get_agent_mode(&self, _owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
-            Some(AgentMode::Durable)
+        async fn get_agent_mode(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<AgentMode>, WorkerExecutorError> {
+            Ok(Some(AgentMode::Durable))
         }
 
         async fn write_cached_status(
