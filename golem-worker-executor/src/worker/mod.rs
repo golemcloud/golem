@@ -3266,24 +3266,6 @@ impl RunningWorker {
             .last_known_status
             .last_manual_update_snapshot_index;
 
-        // A pending snapshot-based update carries the agent's entire state, so
-        // *it* is the replay baseline — not whichever manual update came before
-        // it. Leaving the baseline at the earlier snapshot means everything the
-        // agent did since then still has to be replayed, and `prepare_instance`
-        // refuses exactly that for a pending snapshot update: "snapshot-based
-        // pending update expected replay state to already be live".
-        //
-        // The asymmetry this fixes is why it went unnoticed. An agent's *first*
-        // manual update has no earlier baseline, nothing to replay, and works.
-        // Its second never could, whichever direction it went in — which is how
-        // the S9 chaos scenario ran into it while trying to roll a component
-        // back.
-        if let Some(update) = worker_metadata.last_known_status.pending_updates.front()
-            && update.kind == PendingUpdateKind::SnapshotBased
-        {
-            last_snapshot_index = Some(update.oplog_index);
-        }
-
         // automatic snapshots are only considered until the first failure.
         // additionally, if there are updates, the automatic snapshot is temporarily ignored to catch issues earlier
         if let Some(snapshot_idx) = worker_metadata

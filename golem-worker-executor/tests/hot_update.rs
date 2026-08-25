@@ -50,10 +50,6 @@ inherit_test_dep!(
     #[tagged_as("agent_counters")]
     PrecompiledComponent
 );
-inherit_test_dep!(
-    #[tagged_as("agent_counters_v2")]
-    PrecompiledComponent
-);
 inherit_test_dep!(Tracing);
 
 pub struct F1Blocker {
@@ -1254,31 +1250,15 @@ async fn agent_can_be_invoked_after_manual_snapshot_update_and_restart(
     Ok(())
 }
 
-/// Can an automatic update move an agent *back* to an earlier build?
-///
-/// Written to settle what the first S9 chaos run found on golem-dev: 200 of 200
-/// agents were accepted for an automatic update to a revision carrying the
-/// original build, and none of them moved.
-///
-/// The answer turns out to be about what an automatic update *is*. It replays
-/// the agent's oplog against the new build and aborts if any recorded
-/// invocation produces a different result — so it can only cross a build
-/// boundary that no recorded invocation can tell apart. The first version of
-/// this test failed on its *forward* leg for exactly that reason: it probed
-/// with `Counter::component_version`, whose whole purpose is to differ between
-/// builds, and thereby poisoned the update it was trying to observe.
-///
-/// So the agent here does nothing but `increment`, which returns the same
-/// values under both builds, and `component_version` is invoked only at the
-/// very end. That is the fair question: with an oplog no replay can object to,
-/// does an automatic update roll an agent back?
+/// A second manual update on the same agent. The first one leaves a snapshot
+/// baseline behind, and everything after it still has to be replayed unless the
+/// pending update's own override survives.
 #[test]
 #[tracing::instrument]
-async fn an_automatic_update_rolls_an_agent_back_to_an_earlier_build(
+async fn manual_update_on_idle_twice(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
-    #[tagged_as("agent_counters_v2")] _agent_counters_v2: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -1288,111 +1268,7 @@ async fn an_automatic_update_rolls_an_agent_back_to_an_earlier_build(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let counter_id = agent_id!("Counter", "rollback-probe");
-    let worker_id = executor
-        .start_agent(&component.id, counter_id.clone())
-        .await?;
-
-    // Behaviour-neutral history: `increment` returns the same values on both
-    // builds, so nothing here can make a replay disagree.
-    for _ in 0..3 {
-        executor
-            .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
-            .await?;
-    }
-
-    let report = async |label: &str| -> anyhow::Result<((usize, usize, usize), ComponentRevision)> {
-        let metadata = executor.get_worker_metadata(&worker_id).await?;
-        let counts = update_counts(&metadata);
-        info!(
-            "{label}: revision {}, (pending, successful, failed) = {counts:?}",
-            metadata.component_revision
-        );
-        Ok((counts, metadata.component_revision))
-    };
-
-    // ── Forward ─────────────────────────────────────────────────────────────
-    let forward = executor
-        .update_component(&component.id, "it_agent_counters_v2_release")
-        .await?;
-    executor
-        .auto_update_worker(&worker_id, forward.revision, false)
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
-        .await?;
-    let (forward_counts, forward_at) = report("after the forward update").await?;
-    assert_eq!(
-        forward_counts,
-        (0, 1, 0),
-        "the forward update must be recorded as successful"
-    );
-    assert_eq!(forward_at, forward.revision);
-
-    // ── Back ────────────────────────────────────────────────────────────────
-    let back = executor
-        .update_component(&component.id, "it_agent_counters_release")
-        .await?;
-    assert_ne!(back.revision, forward.revision);
-    executor
-        .auto_update_worker(&worker_id, back.revision, false)
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
-        .await?;
-    let (back_counts, back_at) = report("after the rollback").await?;
-
-    // Only now, when no further update depends on it, ask which code is running.
-    let running = executor
-        .invoke_and_await_agent(&component, &counter_id, "component_version", data_value!())
-        .await?;
-    info!("running code after the rollback: {running:?}");
-
-    assert_eq!(
-        back_counts,
-        (0, 2, 0),
-        "the rollback must be recorded as a second successful update; it was at revision \
-         {back_at}, and the running code reported {running:?}"
-    );
-    assert_eq!(
-        running,
-        data_value!(1u32),
-        "after rolling back to a revision carrying the original build, the agent must run it"
-    );
-
-    Ok(())
-}
-
-/// Does a **snapshot-based** update roll an agent back where an automatic one
-/// cannot?
-///
-/// The companion to the test above, and the reason it matters. An automatic
-/// update replays the oplog and so can only cross a build boundary no recorded
-/// invocation can tell apart — which excludes exactly the case you roll back
-/// for, a build that behaved differently. A snapshot update does not replay: it
-/// saves the agent's state, loads it into the target build, and resumes.
-///
-/// Observed through metadata rather than a discriminating invocation, because
-/// `SnapshotCounter` is byte-identical between the two builds and has nothing
-/// to discriminate with. That is the gap a real S9 snapshot leg would have to
-/// close.
-#[test]
-#[tracing::instrument]
-async fn a_snapshot_update_rolls_an_agent_back_to_an_earlier_build(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
-    #[tagged_as("agent_counters_v2")] _agent_counters_v2: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_counters)
-        .store()
-        .await?;
-    let counter_id = agent_id!("SnapshotCounter", "snapshot-rollback-probe");
+    let counter_id = agent_id!("SnapshotCounter", "twice");
     let worker_id = executor
         .start_agent(&component.id, counter_id.clone())
         .await?;
@@ -1403,94 +1279,8 @@ async fn a_snapshot_update_rolls_an_agent_back_to_an_earlier_build(
             .await?;
     }
 
-    let report = async |label: &str| -> anyhow::Result<((usize, usize, usize), ComponentRevision)> {
-        let metadata = executor.get_worker_metadata(&worker_id).await?;
-        let counts = update_counts(&metadata);
-        info!(
-            "{label}: revision {}, (pending, successful, failed) = {counts:?}",
-            metadata.component_revision
-        );
-        Ok((counts, metadata.component_revision))
-    };
-
-    let forward = executor
-        .update_component(&component.id, "it_agent_counters_v2_release")
-        .await?;
-    executor
-        .manual_update_worker(&worker_id, forward.revision, false)
-        .await?;
-    let value_after_forward = executor
-        .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
-        .await?;
-    let (forward_counts, _) = report("after the forward snapshot update").await?;
-    assert_eq!(forward_counts, (0, 1, 0));
-    assert_eq!(
-        value_after_forward,
-        data_value!(3u32),
-        "the snapshot must carry the agent's state across the build change"
-    );
-
-    let back = executor
-        .update_component(&component.id, "it_agent_counters_release")
-        .await?;
-    executor
-        .manual_update_worker(&worker_id, back.revision, false)
-        .await?;
-    let value_after_rollback = executor
-        .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
-        .await?;
-    let (back_counts, back_at) = report("after the snapshot rollback").await?;
-
-    assert_eq!(
-        back_counts,
-        (0, 2, 0),
-        "a snapshot rollback must be recorded as a second successful update; it was at \
-         revision {back_at}"
-    );
-    assert_eq!(back_at, back.revision);
-    assert_eq!(
-        value_after_rollback,
-        data_value!(3u32),
-        "the agent's state must survive the rollback"
-    );
-
-    Ok(())
-}
-
-/// Control for the test above: are **two consecutive snapshot updates** the
-/// problem, or is it specifically going *backwards*?
-///
-/// Both updates here move forward, to two revisions carrying the same build, so
-/// nothing about direction or behaviour differs. If this fails the same way,
-/// the error belongs to consecutive snapshot updates and has nothing to do with
-/// rollback.
-#[test]
-#[tracing::instrument]
-async fn two_consecutive_snapshot_updates_in_the_same_direction(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
-    #[tagged_as("agent_counters_v2")] _agent_counters_v2: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_counters)
-        .store()
-        .await?;
-    let counter_id = agent_id!("SnapshotCounter", "twice-forward-probe");
-    let worker_id = executor
-        .start_agent(&component.id, counter_id.clone())
-        .await?;
-
-    for _ in 0..3 {
-        executor
-            .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
-            .await?;
-    }
-
+    // Both updates move forward, to two revisions carrying the same build, so
+    // nothing here depends on direction or on a behaviour change.
     let first = executor
         .update_component(&component.id, "it_agent_counters_v2_release")
         .await?;
@@ -1500,28 +1290,91 @@ async fn two_consecutive_snapshot_updates_in_the_same_direction(
     let after_first = executor
         .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
         .await?;
-    assert_eq!(after_first, data_value!(3u32));
-    info!(
-        "after the first snapshot update: {:?}",
-        update_counts(&executor.get_worker_metadata(&worker_id).await?)
-    );
 
-    // Same build again, so this is unambiguously a forward step.
     let second = executor
         .update_component(&component.id, "it_agent_counters_v2_release")
         .await?;
-    assert_ne!(second.revision, first.revision);
     executor
         .manual_update_worker(&worker_id, second.revision, false)
         .await?;
     let after_second = executor
         .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
         .await?;
-    let counts = update_counts(&executor.get_worker_metadata(&worker_id).await?);
-    info!("after the second snapshot update: {counts:?}");
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
 
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+
+    assert_ne!(second.revision, first.revision);
+    assert_eq!(after_first, data_value!(3u32));
     assert_eq!(after_second, data_value!(3u32));
-    assert_eq!(counts, (0, 2, 0), "both snapshot updates must succeed");
+    assert_eq!(metadata.component_revision, second.revision);
+    assert_eq!(update_counts(&metadata), (0, 2, 0));
+
+    Ok(())
+}
+
+/// A manual update to a revision carrying an earlier build. Automatic update
+/// cannot do this once any recorded invocation diverges, which is what makes
+/// the snapshot path the one a rollback has to use.
+#[test]
+#[tracing::instrument]
+async fn manual_update_on_idle_to_earlier_component(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("SnapshotCounter", "rollback");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    for _ in 0..3 {
+        executor
+            .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+            .await?;
+    }
+
+    let forward = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, forward.revision, false)
+        .await?;
+    let after_forward = executor
+        .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
+        .await?;
+
+    // Re-uploading the original build as a new revision is what a rollback is.
+    let back = executor
+        .update_component(&component.id, "it_agent_counters_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, back.revision, false)
+        .await?;
+    let after_rollback = executor
+        .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+
+    // The snapshot has to carry the agent's state across both builds.
+    assert_eq!(after_forward, data_value!(3u32));
+    assert_eq!(after_rollback, data_value!(3u32));
+    assert_eq!(metadata.component_revision, back.revision);
+    assert_eq!(update_counts(&metadata), (0, 2, 0));
 
     Ok(())
 }

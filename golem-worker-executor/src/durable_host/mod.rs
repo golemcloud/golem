@@ -4247,17 +4247,28 @@ impl PrivateDurableWorkerState {
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
     ) -> Result<Self, WorkerExecutorError> {
-        let deleted_regions = if let Some(snapshot_idx) = last_snapshot_index {
-            let mut regions = deleted_regions;
-            let snapshot_skip =
-                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
-                    OplogIndex::INITIAL.next()..=snapshot_idx,
-                )])
-                .build();
-            regions.set_override(snapshot_skip);
-            regions
-        } else {
-            deleted_regions
+        // A pending snapshot-based update already has its replay override: the
+        // status reducer sets one covering everything up to that update's own
+        // oplog entry, because the snapshot carries the whole state. Overriding
+        // it here with the *previous* manual update's narrower region is what
+        // left a second manual update with a suffix still to replay, which
+        // `prepare_instance` refuses outright.
+        let pending_snapshot_update = matches!(
+            pending_update.as_ref().map(|update| &update.description),
+            Some(UpdateDescription::SnapshotBased { .. })
+        );
+        let deleted_regions = match last_snapshot_index {
+            Some(snapshot_idx) if !pending_snapshot_update => {
+                let mut regions = deleted_regions;
+                let snapshot_skip =
+                    DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+                        OplogIndex::INITIAL.next()..=snapshot_idx,
+                    )])
+                    .build();
+                regions.set_override(snapshot_skip);
+                regions
+            }
+            _ => deleted_regions,
         };
         let replay_state =
             ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await?;
