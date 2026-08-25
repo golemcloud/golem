@@ -667,7 +667,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let result = if durability.is_live() {
             let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
-            let result = self.state.worker_service.get(&owned_agent_id).await;
+            let result = self.state.worker_service.get(&owned_agent_id).await?;
             let metadata: Option<AgentMetadataForGuests> = if let Some(result) = result {
                 let mut metadata = result.initial_worker_metadata;
                 if let Some(last_known_status) = &result.last_known_status {
@@ -1356,7 +1356,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 agent_id,
             };
 
-            let metadata = self.state.worker_service.get(&owned_id).await;
+            let metadata = self.state.worker_service.get(&owned_id).await?;
 
             if metadata.is_none() {
                 return Ok(None);

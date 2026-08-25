@@ -349,7 +349,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ));
                 }
             } else {
-                let existing_worker = self.worker_service().get(&owned_agent_id).await;
+                let existing_worker = self.worker_service().get(&owned_agent_id).await?;
                 if let Some(existing) = existing_worker
                     && !Self::is_same_worker_creation_request(
                         &existing.initial_worker_metadata,
@@ -455,7 +455,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let principal = extract_principal(&request.principal);
 
         Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
@@ -568,7 +568,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let metadata = self.worker_service().get(&owned_agent_id).await;
+        let metadata = self.worker_service().get(&owned_agent_id).await?;
 
         match metadata {
             Some(_) => {
@@ -612,7 +612,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .into();
 
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
@@ -659,7 +659,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let principal = extract_principal(&request.principal);
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id).await;
+        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id).await?;
 
         if let Some(metadata) = metadata {
             match &metadata.last_known_status.status {
@@ -765,7 +765,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let force_resume = request.force.unwrap_or(false);
 
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
@@ -874,7 +874,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
         self.ensure_worker_belongs_to_this_executor(&agent_id)?;
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await;
+        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await?;
 
         if let Some(metadata) = &metadata {
             self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, metadata)
@@ -974,7 +974,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
@@ -1098,7 +1098,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
@@ -1302,7 +1302,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let principal = extract_principal(&request.principal);
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
@@ -1690,7 +1690,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let plugin_priority: PluginPriority = PluginPriority(request.plugin_priority);
 
-        let metadata = Worker::get_latest_metadata(&self.services, &owned_agent_id).await;
+        let metadata = Worker::get_latest_metadata(&self.services, &owned_agent_id).await?;
 
         match metadata {
             Some(metadata) => {
@@ -1761,7 +1761,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let plugin_priority = PluginPriority(request.plugin_priority);
 
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;

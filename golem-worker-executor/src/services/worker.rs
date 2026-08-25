@@ -215,7 +215,16 @@ pub struct GetWorkerMetadataResult {
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
 pub trait WorkerService: Send + Sync {
-    async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult>;
+    /// Loads the worker's initial metadata and last known cached status.
+    ///
+    /// `Ok(None)` means the worker has no oplog (it does not exist). `Err` means the underlying
+    /// storage could not be read (after the storage layer's own retries); it is never conflated
+    /// with a missing worker, because doing so would make an outage look like a wave of deleted
+    /// workers and force a full oplog re-fold for every one of them.
+    async fn get(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError>;
 
     async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult>;
 
@@ -274,13 +283,14 @@ pub trait WorkerService: Send + Sync {
     /// an open jump region, it serves as a fold baseline for status recompute that predates any
     /// later jump, avoiding a full re-read of the oplog from index 1.
     ///
-    /// Returns `None` on a cache miss or stale format. The transient `agent_mode` field (not part
-    /// of the persisted `core`) is restored from `agent_mode`.
+    /// Returns `Ok(None)` on a cache miss or stale format, and `Err` when the storage could not be
+    /// read. The transient `agent_mode` field (not part of the persisted `core`) is restored from
+    /// `agent_mode`.
     async fn read_status_checkpoint(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Option<AgentStatusRecord>;
+    ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError>;
 
     /// Writes the worker's *clean* status checkpoint blob.
     ///
@@ -379,6 +389,9 @@ impl DefaultWorkerService {
             let metadata = self
                 .get(&owned_agent_id)
                 .await
+                .unwrap_or_else(|err| {
+                    panic!("failed to get worker metadata from KV storage: {err}")
+                })
                 .unwrap_or_else(|| panic!("failed to get worker metadata from KV storage"));
             workers.push(metadata);
         }
@@ -429,7 +442,10 @@ impl DefaultWorkerService {
     ///
     /// `agent_mode` is `#[transient]` and not part of `core`, so the returned record carries the
     /// `Durable` deserialization default; callers must restore it from the authoritative source.
-    async fn read_cached_status(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentStatusRecord> {
+    async fn read_cached_status(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
         self.read_split_status(
             owned_agent_id,
             Self::status_namespace(&owned_agent_id.agent_id),
@@ -447,7 +463,7 @@ impl DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         namespace: KeyValueStorageNamespace,
-    ) -> Option<AgentStatusRecord> {
+    ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
         // Single atomic read of every field of the per-agent status hash (`core`, `regions`,
         // `updates`, `ir:{key}`). This is one round-trip (Redis `HGETALL`, a single
         // `SELECT ... WHERE namespace`, or one locked scan in memory) that observes a consistent
@@ -461,16 +477,18 @@ impl DefaultWorkerService {
             .with_entity("worker", "read_cached_status", "agent_status")
             .get_all_raw(namespace)
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to get agent status for {owned_agent_id} from KV storage: {err}")
-            });
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to get agent status for {owned_agent_id} from KV storage: {err}"
+                ))
+            })?;
 
         // No `core` field -> nothing cached (or a torn/partial write); treat as a cache miss.
         if !fields.iter().any(|(name, _)| name == STATUS_CORE_FIELD) {
-            return None;
+            return Ok(None);
         }
 
-        reassemble_cached_status(fields)
+        Ok(reassemble_cached_status(fields))
     }
 
     /// Writes the split status fields for an agent, sending only the parts that changed.
@@ -685,13 +703,15 @@ impl DefaultWorkerService {
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
-    async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
+    async fn get(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
         record_worker_call("get");
 
-        let agent_mode = self
-            .get_agent_mode(owned_agent_id)
-            .await
-            .unwrap_or_else(|err| panic!("failed to get agent mode for {owned_agent_id}: {err}"))?;
+        let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await? else {
+            return Ok(None);
+        };
 
         let initial_oplog_entry = self
             .oplog_service
@@ -703,7 +723,7 @@ impl WorkerService for DefaultWorkerService {
         debug!("Found initial oplog entry for worker: {initial_oplog_entry:?}");
 
         match initial_oplog_entry {
-            None => None,
+            None => Ok(None),
             Some((
                 _,
                 OplogEntry::Create {
@@ -739,7 +759,10 @@ impl WorkerService for DefaultWorkerService {
                     )
                     .unwrap_or_else(|err| {
                         panic!("failed to get component metadata for {owned_agent_id}: {err}")
-                    })?;
+                    });
+                let Some(component_metadata) = component_metadata else {
+                    return Ok(None);
+                };
 
                 let config = local_agent_config
                     .into_iter()
@@ -773,7 +796,7 @@ impl WorkerService for DefaultWorkerService {
                     agent_mode,
                 };
 
-                let last_known_status = match self.read_cached_status(owned_agent_id).await {
+                let last_known_status = match self.read_cached_status(owned_agent_id).await? {
                     Some(mut status) => {
                         // `agent_mode` is `#[transient]` and therefore not part of the status
                         // blob; restore it from the authoritative value resolved above so the
@@ -791,7 +814,20 @@ impl WorkerService for DefaultWorkerService {
                             owned_agent_id,
                             agent_mode,
                             None,
-                            || self.read_status_checkpoint(owned_agent_id, agent_mode),
+                            || async {
+                                // The checkpoint is only a fold baseline: a read failure here
+                                // costs a full recompute, not correctness, and the function has
+                                // no way to report it. The live cached status above is the read
+                                // that propagates.
+                                self.read_status_checkpoint(owned_agent_id, agent_mode)
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!(
+                                            "Failed to read the status checkpoint for {owned_agent_id}: {err}"
+                                        );
+                                        None
+                                    })
+                            },
                         )
                         .await
                         .expect("Failed to recompute worker status for existing worker");
@@ -805,10 +841,10 @@ impl WorkerService for DefaultWorkerService {
                     }
                 };
 
-                Some(GetWorkerMetadataResult {
+                Ok(Some(GetWorkerMetadataResult {
                     initial_worker_metadata,
                     last_known_status,
-                })
+                }))
             }
             Some(_) => panic!("Encountered malformed oplog without create oplog entry"),
         }
@@ -950,18 +986,20 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Option<AgentStatusRecord> {
+    ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
         record_worker_call("read_status_checkpoint");
 
-        let mut status = self
+        let status = self
             .read_split_status(
                 owned_agent_id,
                 Self::checkpoint_namespace(&owned_agent_id.agent_id),
             )
             .await?;
         // `agent_mode` is transient (not part of `core`); restore the authoritative value.
-        status.agent_mode = agent_mode;
-        Some(status)
+        Ok(status.map(|mut status| {
+            status.agent_mode = agent_mode;
+            status
+        }))
     }
 
     async fn write_status_checkpoint(

@@ -303,13 +303,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_latest_metadata<T: HasAll<Ctx>>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-    ) -> Option<AgentMetadata> {
+    ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
         if let Some(worker) = deps.active_workers().try_get(owned_agent_id).await {
-            Some(worker.get_latest_worker_metadata().await)
+            Ok(Some(worker.get_latest_worker_metadata().await))
         } else if let Some(GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
-        }) = deps.worker_service().get(owned_agent_id).await
+        }) = deps.worker_service().get(owned_agent_id).await?
         {
             // update with latest data from oplog
             let agent_mode = initial_worker_metadata.agent_mode;
@@ -324,9 +324,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             initial_worker_metadata.last_known_status = last_known_status;
 
-            Some(initial_worker_metadata)
+            Ok(Some(initial_worker_metadata))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -2272,7 +2272,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let component_id = owned_agent_id.component_id();
 
         // Note: this also checks the oplog for the existence of the create entry, which is the main thing we are interested in here.
-        let existing_worker_metadata = this.worker_service().get(owned_agent_id).await;
+        let existing_worker_metadata = this.worker_service().get(owned_agent_id).await?;
 
         match existing_worker_metadata {
             Some(GetWorkerMetadataResult {

@@ -460,7 +460,10 @@ mod tests {
 
     #[async_trait]
     impl WorkerService for MockWorkerService {
-        async fn get(&self, _owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
+        async fn get(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
             unimplemented!()
         }
         async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
@@ -494,8 +497,8 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) -> Option<AgentStatusRecord> {
-            None
+        ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
+            Ok(None)
         }
         async fn write_status_checkpoint(
             &self,

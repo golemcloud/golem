@@ -578,10 +578,19 @@ impl SchedulerServiceDefault {
                 {
                     Some(fingerprint) => fingerprint != target_worker_fingerprint,
                     None => match self.worker_service.get(&owned_agent_id).await {
-                        Some(meta) => {
+                        Ok(Some(meta)) => {
                             meta.initial_worker_metadata.fingerprint != target_worker_fingerprint
                         }
-                        None => true,
+                        Ok(None) => true,
+                        // A storage failure is not evidence that the worker was deleted, so the
+                        // invocation must not be dropped. Fail the action so it is retried.
+                        Err(error) => {
+                            error!(
+                                agent_id = owned_agent_id.to_string(),
+                                "Failed to read worker metadata for a scheduled invocation: {error}"
+                            );
+                            return false;
+                        }
                     },
                 };
 
@@ -888,7 +897,10 @@ mod tests {
 
     #[async_trait]
     impl WorkerService for WorkerServiceMock {
-        async fn get(&self, _owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
+        async fn get(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
             unimplemented!()
         }
 
@@ -920,8 +932,8 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) -> Option<AgentStatusRecord> {
-            None
+        ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
+            Ok(None)
         }
 
         async fn write_status_checkpoint(

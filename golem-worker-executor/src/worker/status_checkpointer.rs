@@ -243,8 +243,11 @@ mod tests {
 
     #[async_trait]
     impl WorkerService for RecordingWorkerService {
-        async fn get(&self, _owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
-            None
+        async fn get(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+            Ok(None)
         }
 
         async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
@@ -275,8 +278,8 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) -> Option<AgentStatusRecord> {
-            None
+        ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
+            Ok(None)
         }
 
         async fn write_status_checkpoint(

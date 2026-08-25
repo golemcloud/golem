@@ -234,7 +234,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
 
         let metadata = self.all.worker_service().get(owned_agent_id).await;
         match metadata {
-            Some(_) => {
+            Ok(Some(_)) => {
                 if let Err(err) = Worker::get_or_create_running(
                     &self.all,
                     owned_agent_id,
@@ -250,8 +250,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                     error!("Failed to activate worker: {err}")
                 }
             }
-            None => {
+            Ok(None) => {
                 error!("WorkerActivator::activate_worker: worker not found")
+            }
+            Err(err) => {
+                error!("WorkerActivator::activate_worker: failed to read worker metadata: {err}")
             }
         }
     }
