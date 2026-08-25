@@ -1624,7 +1624,7 @@ async fn entity_filesystem_streams_share_root_and_block_executor_inspection(
                     store,
                     &parsed_agent_id,
                     principal,
-                    "stream_to_file",
+                    "write_zeroes_to_file_via_stream",
                     data_value!("/entity-stream.bin", 131_072_u64)
                         .value()
                         .clone(),
@@ -1742,7 +1742,7 @@ async fn filesystem_capable_entity_stream_reconstructs_on_clean_owner_replay(
                     store,
                     &parsed_agent_id,
                     live_principal.clone(),
-                    "stream_to_file",
+                    "write_zeroes_to_file_via_stream",
                     data_value!("/entity-replayed-stream.bin", 1024_u64)
                         .value()
                         .clone(),
@@ -1813,7 +1813,7 @@ async fn filesystem_capable_entity_stream_reconstructs_on_clean_owner_replay(
                     store,
                     &parsed_agent_id,
                     principal.clone(),
-                    "stream_to_file",
+                    "write_zeroes_to_file_via_stream",
                     data_value!("/entity-replayed-stream.bin", 1024_u64)
                         .value()
                         .clone(),
