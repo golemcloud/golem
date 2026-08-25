@@ -12,20 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Runtime tests for the Go SDK, driven through the `agent-sdk-go` guest (built
-//! by `test-components/build-components.sh go`). This is the foundational suite —
-//! more scenarios (durability/replay, RPC, config, …) build on this wiring.
-
-pub mod blobstore;
-pub mod config;
-pub mod durability;
-pub mod keyvalue;
-pub mod promise;
-pub mod rich_types;
-pub mod revert;
-pub mod rpc;
+//! Reverting a Go agent's invocations rolls its state back: the oplog is the
+//! source of truth for Go state too, so undoing recorded invocations rebuilds the
+//! earlier value.
 
 use crate::Tracing;
+use golem_common::model::worker::{RevertLastInvocations, RevertWorkerTarget};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -42,13 +34,13 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-/// A durable Go counter agent registers, dispatches its methods, and keeps state
-/// across invocations — the smoke test that proves the agent-sdk-go guest builds
-/// and runs under the worker executor.
+/// After three recorded increments the counter reads 6; reverting the last two
+/// invocations (the `add` and the `value` read) rebuilds the state as of the
+/// first increment.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn go_counter_basic_invoke(
+async fn go_revert_last_invocations(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -61,29 +53,41 @@ async fn go_counter_basic_invoke(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-
-    let agent_id = agent_id!("CounterAgent", "go-counter-1");
-    executor
+    let agent_id = agent_id!("CounterAgent", "go-revert-1");
+    let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
 
-    let v1 = executor
+    executor
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
-        .await?
-        .into_typed::<i64>()?;
-    assert_eq!(v1, 1);
-
-    let v2 = executor
+        .await?;
+    executor
         .invoke_and_await_agent(&component, &agent_id, "add", data_value!(5i64))
-        .await?
-        .into_typed::<i64>()?;
-    assert_eq!(v2, 6);
-
-    let v3 = executor
+        .await?;
+    let before = executor
         .invoke_and_await_agent(&component, &agent_id, "value", data_value!())
         .await?
         .into_typed::<i64>()?;
-    assert_eq!(v3, 6);
 
+    // Undo the `value` read and the `add`, leaving only the first increment.
+    executor
+        .revert(
+            &worker_id,
+            RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                number_of_invocations: 2,
+            }),
+        )
+        .await?;
+
+    let after = executor
+        .invoke_and_await_agent(&component, &agent_id, "value", data_value!())
+        .await?
+        .into_typed::<i64>()?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    assert_eq!(before, 6);
+    assert_eq!(after, 1);
     Ok(())
 }

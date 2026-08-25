@@ -5,12 +5,15 @@
 package main
 
 import (
+	_ "agent-sdk-go/agents/blobs/impl"
 	_ "agent-sdk-go/agents/clock/impl"
 	_ "agent-sdk-go/agents/configecho/impl"
 	_ "agent-sdk-go/agents/counter/impl"
 	_ "agent-sdk-go/agents/customdur/impl"
 	_ "agent-sdk-go/agents/httpcall/impl"
+	_ "agent-sdk-go/agents/kvstore/impl"
 	_ "agent-sdk-go/agents/ledger/impl"
+	_ "agent-sdk-go/agents/promises/impl"
 	_ "agent-sdk-go/agents/richtypes/impl"
 	_ "agent-sdk-go/agents/rpccaller/impl"
 
