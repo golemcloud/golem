@@ -20,8 +20,7 @@ use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{
-    DurabilityHost, DurableWorkerCtx, HttpOutputStreamState, HttpRequestCloseOwner,
-    PendingFilesystemReservation,
+    DurabilityHost, DurableWorkerCtx, HttpOutputStreamState, PendingFilesystemReservation,
 };
 use crate::model::event::InternalWorkerEvent;
 use crate::workerctx::WorkerCtx;
@@ -429,9 +428,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
 
         if is_incoming_http_body_stream(self, &rep) {
             let handle = rep.rep();
-            if let Some(state) = self.state.open_http_requests.get(&handle)
-                && state.close_owner == HttpRequestCloseOwner::InputStreamClosed
-            {
+            if self.state.open_http_requests.contains_key(&handle) {
                 end_http_request(self, handle).await?;
             }
         }
@@ -1244,7 +1241,7 @@ fn get_http_output_stream_state<Ctx: WorkerCtx>(
                 .get(&handle)
                 .map(|state| HttpOutputStreamState {
                     request_handle: handle,
-                    begin_index: state.begin_index,
+                    begin_index: state.begin_index(),
                     request: state.request.clone(),
                 })
         })
@@ -1337,7 +1334,6 @@ async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
 ) -> Result<(), WorkerExecutorError> {
     if matches!(result, Err(SerializableStreamError::Closed))
         && let Some(state) = ctx.state.open_http_requests.get(&handle)
-        && state.close_owner == HttpRequestCloseOwner::InputStreamClosed
     {
         // If the stream has a recorded body handle, transfer tracking back
         // to the body instead of ending the request. This allows
@@ -1345,12 +1341,7 @@ async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
         // making FutureTrailers::get() durable.
         let body_handle = state.body_handle;
         if let Some(body_handle) = body_handle {
-            continue_http_request(
-                ctx,
-                handle,
-                body_handle,
-                HttpRequestCloseOwner::IncomingBodyDropOrFinish,
-            );
+            continue_http_request(ctx, handle, body_handle);
         } else {
             end_http_request(ctx, handle).await?;
         }
@@ -1367,7 +1358,7 @@ fn get_http_request_begin_idx<Ctx: WorkerCtx>(
             "No matching HTTP request is associated with resource handle",
         ))
     })?;
-    Ok(request_state.begin_index)
+    Ok(request_state.begin_index())
 }
 
 fn get_http_stream_request<Ctx: WorkerCtx>(

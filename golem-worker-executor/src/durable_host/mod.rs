@@ -131,9 +131,8 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AgentError, AgentResourceId, DurableFunctionType, HostRequest, HostRequestHttpRequest,
-    HostResponse, LogLevel, OplogEntry, OplogIndex, RawSnapshotData, ScopeScanState,
-    TimestampedUpdateDescription, UpdateDescription,
+    AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
+    OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -162,7 +161,7 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 use std::vec;
@@ -3161,57 +3160,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         }
         self.state.remove_durable_scope(begin_index)
-    }
-
-    /// Appends a completed child host call inside a durable scope, as an eager `Start` immediately
-    /// followed by its matching `End`. Unlike [`crate::durable_host::concurrent::DurableCallSession::start`]
-    /// this never opens a new durable scope — it records the result of a poll on an async future
-    /// (HTTP / RPC) within a request/invoke scope that the caller opens and closes itself.
-    ///
-    /// `parent_start_index` is the `Start` index of the enclosing scope this poll belongs to,
-    /// threaded explicitly by the caller (the owning request/invoke resource). It must **not** be
-    /// inferred from the set of temporally-open scopes: long-lived sibling scopes overlap, so the
-    /// "innermost open scope" would frequently be a different concurrent request.
-    ///
-    /// Both payloads are uploaded before the `Start` is appended, so a serialization failure never
-    /// leaves a dangling `Start`. The two entries are written with plain `add`s (eager model: a
-    /// forced commit may flush the `Start` before its `End`; an incomplete `Start` is rejected on
-    /// replay, like the surrounding scope-recovery rules). The caller remains responsible for the
-    /// snapshotting guard, closing the surrounding scope, finishing spans, and the durable commit.
-    pub(crate) async fn append_completed_child_call(
-        &mut self,
-        function_name: HostFunctionName,
-        request: &HostRequest,
-        response: &HostResponse,
-        function_type: DurableFunctionType,
-        parent_start_index: Option<OplogIndex>,
-    ) -> Result<(), String> {
-        let request_payload = self.state.oplog.upload_payload(request).await?;
-        let response_payload = self.state.oplog.upload_payload(response).await?;
-        let now = Timestamp::now_utc();
-        let start_idx = self
-            .state
-            .oplog
-            .add(OplogEntry::Start {
-                timestamp: now,
-                parent_start_index,
-                function_name,
-                invocation_id: None,
-                observational_owner: None,
-                request: Some(request_payload),
-                durable_function_type: function_type,
-            })
-            .await;
-        self.state
-            .oplog
-            .add(OplogEntry::End {
-                timestamp: now,
-                start_index: start_idx,
-                response: Some(response_payload),
-                forced_commit: false,
-            })
-            .await;
-        Ok(())
     }
 
     /// Best-effort mid-invocation clean status checkpoint. Called from `end_durable_function` after
@@ -8665,15 +8613,97 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     stderr_entries.join("")
 }
 
-/// Indicates which step of the http request handling is responsible for closing an open
-/// http request (by calling end_function)
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum HttpRequestCloseOwner {
-    FutureIncomingResponseDrop,
-    IncomingResponseDrop,
-    IncomingBodyDropOrFinish,
-    InputStreamClosed,
-    FutureTrailersDrop,
+/// Transferable ownership of a P2 HTTP request's durable scope. The request state carrying this
+/// session moves from the response future to the response, body, stream, and trailers resources.
+/// Synchronous resource drops defer closure through the worker's drop-event queue.
+#[derive(Debug, Clone)]
+pub(crate) struct HttpRequestSession {
+    inner: Arc<HttpRequestSessionInner>,
+}
+
+#[derive(Debug)]
+struct HttpRequestSessionInner {
+    begin_index: OplogIndex,
+    span_id: SpanId,
+    phase: AtomicU8,
+    drop_sink: Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>>,
+}
+
+const HTTP_REQUEST_OPEN: u8 = 0;
+const HTTP_REQUEST_SCOPE_CLOSED: u8 = 1;
+const HTTP_REQUEST_CLOSED: u8 = 2;
+
+impl HttpRequestSession {
+    pub(crate) fn new(
+        begin_index: OplogIndex,
+        span_id: SpanId,
+        drop_sink: Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(HttpRequestSessionInner {
+                begin_index,
+                span_id,
+                phase: AtomicU8::new(HTTP_REQUEST_OPEN),
+                drop_sink,
+            }),
+        }
+    }
+
+    pub(crate) fn begin_index(&self) -> OplogIndex {
+        self.inner.begin_index
+    }
+
+    pub(crate) fn span_id(&self) -> &SpanId {
+        &self.inner.span_id
+    }
+
+    pub(crate) fn mark_closed(&self) {
+        self.inner
+            .phase
+            .store(HTTP_REQUEST_CLOSED, Ordering::Release);
+    }
+
+    pub(crate) fn mark_scope_closed(&self) {
+        let _ = self.inner.phase.compare_exchange(
+            HTTP_REQUEST_OPEN,
+            HTTP_REQUEST_SCOPE_CLOSED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    pub(crate) fn defer_close(&self) {
+        self.inner.enqueue_close();
+    }
+}
+
+impl HttpRequestSessionInner {
+    fn enqueue_close(&self) {
+        let phase = self.phase.swap(HTTP_REQUEST_CLOSED, Ordering::AcqRel);
+        if let Some(sink) = &self.drop_sink {
+            let event = match phase {
+                HTTP_REQUEST_OPEN => Some(concurrent::DropEvent::CloseDurableScope {
+                    function_type: DurableFunctionType::WriteRemoteBatched(None),
+                    begin_index: self.begin_index,
+                    span_id: Some(self.span_id.clone()),
+                }),
+                HTTP_REQUEST_SCOPE_CLOSED => Some(concurrent::DropEvent::FinishSpan {
+                    span_id: self.span_id.clone(),
+                    durable: true,
+                }),
+                _ => None,
+            };
+            if let Some(event) = event {
+                let _ = sink.send(event);
+            }
+        }
+    }
+}
+
+impl Drop for HttpRequestSessionInner {
+    fn drop(&mut self) {
+        self.enqueue_close();
+    }
 }
 
 /// Tracks conditions that affect whether an HTTP request is eligible for
@@ -8745,14 +8775,10 @@ pub(crate) enum PendingStatusRetryDecision {
 /// State associated with ongoing http requests, on top of the underlying wasi-http implementation
 #[derive(Debug, Clone)]
 pub(crate) struct HttpRequestState {
-    /// Who is responsible for calling end_function and removing entries from the table
-    pub close_owner: HttpRequestCloseOwner,
-    /// The scope `Start` entry's index (batched-write scope marker)
-    pub begin_index: OplogIndex,
+    /// Durable scope ownership transferred with this state between WASI resources.
+    pub session: HttpRequestSession,
     /// Information about the request to be included in the oplog
     pub request: HostRequestHttpRequest,
-    /// SpanId
-    pub span_id: SpanId,
     /// When tracking is transferred from IncomingBody to InputStream via stream(),
     /// this records the IncomingBody handle so that on stream close we can transfer
     /// tracking back to the body (enabling finish() to then transfer to FutureTrailers).
@@ -8792,6 +8818,10 @@ pub(crate) struct HttpRequestState {
 }
 
 impl HttpRequestState {
+    pub fn begin_index(&self) -> OplogIndex {
+        self.session.begin_index()
+    }
+
     pub fn outgoing_request_config(&self) -> OutgoingRequestConfig {
         OutgoingRequestConfig {
             use_tls: self.use_tls,

@@ -278,7 +278,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
         } else {
             false
         };
-        let response = run_read_access::<_, _, Ctx, P3SocketsTypesUdpSocketSend, _, _>(
+        let response = run_read_access::<_, _, Ctx, P3SocketsTypesUdpSocketSend, _>(
             store,
             HostRequestP3SocketsUdpSend {
                 data: data.clone(),
@@ -321,7 +321,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
         store: &Accessor<U, Self>,
         socket: Resource<UdpSocket>,
     ) -> SocketResult<(Vec<u8>, types::IpSocketAddress)> {
-        let response = run_read_access::<_, _, Ctx, P3SocketsTypesUdpSocketReceive, _, _>(
+        let response = run_read_access::<_, _, Ctx, P3SocketsTypesUdpSocketReceive, _>(
             store,
             HostRequestNoInput {},
             DurableFunctionType::ReadRemote,

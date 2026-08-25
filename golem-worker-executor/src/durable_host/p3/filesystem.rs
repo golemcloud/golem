@@ -1481,7 +1481,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let live_stat = Arc::new(Mutex::new(None));
         let live_stat_for_call = Arc::clone(&live_stat);
 
-        let response = run_read_access::<_, _, Ctx, P3FilesystemTypesDescriptorStat, _, _>(
+        let response = run_read_access::<_, _, Ctx, P3FilesystemTypesDescriptorStat, _>(
             store,
             HostRequestFileSystemPath {
                 path: path.to_string_lossy().to_string(),
@@ -1519,7 +1519,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let live_stat = Arc::new(Mutex::new(None));
         let live_stat_for_call = Arc::clone(&live_stat);
         let live_path = path.clone();
-        let response = run_read_access::<_, _, Ctx, P3FilesystemTypesDescriptorStatAt, _, _>(
+        let response = run_read_access::<_, _, Ctx, P3FilesystemTypesDescriptorStatAt, _>(
             store,
             HostRequestFileSystemPath {
                 path: full_path.to_string_lossy().to_string(),

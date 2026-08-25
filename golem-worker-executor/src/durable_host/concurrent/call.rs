@@ -380,15 +380,10 @@ struct AccessStartCleanup {
 
 /// Context handed to the request builder of [`DurableCallSession::start_access_with`], available after the
 /// durable scope (if any) has been opened but before the host-call `Start` is written or claimed.
-pub struct AccessStartContext {
-    /// The begin index of the call, mirroring `begin_durable_function`: the durable-scope `Start`
-    /// index when the call opens a scope, otherwise the pre-call oplog index. Stable across
-    /// live/replay for scope-opening calls; approximately stable otherwise (see
-    /// [`DurableCallSession::start_access_with`]).
-    pub begin_index: OplogIndex,
+pub(crate) struct AccessStartContext {
     /// Whether the call executes live (the built request will be persisted) or replays (the built
     /// request is discarded; the builder still runs for its positional replay side effects).
-    pub is_live: bool,
+    pub(crate) is_live: bool,
 }
 
 /// Releases a just-registered atomic-region lease when the accessor start path is torn (the
@@ -625,7 +620,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// Reusing `begin_durable_function`/`end_durable_function` (rather than re-deriving scope logic
     /// here) keeps the scope semantics consistent by construction: the same scope `Start`/`End`,
     /// the same `parent_start_index` nesting, the same commit/checkpoint boundaries.
-    pub async fn start<Ctx: WorkerCtx>(
+    pub(crate) async fn start<Ctx: WorkerCtx>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
         function_type: DurableFunctionType,
@@ -633,7 +628,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Self::start_inner(ctx, request, function_type, false).await
     }
 
-    pub async fn start_with_agent_authority<Ctx: WorkerCtx>(
+    pub(crate) async fn start_with_agent_authority<Ctx: WorkerCtx>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
         function_type: DurableFunctionType,
@@ -641,7 +636,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Self::start_inner(ctx, request, function_type, true).await
     }
 
-    pub async fn start_with_agent_authority_capture<Ctx: WorkerCtx, T>(
+    pub(crate) async fn start_with_agent_authority_capture<Ctx: WorkerCtx, T>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
         function_type: DurableFunctionType,
@@ -655,6 +650,26 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             begun.start_replay(ctx).await?
         };
         Ok((handle, captured))
+    }
+
+    /// Starts and drives a re-executable value call through live execution, completed replay, or
+    /// incomplete replay repair. This is the default entry point for callers that do not need the
+    /// begin index or session-owned retry/authority state while performing the live action.
+    pub(crate) async fn invoke<Ctx, A, E>(
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        live_action: A,
+    ) -> Result<Pair::Resp, E>
+    where
+        Ctx: WorkerCtx,
+        E: DurableCallTrapError,
+        A: AsyncFnOnce(&mut DurableWorkerCtx<Ctx>) -> Result<Pair::Resp, E>,
+    {
+        Self::start(ctx, request, function_type)
+            .await?
+            .run(ctx, live_action)
+            .await
     }
 
     async fn start_inner<Ctx: WorkerCtx>(
@@ -678,7 +693,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// The accessor path supports read calls and remote writes. Scope-opening writes open their
     /// durable scope through owned oplog/replay handles and only re-enter the store for in-memory
     /// bookkeeping.
-    pub async fn start_access<T, D, Ctx>(
+    pub(crate) async fn start_access<T, D, Ctx>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
@@ -695,23 +710,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// Like [`Self::start_access`], but the request payload is built by `build_request` *between*
     /// the durable-scope open and the host-call `Start` write/claim. This is the accessor
     /// counterpart of the two-step [`Self::begin`] + [`BegunCall::start_live`] flow: it exists for
-    /// calls whose persisted request depends on the begin index (e.g. a derived idempotency key) or
-    /// that must interleave other positional oplog entries (e.g. a `StartSpan`) between the scope
-    /// `Start` and the host-call `Start`.
+    /// calls that must interleave other positional oplog entries (e.g. a `StartSpan`) between the
+    /// scope `Start` and the host-call `Start`.
     ///
     /// The builder runs on **both** the live and the replay path (so positional side entries it
     /// replays, like `StartSpan`, are consumed in the same order they were written), but its
     /// returned request is only persisted on the live path. It receives an [`AccessStartContext`]
-    /// with the begin index — the durable-scope `Start` index when the call opens a scope, or the
-    /// pre-call oplog index otherwise, mirroring `begin_durable_function` — and the liveness flag.
-    /// For non-scope-opening calls the pre-call index is not perfectly stable between a live run
-    /// and an incomplete-replay re-execution under concurrent siblings; callers deriving identity
-    /// from it accept the same tradeoff as the RPC `async-invoke-and-await` path.
+    /// with the liveness flag.
     ///
     /// A builder error aborts the call like any other start failure: the atomic-region
     /// registration is cleaned up and any already-written durable-scope `Start` is left incomplete,
     /// to be recovered by scope recovery on the next replay.
-    pub async fn start_access_with<T, D, Ctx, F>(
+    pub(crate) async fn start_access_with<T, D, Ctx, F>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
@@ -1026,34 +1036,19 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             }
         }
 
-        // Build the request between the scope open and the host-call `Start` write/claim. The
-        // builder's begin index mirrors `begin_durable_function`: the scope `Start` index when a
-        // scope was opened, otherwise the pre-call index (last added / last replayed non-hint
-        // entry). It runs on the replay path too so any positional side entries it wrote live are
-        // consumed here in the same order.
-        let builder_begin_index = match &scope_start {
-            Some(scope) => scope.begin_index,
-            None => {
-                if is_live {
-                    prepared.oplog.current_oplog_index().await
-                } else {
-                    prepared.replay_state.last_replayed_non_hint_index()
-                }
-            }
-        };
-        let request = build_request(AccessStartContext {
-            begin_index: builder_begin_index,
-            is_live,
-        })
-        .await
-        .map_err(|err| {
-            (
-                err,
-                AccessStartCleanup {
-                    atomic_lease: prepared.atomic_lease.clone(),
-                },
-            )
-        })?;
+        // Build the request between the scope open and the host-call `Start` write/claim. It runs
+        // on replay too so positional side entries written by the builder are consumed in the same
+        // order.
+        let request = build_request(AccessStartContext { is_live })
+            .await
+            .map_err(|err| {
+                (
+                    err,
+                    AccessStartCleanup {
+                        atomic_lease: prepared.atomic_lease.clone(),
+                    },
+                )
+            })?;
 
         if is_live {
             if prepared.snapshotting {
@@ -1444,14 +1439,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// idempotency key derived from it). Such calls cannot use [`Self::start`] because the request
     /// is not yet known when the scope is opened. The common case stays on [`Self::start`], which is
     /// just `begin` + `start_live`/`start_replay`.
-    pub async fn begin<Ctx: WorkerCtx>(
+    pub(crate) async fn begin<Ctx: WorkerCtx>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
     ) -> Result<BegunCall<Pair, P>, WorkerExecutorError> {
         Self::begin_inner(ctx, function_type, false).await
     }
 
-    pub async fn begin_with_agent_authority<Ctx: WorkerCtx>(
+    pub(crate) async fn begin_with_agent_authority<Ctx: WorkerCtx>(
         ctx: &mut DurableWorkerCtx<Ctx>,
         function_type: DurableFunctionType,
     ) -> Result<BegunCall<Pair, P>, WorkerExecutorError> {
@@ -1919,6 +1914,122 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     handle.run_live_action(ctx, live_action).await
                 }
             }
+        }
+    }
+
+    /// Starts and drives a re-executable accessor value call. Low-level session construction stays
+    /// available inside the crate for calls that derive identity from the begin index or own custom
+    /// retry state; ordinary p3 values use this driver. The live action executes without holding a
+    /// store window, and incomplete replay repairs the existing `Start`.
+    pub(crate) async fn invoke_access<T, D, Ctx, A, E>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        live_action: A,
+    ) -> Result<Pair::Resp, E>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        E: DurableCallTrapError,
+        A: AsyncFnOnce() -> Result<Pair::Resp, E>,
+    {
+        let call = Self::start_access(store, get_ctx, request, function_type).await?;
+        debug_assert!(
+            call.retry.can_reexecute_on_incomplete_replay(),
+            "DurableCallSession::invoke_access is only valid for re-executable calls"
+        );
+        if call.is_live() {
+            call.run_live_action_access(store, get_ctx, live_action)
+                .await
+        } else {
+            match call.replay_access(store, get_ctx).await? {
+                CallReplayOutcome::Replayed(response) => Ok(response),
+                CallReplayOutcome::Incomplete(call) => {
+                    call.run_live_action_access(store, get_ctx, live_action)
+                        .await
+                }
+            }
+        }
+    }
+
+    /// Deferred-delivery form of [`Self::invoke_access`] for values that cross another cancellable
+    /// boundary after their durable terminal.
+    pub(crate) async fn invoke_access_deferred<T, D, Ctx, A, E>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        request: Pair::Req,
+        function_type: DurableFunctionType,
+        live_action: A,
+    ) -> Result<(Pair::Resp, CompletionDelivery), E>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        E: DurableCallTrapError,
+        A: AsyncFnOnce() -> Result<Pair::Resp, E>,
+    {
+        let call = Self::start_access(store, get_ctx, request, function_type).await?;
+        debug_assert!(
+            call.retry.can_reexecute_on_incomplete_replay(),
+            "DurableCallSession::invoke_access_deferred is only valid for re-executable calls"
+        );
+        if call.is_live() {
+            call.run_live_action_access_deferred(store, get_ctx, live_action)
+                .await
+        } else {
+            match call.replay_access_deferred(store, get_ctx).await? {
+                DeferredCallReplayOutcome::Replayed(response, delivery) => Ok((response, delivery)),
+                DeferredCallReplayOutcome::Incomplete(call) => {
+                    call.run_live_action_access_deferred(store, get_ctx, live_action)
+                        .await
+                }
+            }
+        }
+    }
+
+    async fn run_live_action_access<T, D, Ctx, A, E>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        live_action: A,
+    ) -> Result<Pair::Resp, E>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        E: DurableCallTrapError,
+        A: AsyncFnOnce() -> Result<Pair::Resp, E>,
+    {
+        match live_action().await {
+            Ok(response) => self
+                .complete_access(store, get_ctx, response)
+                .await
+                .map_err(|error| E::from_durable_call_trap(error.into_marked_anyhow())),
+            Err(error) => Err(E::from_durable_call_trap(self.trap(error))),
+        }
+    }
+
+    async fn run_live_action_access_deferred<T, D, Ctx, A, E>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        live_action: A,
+    ) -> Result<(Pair::Resp, CompletionDelivery), E>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+        E: DurableCallTrapError,
+        A: AsyncFnOnce() -> Result<Pair::Resp, E>,
+    {
+        match live_action().await {
+            Ok(response) => self
+                .complete_access_deferred(store, get_ctx, response, None)
+                .await
+                .map_err(|error| E::from_durable_call_trap(error.into_marked_anyhow())),
+            Err(error) => Err(E::from_durable_call_trap(self.trap(error))),
         }
     }
 
@@ -2599,6 +2710,69 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     return Err(error);
                 }
                 Ok(DeferredCallReplayOutcome::Incomplete(self))
+            }
+        }
+    }
+
+    /// Finalizes a response that has already been produced by adapter-specific logic, converging
+    /// live completion, completed replay, and incomplete-replay repair in one transition.
+    pub(crate) async fn finish_access<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<Pair::Resp, TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let context = self.trap_context();
+        if self.is_live() {
+            self.complete_access(store, get_ctx, response).await
+        } else {
+            match self
+                .replay_access(store, get_ctx)
+                .await
+                .map_err(|source| TerminalCallError::new(source, context))?
+            {
+                CallReplayOutcome::Replayed(recorded) => Ok(recorded),
+                CallReplayOutcome::Incomplete(call) => {
+                    call.complete_access(store, get_ctx, response).await
+                }
+            }
+        }
+    }
+
+    /// Deferred-delivery form of [`Self::finish_access`]. The returned token always describes the
+    /// recorded delivery state, regardless of whether this invocation completed the item live,
+    /// repaired an incomplete `Start`, or replayed an existing terminal.
+    pub(crate) async fn finish_access_deferred<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        response: Pair::Resp,
+    ) -> Result<(Pair::Resp, CompletionDelivery), TerminalCallError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        let context = self.trap_context();
+        if self.is_live() {
+            self.complete_access_deferred(store, get_ctx, response, None)
+                .await
+        } else {
+            match self
+                .replay_access_deferred(store, get_ctx)
+                .await
+                .map_err(|source| TerminalCallError::new(source, context))?
+            {
+                DeferredCallReplayOutcome::Replayed(recorded, delivery) => Ok((recorded, delivery)),
+                DeferredCallReplayOutcome::Incomplete(call) => {
+                    call.complete_access_deferred(store, get_ctx, response, None)
+                        .await
+                }
             }
         }
     }
@@ -3387,7 +3561,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
 
     /// Second phase on the live path: upload the request and append the eager host-call `Start`
     /// (or, while snapshotting, persist nothing).
-    pub async fn start_live<Ctx: WorkerCtx>(
+    pub(crate) async fn start_live<Ctx: WorkerCtx>(
         self,
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
@@ -3483,7 +3657,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
 
     /// Second phase on the replay path: claim the next host-call `Start` from the oplog and register
     /// a resolver receiver for it.
-    pub async fn start_replay<Ctx: WorkerCtx>(
+    pub(crate) async fn start_replay<Ctx: WorkerCtx>(
         self,
         ctx: &mut DurableWorkerCtx<Ctx>,
     ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError> {

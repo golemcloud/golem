@@ -124,7 +124,7 @@ fn observe_function_call_store<Ctx: WorkerCtx, U: 'static>(
 /// unwraps them and the worker fails deterministically — so any wrapper whose response payload
 /// carries such an error value must use [`run_read_access_classified`] instead and classify it
 /// as retryable-via-host vs guest-visible.
-async fn run_read_access<T, D, Ctx, Pair, F, Fut>(
+async fn run_read_access<T, D, Ctx, Pair, F>(
     store: &wasmtime::component::Accessor<T, D>,
     request: Pair::Req,
     function_type: DurableFunctionType,
@@ -135,15 +135,13 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
     Pair: HostPayloadPair,
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = wasmtime::Result<Pair::Resp>>,
+    F: AsyncFnOnce() -> wasmtime::Result<Pair::Resp>,
 {
-    run_read_access_classified::<T, D, Ctx, Pair, F, Fut>(
+    DurableCallSession::<Pair, Cancellable>::invoke_access(
         store,
+        durable_worker_ctx::<Ctx, T>,
         request,
         function_type,
-        |_| None,
-        RetryProperties::new(),
         live,
     )
     .await
