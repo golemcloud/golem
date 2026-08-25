@@ -158,12 +158,12 @@ fn resolver_duplicate_resolution_is_ignored() {
     }
 }
 
-// ---- CallHandle drop policy ----
+// ---- DurableCallSession drop policy ----
 
 fn live_unfinished_handle<P: DropPolicy>(
     start_idx: OplogIndex,
     sink: mpsc::UnboundedSender<DropEvent>,
-) -> CallHandle<host_functions::MonotonicClockNow, P> {
+) -> DurableCallSession<host_functions::MonotonicClockNow, P> {
     live_unfinished_handle_with_atomic_region(start_idx, None, sink)
 }
 
@@ -171,7 +171,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
     start_idx: OplogIndex,
     atomic_region: Option<OplogIndex>,
     sink: mpsc::UnboundedSender<DropEvent>,
-) -> CallHandle<host_functions::MonotonicClockNow, P> {
+) -> DurableCallSession<host_functions::MonotonicClockNow, P> {
     use crate::durable_host::durability::DurableExecutionState;
     use std::time::Duration;
     let durable_execution_state = DurableExecutionState {
@@ -180,9 +180,9 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
         assume_idempotence: false,
         max_in_function_retry_delay: Duration::ZERO,
     };
-    CallHandle {
+    DurableCallSession {
         start_idx,
-        begin_index: start_idx,
+        boundary: DurableCallBoundary::from_begin_index(start_idx),
         is_live: true,
         persisted: true,
         request_upload: PendingUpload::already_durable(),
@@ -213,11 +213,11 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
 /// Terminal-failure tests use this to drive `trap_context()` (the call-owned classification a
 /// terminal-step failure attaches) for a call initiated in a specific scope, without standing up
 /// a full `DurableWorkerCtx`. `finished` is set so dropping the handle is a no-op (no drop
-/// event), and no `drop_sink` is attached. `start_idx`/`begin_index` are set from
+/// event), and no `drop_sink` is attached. `start_idx` and the boundary lease are set from
 /// `scope.retry_from` only so the struct is well-formed; the tests read nothing but the scope.
 fn synthetic_finished_handle_with_scope<P: DropPolicy>(
     scope: CallExecutionScope,
-) -> CallHandle<host_functions::MonotonicClockNow, P> {
+) -> DurableCallSession<host_functions::MonotonicClockNow, P> {
     use crate::durable_host::durability::DurableExecutionState;
     use std::time::Duration;
     let durable_execution_state = DurableExecutionState {
@@ -227,9 +227,9 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
         max_in_function_retry_delay: Duration::ZERO,
     };
     let start_idx = scope.retry_from;
-    CallHandle {
+    DurableCallSession {
         start_idx,
-        begin_index: start_idx,
+        boundary: DurableCallBoundary::from_begin_index(start_idx),
         is_live: true,
         persisted: true,
         request_upload: PendingUpload::already_durable(),
@@ -1117,7 +1117,7 @@ async fn dropped_cancellable_call_records_cancelled_at_next_drain_point() {
 #[test]
 async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     // Ordering is proven against the production persistence stage itself
-    // (`CallHandle::persist_access_terminal`, the exact code `complete_access_impl` runs for a
+    // (`DurableCallSession::persist_access_terminal`, the exact code `complete_access_impl` runs for a
     // persisted live call): while the terminal `End` append is still in flight, the live-call
     // permit must stay held and no cleanup event may become visible; both are released only
     // after the append completes (production releases them via `disarm()` after
@@ -1180,7 +1180,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         CompletionMarkerRecorder::new(persist_oplog.clone(), persist_replay_state);
     let persist = tokio::spawn(async move {
         let response = HostResponseMonotonicClockTimestamp { nanos: 42 };
-        let result = CallHandle::<host_functions::MonotonicClockNow, NotCancellable>::
+        let result = DurableCallSession::<host_functions::MonotonicClockNow, NotCancellable>::
                 persist_access_terminal(persist_oplog, completion_marker_recorder, &mut guard, start_idx, &response, None)
             .await;
         (result, guard)
@@ -1861,7 +1861,7 @@ fn can_reexecute_matches_internal_retry_eligibility() {
     // nor the `Some(begin_index)` (in-scope host call) variants. The `Some(..)` variants are the
     // ones a migrated batched/transaction host call carries, so a lone committed host-call
     // `Start` for them must hard-error on incomplete replay rather than re-execute and risk
-    // duplicating an external write (`CallHandle::replay` Incomplete arm).
+    // duplicating an external write (`DurableCallSession::replay` Incomplete arm).
     assert!(
         !controller(DurableFunctionType::WriteRemote, false).can_reexecute_on_incomplete_replay()
     );

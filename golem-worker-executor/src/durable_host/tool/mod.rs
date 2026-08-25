@@ -21,7 +21,7 @@
 
 use crate::durable_host::authorization::targets::tool_target;
 use crate::durable_host::concurrent::{
-    CallHandle, CallReplayOutcome, Cancellable, NotCancellable,
+    CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
     authorize_live_permissions_at_serialized_access,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
@@ -707,7 +707,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let component_id = self.state.owned_agent_id.agent_id.component_id;
         let component_revision = self.state.component_metadata.revision;
 
-        let mut handle = CallHandle::<GolemToolGetAllTools, NotCancellable>::start(
+        let mut handle = DurableCallSession::<GolemToolGetAllTools, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::ReadRemote,
@@ -777,7 +777,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let component_id = self.state.owned_agent_id.agent_id.component_id;
         let component_revision = self.state.component_metadata.revision;
 
-        let mut handle = CallHandle::<GolemToolGetTool, NotCancellable>::start(
+        let mut handle = DurableCallSession::<GolemToolGetTool, NotCancellable>::start(
             self,
             HostRequestGolemToolGetTool {
                 name: tool_name.clone(),
@@ -892,7 +892,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         });
         let replaying = accessor.with(|mut access| !access.get().state.is_live());
         let handle = if replaying {
-            let handle = CallHandle::<GolemToolRpcInvoke, Cancellable>::start_access(
+            let handle = DurableCallSession::<GolemToolRpcInvoke, Cancellable>::start_access(
                 accessor,
                 accessor.getter(),
                 HostRequestGolemToolInvoke {
@@ -941,7 +941,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                 stdin,
             } => {
                 close_stdin(accessor, stdin).await?;
-                let handle = CallHandle::<GolemToolRpcInvoke, Cancellable>::start_access(
+                let handle = DurableCallSession::<GolemToolRpcInvoke, Cancellable>::start_access(
                     accessor,
                     accessor.getter(),
                     *request,
@@ -964,7 +964,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
             ToolCallPreparation::Ready(prepared) => prepared,
         };
 
-        let handle = CallHandle::<GolemToolRpcInvoke, Cancellable>::start_access(
+        let handle = DurableCallSession::<GolemToolRpcInvoke, Cancellable>::start_access(
             accessor,
             accessor.getter(),
             prepared.request.clone(),
@@ -1000,19 +1000,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         });
         let replaying = accessor.with(|mut access| !access.get().state.is_live());
         let handle = if replaying {
-            let mut handle = CallHandle::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
-                accessor,
-                accessor.getter(),
-                HostRequestGolemToolInvoke {
-                    tool_name: String::new(),
-                    command_path: Vec::new(),
-                    args: Vec::new(),
-                    input: empty_tool_input(),
-                    has_stdin: false,
-                },
-                DurableFunctionType::ReadRemote,
-            )
-            .await?;
+            let mut handle =
+                DurableCallSession::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
+                    accessor,
+                    accessor.getter(),
+                    HostRequestGolemToolInvoke {
+                        tool_name: String::new(),
+                        command_path: Vec::new(),
+                        args: Vec::new(),
+                        input: empty_tool_input(),
+                        has_stdin: false,
+                    },
+                    DurableFunctionType::ReadRemote,
+                )
+                .await?;
             match handle.replay_access(accessor, accessor.getter()).await? {
                 CallReplayOutcome::Replayed(response) => {
                     close_stdin(accessor, stdin).await?;
@@ -1054,13 +1055,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                 stdin,
             } => {
                 close_stdin(accessor, stdin).await?;
-                let handle = CallHandle::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
-                    accessor,
-                    accessor.getter(),
-                    *request,
-                    DurableFunctionType::ReadRemote,
-                )
-                .await?;
+                let handle =
+                    DurableCallSession::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
+                        accessor,
+                        accessor.getter(),
+                        *request,
+                        DurableFunctionType::ReadRemote,
+                    )
+                    .await?;
                 let response = admit_tool_response_secret_holds(accessor, response).await?;
                 let response = handle
                     .complete_access(
@@ -1074,7 +1076,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
             ToolCallPreparation::Ready(prepared) => prepared,
         };
 
-        let handle = CallHandle::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
+        let handle = DurableCallSession::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
             accessor,
             accessor.getter(),
             prepared.request.clone(),
@@ -1111,19 +1113,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         });
         let replaying = accessor.with(|mut access| !access.get().state.is_live());
         let handle = if replaying {
-            let handle = CallHandle::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
-                accessor,
-                accessor.getter(),
-                HostRequestGolemToolInvoke {
-                    tool_name: String::new(),
-                    command_path: Vec::new(),
-                    args: Vec::new(),
-                    input: empty_tool_input(),
-                    has_stdin: false,
-                },
-                DurableFunctionType::ReadRemote,
-            )
-            .await?;
+            let handle =
+                DurableCallSession::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
+                    accessor,
+                    accessor.getter(),
+                    HostRequestGolemToolInvoke {
+                        tool_name: String::new(),
+                        command_path: Vec::new(),
+                        args: Vec::new(),
+                        input: empty_tool_input(),
+                        has_stdin: false,
+                    },
+                    DurableFunctionType::ReadRemote,
+                )
+                .await?;
             match handle.replay_access(accessor, accessor.getter()).await? {
                 CallReplayOutcome::Replayed(response) => {
                     close_stdin(accessor, stdin).await?;
@@ -1171,7 +1174,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
             } => {
                 close_stdin(accessor, stdin).await?;
                 let handle =
-                    CallHandle::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
+                    DurableCallSession::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
                         accessor,
                         accessor.getter(),
                         *request,
@@ -1194,13 +1197,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
             }
             ToolCallPreparation::Ready(prepared) => prepared,
         };
-        let handle = CallHandle::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
-            accessor,
-            accessor.getter(),
-            prepared.request.clone(),
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let handle =
+            DurableCallSession::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
+                accessor,
+                accessor.getter(),
+                prepared.request.clone(),
+                DurableFunctionType::ReadRemote,
+            )
+            .await?;
         close_stdin(accessor, prepared.stdin).await?;
         let _permit = prepared.permit;
         let result = admit_tool_response_secret_holds(

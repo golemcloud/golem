@@ -14,7 +14,7 @@
 
 use crate::durable_host::authorization::targets::agent_method_target;
 use crate::durable_host::concurrent::{
-    CallHandle, CallReplayOutcome, Cancellable, DeferredCallReplayOutcome, NotCancellable,
+    CallReplayOutcome, Cancellable, DeferredCallReplayOutcome, DurableCallSession, NotCancellable,
     authorize_live_permissions_at_serialized_access, finish_span_in_memory,
     try_agent_auth_ctx_at_serialized_access,
 };
@@ -332,7 +332,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let mut logical_remote_agent_id =
                 OwnedAgentId::new(self.owned_agent_id.environment_id, &logical_remote_agent_id);
 
-            let mut handle = CallHandle::<GolemRpcWasmRpcNew, NotCancellable>::start(
+            let mut handle = DurableCallSession::<GolemRpcWasmRpcNew, NotCancellable>::start(
                 self,
                 HostRequestGolemRpcCreate {
                     remote_agent_id: remote_agent_id.clone(),
@@ -383,14 +383,15 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             );
         }
 
-        let handle = CallHandle::<GolemRpcWasmRpcNew, NotCancellable>::start_with_agent_authority(
-            self,
-            HostRequestGolemRpcCreate {
-                remote_agent_id: remote_agent_id.clone(),
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let handle =
+            DurableCallSession::<GolemRpcWasmRpcNew, NotCancellable>::start_with_agent_authority(
+                self,
+                HostRequestGolemRpcCreate {
+                    remote_agent_id: remote_agent_id.clone(),
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
         if !handle.is_live() {
             match handle.replay(self).await? {
@@ -492,12 +493,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let call = if self.state.is_live() {
             Either::Left(
-                CallHandle::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::
+                DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::
                     begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
                     .await?,
             )
         } else {
-            let begun = CallHandle::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::
+            let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::
                 begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
                 .await?;
             let begin_index = begun.begin_index();
@@ -620,7 +621,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let call = if self.state.is_live() {
             Either::Left(
-                CallHandle::<GolemRpcWasmRpcInvoke, NotCancellable>::begin_with_agent_authority(
+                DurableCallSession::<GolemRpcWasmRpcInvoke, NotCancellable>::begin_with_agent_authority(
                     self,
                     DurableFunctionType::WriteRemote,
                 )
@@ -628,7 +629,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             )
         } else {
             let begun =
-                CallHandle::<GolemRpcWasmRpcInvoke, NotCancellable>::begin_with_agent_authority(
+                DurableCallSession::<GolemRpcWasmRpcInvoke, NotCancellable>::begin_with_agent_authority(
                     self,
                     DurableFunctionType::WriteRemote,
                 )
@@ -842,12 +843,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         // at the top of this function and is re-applied by `begin`.
         let call = if self.state.is_live() {
             Either::Left(
-                CallHandle::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::
+                DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::
                     begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
                     .await?,
             )
         } else {
-            let begun = CallHandle::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::
+            let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::
                 begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
                 .await?;
             Either::Right(begun.start_replay(self).await?)
@@ -1163,7 +1164,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         let begun =
-            CallHandle::<GolemRpcWasmRpcActivate, NotCancellable>::begin_with_agent_authority(
+            DurableCallSession::<GolemRpcWasmRpcActivate, NotCancellable>::begin_with_agent_authority(
                 self,
                 DurableFunctionType::WriteRemote,
             )
@@ -1406,12 +1407,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let call = if self.state.is_live() {
             Either::Left(
-                CallHandle::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::
+                DurableCallSession::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::
                     begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
                     .await?,
             )
         } else {
-            let begun = CallHandle::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::
+            let begun = DurableCallSession::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::
                 begin_with_agent_authority(self, DurableFunctionType::WriteRemote)
                 .await?;
             let begin_index = begun.begin_index();
@@ -1630,7 +1631,7 @@ async fn persist_invoke_and_await_denial<Ctx: WorkerCtx>(
     error: RpcError,
 ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
     let details = rpc_denied_details(error);
-    let begun = CallHandle::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::begin(
+    let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>::begin(
         ctx,
         DurableFunctionType::WriteRemote,
     )
@@ -1659,7 +1660,7 @@ async fn persist_invoke_denial<Ctx: WorkerCtx>(
     error: RpcError,
 ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
     let details = rpc_denied_details(error);
-    let begun = CallHandle::<GolemRpcWasmRpcInvoke, NotCancellable>::begin(
+    let begun = DurableCallSession::<GolemRpcWasmRpcInvoke, NotCancellable>::begin(
         ctx,
         DurableFunctionType::WriteRemote,
     )
@@ -1701,7 +1702,7 @@ async fn persist_async_invoke_denial<Ctx: WorkerCtx>(
             payload.span_id.clone(),
         )
     };
-    let begun = CallHandle::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::begin(
+    let begun = DurableCallSession::<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>::begin(
         ctx,
         DurableFunctionType::WriteRemote,
     )
@@ -1799,7 +1800,7 @@ async fn persist_schedule_denial<Ctx: WorkerCtx>(
     error: RpcError,
 ) -> anyhow::Result<Result<Resource<CancellationToken>, RpcError>> {
     let details = rpc_denied_details(error);
-    let begun = CallHandle::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::begin(
+    let begun = DurableCallSession::<GolemRpcWasmRpcScheduleInvocation, NotCancellable>::begin(
         ctx,
         DurableFunctionType::WriteRemote,
     )
@@ -1927,7 +1928,7 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
     remote_agent_id: OwnedAgentId,
     idempotency_key: IdempotencyKey,
     span: Arc<InvocationContextSpan>,
-    mut handle: CallHandle<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>,
+    mut handle: DurableCallSession<GolemRpcWasmRpcInvokeAndAwaitResult, NotCancellable>,
     scope_card: Option<ScopeCard>,
 ) -> anyhow::Result<Result<SchemaValue, RpcError>> {
     let mut freshness_disposition = if known_fresh_dispatch_allowed(
@@ -2059,7 +2060,7 @@ async fn run_invoke<Ctx: WorkerCtx>(
     remote_agent_id: OwnedAgentId,
     idempotency_key: IdempotencyKey,
     span: Arc<InvocationContextSpan>,
-    mut handle: CallHandle<GolemRpcWasmRpcInvoke, NotCancellable>,
+    mut handle: DurableCallSession<GolemRpcWasmRpcInvoke, NotCancellable>,
 ) -> anyhow::Result<Result<(), RpcError>> {
     let mut freshness_disposition = if known_fresh_dispatch_allowed(
         handle.is_live(),
@@ -2156,7 +2157,7 @@ type FutureInvokeTaskResult = Result<Result<SchemaValue, InternalRpcError>, Erro
 type FutureInvokeTaskHandle =
     Arc<tokio::sync::Mutex<AbortOnDropJoinHandle<FutureInvokeTaskResult>>>;
 type FutureInvokeGetResult = Result<Result<SchemaValue, RpcError>, Error>;
-type FutureInvokeCallHandle = CallHandle<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>;
+type FutureInvokeCallHandle = DurableCallSession<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>;
 
 async fn admit_rpc_result_secret_holds<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
@@ -2913,14 +2914,15 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
                 )))
             })?;
 
-        let mut handle = CallHandle::<GolemRpcCancellationTokenCancel, NotCancellable>::start(
-            self,
-            HostRequestGolemRpcScheduledInvocationCancellation {
-                schedule_id: serialized_schedule_id.clone(),
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut handle =
+            DurableCallSession::<GolemRpcCancellationTokenCancel, NotCancellable>::start(
+                self,
+                HostRequestGolemRpcScheduledInvocationCancellation {
+                    schedule_id: serialized_schedule_id.clone(),
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
         'cancel: {
             if !handle.is_live() {
@@ -3010,7 +3012,7 @@ fn invocation_target_agent_id(
 
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    handle: CallHandle<GolemRpcWasmRpcNew, NotCancellable>,
+    handle: DurableCallSession<GolemRpcWasmRpcNew, NotCancellable>,
     remote_agent_id: AgentId,
     env: &[(String, String)],
     config: Vec<AgentConfigEntryDto>,

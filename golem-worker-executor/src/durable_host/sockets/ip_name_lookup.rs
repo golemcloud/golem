@@ -15,7 +15,7 @@
 use wasmtime::component::Resource;
 
 use crate::durable_host::authorization::targets::dns_target;
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::durability::{HostFailureKind, InternalRetryResult};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
@@ -71,11 +71,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         // request name; on replay a committed `Start` without its `End` is re-executable (read), so
         // the live side effect runs from a single shared block for both the live and
         // incomplete-replay paths.
-        let begun = CallHandle::<SocketsIpNameLookupResolveAddresses, NotCancellable>::begin(
-            self,
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let begun =
+            DurableCallSession::<SocketsIpNameLookupResolveAddresses, NotCancellable>::begin(
+                self,
+                DurableFunctionType::ReadRemote,
+            )
+            .await?;
 
         let result = 'resp: {
             let (mut handle, denied) = if begun.is_live() {
