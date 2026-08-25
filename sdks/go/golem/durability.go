@@ -15,7 +15,14 @@
 package golem
 
 import (
+	"fmt"
+	"reflect"
+
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
+	apiOplog "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_oplog"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	durability "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_durability_durability"
+	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 // Durability helpers expose Golem's exactly-once execution knobs to a handler:
@@ -76,4 +83,131 @@ func GenerateIdempotencyKey() UUID {
 // external effect to bound how much progress a crash could lose.
 func OplogCommit(replicas uint8) {
 	apiHost.OplogCommit(replicas)
+}
+
+// ---------------------------------------------------------------------------
+// Custom durability
+// ---------------------------------------------------------------------------
+
+// DurableFunctionType selects how the executor commits and replays a custom
+// durable operation. Use ReadLocal/WriteLocal/ReadRemote/WriteRemote for the
+// common cases; the batched and transaction variants are for libraries that
+// coordinate a group of writes.
+type DurableFunctionType struct{ raw apiOplog.WrappedFunctionType }
+
+var (
+	// ReadLocal reads local (worker-owned) state.
+	ReadLocal = DurableFunctionType{apiOplog.MakeWrappedFunctionTypeReadLocal()}
+	// WriteLocal writes local (worker-owned) state.
+	WriteLocal = DurableFunctionType{apiOplog.MakeWrappedFunctionTypeWriteLocal()}
+	// ReadRemote reads from an external system.
+	ReadRemote = DurableFunctionType{apiOplog.MakeWrappedFunctionTypeReadRemote()}
+	// WriteRemote writes to an external system (the usual choice for a side effect).
+	WriteRemote = DurableFunctionType{apiOplog.MakeWrappedFunctionTypeWriteRemote()}
+)
+
+// WriteRemoteBatched marks a remote write that the executor may commit together
+// with adjacent batched writes. Pass the oplog index that begins the batch to
+// join an existing one; omit it to start a new batch.
+func WriteRemoteBatched(begin ...uint64) DurableFunctionType {
+	return DurableFunctionType{apiOplog.MakeWrappedFunctionTypeWriteRemoteBatched(optionalOplogIndex(begin))}
+}
+
+// WriteRemoteTransaction marks a remote write that participates in a durable
+// transaction. Pass the oplog index that begins the transaction to join an
+// existing one; omit it to start a new transaction.
+func WriteRemoteTransaction(begin ...uint64) DurableFunctionType {
+	return DurableFunctionType{apiOplog.MakeWrappedFunctionTypeWriteRemoteTransaction(optionalOplogIndex(begin))}
+}
+
+func optionalOplogIndex(begin []uint64) witTypes.Option[uint64] {
+	if len(begin) > 0 {
+		return witTypes.Some(begin[0])
+	}
+	return witTypes.None[uint64]()
+}
+
+// DurableSpec describes one custom durable operation: which function it stands
+// for (Interface::Function, used as the persisted name) and its commit/replay
+// policy. Set ForcedCommit to force an efficient oplog commit at the end of the
+// operation.
+type DurableSpec struct {
+	Interface    string
+	Function     string
+	Type         DurableFunctionType
+	ForcedCommit bool
+}
+
+// DurableOp wraps a non-durable side effect so it is recorded once and replayed
+// from the oplog thereafter. It is the building block for authoring custom
+// durable operations (the SDK's own keyvalue/blobstore/http wrappers are built
+// the same way).
+//
+// On a live run it executes body, persists the encoded result, and returns it;
+// on replay it returns the recorded result WITHOUT running body. request is
+// recorded alongside the result so the oplog is self-describing; both request
+// and result are encoded through the ordinary schema codec.
+//
+// Failure has two distinct channels:
+//   - Returning a value carries the outcome. If Out is a [Result], an err Result
+//     is a RECORDED durable failure — it is persisted and replayed like any other
+//     value, so the operation is not retried.
+//   - Panicking is a transient defect: the unfinished invocation is dropped and
+//     normal recovery re-executes body. Panic (or golem.Must) when the effect
+//     should be retried rather than recorded.
+//
+// There is no async variant: a blocking body already suspends the fiber at its
+// await points, so one function covers both cases.
+func DurableOp[In any, Out any](spec DurableSpec, request In, body func() Out) Out {
+	durability.ObserveFunctionCall(spec.Interface, spec.Function)
+
+	name := spec.Function
+	if spec.Interface != "" {
+		name = spec.Interface + "::" + spec.Function
+	}
+
+	req := encodeDurableValue(reflect.ValueOf(&request).Elem())
+	invocation := durability.BeginCustomDurableInvocation(name, req, spec.Type.raw)
+
+	if invocation.Tag() == durability.CustomDurableInvocationReplayed {
+		return decodeDurableValue[Out](name, invocation.Replayed().Response)
+	}
+
+	// Live: run the body, persist its result, and finish. If body panics the
+	// invocation is left unfinished (dropped below) so recovery re-executes it.
+	live := invocation.Live()
+	committed := false
+	defer func() {
+		if !committed {
+			live.Drop()
+		}
+	}()
+
+	out := body()
+	resp := encodeDurableValue(reflect.ValueOf(&out).Elem())
+	durability.LiveCustomDurableInvocationFinish(live, resp, spec.ForcedCommit)
+	committed = true
+	return out
+}
+
+// encodeDurableValue encodes a single value (not a parameter list) into a
+// self-describing typed schema value. It panics on failure, matching the
+// fail-loud durability surface.
+func encodeDurableValue(v reflect.Value) types.TypedSchemaValue {
+	return types.TypedSchemaValue{
+		Graph: defs.graphForType(v.Type()),
+		Value: encodeWith(defs.compile(v.Type()), v),
+	}
+}
+
+// decodeDurableValue decodes a replayed response back into Out, panicking on a
+// mismatch (a replay divergence is not recoverable in-band).
+func decodeDurableValue[Out any](name string, tv types.TypedSchemaValue) Out {
+	typ := reflect.TypeFor[Out]()
+	dst := reflect.New(typ).Elem()
+	dec := decoder{nodes: tv.Value.ValueNodes}
+	if err := defs.compile(typ).decode(&dec, dst, tv.Value.Root); err != nil {
+		panic(fmt.Errorf("golem: durable %s: decoding replayed response: %w", name, err))
+	}
+	return dst.Interface().(Out)
 }

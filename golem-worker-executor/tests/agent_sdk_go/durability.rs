@@ -211,3 +211,82 @@ async fn go_outgoing_http_replayed_without_network(
     assert_eq!(result2.into_typed::<String>()?, "1-b");
     Ok(())
 }
+
+/// The custom durability API (`golem.DurableOp`) records an operation once and
+/// replays its result from the oplog after a restart. The agent wraps an outbound
+/// HTTP call in `DurableOp`; on replay the recorded result is returned without
+/// re-running the body, so the external counter advances once per *live* call —
+/// the second invocation sees "1-b", not "2-b". A broken `DurableOp` would either
+/// re-run the body (advancing the counter) or diverge on replay.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn go_custom_durable_op_replayed_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let response = Arc::new(AtomicU32::new(0));
+    let response_clone = response.clone();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    #[derive(Deserialize)]
+    struct QueryParams {
+        payload: String,
+    }
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/callback",
+                get(move |query: Query<QueryParams>| async move {
+                    format!(
+                        "{}-{}",
+                        response_clone.fetch_add(1, Ordering::AcqRel),
+                        query.payload
+                    )
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("CustomDurAgent", "go-customdur-1");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let result1 = executor
+        .invoke_and_await_agent(&component, &agent_id, "callback", data_value!("a"))
+        .await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // Restart: the first invocation's DurableOp must replay its recorded result
+    // instead of re-running the body (no second hit to the external counter).
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let result2 = executor
+        .invoke_and_await_agent(&component, &agent_id, "callback", data_value!("b"))
+        .await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    assert_eq!(result1.into_typed::<String>()?, "0-a");
+    assert_eq!(result2.into_typed::<String>()?, "1-b");
+    Ok(())
+}
