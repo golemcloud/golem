@@ -33,6 +33,29 @@
 //! returned reports `1` from the code that is running, not from metadata about
 //! what the platform believes.
 //!
+//! ## The constraint that shapes this scenario
+//!
+//! An automatic update **replays the agent's oplog against the new build** and
+//! aborts if any recorded invocation produces a different result. It can only
+//! cross a build boundary that no recorded invocation can tell apart.
+//!
+//! That has a sharp operational consequence, and it is arguably S9's most
+//! useful finding: **a behaviour-changing build cannot be rolled back
+//! automatically.** If the new build ever returned a different answer for an
+//! invocation still in an agent's oplog — which is usually *why* you are
+//! rolling back — the automatic update is refused. A rollback in that situation
+//! needs a snapshot-based update instead.
+//!
+//! It also dictates how this scenario may look at its own agents. The first S9
+//! run verified the forward leg by invoking `component_version`, which exists
+//! precisely to differ between builds, and thereby wrote an entry into all 200
+//! oplogs that the rollback's replay could never reproduce. Every rollback was
+//! refused with `Unexpected oplog entry: expected component_version => 1, got
+//! 2`. The forward leg is now read from metadata, which leaves no trace; the
+//! running code is asked only at the very end, where nothing depends on it.
+//! See `an_automatic_update_rolls_an_agent_back_to_an_earlier_build` in
+//! `golem-worker-executor/tests/hot_update.rs` for the minimal reproduction.
+//!
 //! ## Why the forward leg is verified first
 //!
 //! If the agents never reached the new build, rolling them back returns them to
@@ -259,16 +282,32 @@ pub async fn run(
     );
     tokio::time::sleep(rollback_config.settle()).await;
 
+    // Read from metadata, NOT by invoking `component_version`.
+    //
+    // This is the correction the first S9 run forced, and it is not a
+    // downgrade of the evidence — it is the only way to gather it without
+    // destroying what comes next. An automatic update replays the agent's
+    // oplog against the new build and aborts if any recorded invocation
+    // produces a different result. `component_version` exists precisely to
+    // differ between builds, so invoking it here writes an entry into every
+    // agent's oplog that the rollback's replay can never reproduce. The first
+    // run did exactly that and all 200 rollbacks were refused with
+    // "Unexpected oplog entry: expected component_version => 1, got 2".
+    //
+    // The forward leg only has to establish that the agents moved, so that the
+    // rollback has something to undo. Which revision the platform has them on
+    // answers that, and leaves no trace. The end state is still judged on the
+    // running code, at the very end, where nothing depends on it.
     let rolled_forward = VersionCensus::build(
         "before-rollback",
-        VERSION_ON_THE_NEW_BUILD,
-        &read_versions(&ctx, workload_config).await,
+        forward_revision.get() as u32,
+        &read_revisions(&ctx, workload_config).await,
     );
     info!(
-        "S9: {} of {} agents are on version {} ({} unreadable)",
+        "S9: {} of {} agents are on revision {} ({} unreadable)",
         rolled_forward.on_expected,
         rolled_forward.agents,
-        VERSION_ON_THE_NEW_BUILD,
+        forward_revision,
         rolled_forward.unreadable
     );
 
@@ -302,7 +341,7 @@ pub async fn run(
     let mut report = RollbackReport {
         forward_revision: forward_revision.get(),
         rollback_revision: rollback_revision.get(),
-        forward_version: VERSION_ON_THE_NEW_BUILD,
+        forward_version: forward_revision.get() as u32,
         rollback_version: VERSION_AFTER_ROLLBACK,
         rolled_forward,
         rolled_back: None,
@@ -575,6 +614,45 @@ async fn request_updates(
 
     account.refused = pending.len() as u64;
     account
+}
+
+/// Asks the platform which component revision each durable agent is on.
+///
+/// Deliberately metadata rather than an invocation. See the comment at the
+/// forward-leg census: invoking a method whose result differs between builds
+/// writes an oplog entry that the next automatic update's replay cannot
+/// reproduce, which aborts that update. Reading metadata leaves no trace.
+async fn read_revisions(
+    ctx: &WorkloadContext,
+    config: &crate::chaos::WorkloadConfig,
+) -> std::collections::BTreeMap<String, Option<u32>> {
+    let names: Vec<String> = (0..config.durable_agents)
+        .map(|index| ctx.agent_name(Stream::Durable, index))
+        .collect();
+
+    let mut out = std::collections::BTreeMap::new();
+    for chunk in names.chunks(UPDATE_CONCURRENCY) {
+        let mut batch = tokio::task::JoinSet::new();
+        for agent in chunk.iter().cloned() {
+            let ctx = ctx.clone();
+            batch.spawn(async move {
+                let id = workload::counter_agent_id(&ctx, &agent);
+                let observed = ctx
+                    .user
+                    .get_worker_metadata(&id)
+                    .await
+                    .ok()
+                    .map(|m| m.component_revision.get() as u32);
+                (agent, observed)
+            });
+        }
+        while let Some(joined) = batch.join_next().await {
+            if let Ok((agent, observed)) = joined {
+                out.insert(agent, observed);
+            }
+        }
+    }
+    out
 }
 
 /// Asks every durable agent which build it is running.
