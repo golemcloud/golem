@@ -68,6 +68,7 @@ impl DbInfo {
                     password: pg.password.clone(),
                     max_connections: 10,
                     schema: Some(service_namespace.to_string()),
+                    acquire_timeout: std::time::Duration::from_secs(5),
                 })
             }
             DbInfo::Mysql(_) => {

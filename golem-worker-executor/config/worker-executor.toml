@@ -122,11 +122,11 @@ foreign_keys = false
 max_connections = 10
 
 [key_value_storage_retry]
-max_attempts = 3
-max_delay = "1s"
+max_attempts = 15
+max_delay = "10s"
 max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 3.0
+min_delay = "200ms"
+multiplier = 2.0
 
 [limits]
 ephemeral_fuel_overdraft_multiplier = 100
@@ -490,11 +490,11 @@ without_time = false
 # [key_value_storage.config]
 # 
 # [key_value_storage_retry]
-# max_attempts = 3
-# max_delay = "1s"
+# max_attempts = 15
+# max_delay = "10s"
 # max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
+# min_delay = "200ms"
+# multiplier = 2.0
 # 
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100
@@ -828,11 +828,11 @@ without_time = false
 # [key_value_storage.config]
 # 
 # [key_value_storage_retry]
-# max_attempts = 3
-# max_delay = "1s"
+# max_attempts = 15
+# max_delay = "10s"
 # max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
+# min_delay = "200ms"
+# multiplier = 2.0
 # 
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100
