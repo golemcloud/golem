@@ -1383,12 +1383,13 @@ async fn manual_update_on_idle_to_earlier_component(
 ///
 /// The manual update's snapshot is the authoritative replay baseline, so a later
 /// automatic update must replay only the suffix after it. Replaying from the
-/// start would repeat the pre-migration history that the manual update existed
-/// to get past — and here that history cannot replay, because it recorded a
-/// `component_version` of 1 under a build that now answers 2.
+/// start would repeat the pre-migration history, and here that history cannot
+/// replay: it recorded a `component_version` of 1 under a build that now
+/// answers 2, so divergence detection would fail the update.
 ///
-/// So the automatic update succeeding is the assertion: it proves the earlier
-/// history was skipped rather than replayed.
+/// Two separate mechanisms skip that prefix, and either one alone is enough, so
+/// this test does not attribute the skip to one of them. It goes red when both
+/// are gone.
 #[test]
 #[tracing::instrument]
 async fn auto_update_on_idle_after_manual_update(
