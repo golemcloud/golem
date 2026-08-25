@@ -16,9 +16,8 @@
 //!
 //! The native tool model, its validation, and the canonical input model live
 //! in `golem-schema` so the Rust SDK and the Golem services share one
-//! implementation. This module re-exports them and keeps platform-specific
-//! extensions: the durable discovery model and the WIT wire conversions
-//! ([`wit`]), which depend on host-side types.
+//! implementation. This module re-exports them and keeps the platform-specific
+//! durable discovery model.
 
 use crate::model::component::ComponentId;
 use crate::model::tool::{RegisteredTool, ToolSource};
@@ -57,9 +56,6 @@ impl From<RegisteredTool> for DiscoveredTool {
         }
     }
 }
-
-#[cfg(feature = "full")]
-pub mod wit;
 
 #[cfg(test)]
 mod tests;

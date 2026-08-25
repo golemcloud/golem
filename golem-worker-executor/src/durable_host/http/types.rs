@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::HttpOutgoingBodyState;
-use crate::durable_host::concurrent::{CallHandle, NotCancellable, Resolution};
+use crate::durable_host::concurrent::{DurableCallSession, NotCancellable, Resolution};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::http::inline_retry::{
     StatusRetryOutcome, take_http_background_retry_fallback, try_status_code_retry,
@@ -505,7 +505,7 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
             // `WriteRemoteBatched`: not re-executable on an incomplete `Start`, so replay never
             // yields `Incomplete` (it hard-errors instead) and the lone batched `Start` is recovered
             // by the surrounding durable scope.
-            let mut call = CallHandle::<HttpTypesFutureTrailersGet, NotCancellable>::start(
+            let mut call = DurableCallSession::<HttpTypesFutureTrailersGet, NotCancellable>::start(
                 self,
                 request,
                 DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),

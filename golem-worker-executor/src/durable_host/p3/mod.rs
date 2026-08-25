@@ -36,7 +36,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, Cancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, Cancellable, DurableCallSession};
 use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::RetryProperties;
@@ -96,7 +96,7 @@ fn durable_worker_ctx<Ctx: WorkerCtx, U: 'static>(u: &mut U) -> &mut DurableWork
 }
 
 /// Records a pass-through (non-durable) p3 host function call for metrics and debug tracing.
-/// Durable calls are observed by `CallHandle::start_access` / `prepare_access_start` with their
+/// Durable calls are observed by `DurableCallSession::start_access` / `prepare_access_start` with their
 /// host-function pair's interface/function names; every other host method observes explicitly
 /// through this helper, mirroring the P2 wrappers.
 fn observe_function_call<Ctx: WorkerCtx>(ctx: &Ctx, interface: &str, function: &str) {
@@ -118,7 +118,7 @@ fn observe_function_call_store<Ctx: WorkerCtx, U: 'static>(
 /// retried by the host).
 ///
 /// Durable p3 host wrappers surface failures in two ways: traps, which escape via
-/// [`CallHandle::trap`] and are classified by the trap-recovery machinery; and error *values*
+/// [`DurableCallSession::trap`] and are classified by the trap-recovery machinery; and error *values*
 /// recorded in the response payload and returned to the guest (`wasi:sockets` error codes,
 /// `wasi:http` error codes, ...). Error values bypass trap classification entirely — the guest
 /// unwraps them and the worker fails deterministically — so any wrapper whose response payload
@@ -151,7 +151,7 @@ where
 
 /// Like [`run_read_access`], but classifies a guest-visible error *value* carried in the live
 /// response payload before it is persisted, routing transient failures through the worker-level
-/// retry machinery ([`CallHandle::try_trigger_retry_access`]) instead of returning them to the
+/// retry machinery ([`DurableCallSession::try_trigger_retry_access`]) instead of returning them to the
 /// guest.
 ///
 /// `classify` inspects the response about to be persisted: it returns `None` for a success and
@@ -178,7 +178,7 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = wasmtime::Result<Pair::Resp>>,
 {
-    let mut handle = CallHandle::<Pair, Cancellable>::start_access(
+    let mut handle = DurableCallSession::<Pair, Cancellable>::start_access(
         store,
         durable_worker_ctx::<Ctx, T>,
         request,

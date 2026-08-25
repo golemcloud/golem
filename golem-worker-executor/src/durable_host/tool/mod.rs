@@ -21,7 +21,7 @@
 
 use crate::durable_host::authorization::targets::tool_target;
 use crate::durable_host::concurrent::{
-    CallHandle, CallReplayOutcome, Cancellable, NotCancellable,
+    CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
     authorize_live_permissions_at_serialized_access,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
@@ -54,18 +54,37 @@ use golem_common::model::tool::{RegisteredTool, ToolName, ToolSource};
 use golem_common::schema::render::cli_text::value_to_cli_text_unredacted;
 use golem_common::schema::tool::DiscoveredTool;
 use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
-use golem_common::schema::tool::wit::wire::Tool as WitTool;
+use golem_common::schema::tool::wit::wire::{
+    Host as HostToolCommon, HostUnderlyingTool, HostUnderlyingToolWithStore, Tool as WitTool,
+    ToolError, UnderlyingTool,
+};
 use golem_common::schema::tool::{FlagShape, OptionShape, OptionSpec, Repetition, Tool};
 use golem_common::schema::wit::{decode_graph, decode_value_with, encode_graph, encode_value_with};
 use golem_common::schema::{
     SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue as ModelTypedSchemaValue,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::marker::PhantomData;
 use std::sync::Arc;
-use wasmtime::component::{Accessor, HasSelf, Resource, StreamReader};
+use wasmtime::component::{Accessor, HasData, HasSelf, Linker, Resource, StreamReader};
 
 const NOT_IMPLEMENTED: &str =
     "golem:tool/host tool invocation requires the sidecar invocation backend";
+const UNDERLYING_TOOL_NOT_BOUND: &str =
+    "golem:tool/common underlying-tool is not bound to a middleware chain";
+
+struct ToolCommonHost<Ctx: WorkerCtx>(PhantomData<fn() -> Ctx>);
+
+impl<Ctx: WorkerCtx> HasData for ToolCommonHost<Ctx> {
+    type Data<'a> = &'a mut DurableWorkerCtx<Ctx>;
+}
+
+pub fn add_common_to_linker<Ctx: WorkerCtx>(
+    linker: &mut Linker<Ctx>,
+    get: fn(&mut Ctx) -> &mut DurableWorkerCtx<Ctx>,
+) -> wasmtime::Result<()> {
+    golem_common::schema::tool::wit::wire::add_to_linker::<_, ToolCommonHost<Ctx>>(linker, get)
+}
 
 /// Host-side resource table entry backing the `golem:tool/host.tool-rpc`
 /// resource.
@@ -707,7 +726,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let component_id = self.state.owned_agent_id.agent_id.component_id;
         let component_revision = self.state.component_metadata.revision;
 
-        let mut handle = CallHandle::<GolemToolGetAllTools, NotCancellable>::start(
+        let mut handle = DurableCallSession::<GolemToolGetAllTools, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::ReadRemote,
@@ -777,7 +796,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let component_id = self.state.owned_agent_id.agent_id.component_id;
         let component_revision = self.state.component_metadata.revision;
 
-        let mut handle = CallHandle::<GolemToolGetTool, NotCancellable>::start(
+        let mut handle = DurableCallSession::<GolemToolGetTool, NotCancellable>::start(
             self,
             HostRequestGolemToolGetTool {
                 name: tool_name.clone(),
@@ -863,6 +882,27 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HostUnderlyingTool for DurableWorkerCtx<Ctx> {
+    async fn drop(&mut self, rep: Resource<UnderlyingTool>) -> anyhow::Result<()> {
+        let _ = self.table().delete(rep);
+        Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> HostToolCommon for DurableWorkerCtx<Ctx> {}
+
+impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolCommonHost<Ctx> {
+    async fn invoke(
+        _accessor: &Accessor<U, Self>,
+        _self_: Resource<UnderlyingTool>,
+        _command_path: Vec<String>,
+        _input: TypedSchemaValue,
+        _stdin: Option<StreamReader<u8>>,
+    ) -> anyhow::Result<Result<InvocationResult, ToolError>> {
+        Err(anyhow!(UNDERLYING_TOOL_NOT_BOUND))
+    }
+}
+
 impl<Ctx: WorkerCtx> HostToolRpc for DurableWorkerCtx<Ctx> {
     async fn new(&mut self, tool_name: String) -> anyhow::Result<Resource<ToolRpcEntry>> {
         self.observe_function_call("golem::tool::host::tool-rpc", "new");
@@ -892,7 +932,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         });
         let replaying = accessor.with(|mut access| !access.get().state.is_live());
         let handle = if replaying {
-            let handle = CallHandle::<GolemToolRpcInvoke, Cancellable>::start_access(
+            let handle = DurableCallSession::<GolemToolRpcInvoke, Cancellable>::start_access(
                 accessor,
                 accessor.getter(),
                 HostRequestGolemToolInvoke {
@@ -941,7 +981,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                 stdin,
             } => {
                 close_stdin(accessor, stdin).await?;
-                let handle = CallHandle::<GolemToolRpcInvoke, Cancellable>::start_access(
+                let handle = DurableCallSession::<GolemToolRpcInvoke, Cancellable>::start_access(
                     accessor,
                     accessor.getter(),
                     *request,
@@ -964,7 +1004,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
             ToolCallPreparation::Ready(prepared) => prepared,
         };
 
-        let handle = CallHandle::<GolemToolRpcInvoke, Cancellable>::start_access(
+        let handle = DurableCallSession::<GolemToolRpcInvoke, Cancellable>::start_access(
             accessor,
             accessor.getter(),
             prepared.request.clone(),
@@ -1000,19 +1040,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         });
         let replaying = accessor.with(|mut access| !access.get().state.is_live());
         let handle = if replaying {
-            let mut handle = CallHandle::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
-                accessor,
-                accessor.getter(),
-                HostRequestGolemToolInvoke {
-                    tool_name: String::new(),
-                    command_path: Vec::new(),
-                    args: Vec::new(),
-                    input: empty_tool_input(),
-                    has_stdin: false,
-                },
-                DurableFunctionType::ReadRemote,
-            )
-            .await?;
+            let mut handle =
+                DurableCallSession::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
+                    accessor,
+                    accessor.getter(),
+                    HostRequestGolemToolInvoke {
+                        tool_name: String::new(),
+                        command_path: Vec::new(),
+                        args: Vec::new(),
+                        input: empty_tool_input(),
+                        has_stdin: false,
+                    },
+                    DurableFunctionType::ReadRemote,
+                )
+                .await?;
             match handle.replay_access(accessor, accessor.getter()).await? {
                 CallReplayOutcome::Replayed(response) => {
                     close_stdin(accessor, stdin).await?;
@@ -1054,13 +1095,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
                 stdin,
             } => {
                 close_stdin(accessor, stdin).await?;
-                let handle = CallHandle::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
-                    accessor,
-                    accessor.getter(),
-                    *request,
-                    DurableFunctionType::ReadRemote,
-                )
-                .await?;
+                let handle =
+                    DurableCallSession::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
+                        accessor,
+                        accessor.getter(),
+                        *request,
+                        DurableFunctionType::ReadRemote,
+                    )
+                    .await?;
                 let response = admit_tool_response_secret_holds(accessor, response).await?;
                 let response = handle
                     .complete_access(
@@ -1074,7 +1116,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
             ToolCallPreparation::Ready(prepared) => prepared,
         };
 
-        let handle = CallHandle::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
+        let handle = DurableCallSession::<GolemToolRpcInvokeAndAwait, Cancellable>::start_access(
             accessor,
             accessor.getter(),
             prepared.request.clone(),
@@ -1111,19 +1153,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         });
         let replaying = accessor.with(|mut access| !access.get().state.is_live());
         let handle = if replaying {
-            let handle = CallHandle::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
-                accessor,
-                accessor.getter(),
-                HostRequestGolemToolInvoke {
-                    tool_name: String::new(),
-                    command_path: Vec::new(),
-                    args: Vec::new(),
-                    input: empty_tool_input(),
-                    has_stdin: false,
-                },
-                DurableFunctionType::ReadRemote,
-            )
-            .await?;
+            let handle =
+                DurableCallSession::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
+                    accessor,
+                    accessor.getter(),
+                    HostRequestGolemToolInvoke {
+                        tool_name: String::new(),
+                        command_path: Vec::new(),
+                        args: Vec::new(),
+                        input: empty_tool_input(),
+                        has_stdin: false,
+                    },
+                    DurableFunctionType::ReadRemote,
+                )
+                .await?;
             match handle.replay_access(accessor, accessor.getter()).await? {
                 CallReplayOutcome::Replayed(response) => {
                     close_stdin(accessor, stdin).await?;
@@ -1171,7 +1214,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
             } => {
                 close_stdin(accessor, stdin).await?;
                 let handle =
-                    CallHandle::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
+                    DurableCallSession::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
                         accessor,
                         accessor.getter(),
                         *request,
@@ -1194,13 +1237,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
             }
             ToolCallPreparation::Ready(prepared) => prepared,
         };
-        let handle = CallHandle::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
-            accessor,
-            accessor.getter(),
-            prepared.request.clone(),
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let handle =
+            DurableCallSession::<GolemToolRpcAsyncInvokeAndAwait, Cancellable>::start_access(
+                accessor,
+                accessor.getter(),
+                prepared.request.clone(),
+                DurableFunctionType::ReadRemote,
+            )
+            .await?;
         close_stdin(accessor, prepared.stdin).await?;
         let _permit = prepared.permit;
         let result = admit_tool_response_secret_holds(

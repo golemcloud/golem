@@ -1,0 +1,29 @@
+[package]
+name = "all-sdk-features-native"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+golem-rust = { path = "../../../..", default-features = false, features = [
+    "bigdecimal",
+    "bit_vec",
+    "bytes",
+    "chrono",
+    "default",
+    "durability",
+    "export_golem_agentic",
+    "export_golem_agentic_tool_middleware",
+    "export_golem_tool_middleware",
+    "export_load_snapshot",
+    "export_oplog_processor",
+    "export_save_snapshot",
+    "json",
+    "mac_address",
+    "macro",
+    "nonempty_collections",
+    "num_bigint",
+    "rust_decimal",
+    "serde_json_types",
+    "url",
+] }

@@ -34,7 +34,8 @@ use crate::durable_host::blobstore::{
     authorize_targets, classify_blob_store_error, container_target, object_target,
 };
 use crate::durable_host::concurrent::{
-    CallHandle, CallReplayOutcome, NotCancellable, authorize_live_permissions_at_serialized_access,
+    CallReplayOutcome, DurableCallSession, NotCancellable,
+    authorize_live_permissions_at_serialized_access,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::metrics::storage::{
@@ -85,15 +86,16 @@ async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
         None => None,
     };
 
-    let mut handle = CallHandle::<BlobstoreContainerListObject, NotCancellable>::start_access(
-        accessor,
-        accessor.getter(),
-        HostRequestBlobStoreContainer {
-            container: container_name.clone(),
-        },
-        DurableFunctionType::ReadRemote,
-    )
-    .await?;
+    let mut handle =
+        DurableCallSession::<BlobstoreContainerListObject, NotCancellable>::start_access(
+            accessor,
+            accessor.getter(),
+            HostRequestBlobStoreContainer {
+                container: container_name.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
 
     let result = 'resp: {
         if !handle.is_live() {
@@ -183,7 +185,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             None
         };
 
-        let mut handle = CallHandle::<BlobstoreContainerGetData, NotCancellable>::start(
+        let mut handle = DurableCallSession::<BlobstoreContainerGetData, NotCancellable>::start(
             self,
             HostRequestBlobStoreGetData {
                 container: container_name.clone(),
@@ -261,7 +263,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
         data: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let begun = CallHandle::<BlobstoreContainerWriteData, NotCancellable>::begin(
+        let begun = DurableCallSession::<BlobstoreContainerWriteData, NotCancellable>::begin(
             self,
             DurableFunctionType::WriteRemote,
         )
@@ -407,15 +409,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             None
         };
 
-        let mut handle = CallHandle::<BlobstoreContainerDeleteObject, NotCancellable>::start(
-            self,
-            HostRequestBlobStoreContainerAndObject {
-                container: container_name.clone(),
-                object: name.clone(),
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut handle =
+            DurableCallSession::<BlobstoreContainerDeleteObject, NotCancellable>::start(
+                self,
+                HostRequestBlobStoreContainerAndObject {
+                    container: container_name.clone(),
+                    object: name.clone(),
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
         // Unlike the other sites a durability error here is softened into a guest-visible `Error`
         // rather than propagated, so `complete`/`replay` are matched instead of `?`-ed.
@@ -503,15 +506,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         };
         let count = names.len() as u64;
 
-        let mut handle = CallHandle::<BlobstoreContainerDeleteObjects, NotCancellable>::start(
-            self,
-            HostRequestBlobStoreContainerAndObjects {
-                container: container_name.clone(),
-                objects: names.clone(),
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut handle =
+            DurableCallSession::<BlobstoreContainerDeleteObjects, NotCancellable>::start(
+                self,
+                HostRequestBlobStoreContainerAndObjects {
+                    container: container_name.clone(),
+                    objects: names.clone(),
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
         let result = 'resp: {
             if !handle.is_live() {
@@ -585,7 +589,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             None
         };
 
-        let mut handle = CallHandle::<BlobstoreContainerHasObject, NotCancellable>::start(
+        let mut handle = DurableCallSession::<BlobstoreContainerHasObject, NotCancellable>::start(
             self,
             HostRequestBlobStoreContainerAndObject {
                 container: container_name.clone(),
@@ -657,7 +661,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             None
         };
 
-        let mut handle = CallHandle::<BlobstoreContainerObjectInfo, NotCancellable>::start(
+        let mut handle = DurableCallSession::<BlobstoreContainerObjectInfo, NotCancellable>::start(
             self,
             HostRequestBlobStoreContainerAndObject {
                 container: container_name.clone(),
@@ -739,7 +743,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             None
         };
 
-        let mut handle = CallHandle::<BlobstoreContainerClear, NotCancellable>::start(
+        let mut handle = DurableCallSession::<BlobstoreContainerClear, NotCancellable>::start(
             self,
             HostRequestBlobStoreContainer {
                 container: container_name.clone(),

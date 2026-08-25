@@ -126,6 +126,7 @@ sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);
 sequential_suite!(indexed_storage);
 sequential_suite!(oplog_blob_archive);
+sequential_suite!(resource_limits);
 
 #[derive(Debug)]
 pub struct Tracing;

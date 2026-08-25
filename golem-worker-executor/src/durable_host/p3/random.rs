@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::concurrent::{
-    CallHandle, NotCancellable, drain_queued_dropped_call_events,
+    DurableCallSession, NotCancellable, drain_queued_dropped_call_events,
 };
 use crate::durable_host::p3::DurableP3View;
 use crate::workerctx::WorkerCtx;
@@ -34,7 +34,7 @@ impl<Ctx: WorkerCtx> random::Host for DurableP3View<'_, Ctx> {
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3RandomRandomGetRandomBytes, NotCancellable>::start(
+        let handle = DurableCallSession::<P3RandomRandomGetRandomBytes, NotCancellable>::start(
             ctx,
             HostRequestRandomBytes { length: len },
             DurableFunctionType::ReadLocal,
@@ -59,7 +59,7 @@ impl<Ctx: WorkerCtx> random::Host for DurableP3View<'_, Ctx> {
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3RandomRandomGetRandomU64, NotCancellable>::start(
+        let handle = DurableCallSession::<P3RandomRandomGetRandomU64, NotCancellable>::start(
             ctx,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
@@ -86,12 +86,13 @@ impl<Ctx: WorkerCtx> insecure::Host for DurableP3View<'_, Ctx> {
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3RandomInsecureGetInsecureRandomBytes, NotCancellable>::start(
-            ctx,
-            HostRequestRandomBytes { length: len },
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        let handle =
+            DurableCallSession::<P3RandomInsecureGetInsecureRandomBytes, NotCancellable>::start(
+                ctx,
+                HostRequestRandomBytes { length: len },
+                DurableFunctionType::ReadLocal,
+            )
+            .await?;
 
         let result = handle
             .run(ctx, async |ctx| -> wasmtime::Result<_> {
@@ -111,12 +112,13 @@ impl<Ctx: WorkerCtx> insecure::Host for DurableP3View<'_, Ctx> {
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3RandomInsecureGetInsecureRandomU64, NotCancellable>::start(
-            ctx,
-            HostRequestNoInput {},
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        let handle =
+            DurableCallSession::<P3RandomInsecureGetInsecureRandomU64, NotCancellable>::start(
+                ctx,
+                HostRequestNoInput {},
+                DurableFunctionType::ReadLocal,
+            )
+            .await?;
 
         let result = handle
             .run(ctx, async |ctx| -> wasmtime::Result<_> {
@@ -138,12 +140,13 @@ impl<Ctx: WorkerCtx> insecure_seed::Host for DurableP3View<'_, Ctx> {
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3RandomInsecureSeedGetInsecureSeed, NotCancellable>::start(
-            ctx,
-            HostRequestNoInput {},
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        let handle =
+            DurableCallSession::<P3RandomInsecureSeedGetInsecureSeed, NotCancellable>::start(
+                ctx,
+                HostRequestNoInput {},
+                DurableFunctionType::ReadLocal,
+            )
+            .await?;
 
         let result = handle
             .run(ctx, async |ctx| -> wasmtime::Result<_> {

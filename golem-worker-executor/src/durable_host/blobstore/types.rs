@@ -33,7 +33,7 @@ use wasmtime_wasi::IoView;
 
 use crate::durable_host::LiveAuthorizationPermit;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallHandle, CallReplayOutcome, Cancellable,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession,
     resolve_current_observational_owner,
 };
 use crate::durable_host::durability::CustomInvocationContext;
@@ -165,21 +165,21 @@ where
         accessor: &Accessor<T, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> wasmtime::Result<()> {
         let result = async {
-            let mut handle = CallHandle::<
+            let mut handle = DurableCallSession::<
                 P3BlobstoreTypesIncomingValueConsumeAsync,
                 Cancellable,
             >::start_access_with_options(
-                    accessor,
-                    accessor.getter(),
-                    DurableFunctionType::ReadRemote,
-                    AccessClaimOptions {
-                        observational_owner: self.observational_owner,
-                        ..Default::default()
-                    },
-                    async |_| Ok(HostRequestNoInput {}),
-                )
-                .await
-                .map_err(wasmtime::Error::from)?;
+                accessor,
+                accessor.getter(),
+                DurableFunctionType::ReadRemote,
+                AccessClaimOptions {
+                    observational_owner: self.observational_owner,
+                    ..Default::default()
+                },
+                async |_| Ok(HostRequestNoInput {}),
+            )
+            .await
+            .map_err(wasmtime::Error::from)?;
 
             if !handle.is_live() {
                 match handle

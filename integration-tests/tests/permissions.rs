@@ -283,6 +283,7 @@ async fn filesystem_permissions_enforce_recipient_isolation_across_recovery(
         .name(component_name)
         .without_default_host_permissions("FileSystem")
         .try_update_agent_provision_config("FileSystem", |config| {
+            config.initial_permissions.lower_bound.positive.clear();
             for grant in [
                 format!(
                     "env(?agent) @ {} : read : GOLEM_AGENT_ID",

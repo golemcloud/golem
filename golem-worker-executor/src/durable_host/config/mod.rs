@@ -14,7 +14,7 @@
 
 use super::DurableWorkerCtx;
 use crate::durable_host::authorization::targets::{agent_owner, config_segments_target};
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::preview2::wasi::config::store::{Error, Host};
 use crate::workerctx::WorkerCtx;
 use golem_common::base_model::render_config_path;
@@ -57,7 +57,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             false
         };
-        let begun = CallHandle::<WasiConfigGet, NotCancellable>::begin(
+        let begun = DurableCallSession::<WasiConfigGet, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadLocal,
         )
@@ -120,7 +120,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             None
         };
-        let begun = CallHandle::<WasiConfigGetAll, NotCancellable>::begin(
+        let begun = DurableCallSession::<WasiConfigGetAll, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadLocal,
         )

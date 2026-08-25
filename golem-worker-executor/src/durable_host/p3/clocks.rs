@@ -14,7 +14,7 @@
 
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::concurrent::{
-    CallHandle, Cancellable, DeferredCallReplayOutcome, NotCancellable,
+    Cancellable, DeferredCallReplayOutcome, DurableCallSession, NotCancellable,
     drain_queued_dropped_call_events,
 };
 use crate::durable_host::p3::{DurableP3, DurableP3View, run_read_access};
@@ -49,7 +49,7 @@ impl<Ctx: WorkerCtx> system_clock::Host for DurableP3View<'_, Ctx> {
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3SystemClockNow, NotCancellable>::start(
+        let handle = DurableCallSession::<P3SystemClockNow, NotCancellable>::start(
             ctx,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
@@ -76,7 +76,7 @@ impl<Ctx: WorkerCtx> system_clock::Host for DurableP3View<'_, Ctx> {
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3SystemClockGetResolution, NotCancellable>::start(
+        let handle = DurableCallSession::<P3SystemClockGetResolution, NotCancellable>::start(
             ctx,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
@@ -103,7 +103,7 @@ impl<Ctx: WorkerCtx> monotonic_clock::Host for DurableP3View<'_, Ctx> {
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3MonotonicClockNow, NotCancellable>::start(
+        let handle = DurableCallSession::<P3MonotonicClockNow, NotCancellable>::start(
             ctx,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
@@ -128,7 +128,7 @@ impl<Ctx: WorkerCtx> monotonic_clock::Host for DurableP3View<'_, Ctx> {
         drain_queued_dropped_call_events(ctx)
             .await
             .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3MonotonicClockGetResolution, NotCancellable>::start(
+        let handle = DurableCallSession::<P3MonotonicClockGetResolution, NotCancellable>::start(
             ctx,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
@@ -171,7 +171,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         store: &Accessor<U, Self>,
         how_long: types::Duration,
     ) -> wasmtime::Result<()> {
-        let mut handle = CallHandle::<P3MonotonicClockNow, Cancellable>::start_access(
+        let mut handle = DurableCallSession::<P3MonotonicClockNow, Cancellable>::start_access(
             store,
             super::durable_worker_ctx::<Ctx, U>,
             HostRequestNoInput {},
