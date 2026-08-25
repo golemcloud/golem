@@ -4575,7 +4575,7 @@ impl PrivateDurableWorkerState {
                 &self.owned_agent_id.agent_id,
                 self.current_oplog_index().await,
             )
-            .await;
+            .await?;
 
         let schedule_id = self
             .scheduler_service

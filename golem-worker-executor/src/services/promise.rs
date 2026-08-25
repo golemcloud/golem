@@ -135,7 +135,11 @@ impl PromiseHandle {
 #[async_trait]
 pub trait PromiseService: Send + Sync {
     /// poll and complete for a given promise must be called on the same
-    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId;
+    async fn create(
+        &self,
+        agent_id: &AgentId,
+        oplog_idx: OplogIndex,
+    ) -> Result<PromiseId, WorkerExecutorError>;
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError>;
 
@@ -171,7 +175,11 @@ impl LazyPromiseService {
 
 #[async_trait]
 impl PromiseService for LazyPromiseService {
-    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(
+        &self,
+        agent_id: &AgentId,
+        oplog_idx: OplogIndex,
+    ) -> Result<PromiseId, WorkerExecutorError> {
         let lock = self.0.read().await;
         lock.as_ref().unwrap().create(agent_id, oplog_idx).await
     }
@@ -318,7 +326,11 @@ impl DefaultPromiseService {
 
 #[async_trait]
 impl PromiseService for DefaultPromiseService {
-    async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(
+        &self,
+        agent_id: &AgentId,
+        oplog_idx: OplogIndex,
+    ) -> Result<PromiseId, WorkerExecutorError> {
         let promise_id = PromiseId {
             agent_id: agent_id.clone(),
             oplog_idx,
@@ -336,7 +348,11 @@ impl PromiseService for DefaultPromiseService {
                 &RedisPromiseState::Pending,
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in storage: {err}"));
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to set promise {promise_id} in storage: {err}"
+                ))
+            })?;
 
         record_promise_created();
         crate::metrics::promises::inc_promise_pending_count();
@@ -347,7 +363,7 @@ impl PromiseService for DefaultPromiseService {
             reg.get_or_insert(&promise_id);
         };
 
-        promise_id
+        Ok(promise_id)
     }
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
@@ -620,7 +636,11 @@ impl PromiseServiceMock {
 #[cfg(test)]
 #[async_trait]
 impl PromiseService for PromiseServiceMock {
-    async fn create(&self, _agent_id: &AgentId, _oplog_idx: OplogIndex) -> PromiseId {
+    async fn create(
+        &self,
+        _agent_id: &AgentId,
+        _oplog_idx: OplogIndex,
+    ) -> Result<PromiseId, WorkerExecutorError> {
         unimplemented!()
     }
 
@@ -704,7 +724,7 @@ mod tests {
             DefaultPromiseService::new(storage.clone(), Arc::new(NoopPromiseWorkerAccess));
         let service_b = DefaultPromiseService::new(storage, Arc::new(NoopPromiseWorkerAccess));
         let id = promise_id();
-        let id = service_a.create(&id.agent_id, id.oplog_idx).await;
+        let id = service_a.create(&id.agent_id, id.oplog_idx).await.unwrap();
         let handle = service_b.poll(id.clone()).await.unwrap();
 
         assert!(service_a.complete(id.clone(), vec![1]).await.unwrap());

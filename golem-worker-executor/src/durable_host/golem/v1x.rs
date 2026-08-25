@@ -179,7 +179,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .public_state
                 .promise_service
                 .create(&self.owned_agent_id.agent_id, oplog_idx)
-                .await;
+                .await?;
             durability
                 .persist(
                     self,
@@ -1803,7 +1803,11 @@ mod tests {
 
     #[async_trait]
     impl PromiseService for FlakyPromiseService {
-        async fn create(&self, agent_id: &AgentId, oplog_idx: OplogIndex) -> PromiseId {
+        async fn create(
+            &self,
+            agent_id: &AgentId,
+            oplog_idx: OplogIndex,
+        ) -> Result<PromiseId, WorkerExecutorError> {
             self.inner.create(agent_id, oplog_idx).await
         }
 
@@ -1848,7 +1852,8 @@ mod tests {
         let promise_service = Arc::new(FlakyPromiseService::new(1));
         let promise_id = promise_service
             .create(&agent_id(), OplogIndex::from_u64(1))
-            .await;
+            .await
+            .unwrap();
         let entry = GetPromiseResultEntry::new(
             promise_id.clone(),
             promise_service.clone() as Arc<dyn PromiseService>,
@@ -1869,7 +1874,8 @@ mod tests {
         let promise_service = Arc::new(FlakyPromiseService::new(1));
         let promise_id = promise_service
             .create(&agent_id(), OplogIndex::from_u64(1))
-            .await;
+            .await
+            .unwrap();
         let entry = GetPromiseResultEntry::new(
             promise_id.clone(),
             promise_service.clone() as Arc<dyn PromiseService>,
