@@ -75,7 +75,7 @@
 
 use crate::chaos::errors::ErrorClass;
 use crate::chaos::history::{OperationRecord, Outcome, Stream};
-use crate::chaos::split::{FaultWindow, Window, round2, window_secs, window_start};
+use crate::chaos::split::{FaultWindow, Window, round2, window_end, window_secs, window_start};
 use crate::chaos::summary::LatencyStats;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -131,29 +131,68 @@ pub struct StreamThroughputCell {
     /// window. Below the stream's pool size means emitters were stalled across
     /// the whole window rather than merely slowed.
     pub agents_active: usize,
+    /// Operations *offered* in this window, and how they eventually ended up.
+    /// Attributed by submission time, so an operation counted here may not have
+    /// been answered until a later window.
     pub submitted: u64,
     pub confirmed: u64,
     pub rejected: u64,
     pub indeterminate: u64,
+    /// Operations *answered* in this window, whenever they were offered.
+    ///
+    /// This is the one that says whether the platform was serving, and it is
+    /// deliberately not `confirmed`: during an outage the two differ by exactly
+    /// the work that was accepted while the storage was gone and answered only
+    /// once it came back.
+    pub served: u64,
     /// Attempts that hit the client's attempt timeout rather than answering.
     pub attempts_timed_out: u64,
     pub window_secs: f64,
-    pub confirmed_per_sec: f64,
+    pub served_per_sec: f64,
     /// This cell's rate against the same stream's own before-fault rate. `None`
     /// for the before-fault cell itself, and for a stream that never had a
     /// baseline to compare against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_of_baseline_percent: Option<f64>,
-    /// How long into this window the stream waited before offering anything.
+    /// The longest the stream answered nothing at all, anywhere in this window.
     ///
     /// The number that stops a small non-zero during-fault rate being read as
-    /// residual service: an operation submitted just before the heal can confirm
-    /// just after it and still be counted here. `quietMs` next to `windowSecs`
-    /// says whether the stream was serving throughout or answered only at the
-    /// end, and it needs no threshold to do it.
+    /// residual service. Measured against the window's own edges, so a stream
+    /// that fell silent at the start or stayed silent to the end is caught by
+    /// it too. A `quietMs` close to `windowSecs` is a total outage however the
+    /// rate arithmetic came out, and it needs no threshold to say so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quiet_ms: Option<u64>,
     pub latency: LatencyStats,
+}
+
+/// The longest stretch of a window in which nothing was answered.
+///
+/// The window's own edges are the first and last comparison points, which is
+/// what separates "answered steadily but slowly" from "answered nothing for two
+/// minutes and then caught up in a burst". Those two produce the same count and
+/// the same rate; only this tells them apart.
+fn longest_silence_ms(
+    served_at: &[DateTime<Utc>],
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+) -> Option<u64> {
+    let (start, end) = (start?, end?);
+    let mut marks: Vec<DateTime<Utc>> = served_at
+        .iter()
+        .copied()
+        .filter(|at| *at >= start && *at <= end)
+        .collect();
+    marks.sort_unstable();
+    marks.insert(0, start);
+    marks.push(end);
+    Some(
+        marks
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).num_milliseconds().max(0) as u64)
+            .max()
+            .unwrap_or(0),
+    )
 }
 
 /// The operations the outage began underneath.
@@ -247,13 +286,18 @@ pub struct StorageOutageReport {
 #[derive(Default)]
 struct Tally {
     agents: BTreeSet<String>,
-    first_submitted: Option<DateTime<Utc>>,
     submitted: u64,
     confirmed: u64,
     rejected: u64,
     indeterminate: u64,
     attempts_timed_out: u64,
     durations: Vec<u64>,
+    /// When this stream actually answered inside this window, sorted later.
+    ///
+    /// Keyed on the window a confirmation *landed* in rather than the one its
+    /// operation was offered in, which is the only way either of the numbers
+    /// derived from it means what it says.
+    served_at: Vec<DateTime<Utc>>,
 }
 
 impl StorageOutageReport {
@@ -280,10 +324,6 @@ impl StorageOutageReport {
             let tally = tallies.entry((record.stream, window)).or_default();
 
             tally.agents.insert(record.agent.clone());
-            tally.first_submitted = Some(match tally.first_submitted {
-                Some(at) if at <= record.submitted_at => at,
-                _ => record.submitted_at,
-            });
             tally.submitted += 1;
             match record.outcome {
                 Outcome::Confirmed => {
@@ -294,6 +334,21 @@ impl StorageOutageReport {
                 Outcome::Indeterminate => tally.indeterminate += 1,
             }
             tally.attempts_timed_out += record.attempts_timed_out();
+
+            // Answered work is filed under the window it was answered in, which
+            // is usually but not always the one it was offered in. An operation
+            // offered during the outage and answered after the heal is service
+            // the fault window did not get, and counting it there is how a total
+            // outage reads as partial service.
+            if record.outcome == Outcome::Confirmed
+                && let Some(completed) = record.completed_at
+            {
+                tallies
+                    .entry((record.stream, Window::of(completed, fault)))
+                    .or_default()
+                    .served_at
+                    .push(completed);
+            }
 
             first_submitted = Some(match first_submitted {
                 Some(at) if at <= record.submitted_at => at,
@@ -314,28 +369,32 @@ impl StorageOutageReport {
         let mut cells: Vec<StreamThroughputCell> = Vec::new();
         for ((stream, window), tally) in &tallies {
             let secs = window_secs(*window, fault, first_submitted, last_completed);
+            let served = tally.served_at.len() as u64;
             let rate = if secs > 0.0 {
-                tally.confirmed as f64 / secs
+                served as f64 / secs
             } else {
                 0.0
             };
             if *window == Window::BeforeFault {
                 baseline_rate.insert(*stream, rate);
             }
-            let quiet_ms = window_start(*window, fault, first_submitted)
-                .zip(tally.first_submitted)
-                .map(|(start, first)| (first - start).num_milliseconds().max(0) as u64);
+            let quiet_ms = longest_silence_ms(
+                &tally.served_at,
+                window_start(*window, fault, first_submitted),
+                window_end(*window, fault, last_completed),
+            );
             cells.push(StreamThroughputCell {
                 stream: *stream,
                 window: *window,
                 agents_active: tally.agents.len(),
                 submitted: tally.submitted,
                 confirmed: tally.confirmed,
+                served,
                 rejected: tally.rejected,
                 indeterminate: tally.indeterminate,
                 attempts_timed_out: tally.attempts_timed_out,
                 window_secs: round2(secs),
-                confirmed_per_sec: round2(rate),
+                served_per_sec: round2(rate),
                 share_of_baseline_percent: None,
                 quiet_ms,
                 latency: LatencyStats::from_durations(tally.durations.clone()),
@@ -349,8 +408,7 @@ impl StorageOutageReport {
             if let Some(base) = baseline_rate.get(&cell.stream).copied()
                 && base > 0.0
             {
-                cell.share_of_baseline_percent =
-                    Some(round2(cell.confirmed_per_sec / base * 100.0));
+                cell.share_of_baseline_percent = Some(round2(cell.served_per_sec / base * 100.0));
             }
         }
         cells.sort_by_key(|c| (c.stream, c.window));
@@ -386,15 +444,15 @@ impl StorageOutageReport {
             return;
         }
         let total = |window: Window| -> f64 {
-            let confirmed: u64 = self
+            let served: u64 = self
                 .cells
                 .iter()
                 .filter(|c| c.window == window)
-                .map(|c| c.confirmed)
+                .map(|c| c.served)
                 .sum();
             let secs = window_secs(window, fault, first_submitted, last_completed);
             if secs > 0.0 {
-                confirmed as f64 / secs
+                served as f64 / secs
             } else {
                 0.0
             }
@@ -915,13 +973,71 @@ mod tests {
     #[test]
     fn the_during_fault_cell_says_how_long_the_stream_stayed_quiet() {
         let mut records = history(0, true);
-        // One confirmation, 170s into the 180s outage.
+        // One confirmation, answered 170s into the 180s outage.
         records.push(op(Stream::Durable, 170, Outcome::Confirmed));
         let report = build(&records);
 
         let during = report.cell(Stream::Durable, Window::DuringFault).unwrap();
-        assert_eq!(during.confirmed, 1);
-        assert_eq!(during.quiet_ms, Some(170_000));
+        assert_eq!(during.served, 1);
+        // Silent from the cut until that one answer, which is nearly the whole
+        // window — not the 10s that remained after it.
+        assert_eq!(during.quiet_ms, Some(170_020));
+    }
+
+    /// A stream answering steadily right through the window is the shape the
+    /// quiet number has to be able to tell apart from the one above. Both have
+    /// a non-zero during-fault count; only the silence separates them.
+    #[test]
+    fn a_stream_answering_throughout_the_window_is_never_quiet_for_long() {
+        let report = build(&history(180, true));
+
+        let during = report.cell(Stream::Durable, Window::DuringFault).unwrap();
+        assert_eq!(during.served, 180);
+        assert!(
+            during.quiet_ms.is_some_and(|ms| ms < 2_000),
+            "a stream answering once a second should show no real silence, got {:?}",
+            during.quiet_ms
+        );
+    }
+
+    /// The regression the first S16 run turned up.
+    ///
+    /// The workload keeps offering work all through the outage, so anything
+    /// derived from submission times is busy no matter what the platform is
+    /// doing. Every one of these operations is offered during the fault and
+    /// answered only after the heal: the fault window served nothing, and the
+    /// report has to say so rather than crediting the window with work it did
+    /// not do.
+    #[test]
+    fn work_offered_during_the_outage_and_answered_after_it_is_not_during_fault_service() {
+        let mut records = history(0, true);
+        for second in 0..120 {
+            let mut record = op(Stream::Durable, second, Outcome::Confirmed);
+            // Offered inside the outage, answered once the storage returned.
+            record.completed_at = Some(t0() + TimeDelta::seconds(181));
+            record.duration_ms = (181 - second) as u64 * 1_000;
+            records.push(record);
+        }
+        let report = build(&records);
+
+        let during = report.cell(Stream::Durable, Window::DuringFault).unwrap();
+        assert_eq!(during.submitted, 120, "they were offered during the fault");
+        assert_eq!(during.confirmed, 120, "and they did all eventually confirm");
+        assert_eq!(
+            during.served, 0,
+            "but none of it was served during the fault"
+        );
+        assert_eq!(during.served_per_sec, 0.0);
+        assert_eq!(
+            during.quiet_ms,
+            Some(180_000),
+            "silent for the whole window"
+        );
+        assert!(
+            report.findings.is_empty(),
+            "a total outage must not be reported as one that never landed, got {:?}",
+            report.findings
+        );
     }
 
     /// The operations at risk. They were submitted before the cut and are

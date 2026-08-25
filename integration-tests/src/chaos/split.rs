@@ -139,6 +139,26 @@ pub fn window_start(
     }
 }
 
+/// When a window closed.
+///
+/// The mirror of [`window_start`], and needed wherever a gap has to be measured
+/// against the window's own edges rather than against the first and last thing
+/// that happened inside it: a stream that went silent for the whole back half
+/// of a window has no later timestamp to compare against, so the edge is the
+/// only thing that can show it.
+pub fn window_end(
+    window: Window,
+    fault: Option<FaultWindow>,
+    last_completed: Option<DateTime<Utc>>,
+) -> Option<DateTime<Utc>> {
+    match (window, fault) {
+        (Window::BeforeFault, Some(w)) => Some(w.injected_at),
+        (Window::DuringFault, Some(w)) => w.recovered_at.or(last_completed),
+        (Window::AfterFault, Some(_)) => last_completed,
+        _ => None,
+    }
+}
+
 /// How long a window lasted, in seconds.
 ///
 /// The fault's own windows come from the workflow's timestamps, which is what

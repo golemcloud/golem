@@ -175,7 +175,11 @@ scenarios:
       # executors that stay connected keep getting told the truth, and the
       # disagreement between the two groups is the whole experiment.
       targetCount: 1
-      durationSecs: 120
+      # Must equal phases.faultSecs; see the note on S16. The joiner partition
+      # this scenario applies mid-fault is already sized from faultSecs, so a
+      # shorter value here also made the two partitions lapse at different
+      # times.
+      durationSecs: 180
 
     phases:
       baselineSecs: 300
@@ -883,7 +887,13 @@ scenarios:
       # outage that only some executors could see would be a routing fault
       # wearing a database's clothes, and S3 already covers that shape.
       mode: all
-      durationSecs: 120
+      # Must equal phases.faultSecs. Chaos Mesh recovers a NetworkChaos on its
+      # own `duration`, while the workflow holds the phase for faultSecs and
+      # only then deletes the object. Setting this lower lifts the partition
+      # early and leaves the tail of the fault phase measuring a healed
+      # cluster, which is how the first S16 run came to report 16.87% of
+      # baseline throughput during a total outage.
+      durationSecs: 180
 
     phases:
       # Long enough for cold starts, component loading and route warm-up to

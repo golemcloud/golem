@@ -1084,6 +1084,34 @@ mod tests {
         );
     }
 
+    /// A `pod-kill` is instantaneous and its `duration` only governs how long
+    /// the object lingers, so those two numbers are free to differ. A
+    /// `network-partition` is not: Chaos Mesh takes the iptables rules down on
+    /// the object's own `duration`, while the workflow holds the phase for
+    /// `faultSecs` and only then deletes it. A shorter `durationSecs` therefore
+    /// heals the cluster part-way through the window the driver is still
+    /// attributing to the fault, and every during-fault number is measured
+    /// across a mix of the two states.
+    #[test]
+    fn a_partition_lasts_at_least_as_long_as_the_fault_phase_it_is_measured_over() {
+        let suite = ChaosSuite::load(suite_path()).unwrap();
+        for entry in &suite.scenarios {
+            if entry.fault.kind != "network-partition" {
+                continue;
+            }
+            assert!(
+                entry.fault.duration_secs >= entry.phases.fault_secs,
+                "{}: fault.durationSecs ({}) is shorter than phases.faultSecs ({}), \
+                 so the partition lifts {}s before the fault phase ends and the rest \
+                 of that phase measures a healed cluster",
+                entry.code,
+                entry.fault.duration_secs,
+                entry.phases.fault_secs,
+                entry.phases.fault_secs - entry.fault.duration_secs,
+            );
+        }
+    }
+
     #[test]
     fn every_suite_entry_resolves_to_an_implemented_scenario() {
         let suite = ChaosSuite::load(suite_path()).unwrap();
