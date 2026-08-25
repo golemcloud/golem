@@ -54,18 +54,37 @@ use golem_common::model::tool::{RegisteredTool, ToolName, ToolSource};
 use golem_common::schema::render::cli_text::value_to_cli_text_unredacted;
 use golem_common::schema::tool::DiscoveredTool;
 use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
-use golem_common::schema::tool::wit::wire::Tool as WitTool;
+use golem_common::schema::tool::wit::wire::{
+    Host as HostToolCommon, HostUnderlyingTool, HostUnderlyingToolWithStore, Tool as WitTool,
+    ToolError, UnderlyingTool,
+};
 use golem_common::schema::tool::{FlagShape, OptionShape, OptionSpec, Repetition, Tool};
 use golem_common::schema::wit::{decode_graph, decode_value_with, encode_graph, encode_value_with};
 use golem_common::schema::{
     SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue as ModelTypedSchemaValue,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::marker::PhantomData;
 use std::sync::Arc;
-use wasmtime::component::{Accessor, HasSelf, Resource, StreamReader};
+use wasmtime::component::{Accessor, HasData, HasSelf, Linker, Resource, StreamReader};
 
 const NOT_IMPLEMENTED: &str =
     "golem:tool/host tool invocation requires the sidecar invocation backend";
+const UNDERLYING_TOOL_NOT_BOUND: &str =
+    "golem:tool/common underlying-tool is not bound to a middleware chain";
+
+struct ToolCommonHost<Ctx: WorkerCtx>(PhantomData<fn() -> Ctx>);
+
+impl<Ctx: WorkerCtx> HasData for ToolCommonHost<Ctx> {
+    type Data<'a> = &'a mut DurableWorkerCtx<Ctx>;
+}
+
+pub fn add_common_to_linker<Ctx: WorkerCtx>(
+    linker: &mut Linker<Ctx>,
+    get: fn(&mut Ctx) -> &mut DurableWorkerCtx<Ctx>,
+) -> wasmtime::Result<()> {
+    golem_common::schema::tool::wit::wire::add_to_linker::<_, ToolCommonHost<Ctx>>(linker, get)
+}
 
 /// Host-side resource table entry backing the `golem:tool/host.tool-rpc`
 /// resource.
@@ -860,6 +879,27 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .as_ref()
             .map(|tool| WitRegisteredTool::try_from(tool.as_ref()))
             .transpose()
+    }
+}
+
+impl<Ctx: WorkerCtx> HostUnderlyingTool for DurableWorkerCtx<Ctx> {
+    async fn drop(&mut self, rep: Resource<UnderlyingTool>) -> anyhow::Result<()> {
+        let _ = self.table().delete(rep);
+        Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> HostToolCommon for DurableWorkerCtx<Ctx> {}
+
+impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolCommonHost<Ctx> {
+    async fn invoke(
+        _accessor: &Accessor<U, Self>,
+        _self_: Resource<UnderlyingTool>,
+        _command_path: Vec<String>,
+        _input: TypedSchemaValue,
+        _stdin: Option<StreamReader<u8>>,
+    ) -> anyhow::Result<Result<InvocationResult, ToolError>> {
+        Err(anyhow!(UNDERLYING_TOOL_NOT_BOUND))
     }
 }
 

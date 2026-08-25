@@ -528,6 +528,8 @@ jobs:
         run: cargo make wit
       - name: Build golem-schema in guest mode
         run: cargo build --target wasm32-wasip2 -p golem-schema --no-default-features --features guest
+      - name: Test owned typed values in guest mode
+        run: cargo test -p golem-schema --no-default-features --features guest --test owned_typed_wit -- --nocapture --report-time
 
   golem-client:
     runs-on: blacksmith
@@ -651,6 +653,9 @@ jobs:
           rust-targets: 'wasm32-wasip2'
           cache-prefix-key: 'v2-golem-rust'
           install-cargo-make: 'false'
+          install-cargo-binstall: 'true'
+      - name: Install wasm-tools
+        run: cargo binstall --force --locked wasm-tools@1.248.0
       - name: Check formatting
         run: cargo fmt -- --check
         working-directory: sdks/rust

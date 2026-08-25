@@ -114,6 +114,15 @@ pub trait WorkerCtx:
     /// instead of re-executing.
     const ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS: bool = true;
 
+    /// Wraps a worker's oplog before it is shared with the worker internals and its context.
+    fn wrap_oplog(
+        _owned_agent_id: OwnedAgentId,
+        oplog: Arc<dyn Oplog>,
+        _extra_deps: Self::ExtraDeps,
+    ) -> Arc<dyn Oplog> {
+        oplog
+    }
+
     /// Creates a new worker context
     ///
     /// Arguments:

@@ -65,7 +65,39 @@ mod tests {
 
     #[tool_definition]
     trait PrincipalAutoInjectedRoundTrip {
-        fn whoami(&self, principal: golem_rust::agentic::Principal, name: String) -> String;
+        fn whoami(&self, principal: golem_rust::tool::Principal, name: String) -> String;
+    }
+
+    #[tool_definition]
+    trait GeneratedNameCollisionTool {
+        fn echo(
+            &self,
+            underlying: String,
+            __param_values: String,
+            __value: String,
+            __command_path: String,
+            __descriptor: String,
+            __command_index: String,
+            __model: String,
+            __input: String,
+            __result: String,
+        ) -> String;
+    }
+
+    #[tool_definition]
+    trait GeneratedRawNameCollisionTool {
+        fn echo(
+            &self,
+            r#underlying: String,
+            r#__param_values: String,
+            r#__value: String,
+            r#__command_path: String,
+            r#__descriptor: String,
+            r#__command_index: String,
+            r#__model: String,
+            r#__input: String,
+            r#__result: String,
+        ) -> String;
     }
 
     #[test]
@@ -158,6 +190,121 @@ mod tests {
         ) -> Result<Vec<String>, GrepError> {
             Ok(vec![])
         }
+    }
+
+    struct GrepMiddlewareShape;
+
+    impl GrepMiddleware for GrepMiddlewareShape {
+        async fn grep(
+            &self,
+            underlying: &mut GrepUnderlying,
+            case_sensitive: bool,
+            pattern: String,
+            files: Vec<String>,
+        ) -> Result<Vec<String>, golem_rust::tool::ToolInvokeError<GrepError>> {
+            underlying.grep(case_sensitive, pattern, files).await
+        }
+
+        fn __golem_tool_middleware_annotation() {}
+    }
+
+    struct GrepAdapterShape;
+
+    impl GrepMiddleware<RemoteUnderlying> for GrepAdapterShape {
+        async fn grep(
+            &self,
+            _underlying: &mut RemoteUnderlying,
+            _case_sensitive: bool,
+            _pattern: String,
+            _files: Vec<String>,
+        ) -> Result<Vec<String>, golem_rust::tool::ToolInvokeError<GrepError>> {
+            unimplemented!()
+        }
+
+        fn __golem_tool_middleware_annotation() {}
+    }
+
+    struct PrincipalMiddlewareShape;
+
+    impl PrincipalAutoInjectedRoundTripMiddleware for PrincipalMiddlewareShape {
+        async fn whoami(
+            &self,
+            underlying: &mut PrincipalAutoInjectedRoundTripUnderlying,
+            _principal: golem_rust::tool::Principal,
+            name: String,
+        ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
+            underlying.whoami(name).await
+        }
+
+        fn __golem_tool_middleware_annotation() {}
+    }
+
+    struct GeneratedNameCollisionMiddlewareShape;
+
+    impl GeneratedNameCollisionToolMiddleware for GeneratedNameCollisionMiddlewareShape {
+        async fn echo(
+            &self,
+            proxied: &mut GeneratedNameCollisionToolUnderlying,
+            underlying: String,
+            __param_values: String,
+            __value: String,
+            __command_path: String,
+            __descriptor: String,
+            __command_index: String,
+            __model: String,
+            __input: String,
+            __result: String,
+        ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
+            proxied
+                .echo(
+                    underlying,
+                    __param_values,
+                    __value,
+                    __command_path,
+                    __descriptor,
+                    __command_index,
+                    __model,
+                    __input,
+                    __result,
+                )
+                .await
+        }
+
+        fn __golem_tool_middleware_annotation() {}
+    }
+
+    struct GeneratedRawNameCollisionMiddlewareShape;
+
+    impl GeneratedRawNameCollisionToolMiddleware for GeneratedRawNameCollisionMiddlewareShape {
+        async fn echo(
+            &self,
+            proxied: &mut GeneratedRawNameCollisionToolUnderlying,
+            r#underlying: String,
+            r#__param_values: String,
+            r#__value: String,
+            r#__command_path: String,
+            r#__descriptor: String,
+            r#__command_index: String,
+            r#__model: String,
+            r#__input: String,
+            r#__result: String,
+        ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
+            proxied
+                .echo(
+                    r#underlying,
+                    r#__param_values,
+                    r#__value,
+                    r#__command_path,
+                    r#__descriptor,
+                    r#__command_index,
+                    r#__model,
+                    r#__input,
+                    r#__result,
+                )
+                .await
+        }
+
+        fn __golem_tool_middleware_annotation() {}
     }
 
     fn descriptor<T: Grep>() -> ExtendedToolType {
@@ -464,6 +611,208 @@ mod tests {
     trait Outer {
         #[command(subtree = Mid)]
         fn mid(&self, verbose: bool) -> MidSubtree;
+    }
+
+    struct GitMiddlewareShape;
+
+    impl GitMiddleware for GitMiddlewareShape {
+        async fn commit(
+            &self,
+            underlying: &mut GitUnderlying,
+            message: String,
+            config: BTreeMap<String, String>,
+        ) -> Result<(), golem_rust::tool::ToolInvokeError<CommitError>> {
+            underlying.commit(message, config).await
+        }
+
+        async fn remote__add(
+            &self,
+            underlying: &mut GitUnderlying,
+            verbose: bool,
+            name: String,
+            url: String,
+        ) -> Result<(), golem_rust::tool::ToolInvokeError<RemoteError>> {
+            underlying.remote__add(verbose, name, url).await
+        }
+
+        async fn remote__remove(
+            &self,
+            underlying: &mut GitUnderlying,
+            verbose: bool,
+            name: String,
+        ) -> Result<(), golem_rust::tool::ToolInvokeError<RemoteError>> {
+            underlying.remote__remove(verbose, name).await
+        }
+
+        fn __golem_tool_middleware_annotation() {}
+    }
+
+    struct OuterMiddlewareShape;
+
+    impl OuterMiddleware for OuterMiddlewareShape {
+        async fn mid__inner__leaf(
+            &self,
+            underlying: &mut OuterUnderlying,
+            verbose: bool,
+            name: String,
+        ) -> Result<(), golem_rust::tool::ToolInvokeError<RemoteError>> {
+            underlying.mid__inner__leaf(verbose, name).await
+        }
+
+        fn __golem_tool_middleware_annotation() {}
+    }
+
+    #[tool_definition]
+    trait MiddlewareStreamSurface {
+        fn copy(
+            &self,
+            input: golem_rust::agentic::InputStream,
+            output: golem_rust::agentic::OutputStream,
+        ) -> Result<String, RemoteError>;
+    }
+
+    struct MiddlewareStreamShape;
+
+    impl MiddlewareStreamSurfaceMiddleware for MiddlewareStreamShape {
+        async fn copy(
+            &self,
+            underlying: &mut MiddlewareStreamSurfaceUnderlying,
+            input: golem_rust::tool::InputStream,
+        ) -> Result<
+            (String, golem_rust::tool::InputStream),
+            golem_rust::tool::ToolInvokeError<RemoteError>,
+        > {
+            underlying.copy(input).await
+        }
+
+        fn __golem_tool_middleware_annotation() {}
+    }
+
+    #[test]
+    fn generated_middleware_surfaces_expose_native_descriptors() {
+        let underlying =
+            <GrepUnderlying as golem_rust::tool::ToolUnderlying>::__golem_tool_descriptor();
+        let presented =
+            <GrepMiddlewareShape as GrepMiddleware>::__golem_presented_tool_descriptor();
+
+        assert_eq!(underlying, presented);
+        assert_eq!(underlying.name(), Some("grep"));
+        assert_eq!(underlying.version, "1.2.3");
+    }
+
+    #[test]
+    fn bug_finder_monomorphic_middleware_authoring_macro_compiles() {
+        let output = cargo_check_tool_crate(
+            "monomorphic-middleware-authoring-compiles",
+            r#"
+use golem_rust::{tool_definition, tool_middleware};
+
+#[tool_definition]
+trait Echo {
+    fn echo(&self, value: String) -> String;
+}
+
+struct Policy;
+
+impl Policy {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[tool_middleware(name = "policy", constructor = Policy::new)]
+impl EchoMiddleware for Policy {
+    async fn echo(
+        &self,
+        underlying: &mut EchoUnderlying,
+        value: String,
+    ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
+        underlying.echo(value).await
+    }
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a valid monomorphic middleware must compile:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn bug_finder_universal_middleware_authoring_macro_compiles() {
+        let output = cargo_check_tool_crate(
+            "universal-middleware-authoring-compiles",
+            r#"
+use golem_rust::{universal_tool_middleware, TypedSchemaValue};
+use golem_rust::tool::{
+    InputStream, InvocationResult, Principal, Tool, ToolInvokeError, UnderlyingTool,
+};
+
+#[universal_tool_middleware(name = "audit")]
+async fn audit(
+    _tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    _principal: Principal,
+    mut underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+    underlying.invoke(command_path, input, stdin).await
+}
+"#,
+        );
+
+        assert!(
+            output.status.success(),
+            "a valid universal middleware must compile:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn pure_middleware_feature_compiles_generated_definition_and_authoring_surfaces() {
+        let output = cargo_tool_crate_with_dependency(
+            "pure-middleware-generated-surfaces",
+            "pure-middleware-generated-surfaces",
+            r#"
+use golem_rust::{tool_definition, tool_middleware};
+
+#[tool_definition]
+trait Echo {
+    fn echo(&self, value: String) -> String;
+}
+
+struct Policy;
+
+impl Policy {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[tool_middleware(name = "pure-policy", constructor = Policy::new)]
+impl EchoMiddleware for Policy {
+    async fn echo(
+        &self,
+        underlying: &mut EchoUnderlying,
+        value: String,
+    ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
+        underlying.echo(value).await
+    }
+}
+"#,
+            "check",
+            "golem-rust = { path = PATH, features = [\"export_golem_tool_middleware\"] }",
+        );
+
+        assert!(
+            output.status.success(),
+            "the pure middleware feature must compile generated descriptors, clients, proxies, and authoring adapters:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -905,6 +1254,45 @@ mod tests {
         let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
         let value = String::from_value(result.value()).expect("result schema matches String");
         assert_eq!(value, "default:alice");
+    }
+
+    #[tool_definition]
+    trait StatefulInstanceRoundTrip {
+        fn stateful_instance_round_trip(&self, suffix: String) -> String;
+    }
+
+    struct StatefulInstanceRoundTripImpl {
+        prefix: String,
+    }
+
+    #[tool_implementation]
+    impl StatefulInstanceRoundTrip for StatefulInstanceRoundTripImpl {
+        fn stateful_instance_round_trip(&self, suffix: String) -> String {
+            format!("{}:{suffix}", self.prefix)
+        }
+    }
+
+    #[test]
+    async fn generated_instance_invoker_dispatches_on_borrowed_state() {
+        let tool =
+            <StatefulInstanceRoundTripImpl as StatefulInstanceRoundTrip>::__tool_descriptor();
+        let input = encoded_input(
+            &tool,
+            &[],
+            vec![golem_rust::SchemaValue::String("value".to_string())],
+        );
+        let instance = StatefulInstanceRoundTripImpl {
+            prefix: "state".to_string(),
+        };
+
+        let result = instance
+            .__tool_invoke_on(vec![], input, None, anonymous_principal())
+            .await
+            .expect("instance invocation succeeds");
+        let result = result.result.expect("plain return is encoded as a result");
+        let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
+        let value = String::from_value(result.value()).expect("result schema matches String");
+        assert_eq!(value, "state:value");
     }
 
     #[test]
@@ -2023,7 +2411,7 @@ fn check_standalone_child_keeps_full_signature() {
 
     #[test]
     fn client_duplicate_canonical_name_preserves_last_staged_value() {
-        let output = cargo_test_tool_crate_with_renamed_sdk(
+        let output = cargo_test_tool_crate_with_fake_sdk(
             "client-duplicate-canonical-name-last-wins",
             r#"
 use std::cell::RefCell;
@@ -2064,8 +2452,18 @@ mod golem_rust {
     pub mod agentic {
         pub use golem_rust_actual::agentic::*;
 
+        pub mod ambient_tool_rpc {
+            pub struct AmbientToolRpc;
+
+            impl AmbientToolRpc {
+                pub fn new(_name: &str) -> Self {
+                    Self
+                }
+            }
+        }
+
         pub async fn invoke_and_await_infallible(
-            _rpc: &crate::golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            _rpc: &ambient_tool_rpc::AmbientToolRpc,
             _command_path: &[String],
             input: &crate::golem_rust::TypedSchemaValue,
             _stdin: Option<crate::golem_rust::agentic::InputStream>,
@@ -2084,7 +2482,7 @@ mod golem_rust {
     }
 }
 
-use golem_rust::tool_definition;
+pub use golem_rust::*;
 
 #[tool_definition]
 trait MultiAliasClientInput {
@@ -2143,7 +2541,7 @@ fn duplicate_canonical_param_uses_last_staged_value() {
 
     #[test]
     fn client_duplicate_canonical_name_preserves_last_staged_value_after_prior_removal() {
-        let output = cargo_test_tool_crate_with_renamed_sdk(
+        let output = cargo_test_tool_crate_with_fake_sdk(
             "client-duplicate-canonical-name-last-wins-after-prior-removal",
             r#"
 use std::cell::RefCell;
@@ -2184,8 +2582,18 @@ mod golem_rust {
     pub mod agentic {
         pub use golem_rust_actual::agentic::*;
 
+        pub mod ambient_tool_rpc {
+            pub struct AmbientToolRpc;
+
+            impl AmbientToolRpc {
+                pub fn new(_name: &str) -> Self {
+                    Self
+                }
+            }
+        }
+
         pub async fn invoke_and_await_infallible(
-            _rpc: &crate::golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            _rpc: &ambient_tool_rpc::AmbientToolRpc,
             _command_path: &[String],
             input: &crate::golem_rust::TypedSchemaValue,
             _stdin: Option<crate::golem_rust::agentic::InputStream>,
@@ -2204,7 +2612,7 @@ mod golem_rust {
     }
 }
 
-use golem_rust::tool_definition;
+pub use golem_rust::*;
 
 #[tool_definition]
 trait SwapRemoveLastWins {
@@ -7066,9 +7474,10 @@ impl BadTool for BadToolImpl {
         cargo_tool_crate(name, source, "test")
     }
 
-    fn cargo_test_tool_crate_with_renamed_sdk(name: &str, source: &str) -> std::process::Output {
+    fn cargo_test_tool_crate_with_fake_sdk(name: &str, source: &str) -> std::process::Output {
         cargo_tool_crate_with_dependency(
             name,
+            "golem-rust",
             source,
             "test",
             "golem-rust-actual = { package = \"golem-rust\", path = PATH, features = [\"export_golem_agentic\"] }",
@@ -7078,6 +7487,7 @@ impl BadTool for BadToolImpl {
     fn cargo_tool_crate(name: &str, source: &str, command: &str) -> std::process::Output {
         cargo_tool_crate_with_dependency(
             name,
+            name,
             source,
             command,
             "golem-rust = { path = PATH, features = [\"export_golem_agentic\"] }",
@@ -7086,10 +7496,16 @@ impl BadTool for BadToolImpl {
 
     fn cargo_tool_crate_with_dependency(
         name: &str,
+        package_name: &str,
         source: &str,
         command: &str,
         dependency_template: &str,
     ) -> std::process::Output {
+        let package_version = if package_name == "golem-rust" {
+            "0.0.1"
+        } else {
+            "0.0.0"
+        };
         let root = std::env::temp_dir().join(format!(
             "golem-rust-tool-{name}-{}-{}",
             std::process::id(),
@@ -7107,8 +7523,8 @@ impl BadTool for BadToolImpl {
             format!(
                 r#"
 [package]
-name = "{name}"
-version = "0.0.0"
+name = "{package_name}"
+version = "{package_version}"
 edition = "2024"
 
 [dependencies]
