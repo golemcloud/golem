@@ -176,15 +176,15 @@ pub(super) enum HttpBodyDemand {
 pub(super) enum HttpBodyChunkReply {
     /// One non-empty body frame, already persisted to the oplog as a `Data`
     /// child chunk before being handed back for delivery to the guest.
-    Data(Bytes),
+    Data {
+        bytes: Bytes,
+        delivery: HttpBodyChunkDelivery,
+    },
     /// The body stream reached its terminal (clean EOF, trailers, or a body
-    /// error); there are no more bytes to deliver. The producer signals `ack`
-    /// immediately before it reports EOF to the guest, so the durable task only
-    /// resolves trailers (and finalizes the parent marker) once the terminal has
-    /// actually been observed by the guest-facing stream.
-    End { ack: oneshot::Sender<()> },
+    /// error); there are no more bytes to deliver.
+    End { delivery: HttpBodyChunkDelivery },
     /// The guest cancelled this pending body read before upstream bytes arrived.
-    Cancelled,
+    Cancelled { delivery: HttpBodyChunkDelivery },
     /// A durable failure occurred while persisting/replaying the body; the guest
     /// stream traps with this message, tagged with the failing call scope's trap
     /// context so post-trap retry grouping stays owned by that call.
@@ -192,6 +192,52 @@ pub(super) enum HttpBodyChunkReply {
         message: String,
         trap_context: DurableCallTrapContext,
     },
+}
+
+/// Settles a persisted chunk completion at the producer's observation boundary rather than when
+/// the background task merely queues the reply. The latter is too early: another concurrent guest
+/// future can win and drop the producer before it consumes the queued reply, making replay observe
+/// a different cancellation order.
+pub(super) struct HttpBodyChunkDelivery {
+    delivery: Option<CompletionDelivery>,
+    observed: Option<oneshot::Sender<()>>,
+}
+
+impl HttpBodyChunkDelivery {
+    fn new(delivery: CompletionDelivery) -> (Self, oneshot::Receiver<()>) {
+        let (observed, observation) = oneshot::channel();
+        (
+            Self {
+                delivery: Some(delivery),
+                observed: Some(observed),
+            },
+            observation,
+        )
+    }
+
+    fn observed(mut self) {
+        self.delivery
+            .take()
+            .expect("body chunk delivery is settled exactly once")
+            .delivered();
+        let _ = self
+            .observed
+            .take()
+            .expect("body chunk observation is sent exactly once")
+            .send(());
+    }
+}
+
+impl Drop for HttpBodyChunkDelivery {
+    fn drop(&mut self) {
+        if let Some(delivery) = self.delivery.take() {
+            // The stream producer is an internal runtime bridge, not the externally observable
+            // parent completion. A competing guest future may cancel this bridge after replay has
+            // reached a marker that the live producer observed; acknowledge that marker and let
+            // the parent trailers disposition verify the guest-visible outcome.
+            delivery.settle_abandoned_internal_transfer();
+        }
+    }
 }
 
 /// Resolution delivered to the guest-facing trailers future once the body closes
@@ -411,7 +457,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                         // the remote peer producing more body bytes.
                         return Poll::Pending;
                     }
-                    Poll::Ready(Ok(HttpBodyChunkReply::Data(bytes))) => {
+                    Poll::Ready(Ok(HttpBodyChunkReply::Data { bytes, delivery })) => {
                         self.pending = None;
                         if bytes.is_empty() {
                             continue;
@@ -420,17 +466,14 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                         // across as many guest reads as needed and only calls
                         // us again once it is drained.
                         dst.set_buffer(bytes);
+                        delivery.observed();
                         return Poll::Ready(Ok(StreamResult::Completed));
                     }
-                    Poll::Ready(Ok(HttpBodyChunkReply::End { ack })) => {
+                    Poll::Ready(Ok(HttpBodyChunkReply::End { delivery })) => {
                         let cancelling = pending.cancelling;
                         let cancel_ack = pending.cancel_ack.take();
                         self.pending = None;
-                        // Acknowledge the terminal *before* reporting EOF so the
-                        // task only resolves trailers after this stream observes
-                        // the terminal. A dropped `ack` receiver just means the
-                        // task is already gone, which is harmless here.
-                        let _ = ack.send(());
+                        delivery.observed();
                         if cancelling {
                             if let Some(cancel_ack) = cancel_ack {
                                 self.pending_cancel = Some(cancel_ack);
@@ -443,9 +486,10 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                             return Poll::Ready(Ok(StreamResult::Dropped));
                         }
                     }
-                    Poll::Ready(Ok(HttpBodyChunkReply::Cancelled)) => {
+                    Poll::Ready(Ok(HttpBodyChunkReply::Cancelled { delivery })) => {
                         let cancel_ack = pending.cancel_ack.take();
                         self.pending = None;
+                        delivery.observed();
                         if let Some(cancel_ack) = cancel_ack {
                             self.pending_cancel = Some(cancel_ack);
                             continue;
@@ -708,12 +752,12 @@ pub(super) enum ProducedChunk {
 
 /// Outcome of [`transfer_data_chunk`]: whether the persisted `Data` chunk reached the guest.
 enum DataChunkTransfer {
-    /// The chunk was sent to the guest and counted into `delivered_bytes`.
+    /// The chunk was observed by the guest-facing producer and counted into `delivered_bytes`.
     Delivered,
     /// The guest abandoned the body reader before delivery — either live (the demand receiver
-    /// was gone; the child's `CompletionDiscarded` marker is now durable) or on replay (the
-    /// recorded run discarded the chunk; the task parked until the replayed guest dropped its
-    /// in-flight read). The body must finalize as abandoned, with a clean `Ok(None)` terminal.
+    /// was gone; the child's `CompletionDiscarded` marker is reserved) or on replay (the recorded
+    /// run discarded the chunk; the task parked until the replayed guest dropped its in-flight
+    /// read). The body must finalize as abandoned, with a clean `Ok(None)` terminal.
     Abandoned,
 }
 
@@ -738,17 +782,17 @@ async fn park_replay_discarded_delivery(
 /// boundary between the child's durable `End` and the guest actually receiving the bytes. Owns
 /// the chunk's deferred-delivery token:
 ///
-/// - a successful send is `delivered` and advances `delivered_bytes` (a later resume's `Range`
-///   offset must count only bytes the guest received);
+/// - producer observation is `delivered` and advances `delivered_bytes` (a later resume's
+///   `Range` offset must count only bytes the guest received);
 /// - a closed demand receiver — an ordinary abandonment race (e.g. a guest-side timeout won
-///   between the child `End` and this send), not corruption — records the child's
-///   `CompletionDiscarded` marker and returns only once it is durable, so replay never
-///   re-delivers the persisted chunk to a guest that did not receive it live;
+///   between the child `End` and producer observation), not corruption — reserves the child's
+///   `CompletionDiscarded` marker, so replay never re-delivers the persisted chunk to a guest
+///   that did not receive it live;
 /// - a replay-discarded child is never re-sent: the task parks until the replayed guest drops
 ///   its in-flight read at the same point it did live.
 ///
-/// Fails only when the marker append itself fails; error conversion and parent finalization
-/// stay with the caller.
+/// Fails only when positioning a replayed delivery at its recorded marker fails; error conversion
+/// and parent finalization stay with the caller.
 async fn transfer_data_chunk(
     activity: &TailActivity,
     demand: oneshot::Sender<HttpBodyChunkReply>,
@@ -762,16 +806,20 @@ async fn transfer_data_chunk(
     }
     delivery.prepare_delivery().await?;
     let chunk_len = bytes.len() as u64;
-    if demand.send(HttpBodyChunkReply::Data(bytes)).is_ok() {
+    let (delivery, observed) = HttpBodyChunkDelivery::new(delivery);
+    if let Err(reply) = demand.send(HttpBodyChunkReply::Data { bytes, delivery }) {
+        // Drop the reply before awaiting `observed`: its armed delivery token synchronously
+        // reserves the discard marker, then dropping the observation sender wakes this task.
+        drop(reply);
+    }
+    if observed.await.is_ok() {
         *delivered_bytes += chunk_len;
-        delivery.delivered();
         Ok(DataChunkTransfer::Delivered)
     } else {
         debug!(
             "consume-body chunk persisted but the guest dropped the body reader before \
-             delivery; finalizing the body as abandoned"
+             observing it; finalizing the body as abandoned"
         );
-        delivery.discarded().await?;
         Ok(DataChunkTransfer::Abandoned)
     }
 }
@@ -1543,28 +1591,14 @@ where
                             Some(trap_context),
                         );
                     }
-                    let (ack_tx, ack_rx) = oneshot::channel();
-                    if demand.send(HttpBodyChunkReply::End { ack: ack_tx }).is_ok() {
-                        delivery.delivered();
-                        // Wait for the producer to observe the terminal (report
-                        // EOF to the guest) before resolving trailers / finalizing
-                        // the parent, so trailers never surface before the body
-                        // stream's terminal is observed.
-                        let _ = ack_rx.await;
-                    } else {
-                        let trap_context = parent.trap_context();
-                        if let Err(error) = delivery.discarded().await {
-                            parent.abandon_for_trap();
-                            return fail_consume_body_task(
-                                trailers_tx,
-                                wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
-                                    anyhow::Error::from(error),
-                                    trap_context,
-                                )),
-                                Some(trap_context),
-                            );
-                        }
+                    let (delivery, observed) = HttpBodyChunkDelivery::new(delivery);
+                    if let Err(reply) = demand.send(HttpBodyChunkReply::End { delivery }) {
+                        drop(reply);
                     }
+                    // Wait for the producer to observe the terminal (report EOF to the guest)
+                    // before resolving trailers / finalizing the parent, so trailers never
+                    // surface before the body stream's terminal is observed.
+                    let _ = observed.await;
                     break;
                 }
                 ProducedChunk::Cancelled => {
@@ -1584,22 +1618,11 @@ where
                             Some(trap_context),
                         );
                     }
-                    if demand.send(HttpBodyChunkReply::Cancelled).is_ok() {
-                        delivery.delivered();
-                    } else {
-                        let trap_context = parent.trap_context();
-                        if let Err(error) = delivery.discarded().await {
-                            parent.abandon_for_trap();
-                            return fail_consume_body_task(
-                                trailers_tx,
-                                wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
-                                    anyhow::Error::from(error),
-                                    trap_context,
-                                )),
-                                Some(trap_context),
-                            );
-                        }
+                    let (delivery, observed) = HttpBodyChunkDelivery::new(delivery);
+                    if let Err(reply) = demand.send(HttpBodyChunkReply::Cancelled { delivery }) {
+                        drop(reply);
                     }
+                    let _ = observed.await;
                     break;
                 }
             }
@@ -1986,23 +2009,34 @@ mod tests {
         let (demand, mut reply) = oneshot::channel();
         let mut delivered_bytes = 0u64;
 
-        let outcome = transfer_data_chunk(
+        let mut transfer = Box::pin(transfer_data_chunk(
             &activity,
             demand,
             Bytes::from_static(b"abc"),
             delivery,
             &mut delivered_bytes,
-        )
-        .await
-        .expect("live transfer must not fail");
-
-        assert!(matches!(outcome, DataChunkTransfer::Delivered));
-        assert_eq!(delivered_bytes, 3);
+        ));
+        assert!(
+            futures::poll!(transfer.as_mut()).is_pending(),
+            "the transfer must wait until the producer observes the queued chunk"
+        );
+        assert_eq!(
+            oplog.entry_count(),
+            seeded_entries,
+            "queueing the chunk is not yet a guest delivery boundary"
+        );
         match reply.try_recv() {
-            Ok(HttpBodyChunkReply::Data(bytes)) => assert_eq!(bytes, Bytes::from_static(b"abc")),
+            Ok(HttpBodyChunkReply::Data { bytes, delivery }) => {
+                assert_eq!(bytes, Bytes::from_static(b"abc"));
+                delivery.observed();
+            }
             Ok(_) => panic!("expected the delivered data chunk, got a different reply kind"),
             Err(error) => panic!("expected the delivered data chunk, got no reply: {error}"),
         }
+        let outcome = transfer.await.expect("live transfer must not fail");
+
+        assert!(matches!(outcome, DataChunkTransfer::Delivered));
+        assert_eq!(delivered_bytes, 3);
         assert_eq!(
             oplog.entry_count(),
             seeded_entries + 1,
@@ -2026,8 +2060,8 @@ mod tests {
 
     /// The vanished-demand-receiver regression at the unit level: the child's `End(Data)` is
     /// durable but the guest dropped the body reader before the transfer. The helper must report
-    /// the body abandoned, must not count the undelivered bytes, and must have the child's
-    /// `CompletionDiscarded` marker durable *before* it returns.
+    /// the body abandoned, must not count the undelivered bytes, and must reserve the child's
+    /// `CompletionDiscarded` marker before it returns.
     #[test]
     #[timeout("10s")]
     async fn transfer_data_chunk_records_discard_marker_for_closed_live_receiver() {
