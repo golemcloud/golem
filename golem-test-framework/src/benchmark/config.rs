@@ -254,6 +254,8 @@ pub enum ChaosScenarioArg {
     S6,
     /// Executor pod kill while a component rollback is in flight.
     S9,
+    /// Executors cut off from the key-value PostgreSQL cluster.
+    S16,
 }
 
 /// Density subcommand action.

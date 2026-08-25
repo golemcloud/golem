@@ -30,7 +30,7 @@ use crate::chaos::split::PodSplit;
 use crate::chaos::summary::{ChaosSummary, TerminationReason};
 use crate::chaos::{
     DeleteConfig, FaultConfig, IsolationConfig, PinnedConfig, PromiseConfig, RetryPolicy,
-    RevertConfig, RollbackConfig, ScheduledConfig, WorkloadConfig,
+    RevertConfig, RollbackConfig, ScheduledConfig, StorageConfig, WorkloadConfig,
 };
 use chrono::{DateTime, Utc};
 use golem_test_framework::benchmark::RunMetadata;
@@ -179,6 +179,10 @@ pub struct ChaosResult {
     /// The component rollback the run was configured with, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollback: Option<RollbackConfig>,
+    /// The storage the run was configured to take away, and the thresholds its
+    /// account was judged by. Present only for S16.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<StorageConfig>,
     pub retry_policy: RetryPolicy,
     pub scope: RunScope,
     pub summary: ChaosSummary,
@@ -257,6 +261,7 @@ mod tests {
             delete: None,
             delete_selection: None,
             rollback: None,
+            storage: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "env-1".to_string(),
@@ -1007,6 +1012,7 @@ mod sample_artifact {
             delete: None,
             delete_selection: None,
             rollback: None,
+            storage: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),
@@ -1228,6 +1234,7 @@ mod sample_artifact {
             delete: None,
             delete_selection: None,
             rollback: None,
+            storage: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),

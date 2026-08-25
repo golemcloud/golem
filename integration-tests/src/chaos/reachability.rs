@@ -46,7 +46,9 @@
 //! baseline of hundreds. A cell anywhere near the ceiling means something else.
 
 use crate::chaos::history::{OperationRecord, Outcome, Stream};
-use crate::chaos::split::{FaultWindow, Group, PodSplit, Window};
+use crate::chaos::split::{
+    FaultWindow, Group, PodSplit, Window, round2, window_secs, window_start,
+};
 use crate::chaos::summary::LatencyStats;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -276,7 +278,7 @@ impl ReachabilityReport {
                 Outcome::Rejected => tally.rejected += 1,
                 Outcome::Indeterminate => tally.indeterminate += 1,
             }
-            tally.attempts_timed_out += timed_out(record);
+            tally.attempts_timed_out += record.attempts_timed_out();
 
             first_submitted = Some(match first_submitted {
                 Some(at) if at <= record.submitted_at => at,
@@ -397,7 +399,7 @@ impl ReachabilityReport {
                     duration: LatencyStats::from_durations(
                         caught.iter().map(|r| r.duration_ms).collect(),
                     ),
-                    attempts_timed_out: caught.iter().map(|r| timed_out(r)).sum(),
+                    attempts_timed_out: caught.iter().map(|r| r.attempts_timed_out()).sum(),
                     max_attempts: caught.iter().map(|r| r.attempts).max().unwrap_or(0),
                     outlived_the_fault: caught
                         .iter()
@@ -631,88 +633,9 @@ impl ReachabilityReport {
     }
 }
 
-/// When a window began, for the windows that have a fixed start.
-///
-/// The fault's own boundaries come from the workflow's timestamps, which is
-/// what makes them comparable across runs. The baseline has no boundary of its
-/// own, so it starts at the first operation the run offered.
-fn window_start(
-    window: Window,
-    fault: Option<FaultWindow>,
-    first_submitted: Option<DateTime<Utc>>,
-) -> Option<DateTime<Utc>> {
-    match (window, fault) {
-        (Window::BeforeFault, Some(_)) => first_submitted,
-        (Window::DuringFault, Some(w)) => Some(w.injected_at),
-        (Window::AfterFault, Some(w)) => w.recovered_at,
-        _ => None,
-    }
-}
-
-/// How long a window lasted, in seconds.
-///
-/// The fault's own windows come from the workflow's timestamps, which is what
-/// makes them comparable across runs. The two open-ended ones are bounded by
-/// the workload instead: the baseline starts at the first operation offered,
-/// and recovery ends at the last one that came back.
-fn window_secs(
-    window: Window,
-    fault: Option<FaultWindow>,
-    first_submitted: Option<DateTime<Utc>>,
-    last_completed: Option<DateTime<Utc>>,
-) -> f64 {
-    let seconds = |from: DateTime<Utc>, to: DateTime<Utc>| {
-        (to - from).num_milliseconds().max(0) as f64 / 1000.0
-    };
-    match (window, fault) {
-        (Window::BeforeFault, Some(w)) => first_submitted
-            .map(|first| seconds(first, w.injected_at))
-            .unwrap_or(0.0),
-        (Window::DuringFault, Some(w)) => match (w.recovered_at, last_completed) {
-            (Some(recovered), _) => seconds(w.injected_at, recovered),
-            // A run that never saw the heal: the fault ran to whatever the last
-            // operation saw, which is the most that can be claimed.
-            (None, Some(last)) => seconds(w.injected_at, last),
-            (None, None) => 0.0,
-        },
-        (
-            Window::AfterFault,
-            Some(FaultWindow {
-                recovered_at: Some(recovered),
-                ..
-            }),
-        ) => last_completed
-            .map(|last| seconds(recovered, last))
-            .unwrap_or(0.0),
-        _ => 0.0,
-    }
-}
-
 /// Operations of one outcome.
 fn count_of(records: &[&OperationRecord], outcome: Outcome) -> u64 {
     records.iter().filter(|r| r.outcome == outcome).count() as u64
-}
-
-/// Attempts of one operation that hit the client's attempt timeout.
-///
-/// Matched on the message `crate::chaos::workload` writes for a timed-out
-/// attempt. A structured flag would be better, but the attempt log is an
-/// archived shape shared with every other scenario and this reads it without
-/// changing it.
-fn timed_out(record: &OperationRecord) -> u64 {
-    record
-        .attempt_log
-        .iter()
-        .filter(|a| {
-            a.error
-                .as_deref()
-                .is_some_and(|e| e.contains("attempt timed out"))
-        })
-        .count() as u64
-}
-
-fn round2(value: f64) -> f64 {
-    (value * 100.0).round() / 100.0
 }
 
 #[cfg(test)]

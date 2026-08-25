@@ -30,6 +30,7 @@ pub mod s10;
 pub mod s11;
 pub mod s12;
 pub mod s13;
+pub mod s16;
 pub mod s3;
 pub mod s5;
 pub mod s6;
@@ -132,6 +133,7 @@ pub fn build_result(config: &ScenarioConfig, outcome: ScenarioOutcome) -> ChaosR
         delete: config.delete.clone(),
         delete_selection: outcome.delete_selection,
         rollback: config.rollback.clone(),
+        storage: config.storage.clone(),
         retry_policy: config.retry_policy.clone(),
         scope: outcome.scope,
         summary: outcome.summary,

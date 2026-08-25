@@ -349,6 +349,29 @@ impl OperationRecord {
     pub fn had_successful_attempt(&self) -> bool {
         self.outcome == Outcome::Confirmed || self.attempt_log.iter().any(|a| a.succeeded)
     }
+
+    /// Attempts at this operation that hit the client's attempt timeout rather
+    /// than answering.
+    ///
+    /// Matched on the message [`crate::chaos::workload`] writes for a timed-out
+    /// attempt. A structured flag would be better, but the attempt log is an
+    /// archived shape that older results already carry, and this reads it
+    /// without changing it.
+    ///
+    /// The distinction it draws is the one a stalled dependency needs: an
+    /// operation that timed out and then answered on its retry was rescued by
+    /// the caller, not returned by the platform, and the outcome alone cannot
+    /// say so.
+    pub fn attempts_timed_out(&self) -> u64 {
+        self.attempt_log
+            .iter()
+            .filter(|a| {
+                a.error
+                    .as_deref()
+                    .is_some_and(|e| e.contains("attempt timed out"))
+            })
+            .count() as u64
+    }
 }
 
 /// What a scheduled action recorded when it ran, and the log it was recorded

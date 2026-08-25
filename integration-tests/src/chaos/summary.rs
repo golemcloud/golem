@@ -50,6 +50,7 @@
 
 use crate::chaos::fires::ScheduleFireReport;
 use crate::chaos::history::{Outcome, Phase, Stream};
+use crate::chaos::outage::StorageOutageReport;
 use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::probe::KeyProbe;
 use crate::chaos::reachability::ReachabilityReport;
@@ -593,6 +594,11 @@ pub struct ChaosSummary {
     /// back. Absent for scenarios that do not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollback: Option<RollbackReport>,
+    /// The storage-outage account, for scenarios that take a storage dependency
+    /// away from every executor at once. Absent for scenarios that do not, for
+    /// the same reason as `scheduleFires`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_outage: Option<StorageOutageReport>,
     /// Shard-ownership samples, in the order they were taken. Empty for
     /// scenarios that do not sample executor assignments.
     ///
@@ -728,6 +734,7 @@ impl ChaosSummary {
             truncation: None,
             resurrection: None,
             rollback: None,
+            storage_outage: None,
             ownership: Vec::new(),
             attention,
             notes: Vec::new(),
@@ -838,6 +845,20 @@ impl ChaosSummary {
         self.attention.extend(report.attention_lines());
         self.notes.extend(report.note_lines());
         self.rollback = Some(report);
+        self
+    }
+
+    /// Attaches the storage-outage account and hoists everything it wants a
+    /// human to see into [`Self::attention`].
+    ///
+    /// Same split as the others. The line worth calling out is the
+    /// outage-not-observed one: a partition that failed to take hold leaves
+    /// every cell underneath it describing an undisturbed cluster, and that has
+    /// to read as "this run tested nothing" rather than as a pass.
+    pub fn with_storage_outage(mut self, report: StorageOutageReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.storage_outage = Some(report);
         self
     }
 

@@ -38,6 +38,7 @@ pub mod deletions;
 pub mod errors;
 pub mod fires;
 pub mod history;
+pub mod outage;
 pub mod ownership;
 pub mod pinned;
 pub mod prep;
@@ -89,6 +90,8 @@ pub enum ScenarioCode {
     S6,
     /// Executor pod kill while a component rollback is in flight.
     S9,
+    /// Executors cut off from the key-value PostgreSQL cluster.
+    S16,
 }
 
 impl ScenarioCode {
@@ -105,13 +108,14 @@ impl ScenarioCode {
             ScenarioCode::S7 => "S7",
             ScenarioCode::S6 => "S6",
             ScenarioCode::S9 => "S9",
+            ScenarioCode::S16 => "S16",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 11] = [
+    pub const ALL: [ScenarioCode; 12] = [
         ScenarioCode::S1,
         ScenarioCode::S3,
         ScenarioCode::S5,
@@ -123,6 +127,7 @@ impl ScenarioCode {
         ScenarioCode::S11,
         ScenarioCode::S12,
         ScenarioCode::S13,
+        ScenarioCode::S16,
     ];
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -646,6 +651,54 @@ impl RollbackConfig {
     }
 }
 
+/// Settings for a storage-outage scenario (GOL-379).
+///
+/// Not a workload shape, unlike the blocks above it: S16 drives the mixed
+/// workload and the scheduled-registration workload that already exist, because
+/// the fault is not about which agents are driven but about which *dependency*
+/// is taken away from all of them. What this block carries is the thing being
+/// taken away and the two numbers the account is judged by.
+///
+/// The endpoint is recorded rather than acted on, like every other entry in
+/// [`FaultConfig`]. The driver never resolves it, connects to it or cuts
+/// anything off from it; the workflow does that, and this exists so an archived
+/// result says which storage the run was about rather than leaving a reader to
+/// infer it from the scenario name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageConfig {
+    /// The storage endpoint the workflow partitions the executors from, as a
+    /// hostname. Chaos Mesh resolves it in the controller, so this is the same
+    /// string that appears in the NetworkChaos manifest's `externalTargets`.
+    pub endpoint: String,
+    /// The most of its baseline throughput the workload may keep during the
+    /// fault, as a percentage, for the outage to count as observed.
+    ///
+    /// A run above this line did not take the storage away, whatever the fault
+    /// status said, and every other number in the report then describes an
+    /// undisturbed cluster. That is reported as inconclusive rather than clean:
+    /// a healthy-looking result from a fault that never landed is the worst
+    /// artifact this suite can produce.
+    ///
+    /// It cannot be zero. Operations submitted in the last seconds before the
+    /// heal confirm just after it and are counted in the fault window they were
+    /// submitted in, so a genuine outage still leaves a small non-zero cell.
+    /// Read it together with `quietMs` — see [`crate::chaos::outage`].
+    pub outage_ceiling_percent: f64,
+    /// What serving again may cost once the storage is reachable, and the
+    /// number each stream's recovery gap is reported against. Recorded rather
+    /// than asserted, like every other budget in the suite: how long a
+    /// connection pool may take to notice its database came back is a
+    /// judgement, and the number is in the result either way.
+    pub recovery_budget_secs: u64,
+}
+
+impl StorageConfig {
+    pub fn recovery_budget(&self) -> Duration {
+        Duration::from_secs(self.recovery_budget_secs)
+    }
+}
+
 /// One step of the executor scale schedule the workflow runs during the fault.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -736,6 +789,10 @@ pub struct ScenarioConfig {
     /// The component rollback. Absent for scenarios that do not run one.
     #[serde(default)]
     pub rollback: Option<RollbackConfig>,
+    /// Storage-outage settings. Absent for scenarios that do not take a
+    /// storage dependency away.
+    #[serde(default)]
+    pub storage: Option<StorageConfig>,
     /// Shard-ownership oracle settings. Absent for scenarios that do not sample
     /// executor assignments.
     #[serde(default)]
@@ -882,6 +939,57 @@ impl ScenarioConfig {
         })
     }
 
+    /// The storage-outage block. See [`Self::require_workload`].
+    pub fn require_storage(&self) -> anyhow::Result<&StorageConfig> {
+        let config = self.storage.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs a `storage` block in the suite YAML",
+                self.code
+            )
+        })?;
+        // A zero ceiling can never be met: an operation submitted just before
+        // the heal confirms just after it and is counted in the fault window it
+        // was submitted in, so even a total outage leaves a small non-zero
+        // cell. Every run would then report the outage as not observed, and the
+        // one verdict that exists to catch a fault which never landed would be
+        // stuck on.
+        if config.outage_ceiling_percent <= 0.0 {
+            anyhow::bail!(
+                "chaos scenario {}: outageCeilingPercent is {}, which no real outage can meet, \
+                 so every run would report the fault as not observed",
+                self.code,
+                config.outage_ceiling_percent
+            );
+        }
+        if config.endpoint.trim().is_empty() {
+            anyhow::bail!(
+                "chaos scenario {}: storage.endpoint is empty, so the result could not say which \
+                 storage the run took away",
+                self.code
+            );
+        }
+        // Checked here rather than in the driver so a bad YAML fails the build
+        // instead of a maintenance window. Both blocks write to the scheduled
+        // stream, but only the `scheduled` block's registrations carry a token
+        // into the target's fire log — see `ScheduleEmitter::schedule_fire_at`
+        // in the counters component. Driving both would leave the fire account
+        // pairing the mixed workload's tokenless registrations against nothing
+        // and reporting every one of them as an action that never ran.
+        if let (Some(workload), Some(_)) = (&self.workload, &self.scheduled)
+            && workload.scheduled_agents > 0
+        {
+            anyhow::bail!(
+                "chaos scenario {}: the mixed workload drives {} scheduled agents while a \
+                 `scheduled` block is also present, and only the latter's registrations carry a \
+                 token into the fire log, so the fire account would report every mixed-workload \
+                 registration as one that never fired",
+                self.code,
+                workload.scheduled_agents
+            );
+        }
+        Ok(config)
+    }
+
     /// The pinned workload block. See [`Self::require_workload`].
     pub fn require_pinned(&self) -> anyhow::Result<&PinnedConfig> {
         self.pinned.as_ref().ok_or_else(|| {
@@ -1021,6 +1129,7 @@ mod tests {
                 revert: None,
                 delete: None,
                 rollback: None,
+                storage: None,
                 ownership: None,
                 scale_during_fault: None,
                 retry_policy: RetryPolicy::default(),
@@ -1057,6 +1166,7 @@ mod tests {
             isolation: None,
             delete: None,
             rollback: None,
+            storage: None,
             revert: Some(RevertConfig {
                 agents: 10,
                 increments_per_round: increments,
@@ -1099,6 +1209,112 @@ mod tests {
     fn a_revert_of_exactly_one_round_is_allowed() {
         let config = revert_config(3, 3);
         assert_eq!(config.require_revert().unwrap().net_per_round(), 0);
+    }
+
+    fn storage_config(
+        endpoint: &str,
+        ceiling: f64,
+        scheduled_agents: u32,
+        scheduled_block: bool,
+    ) -> ScenarioConfig {
+        ScenarioConfig {
+            code: "S16".to_string(),
+            name: "keyvalue-postgres-outage".to_string(),
+            enabled: true,
+            fault: FaultConfig {
+                kind: "network-partition".to_string(),
+                target: "worker-executor".to_string(),
+                mode: "all".to_string(),
+                target_count: None,
+                duration_secs: 180,
+            },
+            phases: PhaseConfig {
+                baseline_secs: 1,
+                fault_secs: 1,
+                recovery_secs: 1,
+            },
+            workload: Some(WorkloadConfig {
+                durable_agents: 10,
+                ephemeral_agents: 0,
+                scheduled_agents,
+                promise_agents: 0,
+                quota_agents: 0,
+                rate_per_sec: 10,
+            }),
+            pinned: None,
+            scheduled: scheduled_block.then_some(ScheduledConfig {
+                targets: 10,
+                interval_millis: 2000,
+                lead_secs: 10,
+                lease_budget_secs: 240,
+            }),
+            promise: None,
+            isolation: None,
+            delete: None,
+            rollback: None,
+            storage: Some(StorageConfig {
+                endpoint: endpoint.to_string(),
+                outage_ceiling_percent: ceiling,
+                recovery_budget_secs: 120,
+            }),
+            revert: None,
+            ownership: None,
+            scale_during_fault: None,
+            retry_policy: RetryPolicy::default(),
+            signal_timeout_secs: 1,
+        }
+    }
+
+    /// A zero ceiling can never be met, so the one verdict that exists to catch
+    /// a fault which never landed would be stuck on for every run.
+    #[test]
+    fn a_storage_outage_ceiling_of_zero_is_refused() {
+        let error = storage_config("db.example", 0.0, 0, true)
+            .require_storage()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("no real outage can meet"),
+            "the message has to say why, got: {error}"
+        );
+    }
+
+    /// Without an endpoint the archived result could not say which storage the
+    /// run took away.
+    #[test]
+    fn a_storage_block_with_no_endpoint_is_refused() {
+        assert!(
+            storage_config("   ", 15.0, 0, true)
+                .require_storage()
+                .is_err()
+        );
+    }
+
+    /// Both blocks write to the scheduled stream and only one of them carries a
+    /// token into the fire log, so driving both would report every tokenless
+    /// registration as an action that never ran. Caught at load time rather
+    /// than discovered in the report.
+    #[test]
+    fn driving_the_scheduled_stream_from_both_blocks_is_refused() {
+        let error = storage_config("db.example", 15.0, 50, true)
+            .require_storage()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("token into the fire log"),
+            "the message has to say why, got: {error}"
+        );
+    }
+
+    /// The same mixed-workload setting is fine on its own: without a
+    /// `scheduled` block there is only one writer to the stream.
+    #[test]
+    fn scheduled_agents_alone_are_allowed() {
+        assert!(
+            storage_config("db.example", 15.0, 50, false)
+                .require_storage()
+                .is_ok()
+        );
     }
 
     /// The retry defaults are load-bearing for correctness, not just for load.
@@ -1165,6 +1381,7 @@ mod tests {
         assert_eq!(ScenarioCode::parse("s7"), Some(ScenarioCode::S7));
         assert_eq!(ScenarioCode::parse("s6"), Some(ScenarioCode::S6));
         assert_eq!(ScenarioCode::parse("s9"), Some(ScenarioCode::S9));
+        assert_eq!(ScenarioCode::parse("s16"), Some(ScenarioCode::S16));
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
@@ -1209,6 +1426,11 @@ mod tests {
                 ScenarioCode::S9 => {
                     entry.require_workload().unwrap();
                     entry.require_rollback().unwrap();
+                }
+                ScenarioCode::S16 => {
+                    entry.require_workload().unwrap();
+                    entry.require_scheduled().unwrap();
+                    entry.require_storage().unwrap();
                 }
             }
         }

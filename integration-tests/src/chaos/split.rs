@@ -121,6 +121,68 @@ impl std::fmt::Display for Window {
     }
 }
 
+/// When a window began, for the windows that have a fixed start.
+///
+/// The fault's own boundaries come from the workflow's timestamps, which is
+/// what makes them comparable across runs. The baseline has no boundary of its
+/// own, so it starts at the first operation the run offered.
+pub fn window_start(
+    window: Window,
+    fault: Option<FaultWindow>,
+    first_submitted: Option<DateTime<Utc>>,
+) -> Option<DateTime<Utc>> {
+    match (window, fault) {
+        (Window::BeforeFault, Some(_)) => first_submitted,
+        (Window::DuringFault, Some(w)) => Some(w.injected_at),
+        (Window::AfterFault, Some(w)) => w.recovered_at,
+        _ => None,
+    }
+}
+
+/// How long a window lasted, in seconds.
+///
+/// The fault's own windows come from the workflow's timestamps, which is what
+/// makes them comparable across runs. The two open-ended ones are bounded by
+/// the workload instead: the baseline starts at the first operation offered,
+/// and recovery ends at the last one that came back.
+pub fn window_secs(
+    window: Window,
+    fault: Option<FaultWindow>,
+    first_submitted: Option<DateTime<Utc>>,
+    last_completed: Option<DateTime<Utc>>,
+) -> f64 {
+    let seconds = |from: DateTime<Utc>, to: DateTime<Utc>| {
+        (to - from).num_milliseconds().max(0) as f64 / 1000.0
+    };
+    match (window, fault) {
+        (Window::BeforeFault, Some(w)) => first_submitted
+            .map(|first| seconds(first, w.injected_at))
+            .unwrap_or(0.0),
+        (Window::DuringFault, Some(w)) => match (w.recovered_at, last_completed) {
+            (Some(recovered), _) => seconds(w.injected_at, recovered),
+            // A run that never saw the heal: the fault ran to whatever the last
+            // operation saw, which is the most that can be claimed.
+            (None, Some(last)) => seconds(w.injected_at, last),
+            (None, None) => 0.0,
+        },
+        (
+            Window::AfterFault,
+            Some(FaultWindow {
+                recovered_at: Some(recovered),
+                ..
+            }),
+        ) => last_completed
+            .map(|last| seconds(recovered, last))
+            .unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+/// Two decimal places, for the rates and shares that end up in a result.
+pub fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
 /// The executor the fault will be aimed at, and how the agents divide around it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -853,3 +853,123 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # S16 — key-value PostgreSQL outage recovery (GOL-379).
+  #
+  # The first fault in the suite aimed at something the platform depends on
+  # rather than at the platform itself. The executors keep running, keep their
+  # shards and keep answering the shard-manager. What they lose is the Aurora
+  # cluster underneath them, which on golem-dev carries promises, the
+  # running-workers set, user key-value data and the scheduler's own schema.
+  #
+  # The oplog is on a different cluster and the worker-status hot cache is in
+  # Redis, and neither is touched. That is the interesting part: the platform
+  # keeps the ability to record what it did and loses the ability to know what
+  # it is doing.
+  #
+  # There is no control group of executors, because all three share the cluster.
+  # The control is the baseline window, and the first thing the report has to
+  # establish is that throughput collapsed at all — a partition that silently
+  # failed to take hold would otherwise produce a clean-looking account of an
+  # undisturbed cluster.
+  - code: S16
+    name: keyvalue-postgres-outage
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # Every executor, unlike every other partition in this suite. A storage
+      # outage that only some executors could see would be a routing fault
+      # wearing a database's clothes, and S3 already covers that shape.
+      mode: all
+      durationSecs: 120
+
+    phases:
+      # Long enough for cold starts, component loading and route warm-up to
+      # settle, and for the scheduler to be firing steadily, so the cut lands on
+      # a cluster in steady state.
+      baselineSecs: 300
+      # Has to comfortably exceed the caller's 120s attempt timeout, for the
+      # same reason S3's does: an operation that never reaches its timeout
+      # inside the window leaves the stall invisible in the fault-window cells.
+      # It also has to be long enough for the executors' connection pools to
+      # give up and start retrying rather than merely block.
+      faultSecs: 180
+      # Every stream has to get several whole operations after the heal, so a
+      # stream that recovered slowly is distinguishable from one that never
+      # did. Scheduled actions registered during the outage also have to fall
+      # due and fire inside the run rather than after it.
+      recoverySecs: 420
+
+    workload:
+      # The population read back agent by agent, so a lost increment localises
+      # to one agent out of 200.
+      durableAgents: 200
+      # No durable state of their own, but they still need the running-workers
+      # set to start, so they say whether acceptance degraded separately from
+      # whether state survived.
+      ephemeralAgents: 50
+      # Zero on purpose. The scheduled stream is driven by the `scheduled` block
+      # below instead, because only its registrations carry a token into the
+      # target's fire log and scheduler lag cannot be measured without one.
+      # Setting both is refused at load time.
+      scheduledAgents: 0
+      # Promises live in the cluster being taken away, so this stream is
+      # directly on the fault path rather than incidental to it.
+      promiseAgents: 50
+      # No quota stream: a lease renewal failing would add a shard-manager
+      # failure mode to a scenario that is about storage.
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      # 100 targets, each with its own emitter, same as S10. Also the resolution
+      # of the report: a lost action localises to one target out of a hundred.
+      targets: 100
+      intervalMillis: 2000
+      # 500 actions accepted and not yet run at any instant, so the outage
+      # begins with a large population of work the platform has promised to do
+      # and cannot currently read.
+      leadSecs: 10
+      # What recovering a pending action may cost. Larger than S10's 60s and
+      # deliberately so: there is no shard reassignment here, but the scheduler
+      # cannot claim or acknowledge anything for the whole 180s outage, so the
+      # floor is the outage itself. 240s covers the outage plus a lease TTL and
+      # some catch-up without being so generous that a regression hides inside
+      # it.
+      #
+      # Recorded, not asserted, like every other budget in the suite.
+      leaseBudgetSecs: 240
+
+    storage:
+      # The Aurora writer endpoint the workflow names in the NetworkChaos
+      # manifest's `externalTargets`. Recorded here so the archived result says
+      # which storage the run was about; the driver never resolves or contacts
+      # it.
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+      # The most of its baseline throughput the workload may keep during the
+      # outage for the fault to count as observed. Not zero: an operation
+      # submitted late in the fault window can still be waiting when the
+      # database returns, and then confirms into the window it was submitted in.
+      # At 100 ops/s over 180s that is a handful against a baseline of
+      # thousands, so anything near 15% means the partition did not take hold.
+      outageCeilingPercent: 15
+      # What serving again may cost once the cluster is reachable. Recorded, not
+      # asserted: this is really a measure of how long sqlx's pool takes to
+      # notice, plus whatever recovery scan the executors run, and how long that
+      # may be is a judgement.
+      recoveryBudgetSecs: 120
+
+    retryPolicy:
+      # Identical to the others and load-bearing for the same reason, with one
+      # consequence specific to S16: the retry is what turns a single stalled
+      # attempt into a second one under the same key. If the database comes back
+      # in between, that retry lands against work the first attempt may already
+      # have half-done, which is exactly what the exactly-once probe is here to
+      # rule on.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
