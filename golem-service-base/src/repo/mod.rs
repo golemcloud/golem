@@ -50,6 +50,20 @@ impl RepoError {
             RepoError::UniqueViolation(_) => false,
         }
     }
+
+    /// Returns `true` if this error is a connection pool acquisition timeout.
+    ///
+    /// Unlike [`Self::is_transient`], this excludes mid-query I/O errors: a pool timeout happens
+    /// before any statement runs, so retrying the operation cannot observe a partially applied
+    /// write. This makes it safe to retry even non-idempotent operations.
+    pub fn is_pool_timeout(&self) -> bool {
+        match self {
+            RepoError::InternalError(err) => err
+                .downcast_ref::<sqlx::Error>()
+                .is_some_and(|sqlx_err| matches!(sqlx_err, sqlx::Error::PoolTimedOut)),
+            RepoError::UniqueViolation(_) => false,
+        }
+    }
 }
 
 error_forwarding!(RepoError);

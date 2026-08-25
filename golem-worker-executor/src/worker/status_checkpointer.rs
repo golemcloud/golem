@@ -289,7 +289,8 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _status_value: &AgentStatusRecord,
-        ) {
+        ) -> Result<(), String> {
+            Ok(())
         }
     }
 

@@ -14,12 +14,32 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use fred::error::ErrorKind;
 use fred::types::SetOptions;
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
-use golem_common::redis::RedisPool;
+use golem_common::redis::{RedisError, RedisPool};
 use std::collections::HashMap;
 
-use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageError, KeyValueStorageNamespace};
+
+impl From<RedisError> for KeyValueStorageError {
+    fn from(error: RedisError) -> Self {
+        let message = error.to_string();
+        match error.kind() {
+            // The client refused to queue the command, and asks the caller to retry it.
+            ErrorKind::Backpressure => Self::NotAttempted(message),
+            // The command may already have been written to the connection when it failed. The
+            // client's own reconnect policy only re-establishes the connection; it does not make
+            // these failures invisible to the caller.
+            ErrorKind::IO
+            | ErrorKind::Timeout
+            | ErrorKind::Canceled
+            | ErrorKind::Cluster
+            | ErrorKind::Routing => Self::Transient(message),
+            _ => Self::Other(message),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct RedisKeyValueStorage {
@@ -65,7 +85,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
         match Self::use_hash(&namespace) {
@@ -74,13 +94,13 @@ impl KeyValueStorage for RedisKeyValueStorage {
                 .with(svc_name, api_name)
                 .hset(ns, (key, value))
                 .await
-                .map_err(|redis_err| redis_err.to_string()),
+                .map_err(KeyValueStorageError::from),
             None => self
                 .redis
                 .with(svc_name, api_name)
                 .set(key, value, None, None, false)
                 .await
-                .map_err(|redis_err| redis_err.to_string()),
+                .map_err(KeyValueStorageError::from),
         }
     }
 
@@ -91,7 +111,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let mut map: HashMap<&str, &[u8]> = HashMap::new();
         for (k, v) in pairs {
             map.insert(*k, *v);
@@ -103,13 +123,13 @@ impl KeyValueStorage for RedisKeyValueStorage {
                 .with(svc_name, api_name)
                 .hmset(ns, map)
                 .await
-                .map_err(|redis_err| redis_err.to_string()),
+                .map_err(KeyValueStorageError::from),
             None => self
                 .redis
                 .with(svc_name, api_name)
                 .mset(map)
                 .await
-                .map_err(|redis_err| redis_err.to_string()),
+                .map_err(KeyValueStorageError::from),
         }
     }
 
@@ -121,7 +141,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
         match Self::use_hash(&namespace) {
@@ -131,7 +151,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
                     .with(svc_name, api_name)
                     .hsetnx(ns, key, value)
                     .await
-                    .map_err(|redis_err| redis_err.to_string())?;
+                    .map_err(KeyValueStorageError::from)?;
 
                 Ok(result)
             }
@@ -141,7 +161,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
                     .with(svc_name, api_name)
                     .set(key, value, None, Some(SetOptions::NX), false)
                     .await
-                    .map_err(|redis_err| redis_err.to_string())?;
+                    .map_err(KeyValueStorageError::from)?;
 
                 Ok(result == Some("OK".to_string()))
             }
@@ -155,20 +175,20 @@ impl KeyValueStorage for RedisKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, KeyValueStorageError> {
         let serialized: Option<Bytes> = match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
                 .hget(ns, key)
                 .await
-                .map_err(|redis_err| redis_err.to_string())?,
+                .map_err(KeyValueStorageError::from)?,
             None => self
                 .redis
                 .with(svc_name, api_name)
                 .get(key)
                 .await
-                .map_err(|redis_err| redis_err.to_string())?,
+                .map_err(KeyValueStorageError::from)?,
         };
 
         if let Some(serialized) = serialized {
@@ -186,20 +206,20 @@ impl KeyValueStorage for RedisKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
-    ) -> Result<Vec<Option<Bytes>>, String> {
+    ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         let serialized: Vec<Option<Bytes>> = match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
                 .hmget(ns, keys)
                 .await
-                .map_err(|redis_err| redis_err.to_string())?,
+                .map_err(KeyValueStorageError::from)?,
             None => self
                 .redis
                 .with(svc_name, api_name)
                 .mget(keys)
                 .await
-                .map_err(|redis_err| redis_err.to_string())?,
+                .map_err(KeyValueStorageError::from)?,
         };
 
         for s in serialized.iter().flatten() {
@@ -215,7 +235,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         api_name: &'static str,
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<(String, Bytes)>, String> {
+    ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
         let pairs: Vec<(String, Bytes)> = match Self::use_hash(&namespace) {
             // `HGETALL` returns every field/value of the hash in a single atomic command.
             Some(ns) => {
@@ -224,10 +244,14 @@ impl KeyValueStorage for RedisKeyValueStorage {
                     .with(svc_name, api_name)
                     .hgetall(ns)
                     .await
-                    .map_err(|redis_err| redis_err.to_string())?;
+                    .map_err(KeyValueStorageError::from)?;
                 map.into_iter().collect()
             }
-            None => return Err("get_all is only supported for Redis hash namespaces".to_string()),
+            None => {
+                return Err(KeyValueStorageError::other(
+                    "get_all is only supported for Redis hash namespaces",
+                ));
+            }
         };
 
         for (_, value) in &pairs {
@@ -243,20 +267,20 @@ impl KeyValueStorage for RedisKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
                 .hdel(ns, key)
                 .await
-                .map_err(|redis_err| redis_err.to_string()),
+                .map_err(KeyValueStorageError::from),
             None => self
                 .redis
                 .with(svc_name, api_name)
                 .del(key)
                 .await
-                .map_err(|redis_err| redis_err.to_string()),
+                .map_err(KeyValueStorageError::from),
         }
     }
 
@@ -266,20 +290,20 @@ impl KeyValueStorage for RedisKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
                 .hdel(ns, keys)
                 .await
-                .map_err(|redis_err| redis_err.to_string()),
+                .map_err(KeyValueStorageError::from),
             None => self
                 .redis
                 .with(svc_name, api_name)
                 .del_many(keys)
                 .await
-                .map_err(|redis_err| redis_err.to_string()),
+                .map_err(KeyValueStorageError::from),
         }
     }
 
@@ -289,20 +313,20 @@ impl KeyValueStorage for RedisKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
                 .hexists(ns, key)
                 .await
-                .map_err(|redis_err| redis_err.to_string()),
+                .map_err(KeyValueStorageError::from),
             None => self
                 .redis
                 .with(svc_name, api_name)
                 .exists(key)
                 .await
-                .map_err(|redis_err| redis_err.to_string()),
+                .map_err(KeyValueStorageError::from),
         }
     }
 
@@ -311,20 +335,20 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>, KeyValueStorageError> {
         match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
                 .with(svc_name, api_name)
                 .hkeys(ns)
                 .await
-                .map_err(|redis_err| redis_err.to_string()),
+                .map_err(KeyValueStorageError::from),
             None => self
                 .redis
                 .with(svc_name, api_name)
                 .keys("*".to_string())
                 .await
-                .map_err(|redis_err| redis_err.to_string()),
+                .map_err(KeyValueStorageError::from),
         }
     }
 
@@ -336,7 +360,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
         let key = match Self::use_hash(&namespace) {
@@ -347,7 +371,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
             .with(svc_name, api_name)
             .sadd(&key, value)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn remove_from_set(
@@ -358,7 +382,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
         let key = match Self::use_hash(&namespace) {
@@ -369,7 +393,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
             .with(svc_name, api_name)
             .srem(&key, value)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn members_of_set(
@@ -379,7 +403,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<Bytes>, String> {
+    ) -> Result<Vec<Bytes>, KeyValueStorageError> {
         let key = match Self::use_hash(&namespace) {
             Some(ns) => format!("{ns}:{key}"),
             None => key.to_string(),
@@ -389,7 +413,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
             .with(svc_name, api_name)
             .smembers(&key)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(KeyValueStorageError::from)?;
 
         for member in &members {
             record_redis_deserialized_size(svc_name, entity_name, member.len());
@@ -407,7 +431,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         key: &str,
         score: f64,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
         let key = match Self::use_hash(&namespace) {
@@ -418,7 +442,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
             .with(svc_name, api_name)
             .zadd(&key, None, None, false, false, (score, value))
             .await
-            .map_err(|e| e.to_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn remove_from_sorted_set(
@@ -429,7 +453,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
         let key = match Self::use_hash(&namespace) {
@@ -440,7 +464,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
             .with(svc_name, api_name)
             .zrem(&key, value)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn get_sorted_set(
@@ -450,7 +474,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<(f64, Bytes)>, String> {
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         let key = match Self::use_hash(&namespace) {
             Some(ns) => format!("{ns}:{key}"),
             None => key.to_string(),
@@ -460,7 +484,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
             .with(svc_name, api_name)
             .zrange(&key, 0, -1, None, false, None, true)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(KeyValueStorageError::from)?;
 
         for (data, _score) in &pairs {
             record_redis_deserialized_size(svc_name, entity_name, data.len());
@@ -481,7 +505,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         key: &str,
         min: f64,
         max: f64,
-    ) -> Result<Vec<(f64, Bytes)>, String> {
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         let key = match Self::use_hash(&namespace) {
             Some(ns) => format!("{ns}:{key}"),
             None => key.to_string(),
@@ -491,7 +515,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
             .with(svc_name, api_name)
             .zrangebyscore(&key, min, max, true, None)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(KeyValueStorageError::from)?;
 
         for (data, _score) in &pairs {
             record_redis_deserialized_size(svc_name, entity_name, data.len());

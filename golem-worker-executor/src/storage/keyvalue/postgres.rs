@@ -13,11 +13,10 @@
 // limitations under the License.
 
 use crate::services::golem_config::KeyValueStoragePostgresConfig;
-use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageError, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::FutureExt;
-use golem_common::SafeDisplay;
 use golem_common::metrics::db::record_db_serialized_size;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{Pool, PoolApi};
@@ -101,7 +100,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         let query =
             sqlx::query("INSERT INTO kv_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key) DO UPDATE SET value = EXCLUDED.value;")
@@ -114,7 +113,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn set_many(
@@ -124,7 +123,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         if pairs.is_empty() {
             return Ok(());
         }
@@ -162,7 +161,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
                 .boxed()
             })
             .await
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn set_if_not_exists(
@@ -173,7 +172,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         let query = sqlx::query(
             "INSERT INTO kv_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key) DO NOTHING;",
@@ -187,7 +186,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .execute(query)
             .await
             .map(|result| result.rows_affected() == 1)
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn get(
@@ -197,7 +196,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, KeyValueStorageError> {
         let query = sqlx::query_as::<_, DBValue>(
             "SELECT value FROM kv_storage WHERE namespace = $1 AND key = $2;",
         )
@@ -209,7 +208,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .fetch_optional_as::<DBValue, _>(query)
             .await
             .map(|v| v.map(DBValue::into_bytes))
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn get_many(
@@ -219,7 +218,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
-    ) -> Result<Vec<Option<Bytes>>, String> {
+    ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -250,7 +249,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
                 .boxed()
             })
             .await
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn get_all(
@@ -259,7 +258,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         api_name: &'static str,
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<(String, Bytes)>, String> {
+    ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
         let query = sqlx::query_as::<_, (String, Vec<u8>)>(
             "SELECT key, value FROM kv_storage WHERE namespace = $1;",
         )
@@ -274,7 +273,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
                     .map(|(key, value)| (key, Bytes::from(value)))
                     .collect()
             })
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn del(
@@ -283,7 +282,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let query = sqlx::query("DELETE FROM kv_storage WHERE namespace = $1 AND key = $2;")
             .bind(Self::namespace(namespace))
             .bind(key);
@@ -293,7 +292,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn del_many(
@@ -302,7 +301,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         if keys.is_empty() {
             return Ok(());
         }
@@ -325,7 +324,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
                 .boxed()
             })
             .await
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn exists(
@@ -334,7 +333,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         let query = sqlx::query_as::<_, (bool,)>(
             "SELECT EXISTS(SELECT 1 FROM kv_storage WHERE namespace = $1 AND key = $2);",
         )
@@ -346,7 +345,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .fetch_one_as::<(bool,), _>(query)
             .await
             .map(|row| row.0)
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn keys(
@@ -354,7 +353,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>, KeyValueStorageError> {
         let query = sqlx::query_as::<_, (String,)>(
             "SELECT key FROM kv_storage WHERE namespace = $1 ORDER BY key ASC;",
         )
@@ -365,7 +364,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .fetch_all_as::<(String,), _>(query)
             .await
             .map(|rows| rows.into_iter().map(|row| row.0).collect())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn add_to_set(
@@ -376,7 +375,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let query = sqlx::query(
             "INSERT INTO set_storage (namespace, key, value) VALUES ($1, $2, $3) ON CONFLICT (namespace, key, value) DO NOTHING;",
         )
@@ -389,7 +388,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn remove_from_set(
@@ -400,7 +399,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let query = sqlx::query(
             "DELETE FROM set_storage WHERE namespace = $1 AND key = $2 AND value = $3;",
         )
@@ -413,7 +412,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn members_of_set(
@@ -423,7 +422,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<Bytes>, String> {
+    ) -> Result<Vec<Bytes>, KeyValueStorageError> {
         let query = sqlx::query_as::<_, DBValue>(
             "SELECT value FROM set_storage WHERE namespace = $1 AND key = $2;",
         )
@@ -435,7 +434,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .fetch_all_as::<DBValue, _>(query)
             .await
             .map(|rows| rows.into_iter().map(DBValue::into_bytes).collect())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn add_to_sorted_set(
@@ -447,7 +446,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         key: &str,
         score: f64,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let value_hash = Self::value_hash(value);
         let query = sqlx::query(
             "INSERT INTO sorted_set_storage (namespace, key, value_hash, value, score) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (namespace, key, value_hash) DO UPDATE SET value = EXCLUDED.value, score = EXCLUDED.score;",
@@ -463,7 +462,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn remove_from_sorted_set(
@@ -474,7 +473,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let value_hash = Self::value_hash(value);
         let query = sqlx::query(
             "DELETE FROM sorted_set_storage WHERE namespace = $1 AND key = $2 AND value_hash = $3 AND value = $4;",
@@ -489,7 +488,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn get_sorted_set(
@@ -499,7 +498,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<(f64, Bytes)>, String> {
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         let query = sqlx::query_as::<_, DBScoreValue>(
             "SELECT score, value FROM sorted_set_storage WHERE namespace = $1 AND key = $2 ORDER BY score ASC;",
         )
@@ -511,7 +510,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .fetch_all_as::<DBScoreValue, _>(query)
             .await
             .map(|rows| rows.into_iter().map(DBScoreValue::into_pair).collect())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn query_sorted_set(
@@ -523,7 +522,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         key: &str,
         min: f64,
         max: f64,
-    ) -> Result<Vec<(f64, Bytes)>, String> {
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         let query = sqlx::query_as::<_, DBScoreValue>(
             "SELECT score, value FROM sorted_set_storage WHERE namespace = $1 AND key = $2 AND score BETWEEN $3 AND $4 ORDER BY score ASC;",
         )
@@ -537,7 +536,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             .fetch_all_as::<DBScoreValue, _>(query)
             .await
             .map(|rows| rows.into_iter().map(DBScoreValue::into_pair).collect())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 }
 

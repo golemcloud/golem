@@ -171,10 +171,18 @@ impl AgentStatusFlusher {
         let track_now = DefaultWorkerService::should_track_for_assignment_recovery(new_status);
         let track_before =
             DefaultWorkerService::should_track_for_assignment_recovery(previous_status);
-        if track_now != track_before {
-            self.worker_service
+        if track_now != track_before
+            && let Err(err) = self
+                .worker_service
                 .set_assignment_tracking(&self.owned_agent_id, new_status)
-                .await;
+                .await
+        {
+            // Logged, not fatal: aborting the executor would drop every invocation running on it
+            // and still leave the index exactly as stale as this failed write left it.
+            error!(
+                "Failed to update the running workers recovery index for {}: {err}",
+                self.owned_agent_id
+            );
         }
 
         // Blob: defer to the sweeper, or write inline if background flushing is off.
@@ -497,12 +505,13 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             status_value: &AgentStatusRecord,
-        ) {
+        ) -> Result<(), String> {
             self.state
                 .lock()
                 .unwrap()
                 .tracking_calls
                 .push(status_value.status);
+            Ok(())
         }
     }
 

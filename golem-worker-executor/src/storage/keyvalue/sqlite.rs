@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageError, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -95,7 +94,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         let query = sqlx::query(
             "INSERT OR REPLACE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
@@ -109,7 +108,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn set_many(
@@ -119,9 +118,9 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let api = self.pool.with_rw(svc_name, api_name);
-        let mut tx = api.begin().await.map_err(|err| err.to_safe_string())?;
+        let mut tx = api.begin().await.map_err(KeyValueStorageError::from)?;
 
         for (field_key, field_value) in pairs {
             record_db_serialized_size(DB_TYPE, svc_name, entity_name, field_value.len());
@@ -134,9 +133,9 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                 .bind(Self::namespace(namespace.clone())),
             )
             .await
-            .map_err(|err| err.to_safe_string())?;
+            .map_err(KeyValueStorageError::from)?;
         }
-        tx.commit().await.map_err(|err| err.to_safe_string())
+        tx.commit().await.map_err(KeyValueStorageError::from)
     }
 
     async fn set_if_not_exists(
@@ -147,7 +146,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         let query = sqlx::query(
             "INSERT OR IGNORE INTO kv_storage (key, value, namespace) VALUES (?, ?, ?);",
@@ -161,7 +160,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .execute(query)
             .await
             .map(|result| result.rows_affected() == 1)
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn get(
@@ -171,7 +170,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, KeyValueStorageError> {
         let query = sqlx::query_as("SELECT value FROM kv_storage WHERE key = ? AND namespace = ?;")
             .bind(key)
             .bind(Self::namespace(namespace));
@@ -181,7 +180,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .fetch_optional_as::<DBValue, _>(query)
             .await
             .map(|r| r.map(|op| op.into_bytes()))
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn get_many(
@@ -191,7 +190,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
-    ) -> Result<Vec<Option<Bytes>>, String> {
+    ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         let placeholders = keys.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
         let statement = format!(
@@ -209,7 +208,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .with_ro(svc_name, api_name)
             .fetch_all_as(query)
             .await
-            .map_err(|err| err.to_safe_string())?;
+            .map_err(KeyValueStorageError::from)?;
 
         let mut result_map = results
             .into_iter()
@@ -230,7 +229,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         api_name: &'static str,
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<(String, Bytes)>, String> {
+    ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
         let query = sqlx::query_as("SELECT key, value FROM kv_storage WHERE namespace = ?;")
             .bind(Self::namespace(namespace));
 
@@ -239,7 +238,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .with_ro(svc_name, api_name)
             .fetch_all_as(query)
             .await
-            .map_err(|err| err.to_safe_string())?;
+            .map_err(KeyValueStorageError::from)?;
 
         Ok(results.into_iter().map(|kv| kv.into_pair()).collect())
     }
@@ -250,7 +249,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let query = sqlx::query("DELETE FROM kv_storage WHERE key = ? AND namespace = ?;")
             .bind(key)
             .bind(Self::namespace(namespace));
@@ -259,7 +258,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn del_many(
@@ -268,9 +267,9 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let api = self.pool.with_rw(svc_name, api_name);
-        let mut tx = api.begin().await.map_err(|err| err.to_safe_string())?;
+        let mut tx = api.begin().await.map_err(KeyValueStorageError::from)?;
         for key in keys {
             tx.execute(
                 sqlx::query("DELETE FROM kv_storage WHERE key = ? AND namespace = ?;")
@@ -278,9 +277,9 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                     .bind(Self::namespace(namespace.clone())),
             )
             .await
-            .map_err(|err| err.to_safe_string())?;
+            .map_err(KeyValueStorageError::from)?;
         }
-        tx.commit().await.map_err(|err| err.to_safe_string())
+        tx.commit().await.map_err(KeyValueStorageError::from)
     }
 
     async fn exists(
@@ -289,7 +288,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         let query = sqlx::query("SELECT 1 FROM kv_storage WHERE key = ? AND namespace = ?")
             .bind(key)
             .bind(Self::namespace(namespace));
@@ -299,7 +298,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .fetch_optional(query)
             .await
             .map(|row| row.is_some())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn keys(
@@ -307,7 +306,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>, KeyValueStorageError> {
         let query = sqlx::query_as("SELECT key FROM kv_storage WHERE namespace = ?;")
             .bind(Self::namespace(namespace));
 
@@ -316,7 +315,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .fetch_all_as::<(String,), _>(query)
             .await
             .map(|vec| vec.into_iter().map(|k| k.0).collect::<Vec<String>>())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn add_to_set(
@@ -327,7 +326,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let query = sqlx::query(
             "INSERT OR REPLACE INTO set_storage (namespace, key, value) VALUES (?, ?, ?);",
         )
@@ -340,7 +339,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn remove_from_set(
@@ -351,7 +350,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let query =
             sqlx::query("DELETE FROM set_storage WHERE key = ? AND value = ? AND namespace = ?;")
                 .bind(key)
@@ -363,7 +362,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn members_of_set(
@@ -373,7 +372,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<Bytes>, String> {
+    ) -> Result<Vec<Bytes>, KeyValueStorageError> {
         let query =
             sqlx::query_as("SELECT value FROM set_storage WHERE key = ? AND namespace = ?;")
                 .bind(key)
@@ -388,7 +387,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                     .map(|k| k.into_bytes())
                     .collect::<Vec<Bytes>>()
             })
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn add_to_sorted_set(
@@ -400,7 +399,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         key: &str,
         score: f64,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let query = sqlx::query(
                     r#"
                     INSERT INTO sorted_set_storage (key, value, namespace, score) VALUES (?, ?, ?, ?)
@@ -417,7 +416,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn remove_from_sorted_set(
@@ -428,7 +427,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         let query = sqlx::query(
             "DELETE FROM sorted_set_storage WHERE key = ? AND value = ? AND namespace = ?;",
         )
@@ -441,7 +440,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn get_sorted_set(
@@ -451,7 +450,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<(f64, Bytes)>, String> {
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         let query =
                     sqlx::query_as("SELECT score, value FROM sorted_set_storage WHERE key = ? AND namespace = ? ORDER BY score ASC;")
                         .bind(key)
@@ -466,7 +465,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                     .map(|k| k.into_pair())
                     .collect::<Vec<(f64, Bytes)>>()
             })
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 
     async fn query_sorted_set(
@@ -478,7 +477,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         key: &str,
         min: f64,
         max: f64,
-    ) -> Result<Vec<(f64, Bytes)>, String> {
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         let query =
             sqlx::query_as("SELECT value, score FROM sorted_set_storage WHERE key = ? AND namespace = ? AND score BETWEEN ? AND ? ORDER BY score ASC;")
                 .bind(key)
@@ -495,7 +494,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
                     .map(|k| k.into_pair())
                     .collect::<Vec<(f64, Bytes)>>()
             })
-            .map_err(|err| err.to_safe_string())
+            .map_err(KeyValueStorageError::from)
     }
 }
 

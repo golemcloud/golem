@@ -121,6 +121,13 @@ database = "../data/worker-executor-key-value-storage.db"
 foreign_keys = false
 max_connections = 10
 
+[key_value_storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
 [limits]
 ephemeral_fuel_overdraft_multiplier = 100
 epoch_interval = "10ms"
@@ -482,6 +489,13 @@ without_time = false
 # 
 # [key_value_storage.config]
 # 
+# [key_value_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
@@ -812,6 +826,13 @@ without_time = false
 # type = "InMemory"
 # 
 # [key_value_storage.config]
+# 
+# [key_value_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [limits]
 # ephemeral_fuel_overdraft_multiplier = 100

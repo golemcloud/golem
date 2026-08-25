@@ -34,7 +34,7 @@ use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, error};
 
 /// Hash field holding the bounded part of the cached `AgentStatusRecord` (everything except the
 /// unbounded fields that are stored separately). Always present for a cached status; its absence is
@@ -295,11 +295,15 @@ pub trait WorkerService: Send + Sync {
     /// to resume, so it is always maintained synchronously (never deferred to the background
     /// flusher). The worker is added when [`should_track_for_assignment_recovery`] holds and
     /// removed otherwise. No-op for ephemeral workers.
+    ///
+    /// Returns the storage error if the index could not be updated. The index is not worth aborting
+    /// the executor over: a crash loses the same entry the failed write would have added, plus every
+    /// invocation running on the node.
     async fn set_assignment_tracking(
         &self,
         owned_agent_id: &OwnedAgentId,
         status_value: &AgentStatusRecord,
-    );
+    ) -> Result<(), String>;
 
     /// Convenience cold-path helper that writes the blob *and* updates the recovery index in one
     /// call. Panics on a blob write failure (cold paths cannot meaningfully recover). Hot paths use
@@ -310,8 +314,14 @@ pub trait WorkerService: Send + Sync {
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
     ) {
-        self.set_assignment_tracking(owned_agent_id, &status_value)
-            .await;
+        if let Err(err) = self
+            .set_assignment_tracking(owned_agent_id, &status_value)
+            .await
+        {
+            error!(
+                "Failed to update the running workers recovery index for {owned_agent_id}: {err}"
+            );
+        }
         self.write_cached_status(owned_agent_id, previous_status, status_value)
             .await
             .unwrap_or_else(|err| {
@@ -944,12 +954,12 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         status_value: &AgentStatusRecord,
-    ) {
+    ) -> Result<(), String> {
         record_worker_call("set_assignment_tracking");
 
         // Ephemeral workers are never tracked for recovery (mirrors `write_cached_status`).
         if status_value.agent_mode == AgentMode::Ephemeral {
-            return;
+            return Ok(());
         }
 
         let shard_assignment = self
@@ -963,29 +973,35 @@ impl WorkerService for DefaultWorkerService {
         if Self::should_track_for_assignment_recovery(status_value) {
             debug!("Adding worker to the set of running workers in shard {shard_id}");
 
-            self
-                .key_value_storage
+            self.key_value_storage
                 .with_entity("worker", "add", "agent_id")
-                .add_to_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
+                .add_to_set(
+                    KeyValueStorageNamespace::RunningWorkers,
+                    &Self::running_in_shard_key(&shard_id),
+                    owned_agent_id,
+                )
                 .await
-                .unwrap_or_else(|err| {
-                    panic!(
+                .map_err(|err| {
+                    format!(
                         "failed to add worker to the set of running workers per shard ids on KV storage: {err}"
                     )
-                });
+                })
         } else {
             debug!("Removing worker from the set of running workers in shard {shard_id}");
 
-            self
-                .key_value_storage
+            self.key_value_storage
                 .with_entity("worker", "remove", "agent_id")
-                .remove_from_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
+                .remove_from_set(
+                    KeyValueStorageNamespace::RunningWorkers,
+                    &Self::running_in_shard_key(&shard_id),
+                    owned_agent_id,
+                )
                 .await
-                .unwrap_or_else(|err| {
-                    panic!(
+                .map_err(|err| {
+                    format!(
                         "failed to remove worker from the set of running worker ids per shard on KV storage: {err}"
                     )
-                });
+                })
         }
     }
 }

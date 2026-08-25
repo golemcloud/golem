@@ -17,15 +17,97 @@ pub mod multi_sqlite;
 pub mod namespace_routed;
 pub mod postgres;
 pub mod redis;
+pub mod retrying;
 pub mod sqlite;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
+use golem_common::SafeDisplay;
 use golem_common::model::AgentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::serialization::{deserialize, serialize};
-use std::fmt::Debug;
+use golem_service_base::repo::RepoError;
+use std::fmt::{Debug, Display, Formatter};
+
+/// Error returned by every [`KeyValueStorage`] operation.
+///
+/// The variants classify how a failure may be *retried* rather than mirroring any one backend's
+/// error taxonomy. Each backend maps its own errors onto them, which is what lets a single retry
+/// policy - [`retrying::RetryingKeyValueStorage`] - behave identically no matter which backend is
+/// configured.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyValueStorageError {
+    /// A transient failure that happened before the operation reached the backend: a connection
+    /// pool acquisition timeout, or a request the client refused to dispatch. The operation is
+    /// guaranteed not to have been applied, so retrying it is safe even when it is not idempotent.
+    NotAttempted(String),
+    /// A transient failure where the operation may or may not have been applied: a mid-operation
+    /// I/O error, a timeout waiting for the response, or a dropped connection. Retrying is only
+    /// safe for idempotent operations.
+    Transient(String),
+    /// Any other failure, including every failure not known to be transient. Never retried.
+    Other(String),
+}
+
+impl KeyValueStorageError {
+    pub fn other(message: impl Display) -> Self {
+        Self::Other(message.to_string())
+    }
+
+    /// Whether retrying the failed operation is safe. `idempotent` describes the operation, not the
+    /// error: an operation is idempotent when running it twice has the same effect and yields the
+    /// same result as running it once.
+    pub fn is_retryable(&self, idempotent: bool) -> bool {
+        match self {
+            Self::NotAttempted(_) => true,
+            Self::Transient(_) => idempotent,
+            Self::Other(_) => false,
+        }
+    }
+}
+
+impl Display for KeyValueStorageError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAttempted(message) => write!(
+                f,
+                "Transient key-value storage error (not attempted): {message}"
+            ),
+            Self::Transient(message) => write!(f, "Transient key-value storage error: {message}"),
+            Self::Other(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for KeyValueStorageError {}
+
+impl From<KeyValueStorageError> for String {
+    fn from(error: KeyValueStorageError) -> Self {
+        error.to_string()
+    }
+}
+
+impl From<String> for KeyValueStorageError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
+impl From<RepoError> for KeyValueStorageError {
+    fn from(error: RepoError) -> Self {
+        // `to_safe_string` because repository errors can carry query fragments and row contents.
+        let message = error.to_safe_string();
+        if error.is_pool_timeout() {
+            // Acquiring a connection timed out, so no statement reached the database.
+            Self::NotAttempted(message)
+        } else if error.is_transient() {
+            Self::Transient(message)
+        } else {
+            Self::Other(message)
+        }
+    }
+}
 
 #[async_trait]
 pub trait KeyValueStorage: Debug {
@@ -37,7 +119,7 @@ pub trait KeyValueStorage: Debug {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String>;
+    ) -> Result<(), KeyValueStorageError>;
 
     async fn set_many(
         &self,
@@ -46,7 +128,7 @@ pub trait KeyValueStorage: Debug {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
-    ) -> Result<(), String>;
+    ) -> Result<(), KeyValueStorageError>;
 
     async fn set_if_not_exists(
         &self,
@@ -56,7 +138,7 @@ pub trait KeyValueStorage: Debug {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<bool, String>;
+    ) -> Result<bool, KeyValueStorageError>;
 
     async fn get(
         &self,
@@ -65,7 +147,7 @@ pub trait KeyValueStorage: Debug {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Option<Bytes>, String>;
+    ) -> Result<Option<Bytes>, KeyValueStorageError>;
 
     async fn get_many(
         &self,
@@ -74,7 +156,7 @@ pub trait KeyValueStorage: Debug {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
-    ) -> Result<Vec<Option<Bytes>>, String>;
+    ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError>;
 
     /// Returns every `(field, value)` pair stored under `namespace` in a single atomic read.
     ///
@@ -88,7 +170,7 @@ pub trait KeyValueStorage: Debug {
         api_name: &'static str,
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<(String, Bytes)>, String>;
+    ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError>;
 
     async fn del(
         &self,
@@ -96,7 +178,7 @@ pub trait KeyValueStorage: Debug {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<(), String>;
+    ) -> Result<(), KeyValueStorageError>;
 
     async fn del_many(
         &self,
@@ -104,7 +186,7 @@ pub trait KeyValueStorage: Debug {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
-    ) -> Result<(), String>;
+    ) -> Result<(), KeyValueStorageError>;
 
     async fn exists(
         &self,
@@ -112,14 +194,14 @@ pub trait KeyValueStorage: Debug {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<bool, String>;
+    ) -> Result<bool, KeyValueStorageError>;
 
     async fn keys(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<String>, String>;
+    ) -> Result<Vec<String>, KeyValueStorageError>;
 
     async fn add_to_set(
         &self,
@@ -129,7 +211,7 @@ pub trait KeyValueStorage: Debug {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String>;
+    ) -> Result<(), KeyValueStorageError>;
 
     async fn remove_from_set(
         &self,
@@ -139,7 +221,7 @@ pub trait KeyValueStorage: Debug {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String>;
+    ) -> Result<(), KeyValueStorageError>;
 
     async fn members_of_set(
         &self,
@@ -148,7 +230,7 @@ pub trait KeyValueStorage: Debug {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<Bytes>, String>;
+    ) -> Result<Vec<Bytes>, KeyValueStorageError>;
 
     async fn add_to_sorted_set(
         &self,
@@ -159,7 +241,7 @@ pub trait KeyValueStorage: Debug {
         key: &str,
         score: f64,
         value: &[u8],
-    ) -> Result<(), String>;
+    ) -> Result<(), KeyValueStorageError>;
 
     async fn remove_from_sorted_set(
         &self,
@@ -169,7 +251,7 @@ pub trait KeyValueStorage: Debug {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String>;
+    ) -> Result<(), KeyValueStorageError>;
 
     async fn get_sorted_set(
         &self,
@@ -178,7 +260,7 @@ pub trait KeyValueStorage: Debug {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<(f64, Bytes)>, String>;
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError>;
 
     async fn query_sorted_set(
         &self,
@@ -189,7 +271,7 @@ pub trait KeyValueStorage: Debug {
         key: &str,
         min: f64,
         max: f64,
-    ) -> Result<Vec<(f64, Bytes)>, String>;
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError>;
 }
 
 pub trait KeyValueStorageLabelledApi<T: KeyValueStorage + ?Sized> {
@@ -244,6 +326,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
         self.storage
             .del(self.svc_name, self.api_name, namespace, key)
             .await
+            .map_err(Into::into)
     }
 
     pub async fn del_many(
@@ -254,6 +337,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
         self.storage
             .del_many(self.svc_name, self.api_name, namespace, keys)
             .await
+            .map_err(Into::into)
     }
 
     pub async fn exists(
@@ -264,12 +348,14 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
         self.storage
             .exists(self.svc_name, self.api_name, namespace, key)
             .await
+            .map_err(Into::into)
     }
 
     pub async fn keys(&self, namespace: KeyValueStorageNamespace) -> Result<Vec<String>, String> {
         self.storage
             .keys(self.svc_name, self.api_name, namespace)
             .await
+            .map_err(Into::into)
     }
 }
 
@@ -313,6 +399,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 &serialized,
             )
             .await
+            .map_err(Into::into)
     }
 
     pub async fn set_raw(
@@ -331,6 +418,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 value,
             )
             .await
+            .map_err(Into::into)
     }
 
     pub async fn set_if_not_exists<V: BinarySerializer>(
@@ -350,6 +438,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 &serialized,
             )
             .await
+            .map_err(Into::into)
     }
 
     pub async fn set_many<V: BinarySerializer>(
@@ -374,6 +463,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 &pairs_refs,
             )
             .await
+            .map_err(Into::into)
     }
 
     pub async fn set_many_raw(
@@ -390,6 +480,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 pairs,
             )
             .await
+            .map_err(Into::into)
     }
 
     pub async fn get<V: BinaryDeserializer>(
@@ -440,6 +531,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 key,
             )
             .await
+            .map_err(Into::into)
     }
 
     pub async fn get_many<V: BinaryDeserializer>(
@@ -483,6 +575,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 keys,
             )
             .await
+            .map_err(Into::into)
     }
 
     pub async fn get_all_raw(
@@ -492,6 +585,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         self.storage
             .get_all(self.svc_name, self.api_name, self.entity_name, namespace)
             .await
+            .map_err(Into::into)
     }
 
     pub async fn add_to_set<V: BinarySerializer>(
@@ -511,6 +605,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 &serialized,
             )
             .await
+            .map_err(Into::into)
     }
 
     pub async fn remove_from_set<V: BinarySerializer>(
@@ -530,6 +625,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 &serialized,
             )
             .await
+            .map_err(Into::into)
     }
 
     pub async fn members_of_set<V: BinaryDeserializer>(
@@ -574,6 +670,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 &serialized,
             )
             .await
+            .map_err(Into::into)
     }
 
     pub async fn remove_from_sorted_set<V: BinarySerializer>(
@@ -593,6 +690,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 &serialized,
             )
             .await
+            .map_err(Into::into)
     }
 
     pub async fn get_sorted_set<V: BinaryDeserializer>(

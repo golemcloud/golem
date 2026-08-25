@@ -42,6 +42,12 @@ pub struct GolemConfig {
     pub tracing: TracingConfig,
     pub tracing_file_name_with_port: bool,
     pub key_value_storage: KeyValueStorageConfig,
+    /// Retry policy applied to every key-value storage operation whose failure is classified as
+    /// transient, whichever backend serves it. Without it a brief backend outage - a connection
+    /// pool acquisition timeout, a dropped connection - surfaces to hot paths such as promise and
+    /// agent status updates as a hard failure.
+    #[serde(default = "default_key_value_storage_retry")]
+    pub key_value_storage_retry: RetryConfig,
     pub scheduler_storage: SchedulerStorageConfig,
     pub indexed_storage: IndexedStorageConfig,
     pub blob_storage: BlobStorageConfig,
@@ -84,6 +90,10 @@ pub struct GolemConfig {
     pub runtime_metrics_sampling_interval: Duration,
 }
 
+pub fn default_key_value_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
+}
+
 impl SafeDisplay for GolemConfig {
     fn to_safe_string(&self) -> String {
         use std::fmt::Write;
@@ -102,6 +112,12 @@ impl SafeDisplay for GolemConfig {
             &mut result,
             "{}",
             self.key_value_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "key-value storage retry:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.key_value_storage_retry.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "scheduler storage:");
         let _ = writeln!(
@@ -266,6 +282,7 @@ impl Default for GolemConfig {
             tracing: TracingConfig::local_dev("worker-executor"),
             tracing_file_name_with_port: true,
             key_value_storage: KeyValueStorageConfig::default(),
+            key_value_storage_retry: default_key_value_storage_retry(),
             scheduler_storage: SchedulerStorageConfig::default(),
             indexed_storage: IndexedStorageConfig::default(),
             blob_storage: BlobStorageConfig::default(),
