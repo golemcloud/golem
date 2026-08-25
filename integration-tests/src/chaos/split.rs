@@ -159,6 +159,35 @@ pub fn window_end(
     }
 }
 
+/// The longest stretch of a window in which nothing was answered.
+///
+/// The window's own edges are the first and last comparison points, which is
+/// what separates "answered steadily but slowly" from "answered nothing for two
+/// minutes and then caught up in a burst". Those two produce the same count and
+/// the same rate; only this tells them apart.
+pub fn longest_silence_ms(
+    served_at: &[DateTime<Utc>],
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+) -> Option<u64> {
+    let (start, end) = (start?, end?);
+    let mut marks: Vec<DateTime<Utc>> = served_at
+        .iter()
+        .copied()
+        .filter(|at| *at >= start && *at <= end)
+        .collect();
+    marks.sort_unstable();
+    marks.insert(0, start);
+    marks.push(end);
+    Some(
+        marks
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).num_milliseconds().max(0) as u64)
+            .max()
+            .unwrap_or(0),
+    )
+}
+
 /// How long a window lasted, in seconds.
 ///
 /// The fault's own windows come from the workflow's timestamps, which is what

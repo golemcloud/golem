@@ -75,7 +75,9 @@
 
 use crate::chaos::errors::ErrorClass;
 use crate::chaos::history::{OperationRecord, Outcome, Stream};
-use crate::chaos::split::{FaultWindow, Window, round2, window_end, window_secs, window_start};
+use crate::chaos::split::{
+    FaultWindow, Window, longest_silence_ms, round2, window_end, window_secs, window_start,
+};
 use crate::chaos::summary::LatencyStats;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -164,35 +166,6 @@ pub struct StreamThroughputCell {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quiet_ms: Option<u64>,
     pub latency: LatencyStats,
-}
-
-/// The longest stretch of a window in which nothing was answered.
-///
-/// The window's own edges are the first and last comparison points, which is
-/// what separates "answered steadily but slowly" from "answered nothing for two
-/// minutes and then caught up in a burst". Those two produce the same count and
-/// the same rate; only this tells them apart.
-fn longest_silence_ms(
-    served_at: &[DateTime<Utc>],
-    start: Option<DateTime<Utc>>,
-    end: Option<DateTime<Utc>>,
-) -> Option<u64> {
-    let (start, end) = (start?, end?);
-    let mut marks: Vec<DateTime<Utc>> = served_at
-        .iter()
-        .copied()
-        .filter(|at| *at >= start && *at <= end)
-        .collect();
-    marks.sort_unstable();
-    marks.insert(0, start);
-    marks.push(end);
-    Some(
-        marks
-            .windows(2)
-            .map(|pair| (pair[1] - pair[0]).num_milliseconds().max(0) as u64)
-            .max()
-            .unwrap_or(0),
-    )
 }
 
 /// The operations the outage began underneath.

@@ -47,7 +47,8 @@
 
 use crate::chaos::history::{OperationRecord, Outcome, Stream};
 use crate::chaos::split::{
-    FaultWindow, Group, PodSplit, Window, round2, window_secs, window_start,
+    FaultWindow, Group, PodSplit, Window, longest_silence_ms, round2, window_end, window_secs,
+    window_start,
 };
 use crate::chaos::summary::LatencyStats;
 use chrono::{DateTime, Utc};
@@ -110,32 +111,42 @@ pub struct ThroughputCell {
     /// Below the group's size means emitters were stalled across the whole
     /// window rather than merely slowed.
     pub agents_active: usize,
+    /// Operations *offered* in this window, and how they eventually ended up.
+    /// Attributed by submission time, so an operation counted here may not have
+    /// been answered until a later window.
     pub submitted: u64,
     pub confirmed: u64,
     pub rejected: u64,
     pub indeterminate: u64,
+    /// Operations *answered* in this window, whenever they were offered.
+    ///
+    /// This is the one that says whether the group was being served, and it is
+    /// deliberately not `confirmed`: while an executor is unreachable the two
+    /// differ by exactly the work that was accepted and answered only once the
+    /// partition came down.
+    pub served: u64,
     /// Attempts that hit the client's attempt timeout rather than answering.
     /// The pending-then-timeout behaviour the scenario exists to make visible.
     pub attempts_timed_out: u64,
     pub window_secs: f64,
-    pub confirmed_per_sec: f64,
+    pub served_per_sec: f64,
     /// This cell's rate against the same group's own before-fault rate. `None`
     /// for the before-fault cell itself, and for a group that never had a
     /// baseline to compare against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_of_baseline_percent: Option<f64>,
-    /// How long into this window the group waited before offering anything.
+    /// The longest the group was answered nothing at all, anywhere in this
+    /// window.
     ///
     /// The number that stops a small non-zero rate being read as residual
-    /// service. An emitter holds one operation at a time, so a group whose
-    /// executor is unreachable offers nothing at all until something finally
-    /// answers it: a during-fault cell can therefore show a handful of
-    /// confirmations that all arrived in the last seconds of the window, once
-    /// the fault was already coming down. `quietMs` next to `windowSecs` says
-    /// which of the two happened, and it needs no threshold to do it.
+    /// service. A during-fault cell can show a handful of confirmations that
+    /// all arrived in the last seconds of the window, once the fault was
+    /// already coming down. Measured against the window's own edges, so a group
+    /// that fell silent at the start or stayed silent to the end is caught by
+    /// it too, and a `quietMs` close to `windowSecs` is a total outage however
+    /// the rate arithmetic came out.
     ///
-    /// `None` when the window has no fixed start, or when the group offered
-    /// nothing in it at all.
+    /// `None` when the window has no fixed bounds to measure against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quiet_ms: Option<u64>,
     pub latency: LatencyStats,
@@ -225,14 +236,18 @@ pub struct ReachabilityReport {
 #[derive(Default)]
 struct Tally {
     agents: BTreeSet<String>,
-    /// Earliest submission in this cell, for [`ThroughputCell::quiet_ms`].
-    first_submitted: Option<DateTime<Utc>>,
     submitted: u64,
     confirmed: u64,
     rejected: u64,
     indeterminate: u64,
     attempts_timed_out: u64,
     durations: Vec<u64>,
+    /// When this group actually answered inside this window, sorted later.
+    ///
+    /// Keyed on the window a confirmation *landed* in rather than the one its
+    /// operation was offered in, which is the only way either of the numbers
+    /// derived from it means what it says.
+    served_at: Vec<DateTime<Utc>>,
 }
 
 impl ReachabilityReport {
@@ -265,10 +280,6 @@ impl ReachabilityReport {
             let tally = tallies.entry((group, window)).or_default();
 
             tally.agents.insert(record.agent.clone());
-            tally.first_submitted = Some(match tally.first_submitted {
-                Some(at) if at <= record.submitted_at => at,
-                _ => record.submitted_at,
-            });
             tally.submitted += 1;
             match record.outcome {
                 Outcome::Confirmed => {
@@ -279,6 +290,21 @@ impl ReachabilityReport {
                 Outcome::Indeterminate => tally.indeterminate += 1,
             }
             tally.attempts_timed_out += record.attempts_timed_out();
+
+            // Answered work is filed under the window it was answered in, which
+            // is usually but not always the one it was offered in. An operation
+            // offered while the executor was unreachable and answered once the
+            // partition came down is not service the fault window delivered,
+            // and counting it there is how a total outage reads as partial.
+            if record.outcome == Outcome::Confirmed
+                && let Some(completed) = record.completed_at
+            {
+                tallies
+                    .entry((group, Window::of(completed, fault)))
+                    .or_default()
+                    .served_at
+                    .push(completed);
+            }
 
             first_submitted = Some(match first_submitted {
                 Some(at) if at <= record.submitted_at => at,
@@ -299,28 +325,32 @@ impl ReachabilityReport {
         let mut cells: Vec<ThroughputCell> = Vec::new();
         for ((group, window), tally) in &tallies {
             let secs = window_secs(*window, fault, first_submitted, last_completed);
+            let served = tally.served_at.len() as u64;
             let rate = if secs > 0.0 {
-                tally.confirmed as f64 / secs
+                served as f64 / secs
             } else {
                 0.0
             };
             if *window == Window::BeforeFault {
                 baseline_rate.insert(*group, rate);
             }
-            let quiet_ms = window_start(*window, fault, first_submitted)
-                .zip(tally.first_submitted)
-                .map(|(start, first)| (first - start).num_milliseconds().max(0) as u64);
+            let quiet_ms = longest_silence_ms(
+                &tally.served_at,
+                window_start(*window, fault, first_submitted),
+                window_end(*window, fault, last_completed),
+            );
             cells.push(ThroughputCell {
                 group: *group,
                 window: *window,
                 agents_active: tally.agents.len(),
                 submitted: tally.submitted,
                 confirmed: tally.confirmed,
+                served,
                 rejected: tally.rejected,
                 indeterminate: tally.indeterminate,
                 attempts_timed_out: tally.attempts_timed_out,
                 window_secs: round2(secs),
-                confirmed_per_sec: round2(rate),
+                served_per_sec: round2(rate),
                 share_of_baseline_percent: None,
                 quiet_ms,
                 latency: LatencyStats::from_durations(tally.durations.clone()),
@@ -333,7 +363,7 @@ impl ReachabilityReport {
             }
             if let Some(baseline) = baseline_rate.get(&cell.group).filter(|r| **r > 0.0) {
                 cell.share_of_baseline_percent =
-                    Some(round2(cell.confirmed_per_sec / baseline * 100.0));
+                    Some(round2(cell.served_per_sec / baseline * 100.0));
             }
         }
         cells.sort_by_key(|c| (c.group, c.window));
@@ -588,11 +618,11 @@ impl ReachabilityReport {
             for window in [Window::BeforeFault, Window::DuringFault, Window::AfterFault] {
                 if let Some(cell) = self.cell(group, window) {
                     lines.push(format!(
-                        "S3 {} {}: {:.2} confirmed/s{}, {} submitted{}, {} indeterminate, {} \
+                        "S3 {} {}: {:.2} served/s{}, {} offered{}, {} indeterminate, {} \
                          attempt(s) timed out, {} of {} agents active",
                         group.as_str(),
                         window.as_str(),
-                        cell.confirmed_per_sec,
+                        cell.served_per_sec,
                         cell.share_of_baseline_percent
                             .map(|s| format!(" ({s:.1}% of baseline)"))
                             .unwrap_or_default(),
@@ -603,7 +633,7 @@ impl ReachabilityReport {
                             .filter(|_| cell.window_secs > 0.0)
                             .map(|q| {
                                 format!(
-                                    ", first offered {:.1}s into a {:.1}s window",
+                                    ", answered nothing for {:.1}s of a {:.1}s window",
                                     q as f64 / 1000.0,
                                     cell.window_secs
                                 )
@@ -916,7 +946,7 @@ mod tests {
 
         assert!(report.findings.is_empty());
         assert!(report.cells.iter().all(|c| c.window == Window::Unknown));
-        assert!(report.cells.iter().all(|c| c.confirmed_per_sec == 0.0));
+        assert!(report.cells.iter().all(|c| c.served_per_sec == 0.0));
         assert_eq!(report.recovery.count, 0);
         // And nothing is silently blamed on the agents themselves.
         assert!(report.agents_never_recovered.is_empty());
@@ -1087,7 +1117,7 @@ mod tests {
     /// arrived in the last four seconds of a 182-second window, once the fault
     /// was already coming down.
     #[test]
-    fn a_group_silent_until_the_heal_reports_how_long_it_offered_nothing() {
+    fn a_group_silent_until_the_heal_reports_how_long_it_answered_nothing() {
         let mut records = history(0, 180);
         records.retain(|r| {
             !(r.agent == ISOLATED
@@ -1103,24 +1133,58 @@ mod tests {
         let cell = report.cell(Group::OnPod, Window::DuringFault).unwrap();
 
         assert_eq!(cell.submitted, 4);
-        assert_eq!(cell.quiet_ms, Some(176_000));
+        assert_eq!(cell.quiet_ms, Some(176_020));
         assert!(
             cell.quiet_ms.unwrap() as f64 / 1000.0 > cell.window_secs * 0.9,
             "silence has to dominate the window, not trail it"
         );
-        // Measured from the window's own start, not from the run's first
-        // operation: the baseline began 300s earlier.
+        // The same group's baseline answers once a second, so its longest
+        // silence is one interval. That contrast is the whole reading: 176s of
+        // silence is not a slower version of this, it is a different state.
         let baseline = report.cell(Group::OnPod, Window::BeforeFault).unwrap();
-        assert_eq!(baseline.quiet_ms, Some(0));
+        assert_eq!(baseline.quiet_ms, Some(1_000));
 
         assert!(
             report
                 .note_lines()
                 .iter()
-                .any(|l| l.contains("first offered 176.0s into a 180.0s window")),
+                .any(|l| l.contains("answered nothing for 176.0s of a 180.0s window")),
             "notes were {:?}",
             report.note_lines()
         );
+    }
+
+    /// The regression the first S16 run turned up, in the module that shares
+    /// the construction.
+    ///
+    /// The workload keeps offering work to an unreachable executor all through
+    /// the partition, so anything derived from submission times looks busy no
+    /// matter what the platform is doing. Every one of these is offered during
+    /// the fault and answered only after the heal: the fault window served the
+    /// isolated group nothing, and the cell has to say so.
+    #[test]
+    fn work_offered_to_an_isolated_group_and_answered_after_the_heal_is_not_service() {
+        let mut records = history(0, 180);
+        records.retain(|r| {
+            !(r.agent == ISOLATED
+                && r.submitted_at >= t0()
+                && r.submitted_at < t0() + TimeDelta::seconds(180))
+        });
+        for offset in 0..120 {
+            let mut record = op(ISOLATED, offset, Outcome::Confirmed);
+            record.completed_at = Some(t0() + TimeDelta::seconds(181));
+            record.duration_ms = (181 - offset) as u64 * 1_000;
+            records.push(record);
+        }
+
+        let report = build(&records);
+        let cell = report.cell(Group::OnPod, Window::DuringFault).unwrap();
+
+        assert_eq!(cell.submitted, 120, "they were offered during the fault");
+        assert_eq!(cell.confirmed, 120, "and they did all eventually confirm");
+        assert_eq!(cell.served, 0, "but none of it was served during the fault");
+        assert_eq!(cell.served_per_sec, 0.0);
+        assert_eq!(cell.quiet_ms, Some(180_000), "silent for the whole window");
     }
 
     /// Work the cut caught and the run cannot account for. Not a finding, but
