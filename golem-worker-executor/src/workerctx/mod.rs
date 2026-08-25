@@ -448,6 +448,15 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// passed to the created worker context in the 'extra_deps' parameter of 'WorkerCtx::create'.
     type ExtraDeps: Clone + Send + Sync + 'static;
 
+    /// Decorates an oplog before it is shared by the worker and its execution contexts.
+    fn wrap_oplog(
+        _owned_agent_id: &OwnedAgentId,
+        oplog: Arc<dyn Oplog>,
+        _extra_deps: &Self::ExtraDeps,
+    ) -> Arc<dyn Oplog> {
+        oplog
+    }
+
     /// Gets how many times the worker has been retried to recover from an error, and what
     /// error was stored in the last entry.
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(

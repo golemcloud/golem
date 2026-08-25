@@ -917,20 +917,20 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
         "reinstalling the same card through another transfer must not bump the target generation"
     );
 
-    let read_many_before = executor.oplog_service_call_count("read_many");
-    let commit_before = executor.oplog_service_call_count("commit");
+    let read_many_before = executor.agent_oplog_call_count(&target_agent_id, "read_many");
+    let commit_before = executor.agent_oplog_call_count(&target_agent_id, "commit");
     assert_eq!(
         deliver_card_transfer(&executor, request.clone()).await?,
         Ok(()),
         "an exact retry after target admission must reuse the terminal receipt"
     );
     assert_eq!(
-        executor.oplog_service_call_count("read_many"),
+        executor.agent_oplog_call_count(&target_agent_id, "read_many"),
         read_many_before,
         "an indexed terminal duplicate lookup must not scan the worker oplog"
     );
     assert_eq!(
-        executor.oplog_service_call_count("commit"),
+        executor.agent_oplog_call_count(&target_agent_id, "commit"),
         commit_before,
         "an indexed terminal duplicate lookup must not force an empty oplog commit"
     );

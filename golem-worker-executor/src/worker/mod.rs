@@ -700,6 +700,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         };
 
+        let oplog = Ctx::wrap_oplog(&owned_agent_id, oplog, &deps.extra_deps());
+
         let current_status_snapshot = current_status.load_full();
         let metrics_status = Arc::new(WorkerStatusMetric::new(current_status_snapshot.status));
         let initial_invocation_results = current_status_snapshot.invocation_results.clone();

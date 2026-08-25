@@ -565,7 +565,6 @@ pub struct TestWorkerExecutor {
     pub deps: WorkerExecutorTestDependencies,
     pub client: WorkerExecutorClient<OtelGrpcService<Channel>>,
     pub context: TestContext,
-    prometheus_registry: Registry,
     /// Same `AdditionalTestDeps` instance that the worker context received via
     /// `Bootstrap::create_additional_deps`. Tests use it to evict a worker's
     /// wasmtime instance while keeping the `Worker` shell (and its read-only
@@ -597,21 +596,10 @@ impl TestWorkerExecutor {
         })
     }
 
-    pub fn oplog_service_call_count(&self, api: &str) -> f64 {
-        self.prometheus_registry
-            .gather()
-            .iter()
-            .find(|family| family.name() == "oplog_svc_call_total")
-            .and_then(|family| {
-                family.get_metric().iter().find(|metric| {
-                    metric
-                        .get_label()
-                        .iter()
-                        .any(|label| label.name() == "api" && label.value() == api)
-                })
-            })
-            .map(|metric| metric.get_counter().value())
-            .unwrap_or(0.0)
+    pub fn agent_oplog_call_count(&self, agent_id: &AgentId, api: &'static str) -> u64 {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        self.additional_test_deps
+            .oplog_call_count(&owned_agent_id, api)
     }
 
     pub async fn commit_oplog_entry_bypassing_worker_status(
@@ -1256,7 +1244,6 @@ async fn start_executor_with_config(
                 deps: deps.clone(),
                 client,
                 context: context.clone(),
-                prometheus_registry: prometheus,
                 additional_test_deps,
                 leak_detector,
             });
@@ -1418,6 +1405,18 @@ impl CallCountManagement for TestWorkerCtx {
 #[async_trait]
 impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     type ExtraDeps = AdditionalTestDeps;
+
+    fn wrap_oplog(
+        owned_agent_id: &OwnedAgentId,
+        oplog: Arc<dyn Oplog>,
+        extra_deps: &Self::ExtraDeps,
+    ) -> Arc<dyn Oplog> {
+        Arc::new(TestOplog::new(
+            owned_agent_id.clone(),
+            oplog,
+            extra_deps.clone(),
+        ))
+    }
 
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
@@ -1681,11 +1680,6 @@ impl WorkerCtx for TestWorkerCtx {
         // shells under memory-pressure eviction (#3393 T5).
         extra_deps.set_active_agents(active_agents.clone());
 
-        let oplog = Arc::new(TestOplog::new(
-            owned_agent_id.clone(),
-            oplog.clone(),
-            extra_deps,
-        ));
         if !Arc::ptr_eq(&execution_status, &owner_resources.execution_status()) {
             return Err(WorkerExecutorError::runtime(
                 "Store execution status does not belong to its owner runtime resources",
@@ -2467,7 +2461,6 @@ async fn run_production_context_bootstrap(
                 deps: deps.clone(),
                 client,
                 context: context.clone(),
-                prometheus_registry: prometheus,
                 // Production-context bootstrap path uses the real `NoAdditionalDeps`
                 // worker context, not `TestWorkerCtx`, so the worker-inspection
                 // helpers do not apply here. We hand the executor a fresh, empty
@@ -2923,6 +2916,8 @@ impl Oplog for TestOplog {
     }
 
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.additional_test_deps
+            .record_oplog_call(&self.owned_agent_id, "commit");
         self.oplog.commit(level).await
     }
 
@@ -2943,6 +2938,8 @@ impl Oplog for TestOplog {
     }
 
     async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.additional_test_deps
+            .record_oplog_call(&self.owned_agent_id, "read_many");
         self.oplog.read_many(oplog_index, n).await
     }
 
@@ -3210,6 +3207,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
 pub struct AdditionalTestDeps {
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
+    oplog_call_counts: Arc<std::sync::Mutex<HashMap<OwnedAgentId, HashMap<&'static str, u64>>>>,
     /// One-shot gates pausing the first consume-body chunk `End` append of an
     /// agent inside the [`TestOplog`] wrapper — after the entry is durable in
     /// the underlying oplog but before the wrapper's `Oplog::add` returns. Used
@@ -3237,9 +3235,29 @@ impl AdditionalTestDeps {
         Self {
             oplog_failures,
             rdbms_tx_failures,
+            oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
             active_agents: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    fn record_oplog_call(&self, owned_agent_id: &OwnedAgentId, api: &'static str) {
+        let mut counts = self.oplog_call_counts.lock().unwrap();
+        *counts
+            .entry(owned_agent_id.clone())
+            .or_default()
+            .entry(api)
+            .or_default() += 1;
+    }
+
+    fn oplog_call_count(&self, owned_agent_id: &OwnedAgentId, api: &'static str) -> u64 {
+        self.oplog_call_counts
+            .lock()
+            .unwrap()
+            .get(owned_agent_id)
+            .and_then(|counts| counts.get(&api))
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Arms a one-shot gate that pauses the given agent's next consume-body
