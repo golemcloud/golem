@@ -30,7 +30,7 @@ use crate::chaos::split::PodSplit;
 use crate::chaos::summary::{ChaosSummary, TerminationReason};
 use crate::chaos::{
     DeleteConfig, FaultConfig, IsolationConfig, PinnedConfig, PromiseConfig, RetryPolicy,
-    RevertConfig, ScheduledConfig, WorkloadConfig,
+    RevertConfig, RollbackConfig, ScheduledConfig, WorkloadConfig,
 };
 use chrono::{DateTime, Utc};
 use golem_test_framework::benchmark::RunMetadata;
@@ -176,6 +176,9 @@ pub struct ChaosResult {
     /// Present only for S6.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delete_selection: Option<PodSplit>,
+    /// The component rollback the run was configured with, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback: Option<RollbackConfig>,
     pub retry_policy: RetryPolicy,
     pub scope: RunScope,
     pub summary: ChaosSummary,
@@ -253,6 +256,7 @@ mod tests {
             revert_selection: None,
             delete: None,
             delete_selection: None,
+            rollback: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "env-1".to_string(),
@@ -351,6 +355,78 @@ mod tests {
         assert_eq!(parsed.scenario_code, "S11");
         assert!(parsed.summary.promise_wakeups.is_some());
         assert!(parsed.promise_selection.is_some());
+    }
+
+    /// The S9 shape. Same contract as the others: the investigation report in
+    /// golem-cloud reads these fields by name.
+    #[test]
+    fn an_s9_result_carries_the_rollback_fields_the_investigation_report_reads() {
+        use crate::chaos::rollback::{ControlPlaneAttempts, RollbackReport, VersionCensus};
+
+        let now = Utc::now();
+        let mut forward = std::collections::BTreeMap::new();
+        forward.insert("chaos-s9-durable-0000".to_string(), Some(2u32));
+        let mut back = std::collections::BTreeMap::new();
+        back.insert("chaos-s9-durable-0000".to_string(), Some(1u32));
+
+        let mut result = sample_result(TerminationReason::Completed);
+        result.scenario_code = "S9".to_string();
+        result.rollback = Some(crate::chaos::RollbackConfig {
+            settle_secs: 90,
+            rolled_forward_floor_percent: 90.0,
+            control_retries: 2,
+            control_retry_delay_secs: 5,
+            kill_delay_secs: 2,
+        });
+        result.summary = ChaosSummary::build(&[], Vec::new(), Vec::new(), Some(now)).with_rollback(
+            RollbackReport {
+                forward_revision: 2,
+                rollback_revision: 3,
+                forward_version: 2,
+                rollback_version: 1,
+                rolled_forward: VersionCensus::build("before-rollback", 2, &forward),
+                rolled_back: Some(VersionCensus::build("after-recovery", 1, &back)),
+                control: ControlPlaneAttempts {
+                    requested: 200,
+                    accepted_first_try: 198,
+                    accepted_after_retry: 2,
+                    refused: 0,
+                    max_retries: 2,
+                },
+                rolled_forward_floor_percent: 90.0,
+            },
+        );
+
+        let json = serde_json::to_value(&result).unwrap();
+        let rollback = &json["summary"]["rollback"];
+        for key in [
+            "forwardRevision",
+            "rollbackRevision",
+            "forwardVersion",
+            "rollbackVersion",
+            "rolledForward",
+            "rolledBack",
+            "control",
+            "rolledForwardFloorPercent",
+        ] {
+            assert!(
+                !rollback[key].is_null(),
+                "summary.rollback.{key} is what the investigation report reads"
+            );
+        }
+        for key in [
+            "requested",
+            "acceptedFirstTry",
+            "acceptedAfterRetry",
+            "refused",
+        ] {
+            assert!(!rollback["control"][key].is_null(), "control.{key}");
+        }
+        assert_eq!(json["rollback"]["rolledForwardFloorPercent"], 90.0);
+
+        let parsed: ChaosResult = serde_json::from_str(&json.to_string()).unwrap();
+        assert_eq!(parsed.scenario_code, "S9");
+        assert!(parsed.summary.rollback.is_some());
     }
 
     /// The S6 shape. Same contract as the S3, S7, S10 and S11 tests: the
@@ -930,6 +1006,7 @@ mod sample_artifact {
             revert_selection: None,
             delete: None,
             delete_selection: None,
+            rollback: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),
@@ -1150,6 +1227,7 @@ mod sample_artifact {
             revert_selection: None,
             delete: None,
             delete_selection: None,
+            rollback: None,
             retry_policy: RetryPolicy::default(),
             scope: RunScope {
                 environment_id: "0192f000-0000-7000-8000-000000000001".to_string(),

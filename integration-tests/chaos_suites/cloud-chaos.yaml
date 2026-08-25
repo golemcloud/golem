@@ -767,3 +767,89 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # S9 — executor pod kill during a component rollback (GOL-369).
+  #
+  # S5 moves agents forward onto a new build and kills an executor while that is
+  # happening. S9 moves them forward, waits for that to land, and then moves them
+  # back — killing an executor during the return leg.
+  #
+  # The return leg is the one that matters operationally. A rollback is what you
+  # reach for when the new build is already going wrong, so a rollback happening
+  # under a dying executor is the situation you would actually be in.
+  #
+  # The rollback is a redeploy: `agent-counters` is uploaded again as a new
+  # revision and every agent is asked to move to it. `Counter::component_version`
+  # is compiled into each build, so an agent that has genuinely returned reports
+  # 1 from the code that is running rather than from metadata about what the
+  # platform believes.
+  - code: S9
+    name: executor-crash-during-rollback
+    enabled: true
+
+    fault:
+      kind: pod-kill
+      target: worker-executor
+      # `one` plus the namespace and opt-in label selectors in podchaos-s9.yaml
+      # bound the blast radius. Unlike S8 the driver does not name the pod:
+      # agents are mid-rollback across both executors, so either one interrupts
+      # returns in flight and which one carries no information.
+      mode: one
+      durationSecs: 60
+
+    phases:
+      # Long enough for cold starts and route warm-up to settle, so the roll
+      # forward is applied to a population that is running rather than arriving.
+      baselineSecs: 300
+      # Has to cover the kill, the reschedule, and the rollback finishing on
+      # both the surviving executor and the replacement.
+      faultSecs: 120
+      # Returns continue after the kill and agents have to converge before the
+      # census decides which build they are on.
+      recoverySecs: 300
+
+    workload:
+      # Durable agents are the population being rolled back, so the pool is
+      # large: a stuck agent localises to one out of 200.
+      durableAgents: 200
+      # Not rolled back — they exist to show whether acceptance degraded during
+      # the kill, separately from the rollback.
+      ephemeralAgents: 50
+      # Durable state the rollback does not touch, so they are the control:
+      # their read-back should be unaffected.
+      scheduledAgents: 50
+      promiseAgents: 0
+      # No quota stream, for the same reason as S5: a lease that cannot be
+      # renewed would add a second failure mode to a scenario that has one.
+      quotaAgents: 0
+      ratePerSec: 100
+
+    rollback:
+      # How long to let the roll-forward land before measuring it. Too short and
+      # the census reads a population still in transit, and the gate below
+      # refuses a rollback that would have been fine.
+      settleSecs: 90
+      # The share of agents that must actually report the new build before the
+      # rollback is attempted at all. Below it the driver stops: rolling agents
+      # back to a build they never left would pass every check and prove
+      # nothing, which is the worst artifact this suite can produce.
+      rolledForwardFloorPercent: 90
+      # Retries for the rollback *control plane*, counted apart from the
+      # workload's own. Different question: a request refused because its
+      # agent's executor just died says nothing about correctness, but an agent
+      # nobody successfully asked to come back explains a stale agent later
+      # without excusing one.
+      controlRetries: 2
+      controlRetryDelaySecs: 5
+      # How far into the rollback to ask for the kill. As in S5 this is when the
+      # driver *asks*; applying the PodChaos and confirming it takes a few
+      # seconds more, and the result records both so how far in it landed is
+      # readable rather than assumed.
+      killDelaySecs: 2
+
+    retryPolicy:
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

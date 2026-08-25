@@ -35,6 +35,7 @@ pub mod s5;
 pub mod s6;
 pub mod s7;
 pub mod s8;
+pub mod s9;
 
 use crate::chaos::ScenarioConfig;
 use crate::chaos::history::{OperationHistory, OperationRecord, Stream};
@@ -130,6 +131,7 @@ pub fn build_result(config: &ScenarioConfig, outcome: ScenarioOutcome) -> ChaosR
         revert_selection: outcome.revert_selection,
         delete: config.delete.clone(),
         delete_selection: outcome.delete_selection,
+        rollback: config.rollback.clone(),
         retry_policy: config.retry_policy.clone(),
         scope: outcome.scope,
         summary: outcome.summary,

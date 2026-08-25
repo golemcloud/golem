@@ -252,6 +252,8 @@ pub enum ChaosScenarioArg {
     S7,
     /// Executor pod kill while agents are being deleted.
     S6,
+    /// Executor pod kill while a component rollback is in flight.
+    S9,
 }
 
 /// Density subcommand action.

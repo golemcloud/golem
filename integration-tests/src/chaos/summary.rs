@@ -54,6 +54,7 @@ use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::probe::KeyProbe;
 use crate::chaos::reachability::ReachabilityReport;
 use crate::chaos::resurrection::ResurrectionReport;
+use crate::chaos::rollback::RollbackReport;
 use crate::chaos::truncation::TruncationReport;
 use crate::chaos::wakeups::WakeupReport;
 use serde::{Deserialize, Serialize};
@@ -588,6 +589,10 @@ pub struct ChaosSummary {
     /// scenarios that do not, for the same reason as `scheduleFires`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resurrection: Option<ResurrectionReport>,
+    /// The rollback account, for scenarios that move agents between builds and
+    /// back. Absent for scenarios that do not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback: Option<RollbackReport>,
     /// Shard-ownership samples, in the order they were taken. Empty for
     /// scenarios that do not sample executor assignments.
     ///
@@ -722,6 +727,7 @@ impl ChaosSummary {
             reachability: None,
             truncation: None,
             resurrection: None,
+            rollback: None,
             ownership: Vec::new(),
             attention,
             notes: Vec::new(),
@@ -819,6 +825,19 @@ impl ChaosSummary {
         self.attention.extend(report.attention_lines());
         self.notes.extend(report.note_lines());
         self.resurrection = Some(report);
+        self
+    }
+
+    /// Attaches the rollback account and hoists everything it wants a human to
+    /// see into [`Self::attention`].
+    ///
+    /// Same split as the others. The line worth calling out is the forward-leg
+    /// one: a rollback of agents that never left the old build proves nothing,
+    /// and that has to read as inconclusive rather than as a pass.
+    pub fn with_rollback(mut self, report: RollbackReport) -> Self {
+        self.attention.extend(report.attention_lines());
+        self.notes.extend(report.note_lines());
+        self.rollback = Some(report);
         self
     }
 

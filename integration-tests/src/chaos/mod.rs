@@ -46,6 +46,7 @@ pub mod reachability;
 pub mod result;
 pub mod resurrection;
 pub mod reverts;
+pub mod rollback;
 pub mod scenarios;
 pub mod scheduled;
 pub mod signal;
@@ -86,6 +87,8 @@ pub enum ScenarioCode {
     S7,
     /// Executor pod kill while agents are being deleted.
     S6,
+    /// Executor pod kill while a component rollback is in flight.
+    S9,
 }
 
 impl ScenarioCode {
@@ -101,19 +104,21 @@ impl ScenarioCode {
             ScenarioCode::S3 => "S3",
             ScenarioCode::S7 => "S7",
             ScenarioCode::S6 => "S6",
+            ScenarioCode::S9 => "S9",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 10] = [
+    pub const ALL: [ScenarioCode; 11] = [
         ScenarioCode::S1,
         ScenarioCode::S3,
         ScenarioCode::S5,
         ScenarioCode::S6,
         ScenarioCode::S7,
         ScenarioCode::S8,
+        ScenarioCode::S9,
         ScenarioCode::S10,
         ScenarioCode::S11,
         ScenarioCode::S12,
@@ -587,6 +592,60 @@ impl DeleteConfig {
     }
 }
 
+/// Shape of the component rollback (GOL-369).
+///
+/// S5 moves agents forward onto a new build and kills an executor while that is
+/// happening. S9 moves them forward, waits for that to land, and then moves them
+/// **back**, killing an executor during the return leg.
+///
+/// The rollback is a redeploy: the original artifact is uploaded again as a new
+/// revision, and every agent is asked to move to it. That is what "rollback"
+/// means operationally, and it is what makes the evidence unambiguous —
+/// `Counter::component_version` is compiled into each build, so an agent that
+/// has genuinely returned reports `1` from the code that is actually running,
+/// not from metadata about what the platform believes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RollbackConfig {
+    /// How long to let the roll-forward settle before rolling back.
+    ///
+    /// Load-bearing. If the agents never reached the new build, the rollback
+    /// returns them to a build they never left and the run proves nothing, so
+    /// this has to be long enough for the forward leg to finish on a healthy
+    /// cluster.
+    pub settle_secs: u64,
+    /// The share of agents that must actually report the new build before the
+    /// rollback is worth attempting, as a percentage.
+    ///
+    /// Below it the driver stops rather than spending the maintenance window on
+    /// a return journey nobody made. The same instinct as S6's smoke round.
+    pub rolled_forward_floor_percent: f64,
+    /// Retries for the rollback *control plane* — the per-agent update
+    /// requests — recorded apart from the workload's own retries.
+    ///
+    /// Separate because they answer different questions. The workload's retry
+    /// exists to expose duplicate execution and is deliberately one attempt.
+    /// This one exists so that a refused rollback request is distinguishable
+    /// from a rollback that was never asked for, which matters when the
+    /// executor owning an agent is about to be killed.
+    pub control_retries: u32,
+    pub control_retry_delay_secs: u64,
+    /// How far into the rollback to ask for the kill.
+    pub kill_delay_secs: u64,
+}
+
+impl RollbackConfig {
+    pub fn settle(&self) -> Duration {
+        Duration::from_secs(self.settle_secs)
+    }
+    pub fn control_retry_delay(&self) -> Duration {
+        Duration::from_secs(self.control_retry_delay_secs)
+    }
+    pub fn kill_delay(&self) -> Duration {
+        Duration::from_secs(self.kill_delay_secs)
+    }
+}
+
 /// One step of the executor scale schedule the workflow runs during the fault.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -674,6 +733,9 @@ pub struct ScenarioConfig {
     /// The deletion workload. Absent for scenarios that do not run one.
     #[serde(default)]
     pub delete: Option<DeleteConfig>,
+    /// The component rollback. Absent for scenarios that do not run one.
+    #[serde(default)]
+    pub rollback: Option<RollbackConfig>,
     /// Shard-ownership oracle settings. Absent for scenarios that do not sample
     /// executor assignments.
     #[serde(default)]
@@ -808,6 +870,16 @@ impl ScenarioConfig {
             );
         }
         Ok(config)
+    }
+
+    /// The rollback block. See [`Self::require_workload`].
+    pub fn require_rollback(&self) -> anyhow::Result<&RollbackConfig> {
+        self.rollback.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "chaos scenario {} needs a `rollback` block in the suite YAML",
+                self.code
+            )
+        })
     }
 
     /// The pinned workload block. See [`Self::require_workload`].
@@ -948,6 +1020,7 @@ mod tests {
                 isolation: None,
                 revert: None,
                 delete: None,
+                rollback: None,
                 ownership: None,
                 scale_during_fault: None,
                 retry_policy: RetryPolicy::default(),
@@ -983,6 +1056,7 @@ mod tests {
             promise: None,
             isolation: None,
             delete: None,
+            rollback: None,
             revert: Some(RevertConfig {
                 agents: 10,
                 increments_per_round: increments,
@@ -1090,6 +1164,7 @@ mod tests {
         assert_eq!(ScenarioCode::parse("s3"), Some(ScenarioCode::S3));
         assert_eq!(ScenarioCode::parse("s7"), Some(ScenarioCode::S7));
         assert_eq!(ScenarioCode::parse("s6"), Some(ScenarioCode::S6));
+        assert_eq!(ScenarioCode::parse("s9"), Some(ScenarioCode::S9));
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
@@ -1130,6 +1205,10 @@ mod tests {
                 }
                 ScenarioCode::S6 => {
                     entry.require_delete().unwrap();
+                }
+                ScenarioCode::S9 => {
+                    entry.require_workload().unwrap();
+                    entry.require_rollback().unwrap();
                 }
             }
         }
