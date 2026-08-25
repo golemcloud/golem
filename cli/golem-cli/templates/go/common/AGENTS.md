@@ -56,7 +56,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-webhook-go` | Receiving external webhook callbacks |
 | `golem-make-http-request-go` | Making outgoing HTTP requests via `net/http` |
 | `golem-mark-read-only-go` | Marking methods read-only (side-effect-free) with result caching |
-| `golem-atomic-block-go` | Atomic regions, persistence level, idempotence, oplog commit, idempotency keys |
+| `golem-atomic-block-go` | Atomic regions, custom durability (`DurableOp`), idempotence, oplog commit, idempotency keys |
 | `golem-retry-policies-go` | Configuring semantic retry policies |
 | `golem-add-transactions-go` | Saga-pattern transactions with compensation |
 | `golem-add-postgres-go` | Using PostgreSQL via the `golem/rdbms/postgres` wrapper |
@@ -101,7 +101,7 @@ The following are retried transparently:
 
 - **HTTP requests** to external services (via `wasi:http` and friends)
 - **RPC calls** between agents
-- **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
+- **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `wasi:blobstore`, `wasi:keyvalue`
 - **Panics** escaping an agent method (e.g. from `golem.Must` on an unexpected error) — the worker is restarted and the invocation is replayed from the oplog, with all previously-recorded side effects skipped
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the Go SDK's retry-policy helpers.
