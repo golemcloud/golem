@@ -10084,8 +10084,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "3.0.11"
-source = "git+https://github.com/vigoo/test-r?rev=d4367ce4c55ac39cac85ee6fa4410ee1b0449177#d4367ce4c55ac39cac85ee6fa4410ee1b0449177"
+version = "3.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dfad2a3c321239151d31a82d84e9ba64ce954c1248e3e945cec27f580b54040"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -10095,8 +10096,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "11.0.0"
-source = "git+https://github.com/vigoo/test-r?rev=d4367ce4c55ac39cac85ee6fa4410ee1b0449177#d4367ce4c55ac39cac85ee6fa4410ee1b0449177"
+version = "11.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b178477fa5ca92289c2241984b0c1f806204c0ae8513ee7530389d3e500888fb"
 dependencies = [
  "anstream",
  "anstyle",
@@ -10122,8 +10124,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "1.4.11"
-source = "git+https://github.com/vigoo/test-r?rev=d4367ce4c55ac39cac85ee6fa4410ee1b0449177#d4367ce4c55ac39cac85ee6fa4410ee1b0449177"
+version = "1.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de99e4f567d527d1f953f9e7d3c521545f65e4dd1f6db1081abf1d23b7ac7866"
 dependencies = [
  "darling 0.21.3",
  "humantime",

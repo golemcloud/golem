@@ -31,8 +31,8 @@ tag_suite!(shared_agent_config_live_mutation, group8);
 
 // Matrix dimension for the DB backend. The `shared_agent_config_live_mutation`
 // module is runtime-multiplied via `matrix_suite!` below (zero per-test
-// annotations), while the crate-root `redis_control_round_trip` smoke test uses
-// a per-test `#[dimension(db)]` since it lives outside any named module.
+// annotations), while the crate-root smoke tests explicitly select one matching
+// dependency pair for each backend.
 define_matrix_dimension!(db: EnvBasedTestDependencies -> "postgres", "sqlite");
 
 matrix_suite!(

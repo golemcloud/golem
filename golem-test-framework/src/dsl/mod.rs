@@ -903,21 +903,31 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
-    /// Starts an agent type without default host permissions except the SDK bootstrap identity.
+    /// Starts an agent type without default host permissions except Golem-provided runtime
+    /// metadata.
     pub fn without_default_host_permissions(mut self, agent_type: &str) -> Self {
         let recipient = RecipientPattern::Account {
             account: self.dsl.account_email(),
-        };
-        let bootstrap_identity = parse_polymorphic_permission(&format!(
-            "env(?agent) @ {} : read : GOLEM_AGENT_ID",
-            recipient.render()
-        ))
-        .expect("valid SDK bootstrap identity permission");
+        }
+        .render();
+        let runtime_metadata = [
+            "GOLEM_AGENT_ID",
+            "GOLEM_AGENT_TYPE",
+            "GOLEM_WORKER_NAME",
+            "GOLEM_COMPONENT_ID",
+            "GOLEM_COMPONENT_REVISION",
+        ]
+        .into_iter()
+        .map(|name| {
+            parse_polymorphic_permission(&format!("env(?agent) @ {recipient} : read : {name}"))
+                .expect("valid Golem-provided runtime metadata permission")
+        })
+        .collect();
         self.agent_type_provision_configs.insert(
             AgentTypeName(agent_type.to_string()),
             AgentTypeProvisionConfigCreation {
                 initial_permissions: AgentTypeInitialPermissions::from_patterns(
-                    vec![bootstrap_identity],
+                    runtime_metadata,
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),

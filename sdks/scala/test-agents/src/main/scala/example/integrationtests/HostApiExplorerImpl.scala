@@ -165,12 +165,12 @@ final class HostApiExplorerImpl(@unused private val name: String) extends HostAp
     val sb = new StringBuilder
 
     val pgResult = golem.host.Rdbms.Postgres
-      .open("pg://user:password@localhost:3506")
+      .open("postgresql://invalid:5432/test")
       .flatMap(_.query("SELECT 1"))
     sb.append(s"Rdbms.Postgres.query() = ${pgResult.left.map(_.getClass.getSimpleName)}\n")
 
     val myResult = golem.host.Rdbms.Mysql
-      .open("msql://user:password@localhost:3506")
+      .open("mysql://invalid:3306/test")
       .flatMap(_.query("SELECT 1"))
     sb.append(s"Rdbms.Mysql.query() = ${myResult.left.map(_.getClass.getSimpleName)}\n")
 
