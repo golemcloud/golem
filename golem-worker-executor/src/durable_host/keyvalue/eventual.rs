@@ -24,7 +24,7 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
 
 use crate::durable_host::authorization::targets::kv_target;
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
 use crate::durable_host::keyvalue::{denial, environment_owner};
@@ -44,7 +44,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<Option<Resource<IncomingValue>>, Resource<Error>>> {
-        let begun = CallHandle::<KeyvalueEventualGet, NotCancellable>::begin(
+        let begun = DurableCallSession::<KeyvalueEventualGet, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
         )
@@ -140,7 +140,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         key: Key,
         outgoing_value: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let begun = CallHandle::<KeyvalueEventualSet, NotCancellable>::begin(
+        let begun = DurableCallSession::<KeyvalueEventualSet, NotCancellable>::begin(
             self,
             DurableFunctionType::WriteRemote,
         )
@@ -282,7 +282,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let begun = CallHandle::<KeyvalueEventualDelete, NotCancellable>::begin(
+        let begun = DurableCallSession::<KeyvalueEventualDelete, NotCancellable>::begin(
             self,
             DurableFunctionType::WriteRemote,
         )
@@ -380,7 +380,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key: Key,
     ) -> anyhow::Result<Result<bool, Resource<Error>>> {
-        let begun = CallHandle::<KeyvalueEventualExists, NotCancellable>::begin(
+        let begun = DurableCallSession::<KeyvalueEventualExists, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
         )

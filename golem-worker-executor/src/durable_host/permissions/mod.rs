@@ -29,7 +29,7 @@
 //! durable/cross-executor representation is the snapshot embedded in the
 //! surrounding value, never the live handle.
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::permissions::derive as permissions_derive;
 use crate::preview2::golem::permissions::inspect as permissions_inspect;
@@ -850,7 +850,7 @@ async fn durable_now<Ctx: WorkerCtx>(
 
 async fn complete_runtime_card_creation<Ctx, Pair>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    mut handle: CallHandle<Pair, NotCancellable>,
+    mut handle: DurableCallSession<Pair, NotCancellable>,
     card: StoredCard,
     provenance: CardManagedByRuntimeDerived,
 ) -> anyhow::Result<HostResponsePermissionCardDerived>
@@ -913,7 +913,8 @@ where
     // the re-executable write class so a committed Start without an End can safely retry; the
     // generic remote-write class would make retryability depend on the guest's idempotence flag.
     let begun =
-        CallHandle::<Pair, NotCancellable>::begin(ctx, DurableFunctionType::WriteLocal).await?;
+        DurableCallSession::<Pair, NotCancellable>::begin(ctx, DurableFunctionType::WriteLocal)
+            .await?;
     let oplog_index = begun.begin_index();
     let card_id = derive_card_id(ctx, &invocation_key, oplog_index);
     let provenance = CardManagedByRuntimeDerived {
@@ -2209,7 +2210,7 @@ fn permission_error_to_revoke_error(
 }
 
 async fn complete_permission_card_revoke<Ctx: WorkerCtx>(
-    mut handle: CallHandle<GolemPermissionsRevokePersist, NotCancellable>,
+    mut handle: DurableCallSession<GolemPermissionsRevokePersist, NotCancellable>,
     ctx: &mut DurableWorkerCtx<Ctx>,
     card_handle: &Resource<PermissionCardHandleRep>,
     card_id: CardId,
@@ -2252,7 +2253,7 @@ async fn revoke_and_persist_card<Ctx: WorkerCtx>(
         }
     };
     let card_id = CardId(snapshot.card_id);
-    let (mut handle, captured_authority) = CallHandle::<
+    let (mut handle, captured_authority) = DurableCallSession::<
         GolemPermissionsRevokePersist,
         NotCancellable,
     >::start_with_agent_authority_capture(
@@ -2713,11 +2714,12 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 .state
                 .get_current_idempotency_key()
                 .ok_or_else(|| anyhow!("permission-card transfer requires an active invocation"))?;
-            let begun = CallHandle::<GolemPermissionsInstallTransfer, NotCancellable>::begin(
-                self,
-                DurableFunctionType::WriteLocal,
-            )
-            .await?;
+            let begun =
+                DurableCallSession::<GolemPermissionsInstallTransfer, NotCancellable>::begin(
+                    self,
+                    DurableFunctionType::WriteLocal,
+                )
+                .await?;
             let operation_index = begun.begin_index();
             let transfer_id = self.derive_transfer_id(&invocation_key, operation_index);
             let (installed_card, installed_card_provenance) = match &source_card {
