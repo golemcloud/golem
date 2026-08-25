@@ -11,6 +11,11 @@ trait SnapshotCounter {
     fn oplog_heavy(&mut self, entries: u32) -> u32;
     fn get(&self) -> u32;
     fn was_recovered_from_snapshot(&self) -> bool;
+
+    /// Which build this agent is running, so a replay across a build change is
+    /// detectable. Differs between agent-counters and agent-counters-v2; every
+    /// other method here returns the same value on both.
+    fn component_version(&self) -> u32;
 }
 
 struct SnapshotCounterImpl {
@@ -51,6 +56,10 @@ impl SnapshotCounter for SnapshotCounterImpl {
 
     fn get(&self) -> u32 {
         self.count
+    }
+
+    fn component_version(&self) -> u32 {
+        2
     }
 
     fn was_recovered_from_snapshot(&self) -> bool {

@@ -1378,3 +1378,76 @@ async fn manual_update_on_idle_to_earlier_component(
 
     Ok(())
 }
+
+/// An automatic update on an agent that has already had a manual one.
+///
+/// The manual update's snapshot is the authoritative replay baseline, so a later
+/// automatic update must replay only the suffix after it. Replaying from the
+/// start would repeat the pre-migration history that the manual update existed
+/// to get past — and here that history cannot replay, because it recorded a
+/// `component_version` of 1 under a build that now answers 2.
+///
+/// So the automatic update succeeding is the assertion: it proves the earlier
+/// history was skipped rather than replayed.
+#[test]
+#[tracing::instrument]
+async fn auto_update_on_idle_after_manual_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter_id = agent_id!("SnapshotCounter", "auto-after-manual");
+    let worker_id = executor
+        .start_agent(&component.id, counter_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+    // Recorded under the original build, and unreplayable under any other one.
+    let version_before = executor
+        .invoke_and_await_agent(&component, &counter_id, "component_version", data_value!())
+        .await?;
+
+    let migrated = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, migrated.revision, false)
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+        .await?;
+
+    // Same build again, so nothing after the snapshot can diverge.
+    let later = executor
+        .update_component(&component.id, "it_agent_counters_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, later.revision, false)
+        .await?;
+    let count = executor
+        .invoke_and_await_agent(&component, &counter_id, "get", data_value!())
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+
+    assert_eq!(version_before, data_value!(1u32));
+    assert_eq!(count, data_value!(2u32));
+    assert_eq!(metadata.component_revision, later.revision);
+    // One manual then one automatic, both successful and neither failed.
+    assert_eq!(update_counts(&metadata), (0, 2, 0));
+
+    Ok(())
+}
