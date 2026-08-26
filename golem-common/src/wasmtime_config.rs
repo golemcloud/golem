@@ -12,7 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use wasmtime::{Config, WasmBacktraceDetails};
+use std::hash::{Hash, Hasher};
+use wasmtime::{Config, Engine, WasmBacktraceDetails};
+
+#[derive(Default)]
+struct ArtifactFingerprintHasher(blake3::Hasher);
+
+impl Hasher for ArtifactFingerprintHasher {
+    fn finish(&self) -> u64 {
+        let hash = self.0.clone().finalize();
+        u64::from_le_bytes(hash.as_bytes()[..8].try_into().unwrap())
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+}
 
 /// Creates the Wasmtime configuration shared by every Golem component engine.
 ///
@@ -50,12 +65,19 @@ pub fn create_wasmtime_config_without_fs_cache() -> Config {
     create_wasmtime_config(false)
 }
 
+/// Returns a stable fingerprint for Wasmtime engines that can share precompiled artifacts.
+pub fn wasmtime_artifact_fingerprint(engine: &Engine) -> String {
+    let mut hasher = ArtifactFingerprintHasher::default();
+    engine.precompile_compatibility_hash().hash(&mut hasher);
+    hasher.0.finalize().to_hex().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use test_r::test;
     use wasmtime::component::Component;
-    use wasmtime::{Engine, Module};
+    use wasmtime::{Engine, Module, OptLevel};
 
     #[test]
     fn precompiled_components_are_compatible_across_engines() -> anyhow::Result<()> {
@@ -66,6 +88,37 @@ mod tests {
         // SAFETY: these bytes were produced by Wasmtime in this process and are
         // deserialized without being modified.
         unsafe { Component::deserialize(&executor_engine, precompiled_component) }?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn artifact_fingerprint_ignores_filesystem_cache_configuration() -> anyhow::Result<()> {
+        let with_cache = Engine::new(&create_wasmtime_config_with_fs_cache())?;
+        let without_cache = Engine::new(&create_wasmtime_config_without_fs_cache())?;
+
+        assert_eq!(
+            wasmtime_artifact_fingerprint(&with_cache),
+            wasmtime_artifact_fingerprint(&without_cache)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn artifact_fingerprint_changes_with_compilation_configuration() -> anyhow::Result<()> {
+        let mut unoptimized_config = create_wasmtime_config_without_fs_cache();
+        unoptimized_config.cranelift_opt_level(OptLevel::None);
+        let unoptimized = Engine::new(&unoptimized_config)?;
+
+        let mut optimized_config = create_wasmtime_config_without_fs_cache();
+        optimized_config.cranelift_opt_level(OptLevel::Speed);
+        let optimized = Engine::new(&optimized_config)?;
+
+        assert_ne!(
+            wasmtime_artifact_fingerprint(&unoptimized),
+            wasmtime_artifact_fingerprint(&optimized)
+        );
 
         Ok(())
     }
