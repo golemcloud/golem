@@ -20,4 +20,7 @@ export {
   ToolUnderlyingMisuseError,
   withInvocationScopedUnderlying,
 } from './internal/tool/middlewareRuntime';
-export { golemTool010ToolMiddlewareGuest } from './internal/tool/middlewareGuest';
+export {
+  golemTool010ToolMiddlewareGuest,
+  toolMiddlewareGuest,
+} from './internal/tool/middlewareGuest';

@@ -21,26 +21,12 @@ import type {
   TypedSchemaValue,
   UnderlyingTool,
 } from 'golem:tool/common@0.1.0';
+import type { toolMiddlewareGuest as ToolMiddlewareGuest } from 'tool-middleware-guest';
 import { sdkPrincipalFromHost } from '../../principal';
 import {
   middlewareRegistrationError,
   ToolMiddlewareRegistry,
 } from '../registry/toolMiddlewareRegistry';
-
-export interface GolemToolMiddlewareGuest {
-  discoverToolMiddlewares(): ToolMiddleware[];
-  getToolMiddleware(name: string): ToolMiddleware;
-  invokeToolMiddleware(
-    middlewareName: string,
-    toolName: string,
-    toolMetadata: Tool,
-    commandPath: string[],
-    input: TypedSchemaValue,
-    stdin: AsyncIterable<number> | undefined,
-    principal: HostPrincipal,
-    wrapped: Pick<UnderlyingTool, 'invoke'>,
-  ): Promise<InvocationResult>;
-}
 
 function discoverToolMiddlewares(): ToolMiddleware[] {
   throwRegistrationError();
@@ -88,8 +74,10 @@ function invalidToolName(name: string): ToolError {
   return { tag: 'invalid-tool-name', val: name };
 }
 
-export const golemTool010ToolMiddlewareGuest: GolemToolMiddlewareGuest = {
+export const golemTool010ToolMiddlewareGuest: typeof ToolMiddlewareGuest = {
   discoverToolMiddlewares,
   getToolMiddleware,
   invokeToolMiddleware,
 };
+
+export const toolMiddlewareGuest = golemTool010ToolMiddlewareGuest;

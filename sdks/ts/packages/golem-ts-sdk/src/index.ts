@@ -163,7 +163,10 @@ export type {
   RemoteClient,
   RemoteClientFactory,
 } from './client';
-export { golemTool010ToolMiddlewareGuest } from './internal/tool/middlewareGuest';
+export {
+  golemTool010ToolMiddlewareGuest,
+  toolMiddlewareGuest,
+} from './internal/tool/middlewareGuest';
 export * from './keyvalue';
 export * from './blobstore';
 export * from './websocket';

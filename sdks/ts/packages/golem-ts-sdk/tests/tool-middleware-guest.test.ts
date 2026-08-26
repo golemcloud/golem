@@ -20,8 +20,14 @@ import type {
 } from 'golem:tool/common@0.1.0';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v4';
-import { golemTool010ToolMiddlewareGuest as combinedGuest } from '../src/index';
-import { golemTool010ToolMiddlewareGuest as pureGuest } from '../src/middlewareRuntime';
+import {
+  golemTool010ToolMiddlewareGuest as combinedGuest,
+  toolMiddlewareGuest as combinedGuestAlias,
+} from '../src/index';
+import {
+  golemTool010ToolMiddlewareGuest as pureGuest,
+  toolMiddlewareGuest as pureGuestAlias,
+} from '../src/middlewareRuntime';
 import { compileSchema } from '../src/schema/adapter';
 import { typedSchemaValueFromWit, typedSchemaValueToWit } from '../src/internal/schema-model';
 import { ToolMiddlewareRegistry } from '../src/internal/registry/toolMiddlewareRegistry';
@@ -38,6 +44,13 @@ type RawUnderlyingTool = Pick<UnderlyingTool, 'invoke'>;
 beforeEach(() => {
   ToolMiddlewareRegistry.clearForTests();
   ToolRegistry.clearForTests();
+});
+
+describe('tool middleware guest exports', () => {
+  it('exports the short WIT interface name from both runtime entries', () => {
+    expect(combinedGuestAlias).toBe(combinedGuest);
+    expect(pureGuestAlias).toBe(pureGuest);
+  });
 });
 
 function wireValue(schema: Parameters<typeof compileSchema>[0], value: unknown): TypedSchemaValue {

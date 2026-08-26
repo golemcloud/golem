@@ -13,9 +13,9 @@ interface EmbeddedMiddlewareGuest {
 
 const embeddedGuest = (
   middlewareSdk as unknown as {
-    golemTool010ToolMiddlewareGuest: EmbeddedMiddlewareGuest;
+    toolMiddlewareGuest: EmbeddedMiddlewareGuest;
   }
-).golemTool010ToolMiddlewareGuest;
+).toolMiddlewareGuest;
 
 if (!embeddedGuest) {
   throw new Error('selected wrapper does not expose the middleware guest runtime');
