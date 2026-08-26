@@ -1414,10 +1414,6 @@ mod tests {
             *self.agent_exists.lock().unwrap() = true;
         }
 
-        fn deleted_agent_ids(&self) -> Vec<AgentId> {
-            self.deleted_agent_ids.lock().unwrap().clone()
-        }
-
         fn created_agent_id(&self) -> AgentId {
             self.created_agent_ids.lock().unwrap()[0].clone()
         }
@@ -2082,7 +2078,12 @@ mod tests {
             "expected AgentNotFound, got {err:?}"
         );
         assert!(
-            harness.worker_client.deleted_agent_ids().is_empty(),
+            harness
+                .worker_client
+                .deleted_agent_ids
+                .lock()
+                .unwrap()
+                .is_empty(),
             "the read already answered, so no delete may be dispatched to be retried"
         );
     }
@@ -2101,6 +2102,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(harness.worker_client.deleted_agent_ids(), vec![agent_id]);
+        assert_eq!(
+            *harness.worker_client.deleted_agent_ids.lock().unwrap(),
+            vec![agent_id]
+        );
     }
 }
