@@ -256,9 +256,16 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn remove(&self, _owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
 
-        async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn remove_cached_status(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
 
         async fn get_agent_mode(
             &self,

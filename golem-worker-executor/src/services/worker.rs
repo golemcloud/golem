@@ -234,9 +234,18 @@ pub trait WorkerService: Send + Sync {
         &self,
     ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError>;
 
-    async fn remove(&self, owned_agent_id: &OwnedAgentId);
+    /// Deletes the worker: its oplog, its cached status and its entry in the recovery index.
+    ///
+    /// Returns `Err` when the storage could not be reached. Delete is not retried by the caller:
+    /// a retry would re-run the oplog delete, so the error is reported instead.
+    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError>;
 
-    async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId);
+    /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy
+    /// key and the dedicated `agent_mode` key), leaving the oplog untouched.
+    async fn remove_cached_status(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError>;
 
     /// Returns the persisted [`AgentMode`] for the worker, if it exists.
     ///
@@ -627,28 +636,37 @@ impl DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         namespace: KeyValueStorageNamespace,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         let status_fields = self
             .key_value_storage
             .with("worker", "remove")
             .keys(namespace.clone())
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to list agent status fields for {owned_agent_id}: {err}")
-            });
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to list agent status fields for {owned_agent_id}: {err}"
+                ))
+            })?;
 
         if !status_fields.is_empty() {
             self.key_value_storage
                 .with("worker", "remove")
                 .del_many(namespace, status_fields)
                 .await
-                .unwrap_or_else(|err| {
-                    panic!("failed to remove agent status in the KV storage: {err}")
-                });
+                .map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "failed to remove agent status in the KV storage: {err}"
+                    ))
+                })?;
         }
+
+        Ok(())
     }
 
-    async fn remove_legacy_cached_status(&self, owned_agent_id: &OwnedAgentId) {
+    async fn remove_legacy_cached_status(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
         self.key_value_storage
             .with("worker", "remove_legacy_status")
             .del(
@@ -658,9 +676,11 @@ impl DefaultWorkerService {
                 &Self::legacy_status_key(&owned_agent_id.agent_id),
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to remove legacy status for {owned_agent_id}: {err}")
-            });
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to remove legacy status for {owned_agent_id}: {err}"
+                ))
+            })
     }
 
     /// Reads the dedicated `agent_mode` key, if present. Returns `None` on a cache miss or if the
@@ -857,7 +877,7 @@ impl WorkerService for DefaultWorkerService {
                         // Cold path: no in-memory previous, reconcile against stored fields.
                         self.update_cached_status(owned_agent_id, None, last_known_status.clone())
                             .await;
-                        self.remove_legacy_cached_status(owned_agent_id).await;
+                        self.remove_legacy_cached_status(owned_agent_id).await?;
 
                         Some(last_known_status)
                     }
@@ -887,17 +907,13 @@ impl WorkerService for DefaultWorkerService {
         Ok(result)
     }
 
-    async fn remove(&self, owned_agent_id: &OwnedAgentId) {
+    async fn remove(&self, owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
         record_worker_call("remove");
 
-        let agent_mode = self
-            .get_agent_mode(owned_agent_id)
-            .await
-            .unwrap_or_else(|err| panic!("failed to get agent mode for {owned_agent_id}: {err}"));
-        if let Some(agent_mode) = agent_mode {
+        if let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await? {
             self.oplog_service.delete(owned_agent_id, agent_mode).await;
         }
-        self.remove_cached_status(owned_agent_id).await;
+        self.remove_cached_status(owned_agent_id).await?;
 
         let shard_assignment = self
             .shard_service
@@ -911,24 +927,27 @@ impl WorkerService for DefaultWorkerService {
             .with_entity("worker", "remove", "agent_id")
             .remove_from_set(KeyValueStorageNamespace::RunningWorkers, &Self::running_in_shard_key(&shard_id), owned_agent_id)
             .await
-            .unwrap_or_else(|err| {
-                panic!(
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
                     "failed to remove worker from the set of running worker ids per shard in KV storage: {err}"
-                )
-            });
+                ))
+            })
     }
 
-    async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId) {
+    async fn remove_cached_status(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<(), WorkerExecutorError> {
         record_worker_call("remove_cached_status");
 
         let agent_id = &owned_agent_id.agent_id;
 
         // Delete the live cached status hash and the clean checkpoint hash.
         self.remove_split_status(owned_agent_id, Self::status_namespace(agent_id))
-            .await;
+            .await?;
         self.remove_split_status(owned_agent_id, Self::checkpoint_namespace(agent_id))
-            .await;
-        self.remove_legacy_cached_status(owned_agent_id).await;
+            .await?;
+        self.remove_legacy_cached_status(owned_agent_id).await?;
 
         // The `agent_mode` key has its own lifecycle and lives in the `Worker` namespace.
         self.key_value_storage
@@ -940,9 +959,11 @@ impl WorkerService for DefaultWorkerService {
                 &Self::agent_mode_key(agent_id),
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to remove worker agent mode in the KV storage: {err}")
-            });
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to remove worker agent mode in the KV storage: {err}"
+                ))
+            })
     }
 
     async fn get_agent_mode(
@@ -1761,6 +1782,24 @@ mod tests {
         // The index entry outlived the worker; recovery isolates that instead of aborting.
         let workers = service.enum_workers_at_key(&shard_key).await.unwrap();
         assert!(workers.is_empty());
+    }
+
+    #[test]
+    async fn delete_reports_an_unreachable_storage() {
+        let service = test_worker_service(
+            Arc::new(UnreachableKeyValueStorage),
+            Arc::new(FakeOplogService::default()),
+        );
+        let owned_agent_id = test_owned_agent_id("doomed");
+
+        assert!(
+            service.remove_cached_status(&owned_agent_id).await.is_err(),
+            "expected the cached status delete failure to surface"
+        );
+        assert!(
+            service.remove(&owned_agent_id).await.is_err(),
+            "expected the delete failure to surface"
+        );
     }
 
     #[test]

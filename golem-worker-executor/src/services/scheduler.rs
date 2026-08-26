@@ -543,9 +543,17 @@ impl SchedulerServiceDefault {
                                             "Deleting cached status of fully archived worker"
                                         );
                                         // The oplog is fully archived, so we can also delete the cached worker status
-                                        self.worker_service
+                                        if let Err(error) = self
+                                            .worker_service
                                             .remove_cached_status(&owned_agent_id)
-                                            .await;
+                                            .await
+                                        {
+                                            error!(
+                                                agent_id = owned_agent_id.to_string(),
+                                                "Failed to delete the cached status of a fully archived worker: {error}"
+                                            );
+                                            return false;
+                                        }
                                     }
                                 }
                             }
@@ -910,9 +918,16 @@ mod tests {
             unimplemented!()
         }
 
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn remove(&self, _owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
 
-        async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
+        async fn remove_cached_status(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
+            Ok(())
+        }
 
         async fn get_agent_mode(
             &self,

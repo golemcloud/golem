@@ -479,7 +479,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         info!("Marking worker for deletion");
         worker.start_deleting().await?;
 
-        self.worker_service().remove(&owned_agent_id).await;
+        self.worker_service().remove(&owned_agent_id).await?;
         self.active_workers().remove(&owned_agent_id.agent_id).await;
 
         // ensure we are holding the worker while we are doing cleanup.
