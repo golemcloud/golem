@@ -487,7 +487,7 @@ impl DbConfig {
             port: 5432,
             max_connections: 10,
             schema: None,
-            acquire_timeout: std::time::Duration::from_secs(5),
+            acquire_timeout: None,
         })
     }
 }
@@ -539,16 +539,15 @@ pub struct DbPostgresConfig {
     pub schema: Option<String>,
     /// How long a caller waits for a free pooled connection before giving up.
     ///
-    /// Bounds one attempt, not the operation: callers that retry get their own budget on top, and
-    /// the point of keeping this short is that a retry loop cannot make progress while a single
-    /// attempt is still parked. sqlx defaults this to 30s, which is longer than the AWS failovers
-    /// the retry budget is sized for, so an attempt would outlast the event it is waiting on.
-    #[serde(default = "default_acquire_timeout", with = "humantime_serde")]
-    pub acquire_timeout: Duration,
-}
-
-fn default_acquire_timeout() -> Duration {
-    Duration::from_secs(5)
+    /// `None` leaves sqlx's own default (30s) in place. Deliberately not shortened here: this
+    /// struct is shared by every Postgres pool in the workspace, and a pool whose caller does not
+    /// retry is better off waiting out a load spike than failing six times sooner.
+    ///
+    /// Shortening it is worthwhile only where something above the pool retries, because a retry
+    /// loop cannot make progress while a single attempt is still parked - see the key-value
+    /// storage pool, which picks its own shorter fallback for exactly that reason.
+    #[serde(default, with = "humantime_serde")]
+    pub acquire_timeout: Option<Duration>,
 }
 
 impl DbPostgresConfig {

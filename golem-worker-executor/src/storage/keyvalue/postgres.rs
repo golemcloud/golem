@@ -28,6 +28,13 @@ const DB_TYPE: &str = "postgres";
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/keyvalue");
 
+/// Connection-acquire timeout for the key-value pool specifically.
+///
+/// Sized so the retry budget above it spends its attempts on the backend rather than on the pool
+/// queue: short enough that a blackholed endpoint fails an attempt quickly, long enough not to
+/// mistake ordinary contention for an outage.
+const KEY_VALUE_ACQUIRE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[derive(Debug, Clone)]
 pub struct PostgresKeyValueStorage {
     pool: PostgresPool,
@@ -47,11 +54,21 @@ impl PostgresKeyValueStorage {
         .await
         .map_err(|err| format!("Postgres key-value storage migration failed: {err:?}"))?;
 
-        let pool = PostgresPool::configured(&config.postgres)
-            .await
-            .map_err(|err| {
-                format!("Postgres key-value storage pool initialization failed: {err:?}")
-            })?;
+        // Shorter than sqlx's 30s default, unlike every other Postgres pool, because this is the
+        // one with a retry policy above it: `RetryingKeyValueStorage` cannot make progress while an
+        // attempt is still parked waiting for a connection, so a long wait here would spend the
+        // whole retry budget on a handful of attempts. Pools nobody retries for keep the long wait,
+        // where riding out a load spike beats failing sooner. An explicit setting wins over both.
+        let mut postgres = config.postgres.clone();
+        postgres.acquire_timeout = Some(
+            postgres
+                .acquire_timeout
+                .unwrap_or(KEY_VALUE_ACQUIRE_TIMEOUT),
+        );
+
+        let pool = PostgresPool::configured(&postgres).await.map_err(|err| {
+            format!("Postgres key-value storage pool initialization failed: {err:?}")
+        })?;
 
         Ok(Self { pool })
     }

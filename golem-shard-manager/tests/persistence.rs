@@ -70,7 +70,7 @@ impl GetRoutingTablePersistence for PostgresRoutingTablePersistence {
                 .expect("Postgres connection string missing port"),
             max_connections: 10,
             schema: None,
-            acquire_timeout: std::time::Duration::from_secs(5),
+            acquire_timeout: None,
         };
 
         let migrations = IncludedMigrationsDir::new(&golem_shard_manager::DB_MIGRATIONS);
