@@ -113,9 +113,10 @@ fn observe_function_call_store<Ctx: WorkerCtx, U: 'static>(
     observe_function_call(expect_ctx::<Ctx, U>(u), interface, function);
 }
 
-/// Drives the live / replay / incomplete-replay flow for a re-executable durable p3 accessor
-/// call whose response never carries a guest-visible error value (or whose errors must never be
-/// retried by the host).
+/// Drives the live / replay flow for a durable p3 accessor call whose response never carries a
+/// guest-visible error value (or whose errors must never be retried by the host). Incomplete replay
+/// re-executes reads and idempotent writes, while the durable-call policy rejects incomplete
+/// non-re-executable writes.
 ///
 /// Durable p3 host wrappers surface failures in two ways: traps, which escape via
 /// [`DurableCallSession::trap`] and are classified by the trap-recovery machinery; and error *values*

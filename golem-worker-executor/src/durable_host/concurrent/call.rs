@@ -1917,10 +1917,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
-    /// Starts and drives a re-executable accessor value call. Low-level session construction stays
-    /// available inside the crate for calls that derive identity from the begin index or own custom
-    /// retry state; ordinary p3 values use this driver. The live action executes without holding a
-    /// store window, and incomplete replay repairs the existing `Start`.
+    /// Starts and drives an accessor value call. Low-level session construction stays available
+    /// inside the crate for calls that derive identity from the begin index or own custom retry
+    /// state; ordinary p3 values use this driver. The live action executes without holding a store
+    /// window. Incomplete replay repairs the existing `Start` only for re-executable calls;
+    /// [`Self::replay_access`] rejects it for non-re-executable calls before returning an outcome.
     pub(crate) async fn invoke_access<T, D, Ctx, A, E>(
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -1936,10 +1937,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         A: AsyncFnOnce() -> Result<Pair::Resp, E>,
     {
         let call = Self::start_access(store, get_ctx, request, function_type).await?;
-        debug_assert!(
-            call.retry.can_reexecute_on_incomplete_replay(),
-            "DurableCallSession::invoke_access is only valid for re-executable calls"
-        );
         if call.is_live() {
             call.run_live_action_access(store, get_ctx, live_action)
                 .await
