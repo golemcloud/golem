@@ -191,6 +191,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Durability::<KeyvalueEventualBatchSetMany>::new(self, DurableFunctionType::WriteRemote)
                 .await?;
 
+        // Refcounted once, like the get and delete paths above: the loop below can run several
+        // times, and the payload bytes are guest-supplied and unbounded.
+        let key_values: Arc<[(String, Vec<u8>)]> = key_values.into();
+
         let result = if durability.is_live() {
             let total_bytes: u64 = key_values.iter().map(|(_, v)| v.len() as u64).sum();
             let count = key_values.len() as u64;

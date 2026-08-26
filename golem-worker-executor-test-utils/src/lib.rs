@@ -2739,7 +2739,7 @@ impl KeyValueService for FailingKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        key_values: Vec<(String, Vec<u8>)>,
+        key_values: Arc<[(String, Vec<u8>)]>,
     ) -> anyhow::Result<()> {
         self.inner
             .set_many(environment_id, bucket, key_values)

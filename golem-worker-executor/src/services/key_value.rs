@@ -77,7 +77,7 @@ pub trait KeyValueService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        key_values: Vec<(String, Vec<u8>)>,
+        key_values: Arc<[(String, Vec<u8>)]>,
     ) -> anyhow::Result<()>;
 }
 
@@ -244,7 +244,7 @@ impl KeyValueService for DefaultKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        key_values: Vec<(String, Vec<u8>)>,
+        key_values: Arc<[(String, Vec<u8>)]>,
     ) -> anyhow::Result<()> {
         let key_values: Vec<(&str, &[u8])> = key_values
             .iter()
