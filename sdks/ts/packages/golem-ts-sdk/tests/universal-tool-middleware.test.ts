@@ -161,16 +161,19 @@ describe('universal tool middleware dispatch', () => {
       invoke: vi.fn(async (path, input, receivedStdin) => {
         expect(path).toEqual(request.commandPath);
         expect(input).toBe(request.input);
-        expect(receivedStdin).toBe(stdin.stream);
+        const bytes: number[] = [];
+        for await (const byte of receivedStdin!) bytes.push(byte);
+        expect(bytes).toEqual([1, 2]);
         return rawResult;
       }),
     } as RawUnderlyingTool;
 
     const result = await invoke('raw-forward', request, raw);
 
-    expect(observed).toBe(request);
     expect(observed?.toolName).toBe('runtime-tool');
     expect(observed?.toolMetadata).toBe(request.toolMetadata);
+    expect(observed?.commandPath).toBe(request.commandPath);
+    expect(observed?.input).toBe(request.input);
     expect(observed?.principal).toBe(request.principal);
     expect(result.result).toBe(request.input);
     expect(result.stdout).toBeDefined();

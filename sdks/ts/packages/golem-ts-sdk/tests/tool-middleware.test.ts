@@ -555,7 +555,9 @@ describe('monomorphic tool middleware dispatch', () => {
     const stdout = controllableStream(4, 5, 6);
     const raw = {
       invoke: vi.fn(async (_path, _input, receivedStdin) => {
-        expect(receivedStdin).toBe(stdin.stream);
+        const bytes: number[] = [];
+        for await (const byte of receivedStdin!) bytes.push(byte);
+        expect(bytes).toEqual([1, 2, 3]);
         return { result: wireValue(z.string(), 'streamed'), stdout: stdout.stream };
       }),
     } as RawUnderlyingTool;

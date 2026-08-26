@@ -36,6 +36,24 @@ async fn test_ts_tool_middleware_component_roles() {
     fs_extra::dir::copy(fixture, ctx.cwd_path(), &fs_extra::dir::CopyOptions::new()).unwrap();
     ctx.cd(APP_NAME);
 
+    std::fs::write(
+        ctx.cwd_path()
+            .parent()
+            .unwrap()
+            .join("shared-role-helper.ts"),
+        "export const sharedRoleHelper = 'sdk-independent';\n",
+    )
+    .unwrap();
+    let tsconfig_path = ctx.cwd_path_join("ordinary/tsconfig.json");
+    let mut tsconfig: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&tsconfig_path).unwrap()).unwrap();
+    tsconfig["include"] = serde_json::json!(["src/**/*.ts", "../../shared-role-helper.ts"]);
+    std::fs::write(
+        tsconfig_path,
+        serde_json::to_string_pretty(&tsconfig).unwrap(),
+    )
+    .unwrap();
+
     let optimized = ctx.cli([flag::YES, cmd::BUILD, flag::FORCE_BUILD]).await;
     assert!(optimized.success_or_dump());
     assert_role_contracts(&ctx);
@@ -143,11 +161,22 @@ fn assert_component_contract(component: &Path, expected_exports: &[&str], expect
 }
 
 async fn assert_wrong_role_diagnostics(ctx: &TestContext) {
-    std::fs::copy(
-        ctx.cwd_path_join("combined/src/main.ts"),
-        ctx.cwd_path_join("ordinary/src/main.ts"),
+    let package_path = ctx.cwd_path_join("package.json");
+    let mut package: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&package_path).unwrap()).unwrap();
+    package["imports"] = serde_json::json!({
+        "#role-sdk": "@golemcloud/golem-ts-sdk"
+    });
+    std::fs::write(
+        package_path,
+        serde_json::to_string_pretty(&package).unwrap(),
     )
     .unwrap();
+    let combined = std::fs::read_to_string(ctx.cwd_path_join("combined/src/main.ts"))
+        .unwrap()
+        .replace("'@golemcloud/golem-ts-sdk'", "'#role-sdk'");
+    std::fs::write(ctx.cwd_path_join("ordinary/src/main.ts"), combined).unwrap();
+
     let ordinary = ctx
         .cli([flag::YES, cmd::BUILD, ORDINARY_COMPONENT, flag::FORCE_BUILD])
         .await;
@@ -163,11 +192,12 @@ async fn assert_wrong_role_diagnostics(ctx: &TestContext) {
         "ordinary role mismatch did not produce the expected diagnostic"
     );
 
-    std::fs::copy(
+    let ordinary = std::fs::read_to_string(
         ctx.test_data_path_join(format!("{APP_NAME}/ordinary/src/main.ts")),
-        ctx.cwd_path_join("middleware/src/main.ts"),
     )
-    .unwrap();
+    .unwrap()
+    .replace("'@golemcloud/golem-ts-sdk'", "'#role-sdk'");
+    std::fs::write(ctx.cwd_path_join("middleware/src/main.ts"), ordinary).unwrap();
     let middleware = ctx
         .cli([
             flag::YES,

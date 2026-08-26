@@ -283,6 +283,26 @@ describe('tool middleware runtime foundation', () => {
     });
   });
 
+  it('closes stdout when the underlying typed result is malformed', async () => {
+    const malformedResult = {
+      graph: { typeNodes: [], defs: [], root: 0 },
+      value: { valueNodes: [], root: 0 },
+    } as TypedSchemaValue;
+    const stdout = controllableStream(1, 2, 3);
+    const raw = {
+      invoke: vi.fn(async () => ({ result: malformedResult, stdout: stdout.stream })),
+    } as RawUnderlyingTool;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      await expect(underlying.invoke([], unitValue, undefined)).rejects.toMatchObject({
+        cause: { tag: 'invalid-result' },
+      });
+      return {};
+    });
+
+    expect(stdout.close).toHaveBeenCalledOnce();
+  });
+
   it('rejects an underlying typed result whose value contradicts its own graph', async () => {
     const boolean = wireValue(z.boolean(), true);
     const string = wireValue(z.string(), 'not a boolean');
@@ -430,9 +450,9 @@ describe('tool middleware runtime foundation', () => {
     const stdin = controllableStream(1, 2, 3);
     const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
 
-    await withInvocationScopedUnderlying(raw, stdin.stream, async (underlying) => {
-      await underlying.invoke(['first'], unitValue, stdin.stream);
-      await expect(underlying.invoke(['reuse'], unitValue, stdin.stream)).rejects.toMatchObject({
+    await withInvocationScopedUnderlying(raw, stdin.stream, async (underlying, ownedStdin) => {
+      await underlying.invoke(['first'], unitValue, ownedStdin);
+      await expect(underlying.invoke(['reuse'], unitValue, ownedStdin)).rejects.toMatchObject({
         name: 'ToolUnderlyingMisuseError',
         message: expect.stringContaining('already transferred'),
       });
@@ -461,9 +481,186 @@ describe('tool middleware runtime foundation', () => {
     });
 
     expect(forwarded.close).not.toHaveBeenCalled();
-    expect(abandoned.close).toHaveBeenCalledOnce();
+    expect(abandoned.close).not.toHaveBeenCalled();
     await result.stdout?.[Symbol.asyncIterator]().return?.();
     expect(forwarded.close).toHaveBeenCalledOnce();
+    expect(abandoned.close).toHaveBeenCalledOnce();
+  });
+
+  it('keeps underlying stdout alive while middleware lazily transforms it', async () => {
+    const stdout = controllableStream(4, 5, 6);
+    const raw = {
+      invoke: vi.fn(async () => ({ stdout: stdout.stream })),
+    } as RawUnderlyingTool;
+
+    const result = await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      const nested = await underlying.invoke(['transform'], unitValue, undefined);
+      return {
+        stdout: (async function* () {
+          for await (const byte of nested.stdout!) yield byte + 10;
+        })(),
+      };
+    });
+
+    expect(stdout.close).not.toHaveBeenCalled();
+    const bytes: number[] = [];
+    for await (const byte of result.stdout!) bytes.push(byte);
+    expect(bytes).toEqual([14, 15, 16]);
+  });
+
+  it('keeps outer stdin alive while middleware lazily transforms it into stdout', async () => {
+    const stdin = controllableStream(1, 2, 3);
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+
+    const result = await withInvocationScopedUnderlying(
+      raw,
+      stdin.stream,
+      (_underlying, ownedStdin) => ({
+        stdout: (async function* () {
+          for await (const byte of ownedStdin!) yield byte + 10;
+        })(),
+      }),
+    );
+
+    expect(stdin.close).not.toHaveBeenCalled();
+    const bytes: number[] = [];
+    for await (const byte of result.stdout!) bytes.push(byte);
+    expect(bytes).toEqual([11, 12, 13]);
+    expect(stdin.close).not.toHaveBeenCalled();
+  });
+
+  it('closes outer stdin once when a lazy stdout reader is dropped', async () => {
+    const stdin = controllableStream(1, 2, 3);
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+
+    const result = await withInvocationScopedUnderlying(
+      raw,
+      stdin.stream,
+      (_underlying, ownedStdin) => ({
+        stdout: (async function* () {
+          for await (const byte of ownedStdin!) yield byte + 10;
+        })(),
+      }),
+    );
+    const stdout = result.stdout![Symbol.asyncIterator]();
+
+    await expect(stdout.next()).resolves.toEqual({ done: false, value: 11 });
+    await stdout.return?.();
+
+    expect(stdin.close).toHaveBeenCalledOnce();
+  });
+
+  it('defers final stdout iterator failures until the caller reads it', async () => {
+    const readFailure = new Error('stdout read failed');
+    const stdin = controllableStream(1);
+    const abandoned = controllableStream(2);
+    const stdout = {
+      [Symbol.asyncIterator](): AsyncIterator<number> {
+        throw readFailure;
+      },
+    };
+
+    const result = await withInvocationScopedUnderlying(
+      { invoke: vi.fn(async () => ({ stdout: abandoned.stream })) } as RawUnderlyingTool,
+      stdin.stream,
+      async (underlying) => {
+        await underlying.invoke(['abandon'], unitValue, undefined);
+        return { stdout };
+      },
+    );
+
+    expect(stdin.close).not.toHaveBeenCalled();
+    expect(abandoned.close).not.toHaveBeenCalled();
+    await expect(
+      (async () => {
+        for await (const _byte of result.stdout!) {
+          // Consume the stream.
+        }
+      })(),
+    ).rejects.toBe(readFailure);
+    expect(stdin.close).toHaveBeenCalledOnce();
+    expect(abandoned.close).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a valid structured result when wrapping final stdout', async () => {
+    class InvocationCarrier implements InvocationResult {
+      readonly stdout = controllableStream(1).stream;
+
+      get result(): TypedSchemaValue {
+        return unitValue;
+      }
+    }
+    const carrier = new InvocationCarrier();
+
+    const result = await withInvocationScopedUnderlying(
+      { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool,
+      undefined,
+      () => carrier,
+    );
+
+    expect(result.result).toBe(unitValue);
+  });
+
+  it('preserves an accessor-backed structured result while tracking underlying stdout', async () => {
+    class InvocationCarrier implements InvocationResult {
+      readonly stdout = controllableStream(1).stream;
+
+      get result(): TypedSchemaValue {
+        return unitValue;
+      }
+    }
+    const carrier = new InvocationCarrier();
+
+    const result = await withInvocationScopedUnderlying(
+      { invoke: vi.fn(async () => carrier) } as RawUnderlyingTool,
+      undefined,
+      (underlying) => underlying.invoke([], unitValue, undefined),
+    );
+
+    expect(result.result).toBe(unitValue);
+  });
+
+  it('keeps final stdout readable when its iterator recovers from throw', async () => {
+    const result = await withInvocationScopedUnderlying(
+      { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool,
+      undefined,
+      () => ({
+        stdout: (async function* () {
+          try {
+            yield 1;
+          } catch {
+            yield 2;
+          }
+          yield 3;
+        })(),
+      }),
+    );
+    const iterator = result.stdout![Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: 1 });
+    await expect(iterator.throw?.(new Error('recoverable'))).resolves.toEqual({
+      done: false,
+      value: 2,
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: 3 });
+  });
+
+  it('fails loudly when abandoned stdout is read after disposal', async () => {
+    const stdout = controllableStream(1);
+    const raw = {
+      invoke: vi.fn(async () => ({ stdout: stdout.stream })),
+    } as RawUnderlyingTool;
+    let abandoned!: AsyncIterable<number>;
+
+    await withInvocationScopedUnderlying(raw, undefined, async (underlying) => {
+      abandoned = (await underlying.invoke(['abandon'], unitValue, undefined)).stdout!;
+      return {};
+    });
+
+    expect(stdout.close).toHaveBeenCalledOnce();
+    await expect(abandoned[Symbol.asyncIterator]().next()).rejects.toBeInstanceOf(
+      ToolUnderlyingMisuseError,
+    );
   });
 
   it('closes stdout once when typed result validation fails', async () => {

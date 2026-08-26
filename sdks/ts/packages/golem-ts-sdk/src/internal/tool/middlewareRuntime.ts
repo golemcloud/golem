@@ -124,8 +124,8 @@ export async function invokeMonomorphicToolMiddleware(
   invocation: MonomorphicToolMiddlewareInvocation,
   raw: RawUnderlyingTool,
 ): Promise<WireInvocationResult> {
-  const { commandPath, input, stdin, principal } = invocation;
-  return withInvocationScopedUnderlying(raw, stdin, async (underlying) => {
+  const { commandPath, input, stdin: rawStdin, principal } = invocation;
+  return withInvocationScopedUnderlying(raw, rawStdin, async (underlying, stdin) => {
     let resolved;
     try {
       resolved = resolveToolInvocation(source.presented, source.runtime, commandPath);
@@ -189,13 +189,25 @@ export async function invokeUniversalToolMiddleware(
   raw: RawUnderlyingTool,
 ): Promise<WireInvocationResult> {
   try {
-    return await withInvocationScopedUnderlying(raw, invocation.stdin, (underlying) => {
+    return await withInvocationScopedUnderlying(raw, invocation.stdin, (underlying, stdin) => {
       try {
         preflightTypedSchemaValue(invocation.input);
       } catch (error) {
         throw new ToolInvokeError({ tag: 'invalid-input', val: errorMessage(error) });
       }
-      return source.invoke(invocation, { underlying });
+      return source.invoke(
+        stdin === undefined
+          ? invocation
+          : {
+              toolName: invocation.toolName,
+              toolMetadata: invocation.toolMetadata,
+              commandPath: invocation.commandPath,
+              input: invocation.input,
+              stdin,
+              principal: invocation.principal,
+            },
+        { underlying },
+      );
     });
   } catch (error) {
     throw encodeRawMiddlewareError(error);
@@ -207,20 +219,22 @@ export async function withInvocationScopedUnderlying(
   stdin: AsyncIterable<number> | undefined,
   invoke: (
     underlying: UniversalToolUnderlying,
+    stdin: AsyncIterable<number> | undefined,
   ) => WireInvocationResult | Promise<WireInvocationResult>,
 ): Promise<WireInvocationResult> {
   const ownership = new InvocationOwnership(stdin);
   const underlying = InvocationScopedUnderlying.create(raw, ownership);
   try {
-    const result = await invoke(underlying);
+    const carrier = await invoke(underlying, ownership.stdin);
+    let result: WireInvocationResult;
     try {
-      validateInvocationResult(result);
+      result = validateInvocationResult(carrier);
     } catch (error) {
-      await closeAsyncIterable(invocationStdout(result));
+      await closeAsyncIterable(invocationStdout(carrier));
       throw new ToolInvokeError({ tag: 'invalid-result', val: errorMessage(error) });
     }
-    ownership.forwardStdout(result.stdout);
-    return result;
+    const stdout = ownership.forwardStdout(result.stdout);
+    return stdout === undefined ? result : { result: result.result, stdout };
   } finally {
     await underlying.revoke();
     await ownership.dispose();
@@ -288,20 +302,13 @@ class InvocationScopedUnderlying implements UniversalToolUnderlying {
     stdin: AsyncIterable<number> | undefined,
   ): Promise<WireInvocationResult> {
     try {
-      const result = await this.raw.invoke([...commandPath], input, stdin);
-      if (!isObject(result) || Array.isArray(result)) {
-        throw new ToolInvokeError({
-          tag: 'invalid-result',
-          val: 'tool invocation result must be an object',
-        });
-      }
-      const tracked = this.ownership.trackStdout(result);
+      const carrier = await this.raw.invoke([...commandPath], input, stdin);
       try {
-        validateInvocationResult(tracked);
+        return this.ownership.trackStdout(validateInvocationResult(carrier));
       } catch (error) {
+        await closeAsyncIterable(invocationStdout(carrier));
         throw new ToolInvokeError({ tag: 'invalid-result', val: errorMessage(error) });
       }
-      return tracked;
     } catch (error) {
       throw decodeUnderlyingToolError(error, (payload) => payload);
     }
@@ -312,27 +319,39 @@ class InvocationOwnership {
   private readonly transferredStreams = new Set<AsyncIterable<number>>();
   private readonly stdout = new Map<AsyncIterable<number>, TrackedOutputStream>();
   private outerStdinTransferred = false;
+  private stdoutForwarded = false;
+  readonly stdin: TrackedOutputStream | undefined;
 
-  constructor(private readonly outerStdin: AsyncIterable<number> | undefined) {}
+  constructor(stdin: AsyncIterable<number> | undefined) {
+    this.stdin = stdin === undefined ? undefined : new TrackedOutputStream(stdin);
+  }
 
   forwardStdin(stdin: AsyncIterable<number> | undefined): void {
     this.transfer(stdin);
   }
 
   trackStdout(result: WireInvocationResult): WireInvocationResult {
-    if (!isAsyncIterable(result.stdout)) return result;
+    if (result.stdout === undefined) return result;
     const tracked = new TrackedOutputStream(result.stdout);
     this.stdout.set(tracked, tracked);
-    return { ...result, stdout: tracked };
+    return { result: result.result, stdout: tracked };
   }
 
-  forwardStdout(stdout: AsyncIterable<number> | undefined): void {
+  forwardStdout(stdout: AsyncIterable<number> | undefined): AsyncIterable<number> | undefined {
+    if (stdout === undefined) return undefined;
+    const forwarded = new TrackedOutputStream(stdout, () => this.disposeUntransferredStreams());
     this.transfer(stdout);
+    this.stdoutForwarded = true;
+    return forwarded;
   }
 
   async dispose(): Promise<void> {
+    if (!this.stdoutForwarded) await this.disposeUntransferredStreams();
+  }
+
+  private async disposeUntransferredStreams(): Promise<void> {
     await Promise.allSettled([
-      this.outerStdinTransferred ? undefined : closeAsyncIterable(this.outerStdin),
+      this.outerStdinTransferred ? undefined : this.stdin?.dispose(),
       ...Array.from(this.stdout.values(), (stream) => stream.dispose()),
     ]);
   }
@@ -343,42 +362,97 @@ class InvocationOwnership {
       throw new ToolUnderlyingMisuseError('stream was already transferred');
     }
     this.transferredStreams.add(stream);
-    if (stream === this.outerStdin) this.outerStdinTransferred = true;
+    if (stream === this.stdin) this.outerStdinTransferred = true;
     this.stdout.get(stream)?.transfer();
   }
 }
 
 class TrackedOutputStream implements AsyncIterableIterator<number> {
-  private readonly iterator: AsyncIterator<number>;
-  private transferred = false;
+  private iterator: AsyncIterator<number> | undefined;
   private closed = false;
+  private disposed = false;
+  private finalized = false;
+  private transferred = false;
 
-  constructor(stdout: AsyncIterable<number>) {
-    this.iterator = stdout[Symbol.asyncIterator]();
-  }
+  constructor(
+    private readonly stdout: AsyncIterable<number>,
+    private readonly onClose?: () => Promise<void>,
+  ) {}
 
   [Symbol.asyncIterator](): AsyncIterableIterator<number> {
     return this;
   }
 
   async next(): Promise<IteratorResult<number>> {
-    const result = await this.iterator.next();
-    if (result.done) this.closed = true;
-    return result;
+    if (this.disposed) {
+      throw new ToolUnderlyingMisuseError('stream is no longer available after disposal');
+    }
+    if (this.closed) return { done: true, value: undefined };
+    try {
+      const result = await this.getIterator().next();
+      if (result.done) {
+        this.closed = true;
+        await this.finalize();
+      }
+      return result;
+    } catch (error) {
+      this.closed = true;
+      try {
+        await this.iterator?.return?.();
+      } catch {
+        // Preserve the stream read failure.
+      }
+      await this.finalize();
+      throw error;
+    }
   }
 
   async return(): Promise<IteratorResult<number>> {
     if (this.closed) return { done: true, value: undefined };
     this.closed = true;
-    return (await this.iterator.return?.()) ?? { done: true, value: undefined };
+    try {
+      return (await this.getIterator().return?.()) ?? { done: true, value: undefined };
+    } finally {
+      await this.finalize();
+    }
   }
 
   async throw(error?: unknown): Promise<IteratorResult<number>> {
     if (this.closed) throw error;
-    this.closed = true;
-    if (this.iterator.throw) return this.iterator.throw(error);
-    await this.iterator.return?.();
-    throw error;
+    let iterator: AsyncIterator<number>;
+    try {
+      iterator = this.getIterator();
+    } catch (failure) {
+      this.closed = true;
+      await this.finalize();
+      throw failure;
+    }
+    if (!iterator.throw) {
+      this.closed = true;
+      try {
+        await iterator.return?.();
+      } finally {
+        await this.finalize();
+      }
+      throw error;
+    }
+    try {
+      const result = await iterator.throw(error);
+      if (result.done) {
+        this.closed = true;
+        await this.finalize();
+      }
+      return result;
+    } catch (failure) {
+      this.closed = true;
+      try {
+        await iterator.return?.();
+      } catch {
+        // Preserve the stream failure.
+      }
+      await this.finalize();
+      throw failure;
+    }
   }
 
   transfer(): void {
@@ -386,7 +460,19 @@ class TrackedOutputStream implements AsyncIterableIterator<number> {
   }
 
   async dispose(): Promise<void> {
-    if (!this.transferred) await closeAsyncIterable(this);
+    if (this.closed || this.transferred) return;
+    this.disposed = true;
+    await closeAsyncIterable(this);
+  }
+
+  private getIterator(): AsyncIterator<number> {
+    return (this.iterator ??= this.stdout[Symbol.asyncIterator]());
+  }
+
+  private async finalize(): Promise<void> {
+    if (this.finalized) return;
+    this.finalized = true;
+    await this.onClose?.();
   }
 }
 
@@ -563,16 +649,19 @@ function isDenseStringList(value: unknown): value is string[] {
   return true;
 }
 
-function validateInvocationResult(value: unknown): asserts value is WireInvocationResult {
+function validateInvocationResult(value: unknown): WireInvocationResult {
   if (!isObject(value) || Array.isArray(value)) {
     throw new Error('tool invocation result must be an object');
   }
-  if (value.result !== undefined) {
-    preflightTypedSchemaValue(value.result as WireTypedSchemaValue);
+  const result = value.result as WireTypedSchemaValue | undefined;
+  const stdout = value.stdout;
+  if (result !== undefined) {
+    preflightTypedSchemaValue(result);
   }
-  if (value.stdout !== undefined && !isAsyncIterable(value.stdout)) {
+  if (stdout !== undefined && !isAsyncIterable(stdout)) {
     throw new Error('tool invocation stdout must be an async iterable');
   }
+  return { result, stdout };
 }
 
 function invocationStdout(value: unknown): AsyncIterable<number> | undefined {

@@ -126,7 +126,16 @@ function isSdkModule(moduleName) {
     return moduleName === sdkPackage || moduleName.startsWith(`${sdkPackage}/`);
 }
 
-function validateComponentRole(componentDir, parsedTsConfig, roleName) {
+function resolveModule(moduleName, sourceFile, compilerOptions) {
+    return ts.resolveModuleName(
+        moduleName,
+        sourceFile.fileName,
+        compilerOptions,
+        ts.sys,
+    ).resolvedModule;
+}
+
+function validateComponentRole(parsedTsConfig, roleName) {
     const role = componentRoles[roleName];
     if (!role) {
         throw new Error(
@@ -145,30 +154,60 @@ function validateComponentRole(componentDir, parsedTsConfig, roleName) {
         .filter((sourceFile) => !sourceFile.isDeclarationFile)
         .filter((sourceFile) => rootFileNames.has(normalizedFileName(sourceFile.fileName)));
     const violations = [];
+    const sdkEntriesBySource = new Map();
+    const sdkDeclarationFiles = new Set();
+
+    for (const sourceFile of userSources) {
+        const sdkEntries = new Map();
+        for (const sdkEntry of [sdkPackage, middlewareSdkPackage]) {
+            const resolved = resolveModule(sdkEntry, sourceFile, parsedTsConfig.options);
+            if (!resolved) continue;
+            const resolvedFileName = normalizedFileName(resolved.resolvedFileName);
+            sdkEntries.set(resolvedFileName, sdkEntry);
+            if (sdkEntry === sdkPackage) sdkDeclarationFiles.add(resolvedFileName);
+        }
+        sdkEntriesBySource.set(sourceFile, sdkEntries);
+    }
 
     for (const sourceFile of userSources) {
         visit(sourceFile, (node) => {
             const moduleName = importedModule(node);
-            if (moduleName && isSdkModule(moduleName) && moduleName !== role.sdkImport) {
-                violations.push(
-                    `${sourceLocation(sourceFile, node)} imports ${JSON.stringify(moduleName)}, but component template ${JSON.stringify(role.template)} requires ${JSON.stringify(role.sdkImport)}.`,
-                );
+            if (!moduleName) return;
+
+            const directSdkModule = isSdkModule(moduleName);
+            const resolved = resolveModule(moduleName, sourceFile, parsedTsConfig.options);
+            if (!resolved) {
+                if (directSdkModule) {
+                    violations.push(
+                        `${sourceLocation(sourceFile, node)} cannot resolve ${JSON.stringify(moduleName)}, which is required to validate component template ${JSON.stringify(role.template)}.`,
+                    );
+                }
+                return;
             }
+
+            const sdkModule = directSdkModule
+                ? moduleName
+                : sdkEntriesBySource
+                      .get(sourceFile)
+                      ?.get(normalizedFileName(resolved.resolvedFileName));
+            if (!sdkModule && resolved.packageId?.name === sdkPackage) {
+                violations.push(
+                    `${sourceLocation(sourceFile, node)} imports ${JSON.stringify(moduleName)}, which resolves to an unsupported ${JSON.stringify(sdkPackage)} entry point; component template ${JSON.stringify(role.template)} requires ${JSON.stringify(role.sdkImport)}.`,
+                );
+                return;
+            }
+            if (!sdkModule || sdkModule === role.sdkImport) return;
+
+            const resolvedThroughAlias = moduleName === sdkModule
+                ? ""
+                : `, which resolves to ${JSON.stringify(sdkModule)}`;
+            violations.push(
+                `${sourceLocation(sourceFile, node)} imports ${JSON.stringify(moduleName)}${resolvedThroughAlias}, but component template ${JSON.stringify(role.template)} requires ${JSON.stringify(role.sdkImport)}.`,
+            );
         });
     }
 
     if (roleName === "agent") {
-        const sdkDeclarationFiles = new Set();
-        for (const sourceFile of userSources) {
-            const resolved = ts.resolveModuleName(
-                sdkPackage,
-                sourceFile.fileName,
-                parsedTsConfig.options,
-                ts.sys,
-            ).resolvedModule;
-            if (resolved) sdkDeclarationFiles.add(normalizedFileName(resolved.resolvedFileName));
-        }
-
         for (const sourceFile of userSources) {
             visit(sourceFile, (node) => {
                 if (!ts.isCallExpression(node)) return;
@@ -248,7 +287,7 @@ function componentRollupConfig() {
         {
             name: "component-role",
             buildStart() {
-                validateComponentRole(componentDir, parsedTsConfig, componentRole);
+                validateComponentRole(parsedTsConfig, componentRole);
             },
         },
         virtualAgentMainPlugin(),
