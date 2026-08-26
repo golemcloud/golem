@@ -442,6 +442,16 @@ pub fn encode_typed(typed: &TypedSchemaValue) -> Result<wire::TypedSchemaValue, 
     })
 }
 
+/// Encode a typed guest value while explicitly transferring any affine
+/// resources reachable from it into the returned wire representation.
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub fn encode_typed_owned(typed: TypedSchemaValue) -> Result<wire::TypedSchemaValue, EncodeError> {
+    Ok(wire::TypedSchemaValue {
+        graph: encode_graph(typed.graph())?,
+        value: encode_value(typed.value())?,
+    })
+}
+
 struct GraphCtx {
     type_nodes: Vec<wire::SchemaTypeNode>,
     defs: Vec<wire::SchemaTypeDef>,

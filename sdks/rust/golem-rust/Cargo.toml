@@ -32,6 +32,11 @@ harness = false
 name = "schema_reexport"
 harness = false
 
+[[test]]
+name = "tool_middleware_component"
+harness = false
+required-features = ["export_golem_agentic"]
+
 [[bench]]
 name = "agent_registry_bench"
 harness = false
@@ -79,6 +84,8 @@ bytes = ["dep:bytes", "golem-schema/bytes"]
 chrono = ["dep:chrono", "golem-schema/chrono"]
 durability = []
 export_golem_agentic = ["export_load_snapshot", "export_save_snapshot", "dep:ctor", "dep:async-trait", "dep:serde", "dep:serde_json"]
+export_golem_agentic_tool_middleware = ["export_golem_agentic"]
+export_golem_tool_middleware = ["dep:ctor", "dep:async-trait", "dep:serde", "dep:serde_json"]
 export_load_snapshot = []
 export_oplog_processor = []
 export_save_snapshot = []

@@ -16,7 +16,7 @@
 //! [`super`] and the flat, index-based `golem:tool/common@0.1.0` wire bindings
 //! re-exported here as [`wire`].
 //!
-//! Mirrors [`crate::schema::agent::wit`]: a tool's `defs` plus every type
+//! Mirrors [`crate::schema::wit`]: a tool's `defs` plus every type
 //! embedded in its command tree are folded into one shared
 //! [`wire::SchemaGraph`](crate::schema::wit::wire::SchemaGraph) via
 //! [`GraphEncoder`] / [`GraphDecoder`]. Embedded [`SchemaType`]s become
@@ -33,13 +33,21 @@
 
 use super::*;
 use crate::schema::graph::SchemaGraph;
-use golem_schema::schema::wit::{
-    DecodeError, EncodeError, GraphDecoder, GraphEncoder, decode_value, encode_value,
+use crate::schema::wit::{
+    DecodeError, EncodeError, GraphDecoder, GraphEncoder, decode_value_by_ref, encode_value,
 };
 
-/// Generated `golem:tool/common@0.1.0` types used as the wire shape. Produced by
-/// the single workspace agent bindgen in [`crate::schema::agent::bindings`].
-pub use crate::schema::agent::bindings::golem::tool::common as wire;
+/// Generated `golem:tool/common@0.1.0` types used as the wire shape.
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub mod wire {
+    pub use crate::schema::wit::guest::generated::golem::tool::common::*;
+}
+
+/// Generated `golem:tool/common@0.1.0` types used as the wire shape.
+#[cfg(all(feature = "host", not(feature = "guest")))]
+pub mod wire {
+    pub use crate::schema::wit::host::generated::golem::tool::common::*;
+}
 
 /// Error raised when converting between the native tool model and its wire form.
 #[derive(Debug)]
@@ -69,6 +77,22 @@ impl From<DecodeError> for ToolWitError {
     fn from(e: DecodeError) -> Self {
         ToolWitError::Decode(e)
     }
+}
+
+/// Encode a [`Tool`] into its flat WIT representation.
+pub fn encode_tool(tool: &Tool) -> Result<wire::Tool, ToolWitError> {
+    wire::Tool::try_from(tool)
+}
+
+/// Decode a flat WIT tool representation into the recursive native model.
+pub fn decode_tool(tool: wire::Tool) -> Result<Tool, ToolWitError> {
+    Tool::try_from(&tool)
+}
+
+fn decode_tool_value(
+    value: &crate::schema::wit::wire::SchemaValueTree,
+) -> Result<SchemaValue, DecodeError> {
+    decode_value_by_ref(value)
 }
 
 // ============================================================
@@ -703,7 +727,7 @@ fn decode_positional(dec: &GraphDecoder, p: &wire::Positional) -> Result<Positio
         doc: Doc::from(&p.doc),
         value_name: p.value_name.clone(),
         type_: dec.decode_type_at(p.type_)?,
-        default: p.default.as_ref().map(decode_value).transpose()?,
+        default: p.default.as_ref().map(decode_tool_value).transpose()?,
         required: p.required,
         accepts_stdio: p.accepts_stdio,
     })
@@ -737,7 +761,7 @@ fn decode_option_spec(
         doc: Doc::from(&o.doc),
         value_name: o.value_name.clone(),
         shape: decode_option_shape(dec, &o.shape)?,
-        default: o.default.as_ref().map(decode_value).transpose()?,
+        default: o.default.as_ref().map(decode_tool_value).transpose()?,
         required: o.required,
         env_var: o.env_var.clone(),
     })
@@ -803,7 +827,7 @@ fn decode_ref(r: &wire::Ref) -> Result<Ref, ToolWitError> {
         wire::Ref::Present(name) => Ref::Present(name.clone()),
         wire::Ref::ValueIs(v) => Ref::ValueIs(ValueIsRef {
             name: v.name.clone(),
-            value: decode_value(&v.value)?,
+            value: decode_tool_value(&v.value)?,
         }),
     })
 }

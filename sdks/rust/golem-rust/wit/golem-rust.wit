@@ -54,3 +54,12 @@ world golem-agentic {
    export golem:agent/guest@2.0.0;
    export golem:tool/guest@0.1.0;
 }
+
+world golem-tool-middleware {
+   include golem:tool/tool-middleware@0.1.0;
+}
+
+world golem-agentic-tool-middleware {
+   include golem-agentic;
+   export golem:tool/tool-middleware-guest@0.1.0;
+}

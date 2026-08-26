@@ -11,8 +11,6 @@ source_ref="$(git symbolic-ref -q HEAD || true)"
 artifact_dir="${GOLEM_BENCHMARK_ARTIFACT_DIR:-$root/tmp}"
 results_repository="${BENCHMARK_RESULTS_REPOSITORY:-https://github.com/golemcloud/benchmark-results.git}"
 generated_files=(
-    sdks/ts/packages/golem-ts-typegen/.metadata/generated-types.json
-    sdks/ts/packages/golem-ts-typegen/.metadata/generated-types.ts
     test-components/benchmarks/package-lock.json
 )
 

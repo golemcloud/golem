@@ -114,6 +114,15 @@ pub trait WorkerCtx:
     /// instead of re-executing.
     const ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS: bool = true;
 
+    /// Wraps a worker's oplog before it is shared with the worker internals and its context.
+    fn wrap_oplog(
+        _owned_agent_id: OwnedAgentId,
+        oplog: Arc<dyn Oplog>,
+        _extra_deps: Self::ExtraDeps,
+    ) -> Arc<dyn Oplog> {
+        oplog
+    }
+
     /// Creates a new worker context
     ///
     /// Arguments:
@@ -447,15 +456,6 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Extra dependencies required by this specific worker context. A value of this type is
     /// passed to the created worker context in the 'extra_deps' parameter of 'WorkerCtx::create'.
     type ExtraDeps: Clone + Send + Sync + 'static;
-
-    /// Decorates an oplog before it is shared by the worker and its execution contexts.
-    fn wrap_oplog(
-        _owned_agent_id: &OwnedAgentId,
-        oplog: Arc<dyn Oplog>,
-        _extra_deps: &Self::ExtraDeps,
-    ) -> Arc<dyn Oplog> {
-        oplog
-    }
 
     /// Gets how many times the worker has been retried to recover from an error, and what
     /// error was stored in the last entry.

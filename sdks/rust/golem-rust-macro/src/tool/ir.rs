@@ -20,11 +20,13 @@
 //! author wrote*; turning the IR plus the trait method signatures into the
 //! runtime `ExtendedToolType` metadata is done during metadata synthesis.
 
-use syn::{Expr, Ident, Path, ReturnType, Type};
+use syn::{Expr, Ident, Path, ReturnType, Type, Visibility};
 
 /// A full `#[tool_definition]` trait, lowered to IR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolDefinitionIr {
+    /// Visibility of the authored trait and its generated definition surfaces.
+    pub visibility: Visibility,
     /// The trait identifier; the tool name is `kebab(ident)` (resolved during metadata synthesis).
     pub trait_ident: Ident,
     /// Optional `version = "..."` from the `#[tool_definition(...)]` attribute.

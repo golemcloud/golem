@@ -596,10 +596,11 @@ impl TestWorkerExecutor {
         })
     }
 
-    pub fn agent_oplog_call_count(&self, agent_id: &AgentId, api: &'static str) -> u64 {
-        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        self.additional_test_deps
-            .oplog_call_count(&owned_agent_id, api)
+    pub fn oplog_service_call_count(&self, agent_id: &AgentId, api: &'static str) -> usize {
+        self.additional_test_deps.oplog_call_count(
+            &OwnedAgentId::new(self.context.default_environment_id, agent_id),
+            api,
+        )
     }
 
     pub async fn commit_oplog_entry_bypassing_worker_status(
@@ -1406,18 +1407,6 @@ impl CallCountManagement for TestWorkerCtx {
 impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     type ExtraDeps = AdditionalTestDeps;
 
-    fn wrap_oplog(
-        owned_agent_id: &OwnedAgentId,
-        oplog: Arc<dyn Oplog>,
-        extra_deps: &Self::ExtraDeps,
-    ) -> Arc<dyn Oplog> {
-        Arc::new(TestOplog::new(
-            owned_agent_id.clone(),
-            oplog,
-            extra_deps.clone(),
-        ))
-    }
-
     async fn get_last_error_and_retry_count<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
         owned_agent_id: &OwnedAgentId,
@@ -1630,6 +1619,14 @@ impl WorkerCtx for TestWorkerCtx {
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
     const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour = LogEventEmitBehaviour::LiveOnly;
+
+    fn wrap_oplog(
+        owned_agent_id: OwnedAgentId,
+        oplog: Arc<dyn Oplog>,
+        extra_deps: Self::ExtraDeps,
+    ) -> Arc<dyn Oplog> {
+        Arc::new(TestOplog::new(owned_agent_id, oplog, extra_deps))
+    }
 
     async fn create(
         _account_id: AccountId,
@@ -2324,6 +2321,10 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             _,
             HasSelf<DurableWorkerCtx<Context>>,
         >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::durable_host::tool::add_common_to_linker(
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
@@ -3206,8 +3207,8 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
+    oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
-    oplog_call_counts: Arc<std::sync::Mutex<HashMap<OwnedAgentId, HashMap<&'static str, u64>>>>,
     /// One-shot gates pausing the first consume-body chunk `End` append of an
     /// agent inside the [`TestOplog`] wrapper — after the entry is durable in
     /// the underlying oplog but before the wrapper's `Oplog::add` returns. Used
@@ -3234,30 +3235,11 @@ impl AdditionalTestDeps {
         let rdbms_tx_failures = Arc::new(scc::HashMap::new());
         Self {
             oplog_failures,
-            rdbms_tx_failures,
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
             active_agents: Arc::new(std::sync::OnceLock::new()),
         }
-    }
-
-    fn record_oplog_call(&self, owned_agent_id: &OwnedAgentId, api: &'static str) {
-        let mut counts = self.oplog_call_counts.lock().unwrap();
-        *counts
-            .entry(owned_agent_id.clone())
-            .or_default()
-            .entry(api)
-            .or_default() += 1;
-    }
-
-    fn oplog_call_count(&self, owned_agent_id: &OwnedAgentId, api: &'static str) -> u64 {
-        self.oplog_call_counts
-            .lock()
-            .unwrap()
-            .get(owned_agent_id)
-            .and_then(|counts| counts.get(&api))
-            .copied()
-            .unwrap_or_default()
     }
 
     /// Arms a one-shot gate that pauses the given agent's next consume-body
@@ -3292,6 +3274,24 @@ impl AdditionalTestDeps {
         self.consume_body_chunk_end_gates
             .read_async(agent_id, |_, gate| gate.clone())
             .await
+    }
+
+    fn record_oplog_call(&self, owned_agent_id: &OwnedAgentId, api: &'static str) {
+        *self
+            .oplog_call_counts
+            .lock()
+            .unwrap()
+            .entry((owned_agent_id.clone(), api))
+            .or_default() += 1;
+    }
+
+    fn oplog_call_count(&self, owned_agent_id: &OwnedAgentId, api: &'static str) -> usize {
+        self.oplog_call_counts
+            .lock()
+            .unwrap()
+            .get(&(owned_agent_id.clone(), api))
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Stores the executor's `ActiveAgents` registry on first call. Subsequent

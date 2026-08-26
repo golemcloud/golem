@@ -116,11 +116,11 @@ The sync script (`skills/sync-skills.ts`) strips AI-agent frontmatter, converts 
 
 When this lived in its own repo, [Lefthook](https://github.com/evilmartians/lefthook) wired up automatic pre-commit hooks. In the monorepo we no longer auto-install them (Lefthook lives at the git root, which would conflict with the rest of the golem repo's hooks).
 
-CI still enforces all of the same checks on every PR via `.github/workflows/docs.yaml` → `bun run build:check`, which runs:
+CI enforces all of the following on every docs PR via `.github/workflows/docs.yaml` → `bun run build:check`:
 
 1. ESLint (`bun run lint:check`)
 2. Prettier (`bun run format:check`)
 3. TypeScript type checking (`bun run typecheck`)
 4. Link validation (`bun run check-links`)
 
-Run them locally with `bun run build:check`, or auto-fix lint/format issues with `bun run fix`.
+For an isolated content change, check formatting on the changed paths and run the version/link checks relevant to those pages. For TypeScript, shared components, navigation, versioning, generator, or build configuration changes, run the affected lint/type/build checks; use `bun run build:check` when impact is cross-cutting or unclear. Use `bun run fix` only when lint/format fixes are needed, then inspect the diff.
