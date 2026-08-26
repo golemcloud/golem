@@ -250,8 +250,10 @@ mod tests {
             Ok(None)
         }
 
-        async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
-            Vec::new()
+        async fn get_running_workers_in_shards(
+            &self,
+        ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
+            Ok(Vec::new())
         }
 
         async fn remove(&self, _owned_agent_id: &OwnedAgentId) {}

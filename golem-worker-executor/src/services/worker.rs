@@ -226,7 +226,13 @@ pub trait WorkerService: Send + Sync {
         owned_agent_id: &OwnedAgentId,
     ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError>;
 
-    async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult>;
+    /// Enumerates the workers this executor must recover, per assigned shard.
+    ///
+    /// Returns `Err` when the recovery index itself could not be read; individual workers that
+    /// cannot be loaded are skipped and logged, so one of them cannot block the rest.
+    async fn get_running_workers_in_shards(
+        &self,
+    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError>;
 
     async fn remove(&self, owned_agent_id: &OwnedAgentId);
 
@@ -373,30 +379,46 @@ impl DefaultWorkerService {
         }
     }
 
-    async fn enum_workers_at_key(&self, key: &str) -> Vec<GetWorkerMetadataResult> {
+    async fn enum_workers_at_key(
+        &self,
+        key: &str,
+    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
         record_worker_call("enum");
 
+        // The index itself is not per-worker: without it there is no list of workers to recover,
+        // so this failure is reported to the caller rather than silently yielding an empty shard.
         let value: Vec<OwnedAgentId> = self
             .key_value_storage
             .with_entity("worker", "enum", "agent_id")
             .members_of_set(KeyValueStorageNamespace::RunningWorkers, key)
             .await
-            .unwrap_or_else(|err| panic!("failed to get worker ids from KV storage: {err}"));
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to get worker ids from KV storage: {err}"
+                ))
+            })?;
 
         let mut workers = Vec::new();
 
         for owned_agent_id in value {
-            let metadata = self
-                .get(&owned_agent_id)
-                .await
-                .unwrap_or_else(|err| {
-                    panic!("failed to get worker metadata from KV storage: {err}")
-                })
-                .unwrap_or_else(|| panic!("failed to get worker metadata from KV storage"));
-            workers.push(metadata);
+            // A single unreadable worker is skipped instead of failing the whole scan. The index
+            // entry can outlive the worker (a delete that raced this read leaves no oplog), and
+            // recovery of every other worker on this executor - and executor startup itself -
+            // must not hinge on one of them.
+            match self.get(&owned_agent_id).await {
+                Ok(Some(metadata)) => workers.push(metadata),
+                Ok(None) => {
+                    debug!(
+                        "Skipping {owned_agent_id} during recovery: no oplog (the worker was deleted)"
+                    );
+                }
+                Err(err) => {
+                    error!("Skipping {owned_agent_id} during recovery: {err}");
+                }
+            }
         }
 
-        workers
+        Ok(workers)
     }
 
     /// Namespace holding the agent's split cached status (one per-agent hash whose fields are
@@ -850,17 +872,19 @@ impl WorkerService for DefaultWorkerService {
         }
     }
 
-    async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
+    async fn get_running_workers_in_shards(
+        &self,
+    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
         let shard_assignment = self.shard_service.try_get_current_assignment();
         let mut result: Vec<GetWorkerMetadataResult> = vec![];
         if let Some(shard_assignment) = shard_assignment {
             for shard_id in shard_assignment.shard_ids {
                 let key = Self::running_in_shard_key(&shard_id);
-                let mut shard_worker = self.enum_workers_at_key(&key).await;
+                let mut shard_worker = self.enum_workers_at_key(&key).await?;
                 result.append(&mut shard_worker);
             }
         }
-        result
+        Ok(result)
     }
 
     async fn remove(&self, owned_agent_id: &OwnedAgentId) {
@@ -1101,13 +1125,29 @@ impl HasComponentService for DefaultWorkerService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ExecutionStatus;
+    use crate::services::oplog::Oplog;
+    use crate::services::shard::ShardServiceDefault;
+    use crate::storage::keyvalue::KeyValueStorageError;
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use async_trait::async_trait;
     use bytes::Bytes;
     use golem_common::model::Timestamp;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::component::ComponentId;
     use golem_common::model::component::ComponentRevision;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::{PayloadId, RawOplogPayload};
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
-    use golem_common::model::{PendingInvocationRef, PendingUpdateKind, PendingUpdateRef};
-    use std::collections::VecDeque;
+    use golem_common::model::{
+        PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ScanCursor,
+    };
+    use golem_common::read_only_lock;
+    use golem_service_base::model::component::Component;
+    use std::collections::{BTreeMap, VecDeque};
     use test_r::test;
+    use uuid::Uuid;
 
     fn idempotency_key(value: &str) -> IdempotencyKey {
         IdempotencyKey::new(value.to_string())
@@ -1340,5 +1380,405 @@ mod tests {
         assert!(!DefaultWorkerService::should_track_for_assignment_recovery(
             &status
         ));
+    }
+
+    /// Oplog service that only answers "does this agent have an oplog?"; the recovery scan needs
+    /// nothing else from it.
+    #[derive(Debug, Default)]
+    struct FakeOplogService {
+        existing: Vec<OwnedAgentId>,
+    }
+
+    #[async_trait]
+    impl OplogService for FakeOplogService {
+        async fn create(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _initial_entry: OplogEntry,
+            _initial_worker_metadata: AgentMetadata,
+            _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+            _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        ) -> Arc<dyn Oplog + 'static> {
+            unreachable!()
+        }
+
+        async fn open(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _last_oplog_index: Option<OplogIndex>,
+            _initial_worker_metadata: AgentMetadata,
+            _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
+            _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        ) -> Arc<dyn Oplog + 'static> {
+            unreachable!()
+        }
+
+        async fn get_last_index(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) -> OplogIndex {
+            unreachable!()
+        }
+
+        async fn delete(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) {
+            unreachable!()
+        }
+
+        async fn read(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _idx: OplogIndex,
+            _n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            BTreeMap::new()
+        }
+
+        async fn exists(&self, owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
+            self.existing.contains(owned_agent_id)
+        }
+
+        async fn scan_for_component(
+            &self,
+            _environment_id: &EnvironmentId,
+            _component_id: &ComponentId,
+            _modes: Option<AgentMode>,
+            _cursor: ScanCursor,
+            _count: u64,
+        ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn upload_raw_payload(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _data: Vec<u8>,
+        ) -> Result<RawOplogPayload, String> {
+            unreachable!()
+        }
+
+        async fn download_raw_payload(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _payload_id: PayloadId,
+            _md5_hash: Vec<u8>,
+        ) -> Result<Vec<u8>, String> {
+            unreachable!()
+        }
+    }
+
+    #[derive(Debug)]
+    struct UnusedComponentService;
+
+    #[async_trait]
+    impl ComponentService for UnusedComponentService {
+        async fn get(
+            &self,
+            _engine: &wasmtime::Engine,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn get_metadata(
+            &self,
+            _component_id: ComponentId,
+            _forced_revision: Option<ComponentRevision>,
+        ) -> Result<Component, WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn resolve_component(
+            &self,
+            _component_reference: String,
+            _resolving_environment: EnvironmentId,
+            _resolving_application: ApplicationId,
+            _resolving_account: AccountId,
+        ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<Component> {
+            unreachable!()
+        }
+
+        async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {
+            unreachable!()
+        }
+    }
+
+    /// Key-value storage whose every operation fails, standing in for an unreachable cluster.
+    #[derive(Debug)]
+    struct UnreachableKeyValueStorage;
+
+    impl UnreachableKeyValueStorage {
+        fn error<T>() -> Result<T, KeyValueStorageError> {
+            Err(KeyValueStorageError::NotAttempted(
+                "pool acquire timed out".to_string(),
+            ))
+        }
+    }
+
+    #[async_trait]
+    impl KeyValueStorage for UnreachableKeyValueStorage {
+        async fn set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _value: &[u8],
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn set_many(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _pairs: &[(&str, &[u8])],
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn set_if_not_exists(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _value: &[u8],
+        ) -> Result<bool, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn get(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+        ) -> Result<Option<Bytes>, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn get_many(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _keys: Vec<String>,
+        ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn get_all(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+        ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn del(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn del_many(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _keys: Vec<String>,
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn exists(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+        ) -> Result<bool, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn keys(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+        ) -> Result<Vec<String>, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn add_to_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _value: &[u8],
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn remove_from_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _value: &[u8],
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn members_of_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+        ) -> Result<Vec<Bytes>, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn add_to_sorted_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _score: f64,
+            _value: &[u8],
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn remove_from_sorted_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _value: &[u8],
+        ) -> Result<(), KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn get_sorted_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+        ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
+            Self::error()
+        }
+
+        async fn query_sorted_set(
+            &self,
+            _svc_name: &'static str,
+            _api_name: &'static str,
+            _entity_name: &'static str,
+            _namespace: KeyValueStorageNamespace,
+            _key: &str,
+            _min: f64,
+            _max: f64,
+        ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
+            Self::error()
+        }
+    }
+
+    fn test_owned_agent_id(name: &str) -> OwnedAgentId {
+        OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: name.to_string(),
+            },
+        )
+    }
+
+    fn test_worker_service(
+        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
+    ) -> DefaultWorkerService {
+        DefaultWorkerService::new(
+            key_value_storage,
+            Arc::new(ShardServiceDefault::new()),
+            oplog_service,
+            Arc::new(UnusedComponentService),
+            Arc::new(GolemConfig::default()),
+        )
+    }
+
+    #[test]
+    async fn recovery_scan_skips_workers_whose_oplog_is_gone() {
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let shard_key = DefaultWorkerService::running_in_shard_key(&ShardId::new(0));
+        let deleted = test_owned_agent_id("deleted-by-a-racing-delete");
+        storage
+            .with_entity("worker", "add", "agent_id")
+            .add_to_set(
+                KeyValueStorageNamespace::RunningWorkers,
+                &shard_key,
+                &deleted,
+            )
+            .await
+            .unwrap();
+
+        let service = test_worker_service(storage, Arc::new(FakeOplogService::default()));
+
+        // The index entry outlived the worker; recovery isolates that instead of aborting.
+        let workers = service.enum_workers_at_key(&shard_key).await.unwrap();
+        assert!(workers.is_empty());
+    }
+
+    #[test]
+    async fn recovery_scan_reports_an_unreadable_index() {
+        let service = test_worker_service(
+            Arc::new(UnreachableKeyValueStorage),
+            Arc::new(FakeOplogService::default()),
+        );
+
+        let result = service
+            .enum_workers_at_key(&DefaultWorkerService::running_in_shard_key(&ShardId::new(
+                0,
+            )))
+            .await;
+
+        assert!(
+            result.is_err(),
+            "expected the index read failure to surface"
+        );
     }
 }
