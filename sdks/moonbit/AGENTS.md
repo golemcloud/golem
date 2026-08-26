@@ -154,18 +154,20 @@ files. Regenerate with the script, which requires this exact revision of the
 
 ```sh
 cargo install --locked --git https://github.com/golemcloud/wit-bindgen \
-  --rev 4407232ead86d9bcbd06cbebd790a52120a4087a wit-bindgen-cli
+  --rev e759a320fdd1ecad92dc484af59cfc0c5fff38c6 wit-bindgen-cli
 ```
 
 The pin incorporates Bytecode Alliance's draft
 [MoonBit component-model async PR #1659](https://github.com/bytecodealliance/wit-bindgen/pull/1659)
 and Golem's additional outline-lift, named-memory-lowering, and export-disambiguation changes.
+It also includes deterministic MoonBit generation so unchanged WIT produces stable checked-in
+bindings.
 Released wit-bindgen and upstream `main` do not yet generate the async MoonBit exports required by
 this SDK.
 
 ```sh
 cd golem_sdk
-moon run script bindgen          # or: bash scripts/regen-bindings.sh
+bash scripts/regen-bindings.sh
 ```
 
 The script (`scripts/regen-bindings.sh`):
@@ -175,7 +177,8 @@ The script (`scripts/regen-bindings.sh`):
    load *and* subtracts `0x100`/`0x10000`; the spurious subtraction is stripped).
 4. Removes an emitted `moon.pkg.json` only where a sibling hand-maintained `moon.pkg` owns the
    package metadata.
-5. Asserts the s8/s16 fix took effect.
+5. Formats each generated MoonBit source with `moonfmt`.
+6. Asserts the s8/s16 fix took effect.
 
 `--ignore-stub` means wit-bindgen will NOT (re)generate the stub files. The `stub.mbt` files under
 `gen/interface/` are the **SDK's implementation** of the WIT export interfaces — the dispatch logic
@@ -456,7 +459,7 @@ moon check --target wasm          # Type-check
 moon build --target wasm          # Build
 moon test --target wasm           # Run tests
 moon info && moon fmt             # Regenerate .mbti and format
-moon run script bindgen           # Regenerate with the exact pinned Golem wit-bindgen fork
+bash scripts/regen-bindings.sh     # Regenerate with the exact pinned Golem wit-bindgen fork
 
 # In golem_sdk_tools/ (the codegen CLI, native target):
 moon check
@@ -527,10 +530,11 @@ published to mooncakes.io for the release template to work.
 ## Dependencies & Tools
 
 - **wit-bindgen** — Golem's fork pinned at
-  `4407232ead86d9bcbd06cbebd790a52120a4087a`. It combines draft upstream PR #1659's MoonBit
+  `e759a320fdd1ecad92dc484af59cfc0c5fff38c6`. It combines draft upstream PR #1659's MoonBit
   component-model async support with Golem's outline-lift, named-memory-lowering, and export
-  disambiguation changes. Bindings are regenerated via `scripts/regen-bindings.sh`, which rejects
-  any other generator revision and applies the s8/s16 sign-extension fix in post-processing.
+  disambiguation changes, plus deterministic MoonBit generation. Bindings are regenerated via
+  `scripts/regen-bindings.sh`, which rejects any other generator revision and applies the s8/s16
+  sign-extension fix in post-processing.
 - **wasm-tools** — `component embed` (adds WIT type info) and `component new` (creates the Component
   Model WASM).
 - **moon** — MoonBit build tool.

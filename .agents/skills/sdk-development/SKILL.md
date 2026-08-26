@@ -155,7 +155,7 @@ moon test <affected-package-or-file>
 
 ```shell
 cd sdks/moonbit/golem_sdk
-moon run script bindgen  # Enforces the pinned Golem wit-bindgen and required post-processing
+bash scripts/regen-bindings.sh  # Enforces the pinned Golem wit-bindgen and required post-processing
 moon fmt
 ```
 

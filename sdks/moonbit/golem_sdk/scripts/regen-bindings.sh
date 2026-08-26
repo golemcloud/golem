@@ -18,13 +18,16 @@
 #      subtraction (the signed load alone already yields the correct value).
 #   3. Remove an emitted `moon.pkg.json` only where a sibling hand-maintained
 #      `moon.pkg` owns package metadata (the export stubs and gen link package).
-#   4. Assert the s8/s16 bug is gone.
+#   4. Format generated MoonBit sources one file at a time. `moonfmt` accepts a
+#      single input path, so passing every generated file in one invocation only
+#      formats one of them.
+#   5. Assert the s8/s16 bug is gone.
 #
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-readonly WIT_BINDGEN_COMMIT="4407232ead86d9bcbd06cbebd790a52120a4087a"
+readonly WIT_BINDGEN_COMMIT="e759a320fdd1ecad92dc484af59cfc0c5fff38c6"
 readonly WIT_BINDGEN_SHORT_COMMIT="${WIT_BINDGEN_COMMIT:0:9}"
 
 wit_bindgen_version="$(wit-bindgen --version)"
@@ -61,6 +64,9 @@ find interface world gen async-core -name 'moon.pkg.json' -type f -print0 |
       rm "$package"
     fi
   done
+
+echo "==> Formatting generated MoonBit sources"
+find interface world gen -name '*.mbt' -type f -exec moonfmt -w {} \;
 
 echo "==> Verifying s8/s16 fix"
 if rg -n -g '*.mbt' -e ' - 0x100\b' -e ' - 0x10000\b' interface world gen >/dev/null 2>&1; then

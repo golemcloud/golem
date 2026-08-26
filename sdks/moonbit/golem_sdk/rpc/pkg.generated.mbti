@@ -59,4 +59,3 @@ pub(all) struct ScheduledInvocationReceipt {
 // Type aliases
 
 // Traits
-

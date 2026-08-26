@@ -41,9 +41,14 @@ fn make_client(
   phantom_id : @types.Uuid?,
   agent_config : Array[@common.TypedAgentConfigValue],
 ) -> AgentClient raise @common.AgentError {
-  let rpc = @agentHost.WasmRpc::wasm_rpc(
-    agent_type_name, constructor_input, phantom_id, agent_config,
-  )
+  let rpc = match
+    @agentHost.WasmRpc::create(
+      agent_type_name, constructor_input, phantom_id, agent_config,
+    ) {
+    Ok(rpc) => rpc
+    Err(@agentHost.RpcError::RemoteAgentError(error)) => raise error
+    Err(error) => panic_on_rpc_error(error)
+  }
   { agent_type_name, constructor_input, phantom_id, rpc }
 }
 
