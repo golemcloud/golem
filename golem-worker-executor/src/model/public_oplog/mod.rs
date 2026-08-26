@@ -97,6 +97,7 @@ pub async fn get_public_oplog_chunk(
     initial_oplog_index: OplogIndex,
     count: usize,
 ) -> Result<PublicOplogChunk, String> {
+    let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
         .await;

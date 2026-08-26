@@ -76,10 +76,10 @@ impl ReplayCursor {
         hasher.finish128()
     }
 
-    /// Forward-scans the oplog from `start` up to `replay_target`, skipping entries inside deleted
-    /// regions, running `end_check`/`for_all_intermediate` (and `update_state`) over the rest. This
-    /// is the shared core for replay scans that need to inspect entries without advancing the
-    /// cursor.
+    /// Forward-scans the oplog from `start` up to, but not including, `end`, skipping entries
+    /// inside deleted regions and running `end_check`/`for_all_intermediate` (and `update_state`)
+    /// over the rest. This is the shared core for replay scans that need to inspect entries without
+    /// advancing the cursor.
     ///
     /// It only reads the oplog (via [`Self::read_oplog`]); it never touches [`Self::state`], so it is
     /// safe to call both from inside a held [`CursorTx`] (passing a borrow of the transaction's skip
@@ -90,7 +90,7 @@ impl ReplayCursor {
     pub(super) async fn scan_oplog<State>(
         &self,
         mut start: OplogIndex,
-        replay_target: OplogIndex,
+        end: OplogIndex,
         skipped_regions: &DeletedRegions,
         mut current_next_skip_region: Option<OplogRegion>,
         begin_idx: OplogIndex,
@@ -103,8 +103,8 @@ impl ReplayCursor {
 
         let mut violation = false;
 
-        while start < replay_target {
-            let available = replay_target.as_u64() - start.as_u64() + 1;
+        while start < end {
+            let available = end.as_u64() - start.as_u64();
             let entries = self.read_oplog(start, CHUNK_SIZE.min(available)).await?;
             for (idx, entry) in &entries {
                 if current_next_skip_region
@@ -2239,7 +2239,7 @@ impl ReplayState {
         cursor
             .scan_oplog(
                 start,
-                cursor.replay_target(),
+                cursor.replay_target().next(),
                 &skipped_regions,
                 next_skipped_region,
                 begin_idx,
