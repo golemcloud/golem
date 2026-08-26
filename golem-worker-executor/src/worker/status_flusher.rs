@@ -418,6 +418,7 @@ mod tests {
         writes: Vec<RecordedWrite>,
         tracking_calls: Vec<AgentStatus>,
         fail_writes: bool,
+        fail_tracking: bool,
     }
 
     #[derive(Default)]
@@ -431,6 +432,9 @@ mod tests {
         }
         fn set_fail(&self, fail: bool) {
             self.state.lock().unwrap().fail_writes = fail;
+        }
+        fn set_fail_tracking(&self, fail: bool) {
+            self.state.lock().unwrap().fail_tracking = fail;
         }
         fn write_count(&self) -> usize {
             self.state.lock().unwrap().writes.len()
@@ -522,11 +526,11 @@ mod tests {
             _owned_agent_id: &OwnedAgentId,
             status_value: &AgentStatusRecord,
         ) -> Result<(), String> {
-            self.state
-                .lock()
-                .unwrap()
-                .tracking_calls
-                .push(status_value.status);
+            let mut state = self.state.lock().unwrap();
+            state.tracking_calls.push(status_value.status);
+            if state.fail_tracking {
+                return Err("injected tracking failure".to_string());
+            }
             Ok(())
         }
     }
@@ -835,5 +839,22 @@ mod tests {
         let (a, _, _) = make_flusher(false, true, ws.clone(), queue.clone());
         let (b, _, _) = make_flusher(false, true, ws.clone(), queue.clone());
         assert_ne!(a.queue_id, b.queue_id);
+    }
+
+    /// A failed recovery-index update is logged, not fatal: the cached status is still written.
+    /// Aborting instead would drop every invocation on the node and leave the index exactly as
+    /// stale as the failed write left it.
+    #[test]
+    async fn update_cached_status_writes_the_status_even_when_tracking_fails() {
+        let service = MockWorkerService::arc();
+        service.set_fail_tracking(true);
+
+        let result = service
+            .update_cached_status(&agent_id(), None, status(AgentStatus::Running, 1))
+            .await;
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(service.tracking_count(), 1);
+        assert_eq!(service.write_count(), 1);
     }
 }
