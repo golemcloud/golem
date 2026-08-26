@@ -89,12 +89,13 @@ fn scope_card_observation(scope_card_id: &CardId, root_card_id: &CardId) -> (boo
 }
 
 fn scope_card_rpc(target: String) -> WasmRpc {
-    WasmRpc::new(
+    WasmRpc::create(
         "ScopeCardAgent",
         encode_parameters(vec![target.to_value()]),
         None,
         Vec::new(),
     )
+    .expect("failed to create scope-card RPC client")
 }
 
 fn decode_scope_observation(

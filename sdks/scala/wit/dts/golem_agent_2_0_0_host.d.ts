@@ -36,11 +36,12 @@ declare module 'golem:agent/host@2.0.0' {
   export function getConfigValue(key: string[], expected: SchemaGraph): SchemaValueTree;
   export class WasmRpc {
     /**
-     * Constructs the RPC client connecting to the given target agent.
+     * Creates an RPC client connecting to the given target agent.
      * `constructor` is a value tree whose root encodes the target agent
      * constructor's parameter list.
+     * @throws RpcError
      */
-    constructor(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]);
+    static create(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]): WasmRpc;
     /**
      * Invokes a remote method with the given parameters, and awaits the result.
      * `input` encodes the method's parameter list. The returned result is
