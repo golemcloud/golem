@@ -66,7 +66,10 @@ impl ShardAssignmentCheck for ShardAssignment {
 /// be different for each worker.
 #[derive(Clone, Debug)]
 pub struct AgentConfig {
-    pub deleted_regions: DeletedRegions,
+    /// The regions of the oplog that replay must skip: jumps, reverts, and the prefix
+    /// superseded by a snapshot. Distinct from `AgentStatusRecord::deleted_regions`,
+    /// which holds only the regions dropped by a revert.
+    pub skipped_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
     pub current_filesystem_storage_usage: u64,
     pub component_revision_for_replay: ComponentRevision,
@@ -77,7 +80,7 @@ pub struct AgentConfig {
 
 impl AgentConfig {
     pub fn new(
-        deleted_regions: DeletedRegions,
+        skipped_regions: DeletedRegions,
         total_linear_memory_size: u64,
         current_filesystem_storage_usage: u64,
         component_revision_for_replay: ComponentRevision,
@@ -86,7 +89,7 @@ impl AgentConfig {
         last_snapshot_index: Option<OplogIndex>,
     ) -> AgentConfig {
         AgentConfig {
-            deleted_regions,
+            skipped_regions,
             total_linear_memory_size,
             current_filesystem_storage_usage,
             component_revision_for_replay,
