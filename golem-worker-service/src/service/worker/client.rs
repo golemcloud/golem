@@ -1524,10 +1524,16 @@ impl DeleteReply {
 /// which for an ordinary rebalance over an agent that never existed needs no
 /// crash at all to happen.
 ///
-/// The one case that does round the other way is a delete of an agent that never
-/// existed whose earlier dispatch failed at the *transport*: that caller sees
-/// success instead of not-found. Nothing can distinguish it from the lost-reply
-/// case, and success is the ordinary reading of deleting something already gone.
+/// What stops this from swallowing the answer #3133 deliberately introduced is
+/// that `WorkerService::delete` settles existence with a *read* before any
+/// delete goes out. An agent that was never there is refused up there, and never
+/// reaches this. So by the time a not-found arrives here, the agent did exist
+/// when the caller asked, and something removed it since.
+///
+/// Which leaves one case rounding the other way: the agent existed at that read
+/// and a *third party* deleted it before an earlier dispatch of ours landed. The
+/// caller sees success for a delete somebody else performed. It is narrow, it
+/// needs a concurrent deleter, and the agent is gone either way.
 ///
 /// Every other failure is passed through unchanged at any dispatch count.
 fn map_delete_worker_response(

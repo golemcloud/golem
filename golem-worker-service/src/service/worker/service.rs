@@ -230,6 +230,18 @@ impl WorkerService {
             )
             .await?;
 
+        // #3133 made deleting an agent that does not exist an error, and that
+        // answer has to survive the routing layer's retries. A retried *delete*
+        // cannot tell "I already deleted it" from "it was never here":
+        // `delete_worker_internal` opens with a metadata lookup and reports the
+        // agent missing either way. A read can. Reads do not change their answer
+        // by being repeated, so asking once here settles whether the agent was
+        // there when the caller asked, before any delete goes out and before any
+        // retry can muddy it.
+        self.worker_client
+            .get_metadata(agent_id, component.environment_id, auth_ctx.clone())
+            .await?;
+
         self.worker_client
             .delete(agent_id, component.environment_id, auth_ctx)
             .await?;
@@ -1066,7 +1078,7 @@ mod tests {
     use crate::service::auth::{AuthService, AuthServiceError};
     use crate::service::component::{ComponentService, ComponentServiceError};
     use crate::service::limit::{LimitService, LimitServiceError};
-    use crate::service::worker::{WorkerClient, WorkerResult, WorkerStream};
+    use crate::service::worker::{WorkerClient, WorkerResult, WorkerServiceError, WorkerStream};
     use async_trait::async_trait;
     use bytes::Bytes;
     use chrono::Utc;
@@ -1093,11 +1105,13 @@ mod tests {
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
     use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, RevertWorkerTarget};
     use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+    use golem_common::model::{AgentStatus, Timestamp};
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment, EnvironmentAction};
     use golem_service_base::model::component::Component;
     use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
-    use std::collections::{BTreeMap, BTreeSet, HashMap};
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -1378,6 +1392,10 @@ mod tests {
         invoked_agent_ids: Mutex<Vec<AgentId>>,
         invoked_idempotency_keys: Mutex<Vec<IdempotencyKey>>,
         invocation_output: AgentInvocationOutput,
+        /// Whether `get_metadata` finds anything. Agents do not exist by
+        /// default, so a test that means to delete one has to say so.
+        agent_exists: Mutex<bool>,
+        deleted_agent_ids: Mutex<Vec<AgentId>>,
     }
 
     impl RecordingWorkerClient {
@@ -1387,7 +1405,17 @@ mod tests {
                 invoked_agent_ids: Mutex::new(Vec::new()),
                 invoked_idempotency_keys: Mutex::new(Vec::new()),
                 invocation_output,
+                agent_exists: Mutex::new(false),
+                deleted_agent_ids: Mutex::new(Vec::new()),
             }
+        }
+
+        fn agent_exists(&self) {
+            *self.agent_exists.lock().unwrap() = true;
+        }
+
+        fn deleted_agent_ids(&self) -> Vec<AgentId> {
+            self.deleted_agent_ids.lock().unwrap().clone()
         }
 
         fn created_agent_id(&self) -> AgentId {
@@ -1434,8 +1462,17 @@ mod tests {
             unimplemented!()
         }
 
-        async fn delete(&self, _: &AgentId, _: EnvironmentId, _: AuthCtx) -> WorkerResult<()> {
-            unimplemented!()
+        async fn delete(
+            &self,
+            agent_id: &AgentId,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<()> {
+            self.deleted_agent_ids
+                .lock()
+                .unwrap()
+                .push(agent_id.clone());
+            Ok(())
         }
 
         async fn complete_promise(
@@ -1461,11 +1498,17 @@ mod tests {
 
         async fn get_metadata(
             &self,
-            _: &AgentId,
-            _: EnvironmentId,
+            agent_id: &AgentId,
+            environment_id: EnvironmentId,
             _: AuthCtx,
         ) -> WorkerResult<AgentMetadataDto> {
-            unimplemented!()
+            if *self.agent_exists.lock().unwrap() {
+                Ok(test_agent_metadata(agent_id.clone(), environment_id))
+            } else {
+                Err(WorkerServiceError::GolemError(
+                    WorkerExecutorError::worker_not_found(agent_id.clone()),
+                ))
+            }
         }
 
         async fn find_metadata(
@@ -1709,6 +1752,15 @@ mod tests {
             }
         }
 
+        /// Any well-formed id in this harness's component. The delete path never
+        /// resolves it against the registry, so the name is arbitrary.
+        fn some_agent_id(&self) -> AgentId {
+            AgentId {
+                component_id: self.component_id,
+                agent_id: "weather-agent(\"oslo\")".to_string(),
+            }
+        }
+
         fn create_request(&self) -> CreateAgentRequest {
             CreateAgentRequest {
                 app_name: ApplicationName::try_from("weather-app".to_string()).unwrap(),
@@ -1735,6 +1787,31 @@ mod tests {
                 deployment_revision: None,
                 owner_account_email: None,
             }
+        }
+    }
+
+    /// Nothing on the delete path reads these fields; it only needs the lookup
+    /// to succeed or fail, so everything past identity is filler.
+    fn test_agent_metadata(agent_id: AgentId, environment_id: EnvironmentId) -> AgentMetadataDto {
+        AgentMetadataDto {
+            agent_id,
+            environment_id,
+            created_by: AccountId(Uuid::new_v4()),
+            env: HashMap::new(),
+            config: vec![],
+            status: AgentStatus::Idle,
+            component_revision: ComponentRevision::INITIAL,
+            retry_count: 0,
+            pending_invocation_count: 0,
+            updates: vec![],
+            created_at: Timestamp::now_utc(),
+            last_error: None,
+            component_size: 0,
+            total_linear_memory_size: 0,
+            exported_resource_instances: vec![],
+            active_plugins: HashSet::new(),
+            skipped_regions: vec![],
+            deleted_regions: vec![],
         }
     }
 
@@ -1971,5 +2048,59 @@ mod tests {
         );
         assert!(phantom_id(&create_response.agent_id).is_none());
         assert!(phantom_id(&invoke_response.agent_id).is_none());
+    }
+
+    /// #3133's answer survives the routing layer, which is the whole point of
+    /// settling existence with a read.
+    ///
+    /// Issue #2404 was a user deleting an agent that did not exist and being
+    /// told it worked. #3133 made that an error. A retried *delete* cannot keep
+    /// that promise — `delete_worker_internal` opens with a metadata lookup, so
+    /// "I already deleted it" and "it was never here" arrive identically — so
+    /// `delete` asks first, with a read, and refuses before dispatching
+    /// anything.
+    ///
+    /// The second assertion is the load-bearing one: it is not enough to return
+    /// the right error, nothing may go out at all. A dispatched delete is a
+    /// delete that can be retried, and a retry is what turns this answer into a
+    /// success.
+    #[test]
+    async fn deleting_an_agent_that_never_existed_still_reports_it_missing() {
+        let harness = RestHarness::new(AgentMode::Durable);
+
+        let err = harness
+            .worker_service
+            .delete(&harness.some_agent_id(), AuthCtx::system())
+            .await
+            .expect_err("deleting an agent that is not there must fail");
+
+        assert!(
+            matches!(
+                err,
+                WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. })
+            ),
+            "expected AgentNotFound, got {err:?}"
+        );
+        assert!(
+            harness.worker_client.deleted_agent_ids().is_empty(),
+            "the read already answered, so no delete may be dispatched to be retried"
+        );
+    }
+
+    /// The other half: an agent that is there is still deleted, and the delete
+    /// really does reach the client rather than being swallowed by the check.
+    #[test]
+    async fn deleting_an_existing_agent_dispatches_the_delete() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        harness.worker_client.agent_exists();
+        let agent_id = harness.some_agent_id();
+
+        harness
+            .worker_service
+            .delete(&agent_id, AuthCtx::system())
+            .await
+            .unwrap();
+
+        assert_eq!(harness.worker_client.deleted_agent_ids(), vec![agent_id]);
     }
 }
