@@ -177,10 +177,18 @@ impl AgentStatusFlusher {
                 .set_assignment_tracking(&self.owned_agent_id, new_status)
                 .await
         {
-            // Logged, not fatal: aborting the executor would drop every invocation running on it
-            // and still leave the index exactly as stale as this failed write left it.
-            error!(
-                "Failed to update the running workers recovery index for {}: {err}",
+            // Fatal, deliberately. This index is what a reshard or a crash consults to decide which
+            // workers to resume, so an agent missing from it is an agent that silently stops being
+            // running - the one property this executor exists to uphold. Carrying on would trade a
+            // visible failure for an invisible one.
+            //
+            // What changed is when this fires, not whether it does: the storage retry budget now
+            // absorbs a transient backend blip, so reaching this line means the write kept failing
+            // for the whole budget. At that point this executor cannot maintain its own recovery
+            // index, and replacing it beats leaving it running with agents it can no longer
+            // account for.
+            panic!(
+                "failed to update the running workers recovery index for {}: {err}",
                 self.owned_agent_id
             );
         }
