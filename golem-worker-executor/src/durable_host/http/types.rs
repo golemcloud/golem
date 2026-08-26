@@ -1434,7 +1434,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     exec_state.max_in_function_retry_delay,
                     request_state.begin_index,
                     self.execution_status.clone(),
-                    self.is_unpersisted_execution(),
                 );
                 wasmtime_wasi_http::p2::types::HostFutureIncomingResponse::pending(retry_handle)
             } else {

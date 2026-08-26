@@ -16,7 +16,8 @@ use crate::debug_session::{DebugSessionId, DebugSessions};
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_worker_executor::services::oplog::{
-    CommitLevel, Oplog, OrderedOplogStart, PendingUpload,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OrderedOplogStart,
+    PendingUpload,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
@@ -82,6 +83,16 @@ impl Oplog for DebugOplog {
         OplogIndex::NONE
     }
 
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        Ok(make_batch(OplogIndex::NONE)
+            .into_iter()
+            .map(|record| (OplogIndex::NONE, record.into_inline_entry()))
+            .collect())
+    }
+
     // Mirrors `add`: a debugging session never writes to the oplog, so both entries are built (to
     // satisfy the closure contract) and discarded.
     async fn add_pair(
@@ -107,6 +118,15 @@ impl Oplog for DebugOplog {
             entry,
             pending_upload: PendingUpload::already_durable(),
         })
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        let (serialized_request, build_start) = build_request(OplogIndex::NONE)?;
+        self.add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await
     }
 
     async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {

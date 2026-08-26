@@ -127,6 +127,9 @@ impl AgentCommandHandler {
                     stream_args,
                     stdin_format,
                     stdout_format,
+                    save_session,
+                    resume_session,
+                    takeover_session,
                     post_deploy_args,
                     schedule_at,
                 } => {
@@ -140,6 +143,9 @@ impl AgentCommandHandler {
                         stream_args,
                         stdin_format,
                         stdout_format,
+                        save_session,
+                        resume_session,
+                        takeover_session,
                         post_deploy_args,
                         schedule_at,
                     )
@@ -331,6 +337,9 @@ impl AgentCommandHandler {
         stream_args: StreamArgs,
         stdin_format: InvocationStdinFormat,
         stdout_format: InvocationStdoutFormat,
+        save_session: Option<std::path::PathBuf>,
+        resume_session: Option<std::path::PathBuf>,
+        takeover_session: Option<std::path::PathBuf>,
         post_deploy_args: Option<PostDeployArgs>,
         schedule_at: Option<DateTime<Utc>>,
     ) -> anyhow::Result<()> {
@@ -350,19 +359,37 @@ impl AgentCommandHandler {
             key
         }
 
-        let idempotency_key = match idempotency_key {
-            Some(idempotency_key) if idempotency_key.value == "-" => new_idempotency_key(),
-            Some(idempotency_key) => {
-                log_action(
-                    "Using",
-                    format!(
-                        "requested idempotency key: {}",
-                        idempotency_key.value.log_color_highlight()
-                    ),
-                );
-                idempotency_key
+        let session_mode = match (save_session, resume_session, takeover_session) {
+            (save_session, None, None) => {
+                invocation_session::InvocationSessionMode::Start { save_session }
             }
-            None => new_idempotency_key(),
+            (None, Some(path), None) => invocation_session::InvocationSessionMode::Resume {
+                path,
+                takeover: false,
+            },
+            (None, None, Some(path)) => invocation_session::InvocationSessionMode::Resume {
+                path,
+                takeover: true,
+            },
+            _ => unreachable!("clap enforces mutually exclusive session state options"),
+        };
+        let idempotency_key = if let Some(path) = session_mode.resume_path() {
+            invocation_session::load_session_idempotency_key(path)?
+        } else {
+            match idempotency_key {
+                Some(idempotency_key) if idempotency_key.value == "-" => new_idempotency_key(),
+                Some(idempotency_key) => {
+                    log_action(
+                        "Using",
+                        format!(
+                            "requested idempotency key: {}",
+                            idempotency_key.value.log_color_highlight()
+                        ),
+                    );
+                    idempotency_key
+                }
+                None => new_idempotency_key(),
+            }
         };
 
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
@@ -490,7 +517,12 @@ impl AgentCommandHandler {
             bail!("Streaming agent methods require an attached invocation session");
         }
 
+        if !method_uses_streams && session_mode.uses_checkpoint() {
+            bail!("durable session save/resume options require a streaming agent method");
+        }
+
         if method_uses_streams {
+            let selected_agent_name = stream_agent_id.to_string();
             let mut connect_handle = if !no_stream && stdout_format == InvocationStdoutFormat::Value
             {
                 let connection = AgentConnection::new(
@@ -523,6 +555,9 @@ impl AgentCommandHandler {
                     idempotency_key,
                     stdin_format,
                     stdout_format,
+                    selected_component_id: component.id.0,
+                    selected_agent_name,
+                    session_mode,
                 },
             )
             .await;

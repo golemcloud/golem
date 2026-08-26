@@ -86,6 +86,22 @@ impl Oplog for InMemoryOplog {
         })
     }
 
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: crate::services::oplog::IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        let mut entries = self.entries.lock().await;
+        let index = OplogIndex::from_u64(entries.len() as u64 + 1);
+        let (serialized_request, build_start) = build_request(index)?;
+        let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
+        entries.push(entry.clone());
+        Ok(OrderedOplogStart {
+            index,
+            entry,
+            pending_upload: PendingUpload::already_durable(),
+        })
+    }
+
     async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
         0
     }

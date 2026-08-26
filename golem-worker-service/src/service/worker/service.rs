@@ -28,7 +28,7 @@ use crate::service::limit::LimitService;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
 use golem_api_grpc::proto::golem::worker::{
-    InvocationContext, InvocationRequest, InvocationStart, PublicInvocationStart,
+    InvocationContext, InvocationRequest, InvocationStart, PublicInvocationStart, ResumeAttach,
     invocation_request,
 };
 use golem_common::model::AgentInvocationOutput;
@@ -148,6 +148,35 @@ fn validate_one_shot_invocation_is_stream_free(
     } else {
         Ok(())
     }
+}
+
+fn invocation_method_uses_streams(
+    component: &Component,
+    agent_id: &AgentId,
+    method_name: &str,
+) -> WorkerResult<bool> {
+    let parsed_agent_id = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata)
+        .map_err(WorkerServiceError::TypeChecker)?;
+    let agent_type = component
+        .metadata
+        .find_agent_type_by_name_ref(&parsed_agent_id.agent_type)
+        .ok_or_else(|| {
+            WorkerServiceError::TypeChecker(format!(
+                "Agent type '{}' not found",
+                parsed_agent_id.agent_type
+            ))
+        })?;
+    let method = agent_type
+        .methods
+        .iter()
+        .find(|method| method.name == method_name)
+        .ok_or_else(|| {
+            WorkerServiceError::TypeChecker(format!(
+                "Agent method '{method_name}' not found in agent type '{}'",
+                agent_type.type_name
+            ))
+        })?;
+    Ok(method.uses_streams(&agent_type.schema))
 }
 
 fn decode_public_session_schema_value(
@@ -438,6 +467,51 @@ impl WorkerService {
             worker_client,
             agent_resolution_cache,
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn resolve_streaming_callee_fingerprint(
+        &self,
+        component: &Component,
+        agent_id: &AgentId,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        expected: Option<golem_api_grpc::proto::golem::common::Uuid>,
+    ) -> WorkerResult<AgentFingerprint> {
+        if let Some(expected) = expected {
+            let expected = uuid::Uuid::from(expected);
+            return match self
+                .worker_client
+                .get_metadata(agent_id, component.environment_id, auth_ctx)
+                .await
+            {
+                Ok(metadata) if metadata.fingerprint.0 == expected => Ok(metadata.fingerprint),
+                Ok(_) | Err(WorkerServiceError::AgentNotFound(_)) => {
+                    Err(WorkerServiceError::TypeChecker(
+                        "expected callee fingerprint does not match the active agent incarnation"
+                            .to_string(),
+                    ))
+                }
+                Err(error) => Err(error),
+            };
+        }
+        self.worker_client
+            .create(
+                agent_id,
+                environment_variables,
+                config,
+                true,
+                component.account_id,
+                component.environment_id,
+                auth_ctx,
+                invocation_context,
+                principal,
+            )
+            .await
+            .map(|(_, fingerprint)| fingerprint)
     }
 
     pub async fn create(
@@ -1114,6 +1188,74 @@ impl WorkerService {
             .await
     }
 
+    pub async fn control_durable_stream_attachment(
+        &self,
+        producer_agent_id: &AgentId,
+        producer_environment_id: EnvironmentId,
+        consumer_agent_id: &AgentId,
+        consumer_environment_id: EnvironmentId,
+        expected_consumer_fingerprint: AgentFingerprint,
+        payload: Vec<u8>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<bool> {
+        let component = self
+            .component_service
+            .get_current_by_id_uncached(producer_agent_id.component_id)
+            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            producer_agent_id,
+            AgentVerb::Invoke,
+            AgentResourcePattern::Any,
+        )?;
+        self.worker_client
+            .control_durable_stream_attachment(
+                producer_agent_id,
+                producer_environment_id,
+                consumer_agent_id,
+                consumer_environment_id,
+                expected_consumer_fingerprint,
+                payload,
+                auth_ctx,
+            )
+            .await
+    }
+
+    pub async fn read_durable_stream_segment(
+        &self,
+        producer_agent_id: &AgentId,
+        producer_environment_id: EnvironmentId,
+        consumer_agent_id: &AgentId,
+        consumer_environment_id: EnvironmentId,
+        expected_consumer_fingerprint: AgentFingerprint,
+        payload: Vec<u8>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<u8>> {
+        let component = self
+            .component_service
+            .get_current_by_id_uncached(producer_agent_id.component_id)
+            .await?;
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            producer_agent_id,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )?;
+        self.worker_client
+            .read_durable_stream_segment(
+                producer_agent_id,
+                producer_environment_id,
+                consumer_agent_id,
+                consumer_environment_id,
+                expected_consumer_fingerprint,
+                payload,
+                auth_ctx,
+            )
+            .await
+    }
+
     pub async fn invoke_agent(
         &self,
         agent_id: &AgentId,
@@ -1221,6 +1363,47 @@ impl WorkerService {
                 .unwrap_or(AgentResourcePattern::Any),
         )?;
 
+        if start.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await
+            && let Some(method_name) = start.method_name.as_deref()
+        {
+            let invocation_component = self
+                .component_for_invocation(
+                    &component,
+                    &agent_id,
+                    component.environment_id,
+                    &auth_ctx,
+                    freshness_disposition,
+                )
+                .await?;
+            if invocation_method_uses_streams(&invocation_component, &agent_id, method_name)? {
+                let config = start
+                    .config
+                    .iter()
+                    .cloned()
+                    .map(AgentConfigEntryDto::try_from)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(WorkerServiceError::TypeChecker)?;
+                let environment_variables = start
+                    .context
+                    .as_ref()
+                    .map(|context| context.env.clone())
+                    .unwrap_or_default();
+                let fingerprint = self
+                    .resolve_streaming_callee_fingerprint(
+                        &invocation_component,
+                        &agent_id,
+                        environment_variables,
+                        config,
+                        auth_ctx.clone(),
+                        start.context.clone(),
+                        start.principal.clone(),
+                        start.expected_callee_fingerprint.clone(),
+                    )
+                    .await?;
+                start.expected_callee_fingerprint = Some(fingerprint.0.into());
+            }
+        }
+
         start.agent_id = Some(agent_id.clone().into());
         start.idempotency_key = Some(idempotency_key.into());
         start.environment_id = Some(component.environment_id.into());
@@ -1252,6 +1435,8 @@ impl WorkerService {
         tail: InvocationRequestStream,
         auth: AuthCtx,
     ) -> WorkerResult<InvocationResponseStream> {
+        let attempt_id = start.attempt_id.clone();
+        let expected_callee_fingerprint = start.expected_callee_fingerprint.clone();
         let app_name = ApplicationName::try_from(start.application_name)
             .map_err(WorkerServiceError::TypeChecker)?;
         let env_name = EnvironmentName::try_from(start.environment_name)
@@ -1411,6 +1596,23 @@ impl WorkerService {
                 account_id: auth.account_id(),
             })
             .into();
+        let expected_callee_fingerprint = if method.uses_streams(&invocation_agent_type.schema) {
+            let fingerprint = self
+                .resolve_streaming_callee_fingerprint(
+                    &invocation_component,
+                    &agent_id,
+                    HashMap::new(),
+                    config.clone(),
+                    auth.clone(),
+                    None,
+                    Some(principal.clone()),
+                    expected_callee_fingerprint,
+                )
+                .await?;
+            Some(fingerprint.0.into())
+        } else {
+            expected_callee_fingerprint
+        };
         let trusted_start = InvocationStart {
             agent_id: Some(agent_id.clone().into()),
             method_name: Some(method_name),
@@ -1434,10 +1636,77 @@ impl WorkerService {
                         as i32
                 }
             },
+            attempt_id: attempt_id.or_else(|| Some(uuid::Uuid::new_v4().into())),
+            expected_callee_fingerprint,
+            durable_input_mappings: Vec::new(),
         };
         let request = stream::once(async move {
             InvocationRequest {
                 request: Some(invocation_request::Request::Start(trusted_start)),
+            }
+        })
+        .chain(tail);
+        self.worker_client
+            .invoke_agent_session(&agent_id, Box::pin(request))
+            .await
+    }
+
+    pub async fn resume_public_agent_session(
+        &self,
+        mut resume: ResumeAttach,
+        tail: InvocationRequestStream,
+        auth: AuthCtx,
+    ) -> WorkerResult<InvocationResponseStream> {
+        let principal: golem_api_grpc::proto::golem::component::Principal =
+            Principal::GolemUser(GolemUserPrincipal {
+                account_id: auth.account_id(),
+            })
+            .into();
+        resume.principal = Some(principal);
+        self.resume_agent_session(resume, tail, auth).await
+    }
+
+    pub async fn resume_agent_session(
+        &self,
+        mut resume: ResumeAttach,
+        tail: InvocationRequestStream,
+        auth: AuthCtx,
+    ) -> WorkerResult<InvocationResponseStream> {
+        let agent_id: AgentId = resume
+            .agent_id
+            .clone()
+            .ok_or_else(|| {
+                WorkerServiceError::TypeChecker("resume agent_id not found".to_string())
+            })?
+            .try_into()
+            .map_err(WorkerServiceError::TypeChecker)?;
+        let environment_id: EnvironmentId = resume
+            .environment_id
+            .ok_or_else(|| {
+                WorkerServiceError::TypeChecker("resume environment_id not found".to_string())
+            })?
+            .try_into()
+            .map_err(WorkerServiceError::TypeChecker)?;
+        let component = self
+            .component_service
+            .get_current_by_id(agent_id.component_id)
+            .await?;
+        if component.environment_id != environment_id {
+            return Err(WorkerServiceError::TypeChecker(
+                "resume environment does not own the requested agent component".to_string(),
+            ));
+        }
+        authorize_agent_permission(
+            &auth,
+            &component,
+            &agent_id,
+            AgentVerb::Invoke,
+            AgentResourcePattern::Any,
+        )?;
+        resume.auth_ctx = Some(auth.into());
+        let request = stream::once(async move {
+            InvocationRequest {
+                request: Some(invocation_request::Request::ResumeAttach(resume)),
             }
         })
         .chain(tail);
@@ -1986,16 +2255,18 @@ mod tests {
     use chrono::Utc;
     use futures::{Stream, StreamExt, stream};
     use golem_api_grpc::proto::golem::worker::{
-        InvocationContext, InvocationStart, LogEvent, PublicInvocationStart, invocation_request,
+        InvocationContext, InvocationStart, LogEvent, PublicInvocationStart, ResumeAttach,
+        ResumeOperation, invocation_request,
     };
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::AgentInvocationOutput;
     use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
-        AgentMode, AgentTypeName, HttpEndpointDetails, InvocationFreshnessDisposition,
-        ParsedAgentId, Principal, RegisteredAgentType, RegisteredAgentTypeImplementer,
-        ResolvedAgentType, Snapshotting, ephemeral_invocation_phantom_id,
+        AgentMode, AgentTypeName, GolemUserPrincipal, HttpEndpointDetails,
+        InvocationFreshnessDisposition, ParsedAgentId, Principal, RegisteredAgentType,
+        RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
+        ephemeral_invocation_phantom_id,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::card::{AgentVerb, EffectiveSurface, StoredCard};
@@ -2498,8 +2769,10 @@ mod tests {
         invocations: Mutex<Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)>>,
         invocation_environments: Mutex<Vec<EnvironmentId>>,
         invocation_session_starts: Mutex<Vec<(AgentId, InvocationStart)>>,
+        invocation_session_resumes: Mutex<Vec<(AgentId, ResumeAttach)>>,
         invocation_output: AgentInvocationOutput,
         metadata_component_revision: Option<ComponentRevision>,
+        fingerprint: AgentFingerprint,
     }
 
     impl RecordingWorkerClient {
@@ -2509,8 +2782,10 @@ mod tests {
                 invocations: Mutex::new(Vec::new()),
                 invocation_environments: Mutex::new(Vec::new()),
                 invocation_session_starts: Mutex::new(Vec::new()),
+                invocation_session_resumes: Mutex::new(Vec::new()),
                 invocation_output,
                 metadata_component_revision: None,
+                fingerprint: AgentFingerprint::new(),
             }
         }
 
@@ -2523,13 +2798,19 @@ mod tests {
                 invocations: Mutex::new(Vec::new()),
                 invocation_environments: Mutex::new(Vec::new()),
                 invocation_session_starts: Mutex::new(Vec::new()),
+                invocation_session_resumes: Mutex::new(Vec::new()),
                 invocation_output,
                 metadata_component_revision: Some(component_revision),
+                fingerprint: AgentFingerprint::new(),
             }
         }
 
         fn created_agent_id(&self) -> AgentId {
             self.created_agent_ids.lock().unwrap()[0].clone()
+        }
+
+        fn created_agent_count(&self) -> usize {
+            self.created_agent_ids.lock().unwrap().len()
         }
 
         fn invoked_agent_id(&self) -> AgentId {
@@ -2551,6 +2832,14 @@ mod tests {
         fn invocation_session_start_count(&self) -> usize {
             self.invocation_session_starts.lock().unwrap().len()
         }
+
+        fn invocation_session_resume(&self) -> (AgentId, ResumeAttach) {
+            self.invocation_session_resumes.lock().unwrap()[0].clone()
+        }
+
+        fn invocation_session_resume_count(&self) -> usize {
+            self.invocation_session_resumes.lock().unwrap().len()
+        }
     }
 
     #[async_trait]
@@ -2571,7 +2860,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(agent_id.clone());
-            Ok((agent_id.clone(), AgentFingerprint::new()))
+            Ok((agent_id.clone(), self.fingerprint))
         }
 
         async fn connect(
@@ -2636,7 +2925,7 @@ mod tests {
                     skipped_regions: Vec::new(),
                     deleted_regions: Vec::new(),
                     last_oplog_index: OplogIndex::INITIAL,
-                    fingerprint: AgentFingerprint(Uuid::new_v4()),
+                    fingerprint: self.fingerprint,
                 }),
                 None => Err(WorkerServiceError::AgentNotFound(agent_id.clone())),
             }
@@ -2820,18 +3109,23 @@ mod tests {
             agent_id: &AgentId,
             mut request: super::InvocationRequestStream,
         ) -> WorkerResult<super::InvocationResponseStream> {
-            let start = request
+            let first = request
                 .next()
                 .await
-                .expect("worker service should send an invocation start");
-            let start = match start.request {
-                Some(invocation_request::Request::Start(start)) => start,
-                other => panic!("expected invocation start, got {other:?}"),
-            };
-            self.invocation_session_starts
-                .lock()
-                .unwrap()
-                .push((agent_id.clone(), start));
+                .expect("worker service should send an invocation control request");
+            match first.request {
+                Some(invocation_request::Request::Start(start)) => self
+                    .invocation_session_starts
+                    .lock()
+                    .unwrap()
+                    .push((agent_id.clone(), start)),
+                Some(invocation_request::Request::ResumeAttach(resume)) => self
+                    .invocation_session_resumes
+                    .lock()
+                    .unwrap()
+                    .push((agent_id.clone(), resume)),
+                other => panic!("expected invocation start or resume, got {other:?}"),
+            }
             Ok(Box::pin(stream::empty()))
         }
 
@@ -3074,6 +3368,32 @@ mod tests {
                 method_name: "run".to_string(),
                 method_parameters: Some(empty_json_tuple().try_into().unwrap()),
                 idempotency_key: Some(idempotency_key.into()),
+                attempt_id: Some(Uuid::new_v4().into()),
+                expected_callee_fingerprint: None,
+            }
+        }
+
+        fn public_resume(&self) -> ResumeAttach {
+            let agent_id = build_public_agent_id(
+                self.component_id,
+                self.agent_type_name.clone(),
+                empty_constructor_parameters(),
+                None,
+                AgentMode::Durable,
+            )
+            .unwrap();
+            ResumeAttach {
+                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                agent_id: Some(agent_id.into()),
+                environment_id: Some(self.environment_id.into()),
+                attachment_id: Some(Uuid::new_v4().into()),
+                attempt_id: Some(Uuid::new_v4().into()),
+                expected_callee_fingerprint: Some(self.worker_client.fingerprint.0.into()),
+                expected_epoch: 3,
+                operation: ResumeOperation::Resume as i32,
+                cursors: Vec::new(),
+                auth_ctx: Some(AuthCtx::system().into()),
+                principal: Some(Default::default()),
             }
         }
     }
@@ -3272,6 +3592,8 @@ mod tests {
             start.freshness_disposition(),
             golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
         );
+        assert!(start.attempt_id.is_some());
+        assert!(start.expected_callee_fingerprint.is_none());
     }
 
     #[test]
@@ -3307,6 +3629,166 @@ mod tests {
 
         let (_, trusted_start) = harness.worker_client.invocation_session_start();
         assert_eq!(trusted_start.input, Some(method_parameters));
+        assert_eq!(
+            trusted_start.expected_callee_fingerprint.map(Uuid::from),
+            Some(harness.worker_client.fingerprint.0)
+        );
+        assert_eq!(
+            harness.worker_client.created_agent_id(),
+            AgentId::try_from(trusted_start.agent_id.unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    async fn public_streaming_invocation_rejects_stale_callee_fingerprint() {
+        let harness = RestHarness::new_with_output(
+            AgentMode::Durable,
+            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u32())))),
+        );
+        let mut start = harness.public_invocation_start(IdempotencyKey::fresh());
+        start.expected_callee_fingerprint = Some(Uuid::new_v4().into());
+
+        let result = harness
+            .worker_service
+            .invoke_public_agent_session(start, Box::pin(stream::empty()), AuthCtx::system())
+            .await;
+        let error = match result {
+            Ok(_) => panic!("stale callee fingerprint was accepted"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("does not match"));
+        assert_eq!(harness.worker_client.created_agent_count(), 0);
+        assert_eq!(harness.worker_client.invocation_session_start_count(), 0);
+    }
+
+    #[test]
+    async fn public_resume_reauthorizes_and_preserves_attachment_identity() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let mut resume = harness.public_resume();
+        let requested = resume.clone();
+        let auth = AuthCtx::system();
+        let expected_auth = auth.clone().into();
+        let expected_principal: golem_api_grpc::proto::golem::component::Principal =
+            Principal::GolemUser(GolemUserPrincipal {
+                account_id: auth.account_id(),
+            })
+            .into();
+
+        resume.auth_ctx = None;
+        resume.principal = Some(Default::default());
+        let stale_principal = resume.principal.clone();
+        let _responses = harness
+            .worker_service
+            .resume_public_agent_session(resume, Box::pin(stream::empty()), auth)
+            .await
+            .unwrap();
+
+        let (routed_agent_id, routed) = harness.worker_client.invocation_session_resume();
+        assert_eq!(
+            routed_agent_id,
+            AgentId::try_from(requested.agent_id.clone().unwrap()).unwrap()
+        );
+        assert_eq!(routed.idempotency_key, requested.idempotency_key);
+        assert_eq!(routed.agent_id, requested.agent_id);
+        assert_eq!(routed.environment_id, requested.environment_id);
+        assert_eq!(routed.attachment_id, requested.attachment_id);
+        assert_eq!(routed.attempt_id, requested.attempt_id);
+        assert_eq!(
+            routed.expected_callee_fingerprint,
+            requested.expected_callee_fingerprint
+        );
+        assert_eq!(routed.expected_epoch, requested.expected_epoch);
+        assert_eq!(routed.operation, requested.operation);
+        assert_eq!(routed.cursors, requested.cursors);
+        assert_eq!(routed.auth_ctx, Some(expected_auth));
+        assert_eq!(routed.principal, Some(expected_principal));
+        assert_ne!(routed.principal, stale_principal);
+    }
+
+    #[test]
+    async fn public_takeover_preserves_the_requested_operation() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let mut takeover = harness.public_resume();
+        takeover.operation = ResumeOperation::Takeover as i32;
+
+        let _responses = harness
+            .worker_service
+            .resume_public_agent_session(
+                takeover.clone(),
+                Box::pin(stream::empty()),
+                AuthCtx::system(),
+            )
+            .await
+            .unwrap();
+
+        let (_, routed) = harness.worker_client.invocation_session_resume();
+        assert_eq!(routed.operation, ResumeOperation::Takeover as i32);
+        assert_eq!(routed.expected_epoch, takeover.expected_epoch);
+        assert_eq!(routed.attachment_id, takeover.attachment_id);
+        assert_eq!(routed.attempt_id, takeover.attempt_id);
+    }
+
+    #[test]
+    async fn trusted_resume_preserves_the_pinned_principal() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let mut resume = harness.public_resume();
+        let pinned_principal = Some(Default::default());
+        resume.principal = pinned_principal.clone();
+
+        let _responses = harness
+            .worker_service
+            .resume_agent_session(resume, Box::pin(stream::empty()), AuthCtx::system())
+            .await
+            .unwrap();
+
+        let (_, routed) = harness.worker_client.invocation_session_resume();
+        assert_eq!(routed.principal, pinned_principal);
+    }
+
+    #[test]
+    async fn public_resume_rejects_environment_mismatch_before_dispatch() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let mut resume = harness.public_resume();
+        resume.environment_id = Some(EnvironmentId::new().into());
+
+        let error = match harness
+            .worker_service
+            .resume_public_agent_session(resume, Box::pin(stream::empty()), AuthCtx::system())
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("resume accepted an environment that does not own the component"),
+        };
+
+        assert!(error.to_string().contains("does not own"));
+        assert_eq!(harness.worker_client.invocation_session_resume_count(), 0);
+    }
+
+    #[test]
+    async fn unauthorized_public_resume_never_reaches_worker_dispatch() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let auth = AuthCtx::agent_with_effective_surface(
+            AccountId(Uuid::new_v4()),
+            AccountEmail::new("unauthorized-resume@golem"),
+            EffectiveSurface {
+                source_card_ids: vec![],
+                lower: vec![],
+                upper: vec![],
+            },
+        );
+
+        let error = match harness
+            .worker_service
+            .resume_public_agent_session(harness.public_resume(), Box::pin(stream::empty()), auth)
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("an empty permission surface must reject resume"),
+        };
+
+        assert!(matches!(error, WorkerServiceError::AuthError(_)));
+        assert_eq!(harness.worker_client.invocation_session_resume_count(), 0);
     }
 
     #[test]

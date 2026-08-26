@@ -261,7 +261,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                     .in_current_span()
                     .await;
 
-                    worker.map(Arc::new)
+                    worker.map(|worker| {
+                        let worker = Arc::new(worker);
+                        Worker::start_durable_stream_attachment_reconciler(&worker);
+                        worker
+                    })
                 })
             })
             .await

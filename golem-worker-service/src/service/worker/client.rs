@@ -36,7 +36,8 @@ use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
-    CreateWorkerRequest, DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest,
+    CreateWorkerRequest, DeactivatePluginRequest, DurableStreamAttachmentControlRequest,
+    DurableStreamSegmentReadRequest, ForkWorkerRequest, InterruptWorkerRequest,
     ProcessOplogEntriesRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse,
     UpdateWorkerRequest,
 };
@@ -479,6 +480,36 @@ pub trait WorkerClient: Send + Sync {
     ) -> WorkerResult<InvocationResponseStream> {
         Err(WorkerServiceError::Internal(
             "invocation sessions are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn control_durable_stream_attachment(
+        &self,
+        _producer_agent_id: &AgentId,
+        _producer_environment_id: EnvironmentId,
+        _consumer_agent_id: &AgentId,
+        _consumer_environment_id: EnvironmentId,
+        _expected_consumer_fingerprint: AgentFingerprint,
+        _payload: Vec<u8>,
+        _auth_ctx: AuthCtx,
+    ) -> WorkerResult<bool> {
+        Err(WorkerServiceError::Internal(
+            "durable stream attachment control is not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn read_durable_stream_segment(
+        &self,
+        _producer_agent_id: &AgentId,
+        _producer_environment_id: EnvironmentId,
+        _consumer_agent_id: &AgentId,
+        _consumer_environment_id: EnvironmentId,
+        _expected_consumer_fingerprint: AgentFingerprint,
+        _payload: Vec<u8>,
+        _auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<u8>> {
+        Err(WorkerServiceError::Internal(
+            "durable stream segment reads are not supported by this worker client".to_string(),
         ))
     }
 
@@ -1607,6 +1638,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         let agent_id = agent_id.clone();
         let agent_id_clone = agent_id.clone();
         let first_dispatch = Arc::new(AtomicBool::new(true));
+        let attempt_id = uuid::Uuid::new_v4();
 
         let result = self
             .call_worker_executor(
@@ -1638,6 +1670,9 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                                     as i32
                             }
                         },
+                        attempt_id: Some(attempt_id.into()),
+                        expected_callee_fingerprint: None,
+                        durable_input_mappings: Vec::new(),
                     };
                     Box::pin(run_one_shot_invocation_session(
                         worker_executor_client,
@@ -1703,6 +1738,110 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 )
             })?;
         Ok(Box::pin(response.into_inner()))
+    }
+
+    async fn control_durable_stream_attachment(
+        &self,
+        producer_agent_id: &AgentId,
+        producer_environment_id: EnvironmentId,
+        consumer_agent_id: &AgentId,
+        consumer_environment_id: EnvironmentId,
+        expected_consumer_fingerprint: AgentFingerprint,
+        payload: Vec<u8>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<bool> {
+        let producer_agent_id = producer_agent_id.clone();
+        let consumer_agent_id = consumer_agent_id.clone();
+        self.call_worker_executor(
+            producer_agent_id.clone(),
+            "control_durable_stream_attachment",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.control_durable_stream_attachment(
+                    DurableStreamAttachmentControlRequest {
+                        producer_agent_id: Some(producer_agent_id.clone().into()),
+                        producer_environment_id: Some(producer_environment_id.into()),
+                        payload: payload.clone(),
+                        consumer_agent_id: Some(consumer_agent_id.clone().into()),
+                        consumer_environment_id: Some(consumer_environment_id.into()),
+                        expected_consumer_fingerprint: Some(
+                            expected_consumer_fingerprint.0.into(),
+                        ),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::DurableStreamAttachmentControlResponse {
+                    result: Some(
+                        workerexecutor::v1::durable_stream_attachment_control_response::Result::Replayed(
+                            replayed,
+                        ),
+                    ),
+                } => Ok(replayed),
+                workerexecutor::v1::DurableStreamAttachmentControlResponse {
+                    result: Some(
+                        workerexecutor::v1::durable_stream_attachment_control_response::Result::Failure(
+                            error,
+                        ),
+                    ),
+                } => Err(error.into()),
+                _ => Err("Empty durable stream attachment control response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn read_durable_stream_segment(
+        &self,
+        producer_agent_id: &AgentId,
+        producer_environment_id: EnvironmentId,
+        consumer_agent_id: &AgentId,
+        consumer_environment_id: EnvironmentId,
+        expected_consumer_fingerprint: AgentFingerprint,
+        payload: Vec<u8>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<u8>> {
+        let producer_agent_id = producer_agent_id.clone();
+        let consumer_agent_id = consumer_agent_id.clone();
+        self.call_worker_executor(
+            producer_agent_id.clone(),
+            "read_durable_stream_segment",
+            move |worker_executor_client| {
+                Box::pin(worker_executor_client.read_durable_stream_segment(
+                    DurableStreamSegmentReadRequest {
+                        producer_agent_id: Some(producer_agent_id.clone().into()),
+                        producer_environment_id: Some(producer_environment_id.into()),
+                        payload: payload.clone(),
+                        consumer_agent_id: Some(consumer_agent_id.clone().into()),
+                        consumer_environment_id: Some(consumer_environment_id.into()),
+                        expected_consumer_fingerprint: Some(
+                            expected_consumer_fingerprint.0.into(),
+                        ),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::DurableStreamSegmentReadResponse {
+                    result: Some(
+                        workerexecutor::v1::durable_stream_segment_read_response::Result::Payload(
+                            payload,
+                        ),
+                    ),
+                } => Ok(payload),
+                workerexecutor::v1::DurableStreamSegmentReadResponse {
+                    result: Some(
+                        workerexecutor::v1::durable_stream_segment_read_response::Result::Failure(
+                            error,
+                        ),
+                    ),
+                } => Err(error.into()),
+                _ => Err("Empty durable stream segment read response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
     }
 
     async fn process_oplog_entries(
@@ -1889,6 +2028,7 @@ mod one_shot_session_tests {
             agent_id: agent_id(),
             idempotency_key: key(),
             component_revision: Some(3),
+            ..Default::default()
         })
     }
 
@@ -1924,6 +2064,7 @@ mod one_shot_session_tests {
                     ),
                     oplog_index: Some(29),
                     agent_fingerprint: Some(uuid::Uuid::nil().into()),
+                    new_stream_mappings: Vec::new(),
                 },
             )),
             frame(finished(invocation_session_completion::Outcome::Success(
@@ -2270,6 +2411,16 @@ mod rejection_mapping_tests {
             cancel_invocation,
             CancelInvocationRequest,
             CancelInvocationResponse
+        );
+        unimplemented_unary!(
+            control_durable_stream_attachment,
+            DurableStreamAttachmentControlRequest,
+            DurableStreamAttachmentControlResponse
+        );
+        unimplemented_unary!(
+            read_durable_stream_segment,
+            DurableStreamSegmentReadRequest,
+            DurableStreamSegmentReadResponse
         );
         unimplemented_unary!(
             get_file_system_node,

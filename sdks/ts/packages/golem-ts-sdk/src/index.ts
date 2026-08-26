@@ -79,6 +79,8 @@ export type {
 } from './defineAgent';
 export { Secret } from './secret';
 export { AgentStream } from './schema/agentStream';
+export { schemaFingerprintV1, SchemaFingerprintError } from './internal/schema-model/fingerprint';
+export type { SchemaGraph, SchemaType } from './internal/schema-model/model';
 export { method } from './method';
 export type { InputRecord, MethodSpec } from './method';
 export type { StandardSchemaV1 } from './schema/standardSchema';

@@ -7,6 +7,8 @@ import {
 }
 
 // Values
+pub fn canonical_schema_bytes_v1(SchemaGraph, SchemaType?) -> FixedArray[Byte] raise SchemaFingerprintError
+
 pub fn empty_metadata() -> @types.MetadataEnvelope
 
 pub fn encode_merged_agent_graph(MergedAgentGraph) -> EncodedAgentGraph raise SchemaModelError
@@ -16,6 +18,8 @@ pub fn field(String, SchemaType, metadata? : @types.MetadataEnvelope) -> NamedFi
 pub fn merge_agent_graphs(Array[SchemaGraph]) -> MergedAgentGraph raise SchemaModelError
 
 pub fn merge_graph_defs(Array[SchemaGraph]) -> Array[SchemaTypeDef] raise SchemaModelError
+
+pub fn schema_fingerprint_v1(SchemaGraph, SchemaType?) -> SchemaFingerprintV1 raise SchemaFingerprintError
 
 pub fn schema_graph_from_wit(@types.SchemaGraph) -> SchemaGraph raise SchemaModelError
 
@@ -66,6 +70,11 @@ pub suberror SchemaError {
   TextLengthRangeInverted
   BinaryByteRangeInverted
   NullableNesting(inner~ : String)
+} derive(Eq, Show)
+
+pub suberror SchemaFingerprintError {
+  InvalidSchema(String)
+  DuplicateSetValue(field~ : String, value~ : String)
 } derive(Eq, Show)
 
 pub suberror SchemaModelError {
@@ -148,6 +157,10 @@ pub fn SchemaBuilder::new() -> Self
 pub fn SchemaBuilder::ref_(Self, String) -> SchemaType
 pub fn SchemaBuilder::register(Self, String, () -> SchemaType, String?) -> SchemaType
 pub fn SchemaBuilder::reserve(Self, String) -> Unit
+
+pub(all) struct SchemaFingerprintV1(FixedArray[Byte]) derive(Eq, Show)
+pub fn SchemaFingerprintV1::as_bytes(Self) -> FixedArray[Byte]
+pub fn SchemaFingerprintV1::to_hex(Self) -> String
 
 pub(all) struct SchemaGraph {
   defs : Array[SchemaTypeDef]

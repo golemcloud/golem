@@ -155,11 +155,44 @@ where
     None
 }
 
+/// Returns the first durable stream entry in an inclusive raw oplog range.
+/// Fork and revert reject such histories until identities, offsets and cross-oplog dependencies
+/// can be rewritten without weakening their incarnation guarantees.
+pub async fn find_stream_history_in_range<Read, ReadFut>(
+    read: Read,
+    start: OplogIndex,
+    end: OplogIndex,
+) -> Option<OplogIndex>
+where
+    Read: Fn(OplogIndex) -> ReadFut,
+    ReadFut: Future<Output = OplogEntry>,
+{
+    for idx in OplogIndexRange::new(start, end) {
+        if matches!(
+            read(idx).await,
+            OplogEntry::StreamRegistered { .. }
+                | OplogEntry::StreamItems { .. }
+                | OplogEntry::StreamEnd { .. }
+                | OplogEntry::StreamCancel { .. }
+                | OplogEntry::StreamSession { .. }
+        ) {
+            return Some(idx);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::TransactionId;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::durable_stream::{
+        DURABLE_STREAM_FORMAT_VERSION, StreamConsumerDeletingRecordV1, StreamSessionRecordV1,
+    };
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::OplogPayload;
     use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
+    use golem_common::model::{AgentFingerprint, AgentId, TransactionId};
     use std::collections::HashMap;
     use test_r::test;
     use uuid::Uuid;
@@ -195,6 +228,47 @@ mod tests {
             skipped,
         )
         .await
+    }
+
+    async fn scan_stream_history(
+        entries: &HashMap<u64, OplogEntry>,
+        start: u64,
+        end: u64,
+    ) -> Option<OplogIndex> {
+        find_stream_history_in_range(
+            |i: OplogIndex| {
+                let entry = entries
+                    .get(&u64::from(i))
+                    .cloned()
+                    .unwrap_or_else(OplogEntry::no_op);
+                async move { entry }
+            },
+            idx(start),
+            idx(end),
+        )
+        .await
+    }
+
+    fn stream_entry() -> OplogEntry {
+        OplogEntry::stream_session(OplogPayload::Inline(Box::new(
+            StreamSessionRecordV1::ConsumerDeleting(StreamConsumerDeletingRecordV1 {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                consumer_environment_id: EnvironmentId(Uuid::from_u128(1)),
+                consumer: AgentId {
+                    component_id: ComponentId(Uuid::from_u128(2)),
+                    agent_id: "consumer".to_string(),
+                },
+                consumer_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
+                deleting_at_millis: 100,
+            }),
+        )))
+    }
+
+    #[test]
+    async fn stream_history_is_found_in_the_raw_requested_range() {
+        let entries = HashMap::from([(3, stream_entry()), (7, stream_entry())]);
+        assert_eq!(scan_stream_history(&entries, 1, 5).await, Some(idx(3)));
+        assert_eq!(scan_stream_history(&entries, 4, 8).await, Some(idx(7)));
     }
 
     #[test]

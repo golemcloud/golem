@@ -548,6 +548,9 @@ impl TestDsl for TestWorkerExecutor {
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
             config: Vec::new(),
+            attempt_id: None,
+            expected_callee_fingerprint: None,
+            durable_input_mappings: Vec::new(),
         })
         .await?;
         Ok(())
@@ -590,6 +593,9 @@ impl TestDsl for TestWorkerExecutor {
                     golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                         as i32,
                 config: Vec::new(),
+                attempt_id: None,
+                expected_callee_fingerprint: None,
+                durable_input_mappings: Vec::new(),
             })
             .await?;
 

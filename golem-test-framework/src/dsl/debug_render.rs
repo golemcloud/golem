@@ -490,6 +490,51 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 typed_schema_value_to_string(&params.payload)
             );
         }
+        PublicOplogEntry::StreamRegistered(params) => {
+            let _ = writeln!(result, "STREAM REGISTERED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
+        PublicOplogEntry::StreamItems(params) => {
+            let _ = writeln!(result, "STREAM ITEMS");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
+        PublicOplogEntry::StreamEnd(params) => {
+            let _ = writeln!(result, "STREAM END");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
+        PublicOplogEntry::StreamCancel(params) => {
+            let _ = writeln!(result, "STREAM CANCEL");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
+        PublicOplogEntry::StreamSession(params) => {
+            let _ = writeln!(result, "STREAM SESSION");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}record:            {}",
+                typed_schema_value_to_string(&params.record)
+            );
+        }
     }
 
     result

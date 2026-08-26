@@ -16,7 +16,7 @@
 /// encoding fails.
 pub async fn[T : @schema.IntoSchema] custom_error_of(
   value : T,
-) -> @common.AgentError raise {
+) -> @common.AgentError {
   let typed = @schema.try_into_typed_schema_value(value)
   let wire = @model.typed_schema_value_to_wit_async(typed) catch {
     error => {
@@ -32,13 +32,15 @@ pub async fn[T : @schema.IntoSchema] custom_error_of(
 /// the Rust `custom_error(impl ToString)` / TS `createCustomError(string)` —
 /// infallible, because a bare string always produces a well-formed schema.
 pub fn custom_error(message : String) -> @common.AgentError {
-  let typed = @schema.try_into_typed_schema_value(message) catch {
+  let typed = try @schema.try_into_typed_schema_value(message) catch {
     // Unreachable: a `String` schema graph is always well-formed and encodable.
     e => abort("failed to encode custom agent error: \{e}")
   } noraise {
     value => value
   }
-  try @common.AgentError::CustomError(@model.typed_schema_value_to_wit(typed)) catch {
+  try
+    @common.AgentError::CustomError(@model.typed_schema_value_to_wit(typed))
+  catch {
     e => abort("failed to encode custom agent error: \{e}")
   } noraise {
     error => error

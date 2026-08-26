@@ -30,10 +30,10 @@ use golem_api_grpc::proto::golem::schema::{
     schema_value,
 };
 use golem_api_grpc::proto::golem::worker::{
-    InputStreamEnd, InputStreamItem, InvocationResponse, PublicInvocationRequest,
-    PublicInvocationStart, StreamCancel, StreamCancelReason, StreamCancelRole, input_stream_item,
-    invocation_response, invocation_session_completion, invocation_session_result,
-    public_invocation_request,
+    AgentId, InputStreamEnd, InputStreamItem, InvocationResponse, PublicInvocationRequest,
+    PublicInvocationStart, ResumeAttach, ResumeOperation, StreamCancel, StreamCancelReason,
+    StreamCancelRole, StreamCursor, input_stream_item, invocation_response,
+    invocation_session_completion, invocation_session_result, public_invocation_request,
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -43,8 +43,10 @@ use golem_common::schema::agent::{
 use golem_common::schema::{BinaryValuePayload, SchemaGraph, SchemaType, SchemaValue};
 use native_tls::TlsConnector;
 use prost::Message as _;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
@@ -55,6 +57,41 @@ use tokio_util::sync::CancellationToken;
 
 const PIPELINE_CAPACITY: usize = 16;
 const RAW_CHUNK_SIZE: usize = 64 * 1024;
+const SESSION_CHECKPOINT_VERSION: u8 = 1;
+
+pub(super) enum InvocationSessionMode {
+    Start { save_session: Option<PathBuf> },
+    Resume { path: PathBuf, takeover: bool },
+}
+
+impl InvocationSessionMode {
+    pub(super) fn resume_path(&self) -> Option<&Path> {
+        match self {
+            Self::Start { .. } => None,
+            Self::Resume { path, .. } => Some(path),
+        }
+    }
+
+    pub(super) fn uses_checkpoint(&self) -> bool {
+        match self {
+            Self::Start { save_session } => save_session.is_some(),
+            Self::Resume { .. } => true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct InvocationSessionCheckpoint {
+    version: u8,
+    idempotency_key: String,
+    agent_component_id: uuid::Uuid,
+    agent_name: String,
+    environment_id: uuid::Uuid,
+    attachment_id: uuid::Uuid,
+    callee_fingerprint: uuid::Uuid,
+    epoch: u64,
+    cursors: BTreeMap<uuid::Uuid, Option<Vec<u8>>>,
+}
 
 #[derive(Clone, Debug)]
 struct InputBinding {
@@ -118,6 +155,14 @@ pub(super) struct InvocationSessionArgs {
     pub idempotency_key: IdempotencyKey,
     pub stdin_format: InvocationStdinFormat,
     pub stdout_format: InvocationStdoutFormat,
+    pub selected_component_id: uuid::Uuid,
+    pub selected_agent_name: String,
+    pub session_mode: InvocationSessionMode,
+}
+
+pub(super) fn load_session_idempotency_key(path: &Path) -> anyhow::Result<IdempotencyKey> {
+    let checkpoint = load_checkpoint(path)?;
+    Ok(IdempotencyKey::new(checkpoint.idempotency_key))
 }
 
 pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> anyhow::Result<()> {
@@ -154,20 +199,40 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         .try_into()
         .map_err(anyhow::Error::msg)?;
     let idempotency_key_value = args.idempotency_key.value.clone();
-    let start = PublicInvocationRequest {
-        request: Some(public_invocation_request::Request::Start(
-            PublicInvocationStart {
-                application_name: args.application_name,
-                environment_name: args.environment_name,
-                agent_type_name: args.parsed_agent_id.agent_type.to_string(),
-                constructor_parameters: Some(constructor_parameters),
-                phantom_id: args.parsed_agent_id.phantom_id.map(Into::into),
-                config: args.config.into_iter().map(Into::into).collect(),
-                method_name: args.method_name,
-                method_parameters: Some(method_parameters),
-                idempotency_key: Some(args.idempotency_key.into()),
+    let (start, mut checkpoint, checkpoint_path) = match args.session_mode {
+        InvocationSessionMode::Start { save_session } => (
+            PublicInvocationRequest {
+                request: Some(public_invocation_request::Request::Start(
+                    PublicInvocationStart {
+                        application_name: args.application_name,
+                        environment_name: args.environment_name,
+                        agent_type_name: args.parsed_agent_id.agent_type.to_string(),
+                        constructor_parameters: Some(constructor_parameters),
+                        phantom_id: args.parsed_agent_id.phantom_id.map(Into::into),
+                        config: args.config.into_iter().map(Into::into).collect(),
+                        method_name: args.method_name,
+                        method_parameters: Some(method_parameters),
+                        idempotency_key: Some(args.idempotency_key.into()),
+                        attempt_id: Some(uuid::Uuid::new_v4().into()),
+                        expected_callee_fingerprint: None,
+                    },
+                )),
             },
-        )),
+            None,
+            save_session,
+        ),
+        InvocationSessionMode::Resume { path, takeover } => {
+            let checkpoint = load_checkpoint(&path)?;
+            if checkpoint.agent_component_id != args.selected_component_id
+                || checkpoint.agent_name != args.selected_agent_name
+            {
+                bail!(
+                    "saved invocation session belongs to a different agent than the requested invocation"
+                );
+            }
+            let request = resume_request(&checkpoint, takeover);
+            (request, Some(checkpoint), Some(path))
+        }
     };
 
     let request = websocket_request(&ctx).await?;
@@ -204,30 +269,13 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
 
     let (input_tx, mut input_rx) = mpsc::channel::<PublicInvocationRequest>(PIPELINE_CAPACITY);
     let (input_failure_tx, mut input_failure_rx) = oneshot::channel::<InputFailure>();
+    let mut input_failure_tx = Some(input_failure_tx);
     let input_cancelled = CancellationToken::new();
     let input_failed = CancellationToken::new();
     let stdin_format = args.stdin_format;
-    let stdin_source_language = source_language.clone();
-    let stdin_graph = args.agent_type.schema.clone();
     let has_input = input_binding.is_some();
     let mut input_failure_open = has_input;
-    if let Some(binding) = input_binding {
-        let reader_cancelled = input_cancelled.clone();
-        let reader_failed = input_failed.clone();
-        std::thread::spawn(move || {
-            if let Err(failure) = read_stdin(
-                binding,
-                stdin_format,
-                stdin_source_language,
-                stdin_graph,
-                &input_tx,
-                &reader_cancelled,
-            ) && input_failure_tx.send(failure).is_ok()
-            {
-                reader_failed.cancel();
-            }
-        });
-    }
+    let mut input_binding = input_binding;
 
     let format = ctx.format();
     let structured = format.is_structured() && args.stdout_format == InvocationStdoutFormat::Value;
@@ -259,6 +307,8 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     let mut pending_input_request = None;
     let mut fatal_input_failure = None;
     let mut session_identity = SessionIdentity::default();
+    let mut durable_streams = HashMap::new();
+    let mut attachment_epoch = 0;
     let mut wire_complete = false;
 
     'session: while !state.is_complete() {
@@ -343,9 +393,10 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
             }
             permit = wire_tx.clone().reserve_owned(), if pending_input_request.is_some() => {
                 let permit = permit.map_err(|_| anyhow!("agent invocation session connection closed"))?;
-                let request = pending_input_request
+                let mut request = pending_input_request
                     .take()
                     .expect("wire send selected without a pending input request");
+                bind_durable_request(&mut request, &durable_streams, attachment_epoch)?;
                 state.validate_public_request(&request).map_err(anyhow::Error::msg)?;
                 if matches!(request.request, Some(public_invocation_request::Request::InputItem(_))) {
                     pending_input_items += 1;
@@ -372,12 +423,103 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     Err(error) => return Err(error),
                 };
                 state.validate_response(&response).map_err(anyhow::Error::msg)?;
-                if matches!(response.response, Some(invocation_response::Response::Accepted(_))) {
+                if let Some(path) = checkpoint_path.as_deref() {
+                    update_checkpoint(path, &mut checkpoint, &response)?;
+                }
+                if let Some(invocation_response::Response::Accepted(accepted_response)) =
+                    response.response.as_ref()
+                {
                     accepted = true;
+                    attachment_epoch = accepted_response.epoch;
+                    insert_durable_mappings(
+                        &mut durable_streams,
+                        &accepted_response.stream_mappings,
+                    );
+                    if let Some(binding) = input_binding.take() {
+                        let high_water = accepted_response
+                            .stream_mappings
+                            .iter()
+                            .find(|mapping| mapping.transport_stream_id == binding.stream_id)
+                            .and_then(|mapping| mapping.high_water.as_ref());
+                        let initial_offset = high_water
+                            .map(|high_water| {
+                                high_water.highest_contiguous_sequence.checked_add(1).ok_or_else(
+                                    || anyhow!("input high-water offset overflow"),
+                                )
+                            })
+                            .transpose()?
+                            .unwrap_or_default();
+                        if high_water.is_some_and(|high_water| high_water.terminal) {
+                            input_cancelled.cancel();
+                            input_rx.close();
+                            input_failure_open = false;
+                            input_failure_rx.close();
+                            input_failure_tx = None;
+                            stdin_open = false;
+                            input_terminal = true;
+                        } else {
+                            let reader_cancelled = input_cancelled.clone();
+                            let reader_failed = input_failed.clone();
+                            let reader_source_language = source_language.clone();
+                            let reader_graph = args.agent_type.schema.clone();
+                            let reader_tx = input_tx.clone();
+                            let failure_tx = input_failure_tx
+                                .take()
+                                .expect("stdin failure sender was already consumed");
+                            std::thread::spawn(move || {
+                                if let Err(failure) = read_stdin(
+                                    binding,
+                                    stdin_format,
+                                    reader_source_language,
+                                    reader_graph,
+                                    initial_offset,
+                                    &reader_tx,
+                                    &reader_cancelled,
+                                ) && failure_tx.send(failure).is_ok()
+                                {
+                                    reader_failed.cancel();
+                                }
+                            });
+                        }
+                    }
+                }
+                match response.response.as_ref() {
+                    Some(invocation_response::Response::Result(result)) => {
+                        insert_durable_mappings(
+                            &mut durable_streams,
+                            &result.new_stream_mappings,
+                        );
+                    }
+                    Some(invocation_response::Response::OutputItem(item)) => {
+                        if let Some(stream_id) = &item.durable_stream_id {
+                            durable_streams.insert(item.transport_stream_id, stream_id.clone());
+                        }
+                        insert_durable_mappings(
+                            &mut durable_streams,
+                            &item.new_stream_mappings,
+                        );
+                    }
+                    Some(invocation_response::Response::OutputEnd(end)) => {
+                        if let Some(stream_id) = &end.durable_stream_id {
+                            durable_streams.insert(end.transport_stream_id, stream_id.clone());
+                        }
+                    }
+                    Some(invocation_response::Response::OutputError(error)) => {
+                        if let Some(stream_id) = &error.durable_stream_id {
+                            durable_streams.insert(error.transport_stream_id, stream_id.clone());
+                        }
+                    }
+                    Some(invocation_response::Response::InputAck(ack)) => {
+                        insert_durable_mappings(
+                            &mut durable_streams,
+                            &ack.new_stream_mappings,
+                        );
+                    }
+                    _ => {}
                 }
                 if let Some(invocation_response::Response::InputAck(ack)) = response.response.as_ref() {
                     pending_input_items = pending_input_items.checked_sub(1).ok_or_else(|| anyhow!("received an input acknowledgement without a pending item"))?;
-                    acknowledged_input_offset = ack.sequence.checked_add(ack.logical_item_count).ok_or_else(|| anyhow!("input acknowledgement offset overflow"))?;
+                    acknowledged_input_offset = ack.highest_contiguous_sequence.checked_add(1).ok_or_else(|| anyhow!("input acknowledgement offset overflow"))?;
                 }
                 if response_cancels_input(&response, input_stream_id) {
                     input_cancelled.cancel();
@@ -511,6 +653,276 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     if failed {
         bail!(NonSuccessfulExit);
     }
+    Ok(())
+}
+
+fn load_checkpoint(path: &Path) -> anyhow::Result<InvocationSessionCheckpoint> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("failed to open invocation session file {}", path.display()))?;
+    let checkpoint: InvocationSessionCheckpoint = serde_json::from_reader(file)
+        .with_context(|| format!("failed to read invocation session file {}", path.display()))?;
+    if checkpoint.version != SESSION_CHECKPOINT_VERSION {
+        bail!(
+            "unsupported invocation session file version {}",
+            checkpoint.version
+        );
+    }
+    if checkpoint.idempotency_key.is_empty()
+        || checkpoint.agent_component_id.is_nil()
+        || checkpoint.agent_name.is_empty()
+        || checkpoint.environment_id.is_nil()
+        || checkpoint.attachment_id.is_nil()
+        || checkpoint.callee_fingerprint.is_nil()
+        || checkpoint.epoch == 0
+    {
+        bail!("invocation session file contains an invalid durable session identity");
+    }
+    for (stream_id, cursor) in &checkpoint.cursors {
+        if stream_id.is_nil() {
+            bail!("invocation session file contains a nil durable stream ID");
+        }
+        if let Some(cursor) = cursor {
+            validate_checkpoint_cursor(cursor)?;
+        }
+    }
+    Ok(checkpoint)
+}
+
+fn resume_request(
+    checkpoint: &InvocationSessionCheckpoint,
+    takeover: bool,
+) -> PublicInvocationRequest {
+    let cursors = checkpoint
+        .cursors
+        .iter()
+        .map(|(stream_id, cursor)| StreamCursor {
+            stream_id: Some((*stream_id).into()),
+            last_observed_offset: cursor.clone(),
+        })
+        .collect();
+    PublicInvocationRequest {
+        request: Some(public_invocation_request::Request::ResumeAttach(
+            ResumeAttach {
+                idempotency_key: Some(
+                    IdempotencyKey::new(checkpoint.idempotency_key.clone()).into(),
+                ),
+                agent_id: Some(AgentId {
+                    component_id: Some(golem_api_grpc::proto::golem::component::ComponentId {
+                        value: Some(checkpoint.agent_component_id.into()),
+                    }),
+                    name: checkpoint.agent_name.clone(),
+                }),
+                environment_id: Some(golem_api_grpc::proto::golem::common::EnvironmentId {
+                    value: Some(checkpoint.environment_id.into()),
+                }),
+                attachment_id: Some(checkpoint.attachment_id.into()),
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                expected_callee_fingerprint: Some(checkpoint.callee_fingerprint.into()),
+                expected_epoch: checkpoint.epoch,
+                operation: if takeover {
+                    ResumeOperation::Takeover as i32
+                } else {
+                    ResumeOperation::Resume as i32
+                },
+                cursors,
+                auth_ctx: None,
+                principal: None,
+            },
+        )),
+    }
+}
+
+fn write_checkpoint(path: &Path, checkpoint: &InvocationSessionCheckpoint) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).with_context(|| {
+        format!(
+            "failed to create temporary invocation session file in {}",
+            parent.display()
+        )
+    })?;
+    serde_json::to_writer_pretty(temporary.as_file_mut(), checkpoint)
+        .context("failed to serialize invocation session state")?;
+    temporary
+        .as_file_mut()
+        .write_all(b"\n")
+        .context("failed to finish invocation session state")?;
+    temporary
+        .as_file_mut()
+        .sync_all()
+        .context("failed to flush invocation session state")?;
+    temporary.persist(path).map_err(|error| {
+        anyhow!(
+            "failed to replace invocation session file {}: {}",
+            path.display(),
+            error.error
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_checkpoint_cursor(cursor: &[u8]) -> anyhow::Result<()> {
+    if cursor.len() != 24
+        || cursor[0] != 1
+        || cursor[1..8].iter().any(|byte| *byte != 0)
+        || cursor[20..24].iter().any(|byte| *byte != 0)
+    {
+        bail!("invocation session file contains an invalid durable stream cursor");
+    }
+    Ok(())
+}
+
+fn required_checkpoint_uuid(
+    value: &Option<golem_api_grpc::proto::golem::common::Uuid>,
+    field: &str,
+) -> anyhow::Result<uuid::Uuid> {
+    let value = value
+        .clone()
+        .map(uuid::Uuid::from)
+        .ok_or_else(|| anyhow!("durable invocation acceptance has no {field}"))?;
+    if value.is_nil() {
+        bail!("durable invocation acceptance has a nil {field}");
+    }
+    Ok(value)
+}
+
+fn update_checkpoint(
+    path: &Path,
+    checkpoint: &mut Option<InvocationSessionCheckpoint>,
+    response: &InvocationResponse,
+) -> anyhow::Result<()> {
+    let mut changed = false;
+    if let Some(invocation_response::Response::Accepted(accepted)) = response.response.as_ref() {
+        let agent_id = accepted
+            .agent_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("durable invocation acceptance has no agent identity"))?;
+        let component_id = agent_id
+            .component_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("durable invocation acceptance has no component identity"))?;
+        let agent_component_id =
+            required_checkpoint_uuid(&component_id.value, "agent component identity")?;
+        let environment_id = accepted
+            .environment_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("durable invocation acceptance has no environment identity"))?;
+        let environment_id =
+            required_checkpoint_uuid(&environment_id.value, "environment identity")?;
+        let attachment_id =
+            required_checkpoint_uuid(&accepted.attachment_id, "attachment identity")?;
+        let callee_fingerprint =
+            required_checkpoint_uuid(&accepted.callee_fingerprint, "callee fingerprint")?;
+        let idempotency_key = accepted
+            .idempotency_key
+            .as_ref()
+            .map(|key| key.value.clone())
+            .filter(|key| !key.is_empty())
+            .ok_or_else(|| anyhow!("durable invocation acceptance has no idempotency key"))?;
+        let current = checkpoint.get_or_insert_with(|| InvocationSessionCheckpoint {
+            version: SESSION_CHECKPOINT_VERSION,
+            idempotency_key: idempotency_key.clone(),
+            agent_component_id,
+            agent_name: agent_id.name.clone(),
+            environment_id,
+            attachment_id,
+            callee_fingerprint,
+            epoch: accepted.epoch,
+            cursors: BTreeMap::new(),
+        });
+        if current.idempotency_key != idempotency_key
+            || current.agent_component_id != agent_component_id
+            || current.agent_name != agent_id.name
+            || current.environment_id != environment_id
+            || current.attachment_id != attachment_id
+            || current.callee_fingerprint != callee_fingerprint
+        {
+            bail!("durable invocation acceptance changed the saved session identity");
+        }
+        current.epoch = accepted.epoch;
+        add_checkpoint_mappings(current, &accepted.stream_mappings)?;
+        changed = true;
+    }
+
+    let Some(current) = checkpoint.as_mut() else {
+        return Ok(());
+    };
+    match response.response.as_ref() {
+        Some(invocation_response::Response::Result(result)) => {
+            add_checkpoint_mappings(current, &result.new_stream_mappings)?;
+            changed = true;
+        }
+        Some(invocation_response::Response::OutputItem(item)) => {
+            add_checkpoint_mappings(current, &item.new_stream_mappings)?;
+            update_checkpoint_cursor(current, &item.durable_stream_id, &item.durable_offset)?;
+            changed = true;
+        }
+        Some(invocation_response::Response::OutputEnd(end)) => {
+            update_checkpoint_cursor(current, &end.durable_stream_id, &end.durable_offset)?;
+            changed = true;
+        }
+        Some(invocation_response::Response::OutputError(error)) => {
+            update_checkpoint_cursor(current, &error.durable_stream_id, &error.durable_offset)?;
+            changed = true;
+        }
+        Some(invocation_response::Response::InputAck(ack)) => {
+            add_checkpoint_mappings(current, &ack.new_stream_mappings)?;
+            update_checkpoint_cursor(current, &ack.durable_stream_id, &ack.resulting_offset)?;
+            changed = true;
+        }
+        Some(invocation_response::Response::StreamCancel(cancel))
+            if cancel.durable_stream_id.is_some() && !cancel.durable_offset.is_empty() =>
+        {
+            update_checkpoint_cursor(current, &cancel.durable_stream_id, &cancel.durable_offset)?;
+            changed = true;
+        }
+        _ => {}
+    }
+    if changed {
+        write_checkpoint(path, current)?;
+    }
+    Ok(())
+}
+
+fn add_checkpoint_mappings(
+    checkpoint: &mut InvocationSessionCheckpoint,
+    mappings: &[golem_api_grpc::proto::golem::worker::DurableStreamMapping],
+) -> anyhow::Result<()> {
+    for mapping in mappings {
+        let stream_id = mapping
+            .handle
+            .as_ref()
+            .ok_or_else(|| anyhow!("durable stream mapping has no handle"))?
+            .stream_id
+            .clone();
+        let stream_id = required_checkpoint_uuid(&stream_id, "durable stream identity")?;
+        let cursor = mapping
+            .high_water
+            .as_ref()
+            .map(|high_water| {
+                validate_checkpoint_cursor(&high_water.resulting_offset)?;
+                Ok::<_, anyhow::Error>(high_water.resulting_offset.clone())
+            })
+            .transpose()?;
+        if let Some(cursor) = cursor {
+            checkpoint.cursors.insert(stream_id, Some(cursor));
+        } else {
+            checkpoint.cursors.entry(stream_id).or_insert(None);
+        }
+    }
+    Ok(())
+}
+
+fn update_checkpoint_cursor(
+    checkpoint: &mut InvocationSessionCheckpoint,
+    stream_id: &Option<golem_api_grpc::proto::golem::common::Uuid>,
+    cursor: &[u8],
+) -> anyhow::Result<()> {
+    let stream_id = required_checkpoint_uuid(stream_id, "durable stream identity")?;
+    validate_checkpoint_cursor(cursor)?;
+    checkpoint.cursors.insert(stream_id, Some(cursor.to_vec()));
     Ok(())
 }
 
@@ -668,10 +1080,11 @@ fn read_stdin(
     format: InvocationStdinFormat,
     source_language: SourceLanguage,
     graph: SchemaGraph,
+    initial_offset: u64,
     tx: &mpsc::Sender<PublicInvocationRequest>,
     cancelled: &CancellationToken,
 ) -> Result<(), InputFailure> {
-    let mut offset = 0_u64;
+    let mut offset = initial_offset;
     match format {
         InvocationStdinFormat::Value => {
             let mut stdin = BufReader::new(std::io::stdin().lock());
@@ -804,9 +1217,10 @@ fn read_stdin(
                     .blocking_send(PublicInvocationRequest {
                         request: Some(public_invocation_request::Request::InputItem(
                             InputStreamItem {
-                                stream_id: binding.stream_id,
+                                transport_stream_id: binding.stream_id,
                                 sequence: offset,
                                 payload: Some(payload),
+                                ..Default::default()
                             },
                         )),
                     })
@@ -844,8 +1258,9 @@ fn read_stdin(
         .blocking_send(PublicInvocationRequest {
             request: Some(public_invocation_request::Request::InputEnd(
                 InputStreamEnd {
-                    stream_id: binding.stream_id,
-                    offset,
+                    transport_stream_id: binding.stream_id,
+                    sequence: offset,
+                    ..Default::default()
                 },
             )),
         })
@@ -871,13 +1286,62 @@ fn input_cancel_request(
     PublicInvocationRequest {
         request: Some(public_invocation_request::Request::StreamCancel(
             StreamCancel {
-                stream_id,
-                offset,
+                transport_stream_id: stream_id,
+                producer_sequence: offset,
                 role: StreamCancelRole::InputProducer as i32,
                 reason: reason as i32,
                 details: Some(details),
+                ..Default::default()
             },
         )),
+    }
+}
+
+fn bind_durable_request(
+    request: &mut PublicInvocationRequest,
+    streams: &HashMap<u64, golem_api_grpc::proto::golem::common::Uuid>,
+    epoch: u64,
+) -> anyhow::Result<()> {
+    let (transport_stream_id, durable_stream_id, frame_epoch) = match request.request.as_mut() {
+        Some(public_invocation_request::Request::InputItem(item)) => (
+            item.transport_stream_id,
+            &mut item.durable_stream_id,
+            &mut item.epoch,
+        ),
+        Some(public_invocation_request::Request::InputEnd(end)) => (
+            end.transport_stream_id,
+            &mut end.durable_stream_id,
+            &mut end.epoch,
+        ),
+        Some(public_invocation_request::Request::StreamCancel(cancel)) => (
+            cancel.transport_stream_id,
+            &mut cancel.durable_stream_id,
+            &mut cancel.epoch,
+        ),
+        _ => return Ok(()),
+    };
+    *durable_stream_id = Some(
+        streams
+            .get(&transport_stream_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("no durable mapping for stream {transport_stream_id}"))?,
+    );
+    *frame_epoch = epoch;
+    Ok(())
+}
+
+fn insert_durable_mappings(
+    streams: &mut HashMap<u64, golem_api_grpc::proto::golem::common::Uuid>,
+    mappings: &[golem_api_grpc::proto::golem::worker::DurableStreamMapping],
+) {
+    for mapping in mappings {
+        if let Some(stream_id) = mapping
+            .handle
+            .as_ref()
+            .and_then(|handle| handle.stream_id.as_ref())
+        {
+            streams.insert(mapping.transport_stream_id, stream_id.clone());
+        }
     }
 }
 
@@ -890,11 +1354,12 @@ fn output_cancel_request(
     PublicInvocationRequest {
         request: Some(public_invocation_request::Request::StreamCancel(
             StreamCancel {
-                stream_id,
-                offset,
+                transport_stream_id: stream_id,
+                producer_sequence: offset,
                 role: StreamCancelRole::OutputConsumer as i32,
                 reason: reason as i32,
                 details: Some(details),
+                ..Default::default()
             },
         )),
     }
@@ -938,11 +1403,12 @@ fn input_value_request(
     Ok(PublicInvocationRequest {
         request: Some(public_invocation_request::Request::InputItem(
             InputStreamItem {
-                stream_id,
+                transport_stream_id: stream_id,
                 sequence,
                 payload: Some(input_stream_item::Payload::Value(
                     value.try_into().map_err(anyhow::Error::msg)?,
                 )),
+                ..Default::default()
             },
         )),
     })
@@ -1038,7 +1504,7 @@ fn response_cancels_input(response: &InvocationResponse, input_stream_id: Option
     matches!(
         response.response.as_ref(),
         Some(invocation_response::Response::StreamCancel(cancel))
-            if cancel.stream_id == input_stream_id
+            if cancel.transport_stream_id == input_stream_id
                 && cancel.role() == StreamCancelRole::InputConsumer
     )
 }
@@ -1197,9 +1663,11 @@ async fn handle_response(
         }
         Some(invocation_response::Response::OutputItem(item)) => {
             let stream = output_streams
-                .get(&item.stream_id)
+                .get(&item.transport_stream_id)
                 .cloned()
-                .ok_or_else(|| anyhow!("output stream {} has no schema", item.stream_id))?;
+                .ok_or_else(|| {
+                    anyhow!("output stream {} has no schema", item.transport_stream_id)
+                })?;
             let value = item
                 .value
                 .ok_or_else(|| anyhow!("output stream item has no value"))?;
@@ -1207,24 +1675,24 @@ async fn handle_response(
                 graph,
                 &stream.item_type,
                 &value,
-                &format!("{}[{}]", stream.path, item.offset),
-                Some(item.stream_id),
+                &format!("{}[{}]", stream.path, item.producer_sequence),
+                Some(item.transport_stream_id),
                 InvocationStdoutFormat::Value,
                 output_streams,
             )?;
             output_streams
-                .get_mut(&item.stream_id)
+                .get_mut(&item.transport_stream_id)
                 .expect("output stream disappeared while processing an item")
                 .next_offset = item
-                .offset
+                .producer_sequence
                 .checked_add(1)
                 .ok_or_else(|| anyhow!("output stream offset overflow"))?;
             if structured {
                 let mut event = event(AgentInvocationSessionEventKind::Item, idempotency_key);
-                event.stream_id = Some(item.stream_id);
+                event.stream_id = Some(item.transport_stream_id);
                 event.parent_stream_id = stream.parent_stream_id;
                 event.path = Some(stream.path);
-                event.offset = Some(item.offset);
+                event.offset = Some(item.producer_sequence);
                 event.value = Some(proto_value_to_json(graph, &stream.item_type, &value)?);
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else if stdout_format == InvocationStdoutFormat::Raw {
@@ -1249,45 +1717,51 @@ async fn handle_response(
         }
         Some(invocation_response::Response::OutputEnd(end)) => {
             output_streams
-                .get_mut(&end.stream_id)
-                .ok_or_else(|| anyhow!("output stream {} has no schema", end.stream_id))?
+                .get_mut(&end.transport_stream_id)
+                .ok_or_else(|| anyhow!("output stream {} has no schema", end.transport_stream_id))?
                 .terminal = true;
             if structured {
                 let stream = output_streams
-                    .get(&end.stream_id)
-                    .ok_or_else(|| anyhow!("output stream {} has no schema", end.stream_id))?;
+                    .get(&end.transport_stream_id)
+                    .ok_or_else(|| {
+                        anyhow!("output stream {} has no schema", end.transport_stream_id)
+                    })?;
                 let mut event = event(AgentInvocationSessionEventKind::End, idempotency_key);
-                event.stream_id = Some(end.stream_id);
+                event.stream_id = Some(end.transport_stream_id);
                 event.parent_stream_id = stream.parent_stream_id;
                 event.path = Some(stream.path.clone());
-                event.offset = Some(end.offset);
+                event.offset = Some(end.producer_sequence);
                 emit(output_tx, OutputJob::Event(event)).await?;
             }
         }
         Some(invocation_response::Response::OutputError(error)) => {
             failed = true;
             output_streams
-                .get_mut(&error.stream_id)
-                .ok_or_else(|| anyhow!("output stream {} has no schema", error.stream_id))?
+                .get_mut(&error.transport_stream_id)
+                .ok_or_else(|| {
+                    anyhow!("output stream {} has no schema", error.transport_stream_id)
+                })?
                 .terminal = true;
             if structured {
                 let stream = output_streams
-                    .get(&error.stream_id)
-                    .ok_or_else(|| anyhow!("output stream {} has no schema", error.stream_id))?;
+                    .get(&error.transport_stream_id)
+                    .ok_or_else(|| {
+                        anyhow!("output stream {} has no schema", error.transport_stream_id)
+                    })?;
                 let mut event = event(
                     AgentInvocationSessionEventKind::StreamError,
                     idempotency_key,
                 );
-                event.stream_id = Some(error.stream_id);
+                event.stream_id = Some(error.transport_stream_id);
                 event.parent_stream_id = stream.parent_stream_id;
                 event.path = Some(stream.path.clone());
-                event.offset = Some(error.offset);
+                event.offset = Some(error.producer_sequence);
                 event.error = Some(error.details);
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else {
                 eprintln!(
                     "Output stream {} failed: {}",
-                    error.stream_id, error.details
+                    error.transport_stream_id, error.details
                 );
             }
         }
@@ -1296,8 +1770,10 @@ async fn handle_response(
             failed |= cancel.reason() != StreamCancelReason::Cancelled;
             let output_stream = if cancel.role() == StreamCancelRole::OutputProducer {
                 let stream = output_streams
-                    .get_mut(&cancel.stream_id)
-                    .ok_or_else(|| anyhow!("output stream {} has no schema", cancel.stream_id))?;
+                    .get_mut(&cancel.transport_stream_id)
+                    .ok_or_else(|| {
+                        anyhow!("output stream {} has no schema", cancel.transport_stream_id)
+                    })?;
                 stream.terminal = true;
                 Some(stream.clone())
             } else {
@@ -1308,17 +1784,17 @@ async fn handle_response(
                     AgentInvocationSessionEventKind::StreamCancel,
                     idempotency_key,
                 );
-                event.stream_id = Some(cancel.stream_id);
+                event.stream_id = Some(cancel.transport_stream_id);
                 if let Some(stream) = output_stream {
                     event.parent_stream_id = stream.parent_stream_id;
                     event.path = Some(stream.path);
                 }
-                event.offset = Some(cancel.offset);
+                event.offset = Some(cancel.producer_sequence);
                 event.reason = Some(format!("{:?}", cancel.reason()));
                 event.error = cancel.details;
                 emit(output_tx, OutputJob::Event(event)).await?;
             } else {
-                eprintln!("Stream {} was cancelled", cancel.stream_id);
+                eprintln!("Stream {} was cancelled", cancel.transport_stream_id);
             }
         }
         Some(invocation_response::Response::AttachmentRevoked(revoked)) => {
@@ -2033,6 +2509,135 @@ mod tests {
         }
     }
 
+    fn checkpoint_cursor(value: u8) -> Vec<u8> {
+        let mut cursor = vec![0; 24];
+        cursor[0] = 1;
+        cursor[19] = value;
+        cursor
+    }
+
+    fn checkpoint() -> InvocationSessionCheckpoint {
+        InvocationSessionCheckpoint {
+            version: SESSION_CHECKPOINT_VERSION,
+            idempotency_key: "session-key".to_string(),
+            agent_component_id: uuid::Uuid::from_u128(1),
+            agent_name: "agent".to_string(),
+            environment_id: uuid::Uuid::from_u128(2),
+            attachment_id: uuid::Uuid::from_u128(3),
+            callee_fingerprint: uuid::Uuid::from_u128(4),
+            epoch: 1,
+            cursors: BTreeMap::from([
+                (uuid::Uuid::from_u128(6), Some(checkpoint_cursor(6))),
+                (uuid::Uuid::from_u128(5), None),
+            ]),
+        }
+    }
+
+    #[test]
+    fn session_checkpoint_is_atomically_replaced_and_validated() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("invocation-session.json");
+        let mut expected = checkpoint();
+        write_checkpoint(&path, &expected).unwrap();
+        assert_eq!(load_checkpoint(&path).unwrap().epoch, 1);
+
+        expected.epoch = 2;
+        expected
+            .cursors
+            .insert(uuid::Uuid::from_u128(5), Some(checkpoint_cursor(7)));
+        write_checkpoint(&path, &expected).unwrap();
+        let actual = load_checkpoint(&path).unwrap();
+        assert_eq!(actual.epoch, 2);
+        assert_eq!(actual.cursors, expected.cursors);
+    }
+
+    #[test]
+    fn explicit_resume_and_takeover_use_fresh_attempts_and_sorted_cursors() {
+        let checkpoint = checkpoint();
+        let resume = resume_request(&checkpoint, false);
+        let takeover = resume_request(&checkpoint, true);
+        let Some(public_invocation_request::Request::ResumeAttach(resume)) = resume.request else {
+            panic!("expected resume request");
+        };
+        let Some(public_invocation_request::Request::ResumeAttach(takeover)) = takeover.request
+        else {
+            panic!("expected takeover request");
+        };
+        assert_eq!(resume.operation(), ResumeOperation::Resume);
+        assert_eq!(takeover.operation(), ResumeOperation::Takeover);
+        assert_ne!(resume.attempt_id, takeover.attempt_id);
+        assert_eq!(resume.expected_epoch, checkpoint.epoch);
+        assert_eq!(
+            resume
+                .cursors
+                .iter()
+                .map(|cursor| uuid::Uuid::from(cursor.stream_id.clone().unwrap()))
+                .collect::<Vec<_>>(),
+            checkpoint.cursors.keys().copied().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn checkpoint_advances_on_acceptance_and_each_durable_observation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("invocation-session.json");
+        let stream_id = uuid::Uuid::from_u128(5);
+        let acceptance = InvocationResponse {
+            response: Some(invocation_response::Response::Accepted(
+                golem_api_grpc::proto::golem::worker::InvocationAccepted {
+                    agent_id: Some(AgentId {
+                        component_id: Some(golem_api_grpc::proto::golem::component::ComponentId {
+                            value: Some(uuid::Uuid::from_u128(1).into()),
+                        }),
+                        name: "agent".to_string(),
+                    }),
+                    idempotency_key: Some(IdempotencyKey::new("session-key".to_string()).into()),
+                    component_revision: Some(1),
+                    attachment_id: Some(uuid::Uuid::from_u128(3).into()),
+                    attempt_id: Some(uuid::Uuid::from_u128(7).into()),
+                    epoch: 2,
+                    stream_mappings: vec![
+                        golem_api_grpc::proto::golem::worker::DurableStreamMapping {
+                            transport_stream_id: 9,
+                            handle: Some(
+                                golem_api_grpc::proto::golem::worker::DurableStreamHandle {
+                                    stream_id: Some(stream_id.into()),
+                                    ..Default::default()
+                                },
+                            ),
+                            role: golem_api_grpc::proto::golem::worker::StreamMappingRole::Output
+                                as i32,
+                            ..Default::default()
+                        },
+                    ],
+                    environment_id: Some(golem_api_grpc::proto::golem::common::EnvironmentId {
+                        value: Some(uuid::Uuid::from_u128(2).into()),
+                    }),
+                    callee_fingerprint: Some(uuid::Uuid::from_u128(4).into()),
+                },
+            )),
+        };
+        let mut current = None;
+        update_checkpoint(&path, &mut current, &acceptance).unwrap();
+        assert_eq!(load_checkpoint(&path).unwrap().epoch, 2);
+
+        let item = InvocationResponse {
+            response: Some(invocation_response::Response::OutputItem(
+                golem_api_grpc::proto::golem::worker::OutputStreamItem {
+                    transport_stream_id: 9,
+                    durable_stream_id: Some(stream_id.into()),
+                    durable_offset: checkpoint_cursor(9),
+                    ..Default::default()
+                },
+            )),
+        };
+        update_checkpoint(&path, &mut current, &item).unwrap();
+        assert_eq!(
+            load_checkpoint(&path).unwrap().cursors[&stream_id],
+            Some(checkpoint_cursor(9))
+        );
+    }
+
     #[test]
     fn raw_stream_kind_resolves_refs() {
         let graph = SchemaGraph::empty();
@@ -2066,8 +2671,8 @@ mod tests {
         let Some(public_invocation_request::Request::StreamCancel(cancel)) = request.request else {
             panic!("expected stream cancellation");
         };
-        assert_eq!(cancel.stream_id, 1);
-        assert_eq!(cancel.offset, 4);
+        assert_eq!(cancel.transport_stream_id, 1);
+        assert_eq!(cancel.producer_sequence, 4);
         assert_eq!(cancel.role(), StreamCancelRole::InputProducer);
         assert_eq!(cancel.reason(), StreamCancelReason::Protocol);
     }
@@ -2372,11 +2977,12 @@ mod tests {
         let response = InvocationResponse {
             response: Some(invocation_response::Response::StreamCancel(
                 golem_api_grpc::proto::golem::worker::StreamCancel {
-                    stream_id: 1,
-                    offset: 0,
+                    transport_stream_id: 1,
+                    producer_sequence: 0,
                     role: StreamCancelRole::InputConsumer as i32,
                     reason: StreamCancelReason::Cancelled as i32,
                     details: None,
+                    ..Default::default()
                 },
             )),
         };

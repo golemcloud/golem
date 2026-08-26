@@ -1245,6 +1245,307 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
 }
 
 #[test]
+async fn durable_stream_batch_externalizes_every_record_family(_tracing: &Tracing) {
+    use golem_common::base_model::durable_stream::{
+        DurableStreamHandleV1, StreamCancelReasonV1, StreamCancelRecordV1, StreamCancelRoleV1,
+        StreamEndRecordV1, StreamEndResultV1, StreamId, StreamInvocationIdV1, StreamItemsPayloadV1,
+        StreamItemsRecordV1, StreamOffsetV1, StreamRegisteredRecordV1,
+        StreamRegistrationCoordinateV1, StreamRootKindV1, StreamSourceKindV1,
+        StreamTerminalAuthorV1,
+    };
+    use golem_common::model::component::ComponentRevision;
+    use golem_schema::schema::SchemaFingerprintV1;
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        100,
+        100,
+        8,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "stream-payload".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    let stream_id = StreamId(Uuid::new_v4());
+    let producer_fingerprint = AgentFingerprint(Uuid::new_v4());
+    let invocation_id = StreamInvocationIdV1 {
+        callee_environment_id: environment_id,
+        callee: agent_id.clone(),
+        callee_fingerprint: producer_fingerprint,
+        idempotency_key: IdempotencyKey::new("stream-invocation".to_string()),
+    };
+    let added = oplog
+        .add_durable_stream_batch(Box::new(move |registration_index| {
+            let item_index = registration_index.next();
+            let end_index = item_index.next();
+            let cancel_index = end_index.next();
+            vec![
+                DurableStreamOplogRecord::Registered(StreamRegisteredRecordV1 {
+                    format_version: 1,
+                    coordinate: StreamRegistrationCoordinateV1::Root {
+                        invocation_id: invocation_id.clone(),
+                        root_kind: StreamRootKindV1::MethodResult,
+                        recursive_value_path: Vec::new(),
+                    },
+                    registration_oplog_index: registration_index,
+                    handle: DurableStreamHandleV1 {
+                        format_version: 1,
+                        stream_id,
+                        producer_environment_id: environment_id,
+                        producer: agent_id,
+                        expected_producer_fingerprint: producer_fingerprint,
+                        source_invocation: invocation_id,
+                        component_revision: ComponentRevision::INITIAL,
+                        element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
+                    },
+                    source_kind: StreamSourceKindV1::InvocationOutput,
+                    session_mapping: None,
+                }),
+                DurableStreamOplogRecord::Items(StreamItemsRecordV1 {
+                    format_version: 1,
+                    stream_id,
+                    producer_fingerprint,
+                    first_sequence: 0,
+                    nested_stream_ids: Vec::new(),
+                    newly_registered_stream_ids: Vec::new(),
+                    payload: StreamItemsPayloadV1::Values(vec![vec![42; 1024]]),
+                    offsets: vec![StreamOffsetV1::new(item_index, 0)],
+                }),
+                DurableStreamOplogRecord::End(StreamEndRecordV1 {
+                    format_version: 1,
+                    stream_id,
+                    producer_fingerprint,
+                    sequence: 1,
+                    offset: StreamOffsetV1::new(end_index, 0),
+                    authored_by: StreamTerminalAuthorV1::Guest,
+                    result: StreamEndResultV1::Ok,
+                }),
+                DurableStreamOplogRecord::Cancel(StreamCancelRecordV1 {
+                    format_version: 1,
+                    stream_id,
+                    producer_fingerprint,
+                    sequence: 1,
+                    offset: StreamOffsetV1::new(cancel_index, 0),
+                    authored_by: StreamTerminalAuthorV1::Protocol,
+                    role: StreamCancelRoleV1::OutputConsumer,
+                    reason: StreamCancelReasonV1::Protocol,
+                    details: Some("test cancellation".to_string()),
+                }),
+            ]
+        }))
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await;
+
+    assert_eq!(added.len(), 4);
+    for (_, entry) in added {
+        match entry {
+            OplogEntry::StreamRegistered { record, .. } => {
+                assert!(matches!(&record, OplogPayload::External { .. }));
+                oplog.download_payload(record).await.unwrap();
+            }
+            OplogEntry::StreamItems { record, .. } => {
+                assert!(matches!(&record, OplogPayload::External { .. }));
+                let record = oplog.download_payload(record).await.unwrap();
+                assert_eq!(
+                    record.payload,
+                    StreamItemsPayloadV1::Values(vec![vec![42; 1024]])
+                );
+            }
+            OplogEntry::StreamEnd { record, .. } => {
+                assert!(matches!(&record, OplogPayload::External { .. }));
+                oplog.download_payload(record).await.unwrap();
+            }
+            OplogEntry::StreamCancel { record, .. } => {
+                assert!(matches!(&record, OplogPayload::External { .. }));
+                oplog.download_payload(record).await.unwrap();
+            }
+            _ => panic!("durable stream batch appended a non-stream entry"),
+        }
+    }
+}
+
+#[test]
+async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: &Tracing) {
+    use crate::durable_host::durable_stream::{
+        CommittedProducerStreamEventPayloadV1, DurableStreamProducer, ProducerRegistrationRequestV1,
+    };
+    use golem_common::base_model::durable_stream::{
+        StreamEndResultV1, StreamInvocationIdV1, StreamItemsPayloadV1,
+        StreamRegistrationCoordinateV1, StreamRootKindV1, StreamSourceKindV1,
+    };
+    use golem_common::model::component::ComponentRevision;
+    use golem_schema::schema::SchemaFingerprintV1;
+
+    let tempdir = tempfile::TempDir::new().expect("Cannot create temp dir");
+    let config = golem_common::config::DbSqliteConfig {
+        database: tempdir
+            .path()
+            .join("durable-stream.db")
+            .to_string_lossy()
+            .into_owned(),
+        max_connections: 4,
+        foreign_keys: false,
+    };
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "durable-stream-restart".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let producer_fingerprint = AgentFingerprint(Uuid::new_v4());
+    let invocation_id = StreamInvocationIdV1 {
+        callee_environment_id: environment_id,
+        callee: agent_id.clone(),
+        callee_fingerprint: producer_fingerprint,
+        idempotency_key: IdempotencyKey::new("durable-stream-invocation".to_string()),
+    };
+    let registration = ProducerRegistrationRequestV1 {
+        coordinate: StreamRegistrationCoordinateV1::Root {
+            invocation_id: invocation_id.clone(),
+            root_kind: StreamRootKindV1::MethodResult,
+            recursive_value_path: Vec::new(),
+        },
+        source_invocation: invocation_id,
+        component_revision: ComponentRevision::INITIAL,
+        element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
+        source_kind: StreamSourceKindV1::InvocationOutput,
+        session_mapping: None,
+    };
+
+    let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> =
+        Arc::new(SqliteIndexedStorage::configured(&config).await.unwrap());
+    let service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage.clone(),
+        100,
+        100,
+        128,
+        RetryConfig::default(),
+    )
+    .await;
+    let oplog = service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    let producer = DurableStreamProducer::load(
+        oplog,
+        environment_id,
+        agent_id.clone(),
+        producer_fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = producer.register(registration.clone()).await.unwrap().value;
+    producer
+        .write_items(
+            handle.stream_id,
+            0,
+            StreamItemsPayloadV1::Values(vec![vec![42]]),
+        )
+        .await
+        .unwrap();
+    producer
+        .end(handle.stream_id, 1, StreamEndResultV1::Ok)
+        .await
+        .unwrap();
+    drop(producer);
+    drop(service);
+
+    let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> =
+        Arc::new(SqliteIndexedStorage::configured(&config).await.unwrap());
+    let restarted_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        100,
+        100,
+        128,
+        RetryConfig::default(),
+    )
+    .await;
+    let restarted_oplog = restarted_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    let restarted = DurableStreamProducer::load(
+        restarted_oplog.clone(),
+        environment_id,
+        agent_id,
+        producer_fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(restarted.register(registration).await.unwrap().replayed);
+    assert!(
+        restarted
+            .write_items(
+                handle.stream_id,
+                0,
+                StreamItemsPayloadV1::Values(vec![vec![42]]),
+            )
+            .await
+            .unwrap()
+            .replayed
+    );
+    assert!(
+        restarted
+            .end(handle.stream_id, 1, StreamEndResultV1::Ok)
+            .await
+            .unwrap()
+            .replayed
+    );
+    assert_eq!(
+        restarted_oplog.current_oplog_index().await,
+        OplogIndex::from_u64(3)
+    );
+
+    let mut reader = restarted.catch_up(handle, None).await.unwrap();
+    assert_eq!(
+        reader.next().await.unwrap().unwrap().payload,
+        CommittedProducerStreamEventPayloadV1::Value(vec![42])
+    );
+    assert_eq!(
+        reader.next().await.unwrap().unwrap().payload,
+        CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok)
+    );
+    assert!(reader.next().await.unwrap().is_none());
+}
+
+#[test]
 async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());

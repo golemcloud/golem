@@ -20,14 +20,18 @@ use golem_api_grpc::proto::golem::schema::{
 };
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
-    InputStreamEnd, InputStreamItem, InvocationRejectionReason, InvocationRequest,
-    InvocationResponse, InvocationStart, PublicInvocationRequest, PublicInvocationStart,
-    input_stream_item, invocation_request, invocation_response, invocation_session_completion,
-    invocation_session_result, public_invocation_request,
+    InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRejectionReason,
+    InvocationRequest, InvocationResponse, InvocationStart, PublicInvocationRequest,
+    PublicInvocationStart, ResumeAttach, ResumeOperation, input_stream_item, invocation_request,
+    invocation_response, invocation_session_completion, invocation_session_result,
+    public_invocation_request,
 };
 use golem_client::model::ComponentDto;
+use golem_common::base_model::durable_stream::AttachmentId;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, IdempotencyKey, RoutingTable};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
@@ -126,6 +130,8 @@ fn public_start(
                 method_name: method_name.to_string(),
                 method_parameters: Some(method_parameters),
                 idempotency_key: Some(IdempotencyKey::fresh().into()),
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                expected_callee_fingerprint: None,
             },
         )),
     }
@@ -160,6 +166,76 @@ async fn run_public_session(
         other => anyhow::bail!("completed public invocation must close cleanly, got {other:?}"),
     }
     Ok(responses)
+}
+
+async fn resume_public_input_with_end(
+    deps: &EnvBasedTestDependencies,
+    token: &TokenSecret,
+    acceptance: InvocationAccepted,
+    transport_stream_id: u64,
+) -> anyhow::Result<()> {
+    let durable_stream_id = acceptance
+        .stream_mappings
+        .iter()
+        .find(|mapping| mapping.transport_stream_id == transport_stream_id)
+        .and_then(|mapping| mapping.handle.as_ref())
+        .and_then(|handle| handle.stream_id.clone())
+        .ok_or_else(|| anyhow::anyhow!("acceptance omitted its input stream mapping"))?;
+    let resume = PublicInvocationRequest {
+        request: Some(public_invocation_request::Request::ResumeAttach(
+            ResumeAttach {
+                idempotency_key: acceptance.idempotency_key,
+                agent_id: acceptance.agent_id,
+                environment_id: acceptance.environment_id,
+                attachment_id: acceptance.attachment_id,
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                expected_callee_fingerprint: acceptance.callee_fingerprint,
+                expected_epoch: acceptance.epoch,
+                operation: ResumeOperation::Resume as i32,
+                cursors: Vec::new(),
+                auth_ctx: None,
+                principal: None,
+            },
+        )),
+    };
+    let mut socket = connect_public_invocation_socket(deps, Some(token)).await?;
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_public_request(&resume)
+        .map_err(anyhow::Error::msg)?;
+    send_public_request(&mut socket, &resume).await?;
+    let resumed = receive_public_response(&mut socket).await?;
+    state
+        .validate_response(&resumed)
+        .map_err(anyhow::Error::msg)?;
+    let resumed_epoch = match resumed.response {
+        Some(invocation_response::Response::Accepted(accepted)) => {
+            assert_eq!(accepted.epoch, acceptance.epoch + 1);
+            accepted.epoch
+        }
+        other => anyhow::bail!("detached public invocation did not resume: {other:?}"),
+    };
+    let end = PublicInvocationRequest {
+        request: Some(public_invocation_request::Request::InputEnd(
+            InputStreamEnd {
+                transport_stream_id,
+                sequence: 0,
+                durable_stream_id: Some(durable_stream_id),
+                epoch: resumed_epoch,
+            },
+        )),
+    };
+    state
+        .validate_public_request(&end)
+        .map_err(anyhow::Error::msg)?;
+    send_public_request(&mut socket, &end).await?;
+    while !state.is_complete() {
+        let response = receive_public_response(&mut socket).await?;
+        state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+    }
+    Ok(())
 }
 
 fn cross_executor_agent_name(
@@ -217,6 +293,9 @@ async fn invoke_agent_session(
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
+            attempt_id: None,
+            expected_callee_fingerprint: None,
+            durable_input_mappings: Vec::new(),
         })),
     };
     let mut state = InvocationSessionState::default();
@@ -350,6 +429,80 @@ fn assert_streaming_report(value: SchemaValue) {
             ],
         }
     );
+}
+
+#[test]
+#[timeout("4 minutes")]
+#[tracing::instrument]
+async fn grpc_invocation_session_routes_resume_and_takeover(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let environment_id = EnvironmentId(uuid::Uuid::new_v4());
+    let agent_id = AgentId {
+        component_id: ComponentId(uuid::Uuid::new_v4()),
+        agent_id: "missing-resume-target".to_string(),
+    };
+    let worker_service = deps.worker_service();
+    let mut client = WorkerServiceClient::connect(format!(
+        "http://{}:{}",
+        worker_service.grpc_host(),
+        worker_service.gprc_port()
+    ))
+    .await?;
+
+    for operation in [ResumeOperation::Resume, ResumeOperation::Takeover] {
+        let idempotency_key = IdempotencyKey::fresh();
+        let request = InvocationRequest {
+            request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
+                idempotency_key: Some(idempotency_key.clone().into()),
+                agent_id: Some(agent_id.clone().into()),
+                environment_id: Some(environment_id.into()),
+                attachment_id: Some(
+                    AttachmentId::primary(environment_id, &agent_id, &idempotency_key)?
+                        .0
+                        .into(),
+                ),
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                expected_callee_fingerprint: Some(uuid::Uuid::new_v4().into()),
+                expected_epoch: 1,
+                operation: operation as i32,
+                cursors: Vec::new(),
+                auth_ctx: Some(AuthCtx::System.into()),
+                principal: Some(Default::default()),
+            })),
+        };
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&request)
+            .map_err(anyhow::Error::msg)?;
+        let (requests, receiver) = mpsc::channel(1);
+        requests.send(request).await?;
+        drop(requests);
+        let mut responses = client
+            .invoke_agent_session(ReceiverStream::new(receiver))
+            .await?
+            .into_inner();
+        let response = responses
+            .message()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("resume endpoint returned no response"))?;
+        state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+        let rejected = match response.response {
+            Some(invocation_response::Response::Rejected(rejected)) => rejected,
+            other => anyhow::bail!("resume endpoint returned an unexpected response: {other:?}"),
+        };
+        assert_eq!(
+            rejected.reason,
+            InvocationRejectionReason::Internal as i32,
+            "resume endpoint returned an unexpected rejection: {rejected:?}"
+        );
+        assert_eq!(rejected.error, "Component not found");
+        assert!(responses.message().await?.is_none());
+        assert!(state.is_complete());
+    }
+    Ok(())
 }
 
 #[test]
@@ -494,7 +647,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         .iter()
         .map(|response| match &response.response {
             Some(invocation_response::Response::OutputItem(item)) => {
-                assert_eq!(item.stream_id, stream.stream_id);
+                assert_eq!(item.transport_stream_id, stream.stream_id);
                 SchemaValue::try_from(item.value.clone().unwrap()).unwrap()
             }
             other => panic!("expected output item, got {other:?}"),
@@ -546,18 +699,38 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     state
         .validate_response(&accepted)
         .map_err(anyhow::Error::msg)?;
+    let (input_durable_stream_id, input_epoch) = match accepted.response.as_ref() {
+        Some(invocation_response::Response::Accepted(accepted)) => {
+            let mapping = accepted
+                .stream_mappings
+                .iter()
+                .find(|mapping| mapping.transport_stream_id == input_stream_id)
+                .ok_or_else(|| anyhow::anyhow!("acceptance omitted the input stream mapping"))?;
+            let stream_id = mapping
+                .handle
+                .as_ref()
+                .and_then(|handle| handle.stream_id.clone())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("input stream mapping omitted its durable stream ID")
+                })?;
+            (stream_id, accepted.epoch)
+        }
+        other => anyhow::bail!("streaming input was not accepted: {other:?}"),
+    };
 
     for (sequence, value) in [13_u32, 21].into_iter().enumerate() {
         let request = PublicInvocationRequest {
             request: Some(public_invocation_request::Request::InputItem(
                 InputStreamItem {
-                    stream_id: input_stream_id,
+                    transport_stream_id: input_stream_id,
                     sequence: sequence as u64,
                     payload: Some(input_stream_item::Payload::Value(
                         SchemaValue::U32(value)
                             .try_into()
                             .map_err(anyhow::Error::msg)?,
                     )),
+                    durable_stream_id: Some(input_durable_stream_id.clone()),
+                    epoch: input_epoch,
                 },
             )),
         };
@@ -575,8 +748,10 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     let end = PublicInvocationRequest {
         request: Some(public_invocation_request::Request::InputEnd(
             InputStreamEnd {
-                stream_id: input_stream_id,
-                offset: 2,
+                transport_stream_id: input_stream_id,
+                sequence: 2,
+                durable_stream_id: Some(input_durable_stream_id),
+                epoch: input_epoch,
             },
         )),
     };
@@ -624,32 +799,38 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     let mut blocked_socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
     send_public_request(&mut blocked_socket, &blocked).await?;
     let accepted = receive_public_response(&mut blocked_socket).await?;
-    assert!(
-        matches!(
-            accepted.response,
-            Some(invocation_response::Response::Accepted(_))
-        ),
-        "blocked public invocation was not accepted: {accepted:?}"
-    );
-    blocked_socket.send(Message::Close(None)).await?;
+    let blocked_acceptance = match accepted.response {
+        Some(invocation_response::Response::Accepted(accepted)) => accepted,
+        other => anyhow::bail!("blocked public invocation was not accepted: {other:?}"),
+    };
+    blocked_socket.close(None).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while let Some(message) = blocked_socket.next().await {
+            match message {
+                Ok(Message::Close(_)) | Err(_) => return Ok::<_, anyhow::Error>(()),
+                Ok(_) => {}
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("blocked invocation close handshake timed out"))??;
     drop(blocked_socket);
 
-    let subsequent = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        run_public_session(
-            deps,
-            &user.token,
-            public_start(
-                application_name,
-                environment_name,
-                &agent_name,
-                "ping",
-                proto_record(Vec::new()),
-            ),
+    resume_public_input_with_end(deps, &user.token, blocked_acceptance, blocked_stream_id).await?;
+
+    let subsequent = run_public_session(
+        deps,
+        &user.token,
+        public_start(
+            application_name,
+            environment_name,
+            &agent_name,
+            "ping",
+            proto_record(Vec::new()),
         ),
     )
-    .await
-    .map_err(|_| anyhow::anyhow!("public disconnect did not cancel the blocked invocation"))??;
+    .await?;
     assert!(subsequent.iter().any(|response| matches!(
         response.response,
         Some(invocation_response::Response::Finished(_))
@@ -679,16 +860,24 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     )
     .await?;
     let accepted = receive_public_response(&mut capability_socket).await?;
-    assert!(matches!(
-        accepted.response,
-        Some(invocation_response::Response::Accepted(_))
-    ));
+    let capability_acceptance = match accepted.response {
+        Some(invocation_response::Response::Accepted(accepted)) => accepted,
+        other => anyhow::bail!("capability invocation was not accepted: {other:?}"),
+    };
+    let capability_durable_stream_id = capability_acceptance
+        .stream_mappings
+        .iter()
+        .find(|mapping| mapping.transport_stream_id == capability_stream_id)
+        .and_then(|mapping| mapping.handle.as_ref())
+        .and_then(|handle| handle.stream_id.clone())
+        .ok_or_else(|| anyhow::anyhow!("capability input mapping omitted its durable stream ID"))?;
+    let capability_epoch = capability_acceptance.epoch;
     send_public_request(
         &mut capability_socket,
         &PublicInvocationRequest {
             request: Some(public_invocation_request::Request::InputItem(
                 InputStreamItem {
-                    stream_id: capability_stream_id,
+                    transport_stream_id: capability_stream_id,
                     sequence: 0,
                     payload: Some(input_stream_item::Payload::Value(ProtoSchemaValue {
                         value: Some(schema_value::Value::RecordValue(RecordValue {
@@ -699,6 +888,8 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
                             }],
                         })),
                     })),
+                    durable_stream_id: Some(capability_durable_stream_id),
+                    epoch: capability_epoch,
                 },
             )),
         },
@@ -722,6 +913,13 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     ));
     drop(capability_socket);
 
+    resume_public_input_with_end(
+        deps,
+        &user.token,
+        capability_acceptance,
+        capability_stream_id,
+    )
+    .await?;
     tokio::time::timeout(
         std::time::Duration::from_secs(30),
         run_public_session(
@@ -737,7 +935,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         ),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("capability rejection did not cancel the live invocation"))??;
+    .map_err(|_| anyhow::anyhow!("resumed capability rejection did not finish"))??;
     Ok(())
 }
 

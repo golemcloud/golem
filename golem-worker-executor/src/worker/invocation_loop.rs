@@ -19,8 +19,7 @@ use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invoke_live_streaming_rpc, invoke_observed_and_traced,
-    lower_invocation,
+    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
@@ -237,6 +236,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
             }
 
+            store
+                .lock()
+                .await
+                .data()
+                .durable_ctx()
+                .begin_stream_runtime_teardown();
             self.suspend_worker(&store).await;
 
             if let Some(kind) = final_interrupt {
@@ -676,17 +681,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     }
 
     async fn pop_ready_internal_invocation(&self) -> Option<QueuedWorkerInvocation> {
-        let live_invocation_is_next = matches!(
-            self.active.read().await.front(),
-            Some(QueuedWorkerInvocation::LiveStreamingInvocation { .. })
-        );
-        if live_invocation_is_next {
-            let status = self.parent.get_non_detached_last_known_status().await;
-            if !status.pending_updates.is_empty() || !status.pending_invocations.is_empty() {
-                return None;
-            }
-        }
-
         self.active.write().await.pop_front()
     }
 
@@ -1065,64 +1059,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let _ = sender.send(Ok(()));
                 CommandOutcome::Continue
             }
-            QueuedWorkerInvocation::LiveStreamingInvocation {
-                invocation,
-                sender,
-                cancellation,
-            } => {
-                self.invoke_live_streaming(*invocation, sender, cancellation)
-                    .await
-            }
             QueuedWorkerInvocation::SaveSnapshot => self.save_snapshot().await,
         }
-    }
-
-    async fn invoke_live_streaming(
-        &mut self,
-        invocation: AgentInvocation,
-        sender: oneshot::Sender<Result<golem_common::schema::SchemaValue, WorkerExecutorError>>,
-        cancellation: tokio_util::sync::CancellationToken,
-    ) -> CommandOutcome {
-        if cancellation.is_cancelled() {
-            let _ = sender.send(Err(WorkerExecutorError::runtime(
-                "live streaming invocation was cancelled before execution",
-            )));
-            return CommandOutcome::Continue;
-        }
-        let idempotency_key = invocation
-            .idempotency_key()
-            .cloned()
-            .unwrap_or_else(IdempotencyKey::fresh);
-        let mut invocation_context = invocation.invocation_context();
-        let result = async {
-            self.store
-                .data_mut()
-                .set_current_idempotency_key(idempotency_key.clone())
-                .await;
-            Self::extend_invocation_context(
-                &mut invocation_context,
-                &idempotency_key,
-                &invocation,
-                &self.owned_agent_id.agent_id(),
-                &self.parent.parsed_agent_id,
-            );
-            self.store
-                .data_mut()
-                .set_current_invocation_context(invocation_context)
-                .await?;
-            let lowered = lower_invocation(
-                invocation,
-                &self.store.data().component_metadata().metadata,
-                self.parent.parsed_agent_id.as_ref(),
-            )?;
-            invoke_live_streaming_rpc(lowered, self.store, self.instance, sender, cancellation)
-                .await
-        }
-        .await;
-        if let Err(error) = result {
-            tracing::warn!("live streaming invocation failed: {error}");
-        }
-        live_streaming_invocation_outcome(self.parent.agent_mode())
     }
 
     /// Process an external queued worker invocation - this is either an exported function invocation
@@ -1188,13 +1126,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     ) -> CommandOutcome {
         let kind = invocation.kind();
         let display_name = invocation.display_name();
+        let invocation_idempotency_key = idempotency_key.clone();
         let result = self
             .invoke_agent_with_context(invocation_context, idempotency_key, invocation)
             .await;
 
         match result {
             Ok(InvokeResult::Succeeded {
-                result: invocation_result,
+                result: mut invocation_result,
                 consumed_fuel,
             }) => {
                 let mut interrupt_state = self.parent.interrupt_signal.lock().await;
@@ -1202,6 +1141,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     drop(interrupt_state);
                     self.agent_invocation_failed(
                         &display_name,
+                        &invocation_idempotency_key,
                         Ok(InvokeResult::Interrupted {
                             consumed_fuel,
                             interrupt_kind: interrupt.kind,
@@ -1210,8 +1150,88 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 } else {
                     drop(interrupt_state);
+                    if let AgentInvocationResult::AgentMethod { output } = &mut invocation_result {
+                        let component = self.store.data().component_metadata();
+                        let Some(agent_type) =
+                            self.parent.parsed_agent_id.as_ref().and_then(|parsed| {
+                                component
+                                    .metadata
+                                    .find_agent_type_by_name_ref(&parsed.agent_type)
+                            })
+                        else {
+                            return self
+                                .agent_invocation_failed(
+                                    &display_name,
+                                    &invocation_idempotency_key,
+                                    Err(WorkerExecutorError::runtime(
+                                        "durable invocation result schema is unavailable",
+                                    )),
+                                )
+                                .await;
+                        };
+                        let Some(method) = agent_type
+                            .methods
+                            .iter()
+                            .find(|method| method.name == display_name)
+                        else {
+                            return self
+                                .agent_invocation_failed(
+                                    &display_name,
+                                    &invocation_idempotency_key,
+                                    Err(WorkerExecutorError::runtime(
+                                        "durable invocation result method schema is unavailable",
+                                    )),
+                                )
+                                .await;
+                        };
+                        let graph = agent_type.schema.clone();
+                        let root =
+                            method.output_schema.schema().cloned().unwrap_or_else(|| {
+                                golem_common::schema::SchemaType::tuple(Vec::new())
+                            });
+                        let component_revision = component.revision;
+                        let parent = self.parent.clone();
+                        let idempotency_key = invocation_idempotency_key.clone();
+                        let result_value = output.clone();
+                        match self
+                            .store
+                            .run_concurrent(async move |_accessor| {
+                                parent
+                                    .materialize_durable_streaming_result(
+                                        &idempotency_key,
+                                        result_value,
+                                        &graph,
+                                        &root,
+                                        component_revision,
+                                    )
+                                    .await
+                            })
+                            .await
+                        {
+                            Ok(Ok(materialized)) => *output = materialized,
+                            Ok(Err(error)) => {
+                                return self
+                                    .agent_invocation_failed(
+                                        &display_name,
+                                        &invocation_idempotency_key,
+                                        Err(error),
+                                    )
+                                    .await;
+                            }
+                            Err(error) => {
+                                return self
+                                    .agent_invocation_failed(
+                                        &display_name,
+                                        &invocation_idempotency_key,
+                                        Err(WorkerExecutorError::runtime(error.to_string())),
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
                     self.agent_invocation_finished(
                         display_name,
+                        &invocation_idempotency_key,
                         invocation_result,
                         consumed_fuel,
                         kind,
@@ -1227,9 +1247,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .await
                         .claim_pending_terminal();
                 }
-                self.agent_invocation_failed(&display_name, result).await
+                self.agent_invocation_failed(&display_name, &invocation_idempotency_key, result)
+                    .await
             }
-            _ => self.agent_invocation_failed(&display_name, result).await,
+            _ => {
+                self.agent_invocation_failed(&display_name, &invocation_idempotency_key, result)
+                    .await
+            }
         }
     }
 
@@ -1272,7 +1296,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await;
             }
 
-            let invocation_for_lowering = invocation.clone();
+            let invocation_for_lowering = self
+                .parent
+                .rehydrate_durable_streaming_invocation(invocation.clone())
+                .await?;
             let lowered = lower_invocation(
                 invocation_for_lowering,
                 &component_metadata,
@@ -1314,6 +1341,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn agent_invocation_finished(
         &mut self,
         full_function_name: String,
+        idempotency_key: &IdempotencyKey,
         invocation_result: AgentInvocationResult,
         consumed_fuel: u64,
         kind: AgentInvocationKind,
@@ -1335,11 +1363,24 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .on_agent_invocation_success(&full_function_name, consumed_fuel, &mut output)
             .await
         {
-            Ok(()) => successful_agent_invocation_outcome(
-                self.parent.agent_mode(),
-                self.store.data().component_metadata().metadata.is_agent(),
-                kind,
-            ),
+            Ok(()) => {
+                if let Err(error) = self
+                    .parent
+                    .complete_durable_streaming_session(idempotency_key)
+                    .await
+                {
+                    tracing::error!(%error, "Failed to complete durable streaming session");
+                    return failed_agent_invocation_outcome(
+                        self.parent.agent_mode(),
+                        RetryDecision::Immediate,
+                    );
+                }
+                successful_agent_invocation_outcome(
+                    self.parent.agent_mode(),
+                    self.store.data().component_metadata().metadata.is_agent(),
+                    kind,
+                )
+            }
             Err(error) => {
                 self.store
                     .data_mut()
@@ -1354,6 +1395,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         },
                     )
                     .await;
+                let _ = self
+                    .parent
+                    .fail_durable_streaming_session(idempotency_key, error.to_string())
+                    .await;
                 failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
             }
         }
@@ -1363,8 +1408,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn agent_invocation_failed(
         &mut self,
         full_function_name: &str,
+        idempotency_key: &IdempotencyKey,
         result: Result<InvokeResult, WorkerExecutorError>,
     ) -> CommandOutcome {
+        self.store
+            .data()
+            .durable_ctx()
+            .begin_stream_runtime_teardown();
+        let details = format!("{result:?}");
         let trap_type = match result {
             Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
             Err(error) => Some(TrapType::from_error::<Ctx>(
@@ -1384,6 +1435,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             None => RetryDecision::None,
         };
+
+        if decision == RetryDecision::None {
+            let _ = self
+                .parent
+                .fail_durable_streaming_session(idempotency_key, details)
+                .await;
+        }
 
         failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
     }
@@ -1852,16 +1910,6 @@ fn failed_agent_invocation_outcome(
     }
 }
 
-fn live_streaming_invocation_outcome(agent_mode: AgentMode) -> CommandOutcome {
-    if agent_mode == AgentMode::Ephemeral {
-        CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
-    } else {
-        // Live streams are not replayable yet. Recreate the Store from the last durable boundary
-        // before any later command can observe unjournaled guest-memory changes.
-        CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-    }
-}
-
 fn should_cleanup_terminal_ephemeral_invocation(
     agent_mode: AgentMode,
     is_agent_component: bool,
@@ -1920,8 +1968,8 @@ fn snapshot_action_at(
 mod tests {
     use super::{
         CommandOutcome, PeriodicSnapshotAction, failed_agent_invocation_outcome,
-        live_streaming_invocation_outcome, periodic_snapshot_failure_outcome, snapshot_action_at,
-        snapshot_baseline_timestamp, successful_agent_invocation_outcome,
+        periodic_snapshot_failure_outcome, snapshot_action_at, snapshot_baseline_timestamp,
+        successful_agent_invocation_outcome,
     };
     use crate::worker::RetryDecision;
     use crate::worker::invocation::InvokeResult;
@@ -2055,15 +2103,23 @@ mod tests {
     #[test]
     fn durable_live_streaming_invocation_always_reconstructs_the_store() {
         assert_eq!(
-            live_streaming_invocation_outcome(AgentMode::Durable),
-            CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+            successful_agent_invocation_outcome(
+                AgentMode::Durable,
+                true,
+                AgentInvocationKind::AgentMethod
+            ),
+            CommandOutcome::Continue
         );
     }
 
     #[test]
     fn ephemeral_live_streaming_invocation_archives_its_ephemeral_oplog() {
         assert_eq!(
-            live_streaming_invocation_outcome(AgentMode::Ephemeral),
+            successful_agent_invocation_outcome(
+                AgentMode::Ephemeral,
+                true,
+                AgentInvocationKind::AgentMethod
+            ),
             CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision::None)
         );
     }

@@ -57,6 +57,9 @@
   "author": "",
   "license": "SEE LICENSE IN LICENSE",
   "description": "",
+  "dependencies": {
+    "@noble/hashes": "^1.8.0"
+  },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
     "arktype": "^2.1.0",

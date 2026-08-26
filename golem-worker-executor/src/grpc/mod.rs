@@ -15,6 +15,8 @@
 mod invocation;
 mod invocation_session;
 
+pub(crate) use invocation_session::build_durable_streaming_request;
+
 use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
@@ -41,13 +43,19 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::Wo
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
     CancelInvocationResponse, ConnectWorkerRequest, DeactivatePluginRequest,
-    DeactivatePluginResponse, DeleteWorkerRequest, ForkWorkerRequest, ForkWorkerResponse,
-    GetAgentWalletRequest, GetAgentWalletResponse, GetAgentWalletSuccess, GetFileContentsRequest,
-    GetFileContentsResponse, GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest,
-    GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, ProcessOplogEntriesRequest,
-    ProcessOplogEntriesResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse, process_oplog_entries_response,
+    DeactivatePluginResponse, DeleteWorkerRequest, DurableStreamAttachmentControlRequest,
+    DurableStreamAttachmentControlResponse, DurableStreamSegmentReadRequest,
+    DurableStreamSegmentReadResponse, ForkWorkerRequest, ForkWorkerResponse, GetAgentWalletRequest,
+    GetAgentWalletResponse, GetAgentWalletSuccess, GetFileContentsRequest, GetFileContentsResponse,
+    GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse,
+    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, ProcessOplogEntriesRequest, ProcessOplogEntriesResponse,
+    RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, durable_stream_attachment_control_response,
+    durable_stream_segment_read_response, process_oplog_entries_response,
+};
+use golem_common::base_model::durable_stream::{
+    AttachedStreamSegmentRequestV1, StreamAttachmentControlRequestV1,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
@@ -460,10 +468,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )
         .await?;
 
-        info!("Interrupting worker before deletion");
-        worker
-            .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-            .await;
         info!("Marking worker for deletion");
         worker.start_deleting().await?;
 
@@ -474,6 +478,155 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         drop(worker);
 
         Ok(())
+    }
+
+    async fn control_durable_stream_attachment_internal(
+        &self,
+        request: DurableStreamAttachmentControlRequest,
+    ) -> Result<bool, WorkerExecutorError> {
+        let owned_agent_id = extract_owned_agent_id(
+            &request,
+            |request| &request.producer_agent_id,
+            |request| &request.producer_environment_id,
+        )?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        if !matches!(auth_ctx, AuthCtx::System | AuthCtx::Agent(_)) {
+            return Err(WorkerExecutorError::invalid_request(
+                "durable stream attachment control requires an authenticated internal caller",
+            ));
+        }
+        let control: StreamAttachmentControlRequestV1 =
+            golem_common::serialization::deserialize(&request.payload)
+                .map_err(WorkerExecutorError::invalid_request)?;
+        let consumer_agent_id: AgentId = request
+            .consumer_agent_id
+            .ok_or_else(|| WorkerExecutorError::invalid_request("consumer_agent_id not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let consumer_environment_id: EnvironmentId = request
+            .consumer_environment_id
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request("consumer_environment_id not found")
+            })?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let expected_consumer_fingerprint = AgentFingerprint(
+            request
+                .expected_consumer_fingerprint
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request("expected_consumer_fingerprint not found")
+                })?
+                .into(),
+        );
+        let key = control.operation.key();
+        let target_matches = if control.operation.targets_consumer() {
+            key.consumer_environment_id == owned_agent_id.environment_id
+                && key.consumer == owned_agent_id.agent_id
+        } else {
+            key.producer_environment_id == owned_agent_id.environment_id
+                && key.producer == owned_agent_id.agent_id
+        };
+        if !target_matches
+            || key.consumer != consumer_agent_id
+            || control.operation.key().consumer_environment_id != consumer_environment_id
+            || key.expected_consumer_fingerprint != expected_consumer_fingerprint
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "durable stream attachment target does not match the routed worker",
+            ));
+        }
+        Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
+            .await
+            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+        let worker = Worker::get_or_create_suspended(
+            self,
+            &owned_agent_id,
+            None,
+            Vec::new(),
+            None,
+            None,
+            &InvocationContextStack::fresh(),
+            Principal::anonymous(),
+        )
+        .await?;
+        worker.control_durable_stream_attachment(control).await
+    }
+
+    async fn read_durable_stream_segment_internal(
+        &self,
+        request: DurableStreamSegmentReadRequest,
+    ) -> Result<Vec<u8>, WorkerExecutorError> {
+        let owned_agent_id = extract_owned_agent_id(
+            &request,
+            |request| &request.producer_agent_id,
+            |request| &request.producer_environment_id,
+        )?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        if !matches!(auth_ctx, AuthCtx::System | AuthCtx::Agent(_)) {
+            return Err(WorkerExecutorError::invalid_request(
+                "durable stream segment reads require an authenticated internal caller",
+            ));
+        }
+        let read: AttachedStreamSegmentRequestV1 =
+            golem_common::serialization::deserialize(&request.payload)
+                .map_err(WorkerExecutorError::invalid_request)?;
+        let consumer_agent_id: AgentId = request
+            .consumer_agent_id
+            .ok_or_else(|| WorkerExecutorError::invalid_request("consumer_agent_id not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let consumer_environment_id: EnvironmentId = request
+            .consumer_environment_id
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request("consumer_environment_id not found")
+            })?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let expected_consumer_fingerprint = AgentFingerprint(
+            request
+                .expected_consumer_fingerprint
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request("expected_consumer_fingerprint not found")
+                })?
+                .into(),
+        );
+        let key = &read.attachment;
+        if key.producer_environment_id != owned_agent_id.environment_id
+            || key.producer != owned_agent_id.agent_id
+            || key.consumer != consumer_agent_id
+            || key.consumer_environment_id != consumer_environment_id
+            || key.expected_consumer_fingerprint != expected_consumer_fingerprint
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "durable stream segment target does not match its producer or consumer",
+            ));
+        }
+        Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
+            .await
+            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+        let worker = Worker::get_or_create_suspended(
+            self,
+            &owned_agent_id,
+            None,
+            Vec::new(),
+            None,
+            None,
+            &InvocationContextStack::fresh(),
+            Principal::anonymous(),
+        )
+        .await?;
+        let events = worker.read_durable_stream_segment(read).await?;
+        golem_common::serialization::serialize(&events).map_err(WorkerExecutorError::runtime)
     }
 
     async fn fork_worker_internal(
@@ -2924,6 +3077,68 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<tonic::Streaming<InvocationRequest>>,
     ) -> ResponseResult<Self::InvokeAgentSessionStream> {
         invocation_session::invoke_agent_session(self, request).await
+    }
+
+    async fn control_durable_stream_attachment(
+        &self,
+        request: Request<DurableStreamAttachmentControlRequest>,
+    ) -> ResponseResult<DurableStreamAttachmentControlResponse> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "control_durable_stream_attachment",
+            agent_id = proto_agent_id_string(&request.producer_agent_id),
+        );
+        match self
+            .control_durable_stream_attachment_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(replayed) => {
+                record.succeed(Ok(Response::new(DurableStreamAttachmentControlResponse {
+                    result: Some(
+                        durable_stream_attachment_control_response::Result::Replayed(replayed),
+                    ),
+                })))
+            }
+            Err(mut error) => record.fail(
+                Ok(Response::new(DurableStreamAttachmentControlResponse {
+                    result: Some(durable_stream_attachment_control_response::Result::Failure(
+                        error.clone().into(),
+                    )),
+                })),
+                &mut error,
+            ),
+        }
+    }
+
+    async fn read_durable_stream_segment(
+        &self,
+        request: Request<DurableStreamSegmentReadRequest>,
+    ) -> ResponseResult<DurableStreamSegmentReadResponse> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "read_durable_stream_segment",
+            agent_id = proto_agent_id_string(&request.producer_agent_id),
+        );
+        match self
+            .read_durable_stream_segment_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(payload) => record.succeed(Ok(Response::new(DurableStreamSegmentReadResponse {
+                result: Some(durable_stream_segment_read_response::Result::Payload(
+                    payload,
+                )),
+            }))),
+            Err(mut error) => record.fail(
+                Ok(Response::new(DurableStreamSegmentReadResponse {
+                    result: Some(durable_stream_segment_read_response::Result::Failure(
+                        error.clone().into(),
+                    )),
+                })),
+                &mut error,
+            ),
+        }
     }
 
     async fn process_oplog_entries(

@@ -238,16 +238,15 @@ fn agent_error_stream() -> AgentStream<u32> {
     spawn_local(async move {
         let first = encode_schema_value(&SchemaValue::U32(1))
             .expect("failed to encode value before producer error");
-        assert!(writer.write_one(first).await.is_none());
-        assert!(
-            writer
-                .write_one(golem_rust::schema::wit::wire::SchemaValueTree {
-                    value_nodes: Vec::new(),
-                    root: 0,
-                })
-                .await
-                .is_none()
-        );
+        if writer.write_one(first).await.is_some() {
+            return;
+        }
+        let _ = writer
+            .write_one(golem_rust::schema::wit::wire::SchemaValueTree {
+                value_nodes: Vec::new(),
+                root: 0,
+            })
+            .await;
     });
     AgentStream::from_raw(output)
 }
@@ -298,6 +297,9 @@ pub trait StreamingRpcTarget {
     async fn consume_nested(&self, input: NestedStreamInput) -> (Vec<String>, Vec<u32>);
     fn produce_scalar_and_stream(&self) -> (String, AgentStream<u32>);
     fn produce_nested_items(&self) -> AgentStream<NestedStreamItem>;
+    fn produce_nested_siblings(
+        &self,
+    ) -> (AgentStream<NestedStreamItem>, AgentStream<NestedStreamItem>);
     fn produce_siblings(&self) -> (AgentStream<String>, AgentStream<u32>);
     fn produce_sibling_error(&self) -> (AgentStream<u32>, AgentStream<u32>);
     fn produce_error(&self) -> AgentStream<u32>;
@@ -477,6 +479,32 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
         output
     }
 
+    fn produce_nested_siblings(
+        &self,
+    ) -> (AgentStream<NestedStreamItem>, AgentStream<NestedStreamItem>) {
+        let (mut left_writer, left) = AgentStream::new();
+        let (mut right_writer, right) = AgentStream::new();
+        spawn_local(async move {
+            left_writer
+                .write_one(NestedStreamItem {
+                    label: "left".to_string(),
+                    values: agent_stream(vec![1, 2]),
+                })
+                .await
+                .expect("failed to write left nested sibling");
+        });
+        spawn_local(async move {
+            right_writer
+                .write_one(NestedStreamItem {
+                    label: "right".to_string(),
+                    values: agent_stream(vec![10, 20, 30]),
+                })
+                .await
+                .expect("failed to write right nested sibling");
+        });
+        (left, right)
+    }
+
     fn produce_siblings(&self) -> (AgentStream<String>, AgentStream<u32>) {
         (
             agent_stream(vec!["a".to_string(), "b".to_string()]),
@@ -509,7 +537,8 @@ pub trait StreamingRpcCaller {
     fn new(name: String) -> Self;
 
     async fn run(&self) -> StreamingRpcReport;
-    async fn cancel_transform_blocked_on_input(&self) -> u64;
+    fn create_input_gate(&self) -> PromiseId;
+    async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32>;
     async fn call_producer_error(&self) -> Vec<u32>;
     async fn call_stream_free(&self) -> u64;
 }
@@ -594,14 +623,30 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         }
     }
 
-    async fn cancel_transform_blocked_on_input(&self) -> u64 {
+    fn create_input_gate(&self) -> PromiseId {
+        golem_rust::create_promise()
+    }
+
+    async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32> {
         let target = StreamingRpcTargetClient::get(self.name.clone());
-        let (input_writer, input) = AgentStream::new();
-        let output = target.transform(input).await;
-        drop(output);
-        let result = target.ping().await;
-        drop(input_writer);
-        result
+        let (mut writer, input) = AgentStream::new();
+        spawn_local(async move {
+            writer
+                .write_one(1)
+                .await
+                .expect("failed to write input before caller recovery gate");
+            golem_rust::await_promise(&gate).await;
+            writer
+                .write_all(vec![2, 3])
+                .await
+                .expect("failed to write input after caller recovery gate");
+        });
+        target
+            .transform(input)
+            .await
+            .collect()
+            .await
+            .expect("failed to collect transformed input after caller recovery")
     }
 
     async fn call_producer_error(&self) -> Vec<u32> {

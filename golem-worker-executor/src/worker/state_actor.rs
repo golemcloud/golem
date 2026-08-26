@@ -91,6 +91,7 @@ enum StatusJob {
     /// invocation loop notified about the change, it enqueues a lifecycle job afterwards.
     CommitAndUpdateState {
         level: CommitLevel,
+        committed: Option<oneshot::Sender<()>>,
         done: oneshot::Sender<(OplogIndex, bool)>,
     },
     /// Returns the published status if it is currently attached to the oplog, `None` if it is
@@ -186,8 +187,12 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         let status_task = tokio::spawn(async move {
             while let Some(job) = status_rx.recv().await {
                 match job {
-                    StatusJob::CommitAndUpdateState { level, done } => {
-                        let changed = state.commit_and_update_state(level).await;
+                    StatusJob::CommitAndUpdateState {
+                        level,
+                        committed,
+                        done,
+                    } => {
+                        let changed = state.commit_and_update_state(level, committed).await;
                         let index = state.oplog.current_oplog_index().await;
                         let _ = done.send((index, changed));
                     }
@@ -261,8 +266,25 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// If the caller's future is dropped while awaiting the reply, the commit still runs to
     /// completion on the status task (the same semantics as the oplog actor's own jobs).
     pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
-        self.run_status_job(|done| StatusJob::CommitAndUpdateState { level, done })
-            .await
+        self.run_status_job(|done| StatusJob::CommitAndUpdateState {
+            level,
+            committed: None,
+            done,
+        })
+        .await
+    }
+
+    pub async fn commit_and_update_state_notifying(
+        &self,
+        level: CommitLevel,
+        committed: oneshot::Sender<()>,
+    ) -> (OplogIndex, bool) {
+        self.run_status_job(|done| StatusJob::CommitAndUpdateState {
+            level,
+            committed: Some(committed),
+            done,
+        })
+        .await
     }
 
     /// Returns the published status, asserting it is attached to the oplog. Serialized behind
@@ -375,8 +397,15 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// committed entries into the published status or marks the status detached when it can no
     /// longer be incrementally computed (e.g. after a revert or a snapshot update). Returns
     /// whether the published status (or its detachment) changed.
-    async fn commit_and_update_state(&self, commit_level: CommitLevel) -> bool {
+    async fn commit_and_update_state(
+        &self,
+        commit_level: CommitLevel,
+        committed: Option<oneshot::Sender<()>>,
+    ) -> bool {
         let new_entries = self.oplog.commit(commit_level).await;
+        if let Some(committed) = committed {
+            let _ = committed.send(());
+        }
 
         if !self.detached.load(Ordering::Acquire) {
             let old_status = self.last_known_status.load_full();
@@ -416,7 +445,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     }
 
     async fn reattach(&self) {
-        self.commit_and_update_state(CommitLevel::Always).await;
+        self.commit_and_update_state(CommitLevel::Always, None)
+            .await;
 
         if self.detached.load(Ordering::Relaxed) {
             debug!(

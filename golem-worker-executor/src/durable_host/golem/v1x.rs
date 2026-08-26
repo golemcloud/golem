@@ -1151,12 +1151,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .state
                 .opens_durable_scope(&DurableFunctionType::WriteRemote)
                 .then_some(oplog_index_cut_off);
-            if !self.is_unpersisted_execution() {
-                self.public_state
-                    .worker()
-                    .commit_oplog_and_update_state(CommitLevel::Always)
-                    .await;
-            }
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
 
             let created_by = self.created_by();
             let fork_result = loop {

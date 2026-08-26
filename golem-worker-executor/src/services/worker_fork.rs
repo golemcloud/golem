@@ -568,6 +568,17 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .await
             .last_known_status
             .skipped_regions;
+        if let Some(stream_index) = crate::worker::cut_point::find_stream_history_in_range(
+            |idx| source_oplog.read(idx),
+            OplogIndex::INITIAL,
+            oplog_index_cut_off,
+        )
+        .await
+        {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "Cannot fork worker at oplog index {oplog_index_cut_off}: copied durable stream history exists at oplog index {stream_index}"
+            )));
+        }
         if let Some(spanning) = crate::worker::cut_point::find_construct_spanning_cut_point(
             |idx| source_oplog.read(idx),
             oplog_index_cut_off,

@@ -343,13 +343,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>> {
         let worker_fork = Arc::new(DefaultWorkerFork::new(
-            Arc::new(RemoteInvocationRpc::new_with_stream_capacity(
+            Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
                 shard_service.clone(),
-                golem_config
-                    .limits
-                    .live_stream_event_broadcast_capacity
-                    .get(),
             )),
             active_workers.clone(),
             engine.clone(),
@@ -387,13 +383,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
-            Arc::new(RemoteInvocationRpc::new_with_stream_capacity(
+            Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
                 shard_service.clone(),
-                golem_config
-                    .limits
-                    .live_stream_event_broadcast_capacity
-                    .get(),
             )),
             direct_invocation_auth_service,
             active_workers.clone(),

@@ -18,6 +18,10 @@ pub async fn[T : @schema.FromSchema] decode_output(@types.SchemaValueTree, Strin
 
 pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int, String) -> T raise @common.AgentError
 
+pub fn discard_optional_wire_value(@types.SchemaValueTree?) -> Unit
+
+pub fn discard_wire_value(@types.SchemaValueTree) -> Unit
+
 pub fn encode_invocation_input(Array[@schema_model.SchemaValue]) -> @types.SchemaValueTree raise @common.AgentError
 
 pub async fn encode_invocation_input_async(Array[@schema_model.SchemaValue]) -> @types.SchemaValueTree raise @common.AgentError

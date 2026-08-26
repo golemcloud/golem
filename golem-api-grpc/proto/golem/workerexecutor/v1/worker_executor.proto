@@ -59,6 +59,8 @@ service WorkerExecutor {
 
   rpc InvokeAgentSession(stream golem.worker.InvocationRequest) returns (stream golem.worker.InvocationResponse);
 
+  rpc ControlDurableStreamAttachment(DurableStreamAttachmentControlRequest) returns (DurableStreamAttachmentControlResponse);
+  rpc ReadDurableStreamSegment(DurableStreamSegmentReadRequest) returns (DurableStreamSegmentReadResponse);
   rpc ProcessOplogEntries(ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
 }
 
@@ -460,6 +462,40 @@ message CancelInvocationRequest {
 message CancelInvocationResponse {
   oneof result {
     bool success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message DurableStreamAttachmentControlRequest {
+  golem.worker.AgentId producer_agent_id = 1;
+  golem.common.EnvironmentId producer_environment_id = 2;
+  bytes payload = 3;
+  golem.worker.AgentId consumer_agent_id = 4;
+  golem.common.EnvironmentId consumer_environment_id = 5;
+  golem.common.UUID expected_consumer_fingerprint = 6;
+  golem.auth.AuthCtx auth_ctx = 7;
+}
+
+message DurableStreamAttachmentControlResponse {
+  oneof result {
+    bool replayed = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message DurableStreamSegmentReadRequest {
+  golem.worker.AgentId producer_agent_id = 1;
+  golem.common.EnvironmentId producer_environment_id = 2;
+  bytes payload = 3;
+  golem.worker.AgentId consumer_agent_id = 4;
+  golem.common.EnvironmentId consumer_environment_id = 5;
+  golem.common.UUID expected_consumer_fingerprint = 6;
+  golem.auth.AuthCtx auth_ctx = 7;
+}
+
+message DurableStreamSegmentReadResponse {
+  oneof result {
+    bytes payload = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }

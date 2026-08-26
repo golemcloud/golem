@@ -52,6 +52,13 @@ cache_capacity = 1024
 cache_eviction_interval = "1m"
 cache_ttl = "5m"
 
+[durable_stream]
+abandoned_prepare_after = "5m"
+lease_ttl = "1m"
+reconciliation_batch_size = 256
+reconciliation_interval = "30s"
+renewal_interval = "20s"
+
 [engine]
 enable_fs_cache = false
 
@@ -430,6 +437,13 @@ without_time = false
 # cache_eviction_interval = "1m"
 # cache_ttl = "5m"
 # 
+# [durable_stream]
+# abandoned_prepare_after = "5m"
+# lease_ttl = "1m"
+# reconciliation_batch_size = 256
+# reconciliation_interval = "30s"
+# renewal_interval = "20s"
+#
 # [engine]
 # enable_fs_cache = false
 # 
@@ -781,6 +795,13 @@ without_time = false
 # cache_eviction_interval = "1m"
 # cache_ttl = "5m"
 # 
+# [durable_stream]
+# abandoned_prepare_after = "5m"
+# lease_ttl = "1m"
+# reconciliation_batch_size = 256
+# reconciliation_interval = "30s"
+# renewal_interval = "20s"
+#
 # [engine]
 # enable_fs_cache = false
 # 

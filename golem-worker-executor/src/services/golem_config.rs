@@ -63,6 +63,8 @@ pub struct GolemConfig {
     pub indexed_storage: IndexedStorageConfig,
     pub blob_storage: BlobStorageConfig,
     pub limits: Limits,
+    #[serde(default)]
+    pub durable_stream: DurableStreamConfig,
     pub retry: RetryConfig,
     #[serde(with = "humantime_serde")]
     pub max_in_function_retry_delay: Duration,
@@ -172,6 +174,12 @@ impl SafeDisplay for GolemConfig {
         );
         let _ = writeln!(&mut result, "limits:");
         let _ = writeln!(&mut result, "{}", self.limits.to_safe_string_indented());
+        let _ = writeln!(&mut result, "durable stream:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.durable_stream.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "retry:");
         let _ = writeln!(&mut result, "{}", self.retry.to_safe_string_indented());
         let _ = writeln!(
@@ -329,6 +337,7 @@ impl Default for GolemConfig {
             indexed_storage: IndexedStorageConfig::default(),
             blob_storage: BlobStorageConfig::default(),
             limits: Limits::default(),
+            durable_stream: DurableStreamConfig::default(),
             retry: RetryConfig::max_attempts_3(),
             max_in_function_retry_delay: Duration::from_secs(20),
             compiled_component_service: CompiledComponentServiceConfig::default(),
@@ -464,6 +473,105 @@ impl SafeDisplay for Limits {
             self.tail_work_settle_timeout
         );
 
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DurableStreamConfig {
+    #[serde(with = "humantime_serde")]
+    pub lease_ttl: Duration,
+    #[serde(with = "humantime_serde")]
+    pub renewal_interval: Duration,
+    #[serde(with = "humantime_serde")]
+    pub reconciliation_interval: Duration,
+    pub reconciliation_batch_size: usize,
+    #[serde(with = "humantime_serde")]
+    pub abandoned_prepare_after: Duration,
+}
+
+impl DurableStreamConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.lease_ttl
+                == Duration::from_millis(
+                    golem_common::base_model::durable_stream::STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
+                ),
+            "durable stream lease TTL is fixed at 60 seconds in protocol v1"
+        );
+        anyhow::ensure!(
+            self.abandoned_prepare_after
+                == Duration::from_millis(
+                    golem_common::base_model::durable_stream::STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS,
+                ),
+            "durable stream abandoned-prepare threshold is fixed at 5 minutes in protocol v1"
+        );
+        anyhow::ensure!(
+            self.renewal_interval < self.lease_ttl,
+            "durable stream renewal interval must be shorter than lease TTL"
+        );
+        anyhow::ensure!(
+            self.renewal_interval
+                <= Duration::from_millis(
+                    golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RENEWAL_TARGET_MILLIS,
+                )
+                && self.reconciliation_interval
+                    <= Duration::from_millis(
+                        golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RECONCILIATION_INTERVAL_MILLIS,
+                    ),
+            "durable stream renewal and reconciliation intervals may only shorten the v1 defaults"
+        );
+        anyhow::ensure!(
+            !self.renewal_interval.is_zero()
+                && !self.reconciliation_interval.is_zero()
+                && self.reconciliation_batch_size > 0,
+            "durable stream reconciliation settings must be non-zero"
+        );
+        Ok(())
+    }
+}
+
+impl Default for DurableStreamConfig {
+    fn default() -> Self {
+        Self {
+            lease_ttl: Duration::from_millis(
+                golem_common::base_model::durable_stream::STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
+            ),
+            renewal_interval: Duration::from_millis(
+                golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RENEWAL_TARGET_MILLIS,
+            ),
+            reconciliation_interval: Duration::from_millis(
+                golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RECONCILIATION_INTERVAL_MILLIS,
+            ),
+            reconciliation_batch_size:
+                golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RECONCILIATION_BATCH_SIZE,
+            abandoned_prepare_after: Duration::from_millis(
+                golem_common::base_model::durable_stream::STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS,
+            ),
+        }
+    }
+}
+
+impl SafeDisplay for DurableStreamConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "lease TTL: {:?}", self.lease_ttl);
+        let _ = writeln!(&mut result, "renewal interval: {:?}", self.renewal_interval);
+        let _ = writeln!(
+            &mut result,
+            "reconciliation interval: {:?}",
+            self.reconciliation_interval
+        );
+        let _ = writeln!(
+            &mut result,
+            "reconciliation batch size: {}",
+            self.reconciliation_batch_size
+        );
+        let _ = writeln!(
+            &mut result,
+            "abandoned prepare after: {:?}",
+            self.abandoned_prepare_after
+        );
         result
     }
 }
@@ -2077,10 +2185,18 @@ pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
 
 #[cfg(test)]
 mod tests {
-    use super::Limits;
+    use super::{DurableStreamConfig, Limits};
     use golem_common::SafeDisplay;
     use serde_json::Value;
     use test_r::test;
+
+    #[test]
+    fn durable_stream_config_enforces_renewal_before_lease_expiry() {
+        let mut config = DurableStreamConfig::default();
+        assert!(config.validate().is_ok());
+        config.renewal_interval = config.lease_ttl;
+        assert!(config.validate().is_err());
+    }
 
     #[test]
     fn live_stream_event_broadcast_capacity_defaults_to_32() {

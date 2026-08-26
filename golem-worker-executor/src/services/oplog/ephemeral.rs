@@ -18,7 +18,8 @@ use crate::services::oplog::multilayer::{
     TransferFiber, WrappedOplogArchive,
 };
 use crate::services::oplog::{
-    CommitLevel, Oplog, OplogService, OrderedOplogStart, PendingUpload, downcast_oplog,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogService,
+    OrderedOplogStart, PendingUpload, ReservedRawStartBuilder, downcast_oplog,
 };
 use async_trait::async_trait;
 use golem_common::model::OwnedAgentId;
@@ -65,10 +66,18 @@ enum EphemeralJob {
         entry: OplogEntry,
         done: tokio::sync::oneshot::Sender<OplogIndex>,
     },
+    AddDurableStreamBatch {
+        make_batch: DurableStreamBatchBuilder,
+        done: tokio::sync::oneshot::Sender<Vec<(OplogIndex, OplogEntry)>>,
+    },
     AddPair {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
         done: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
+    },
+    AddIndexedStart {
+        build_request: IndexedReservedStartBuilder,
+        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
     },
     Commit {
         done: tokio::sync::oneshot::Sender<BTreeMap<OplogIndex, OplogEntry>>,
@@ -171,12 +180,27 @@ impl EphemeralOplog {
         };
 
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<EphemeralJob>();
+        let actor_primary_service = primary_service.clone();
+        let actor_owned_agent_id = owned_agent_id.clone();
         let actor = tokio::spawn(async move {
             while let Some(job) = job_rx.recv().await {
                 match job {
                     EphemeralJob::Add { entry, done } => {
                         let idx = state.add(entry).await;
                         let _ = done.send(idx);
+                    }
+                    EphemeralJob::AddDurableStreamBatch { make_batch, done } => {
+                        let records = make_batch(state.last_oplog_idx.next());
+                        let result = records
+                            .into_iter()
+                            .map(|record| {
+                                let entry = record.into_inline_entry();
+                                let idx = state.push(entry.clone());
+                                (idx, entry)
+                            })
+                            .collect();
+                        state.maybe_commit().await;
+                        let _ = done.send(result);
                     }
                     EphemeralJob::AddPair {
                         start,
@@ -188,6 +212,34 @@ impl EphemeralOplog {
                         let second_idx = state.push(second);
                         state.maybe_commit().await;
                         let _ = done.send((first_idx, second_idx));
+                    }
+                    EphemeralJob::AddIndexedStart {
+                        build_request,
+                        done,
+                    } => {
+                        let result = match build_request(state.last_oplog_idx.next()) {
+                            Ok((serialized_request, build_start)) => actor_primary_service
+                                .upload_raw_payload(
+                                    &actor_owned_agent_id,
+                                    agent_mode,
+                                    serialized_request,
+                                )
+                                .await
+                                .and_then(build_start)
+                                .map(|entry| {
+                                    let index = state.push(entry.clone());
+                                    OrderedOplogStart {
+                                        index,
+                                        entry,
+                                        pending_upload: PendingUpload::already_durable(),
+                                    }
+                                }),
+                            Err(error) => Err(error),
+                        };
+                        if result.is_ok() {
+                            state.maybe_commit().await;
+                        }
+                        let _ = done.send(result);
                     }
                     EphemeralJob::Commit { done } => {
                         let result = state.commit().await;
@@ -518,6 +570,16 @@ impl Oplog for EphemeralOplog {
         self.run_job(|done| EphemeralJob::Add { entry, done }).await
     }
 
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        record_oplog_call("add_durable_stream_batch");
+        Ok(self
+            .run_job(|done| EphemeralJob::AddDurableStreamBatch { make_batch, done })
+            .await)
+    }
+
     async fn add_pair(
         &self,
         start: OplogEntry,
@@ -535,7 +597,7 @@ impl Oplog for EphemeralOplog {
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
-        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        build_start: ReservedRawStartBuilder,
     ) -> Result<OrderedOplogStart, String> {
         record_oplog_call("add_start_with_reserved_raw_payload");
         // Ephemeral oplogs are never replayed, so cross-call `Start` ordering need not be
@@ -555,6 +617,18 @@ impl Oplog for EphemeralOplog {
             entry,
             pending_upload: PendingUpload::already_durable(),
         })
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        record_oplog_call("add_start_with_indexed_reserved_raw_payload");
+        self.run_job(|done| EphemeralJob::AddIndexedStart {
+            build_request,
+            done,
+        })
+        .await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {

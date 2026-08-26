@@ -849,8 +849,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
             observational_owner,
         };
         let is_live = durable_execution_state.is_live;
-        let unpersisted = durable_execution_state.snapshotting_mode
-            || durable_execution_state.is_unpersisted_execution;
+        let unpersisted = durable_execution_state.snapshotting_mode;
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
         // A live persisted call initiated inside an open atomic region joins the region's member
@@ -932,7 +931,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                     DurableExecutionState {
                         is_live: true,
                         snapshotting_mode: previous.snapshotting_mode,
-                        is_unpersisted_execution: previous.is_unpersisted_execution,
                         assume_idempotence: previous.assume_idempotence,
                         max_in_function_retry_delay: previous.max_in_function_retry_delay,
                     },
@@ -1634,10 +1632,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> CallHandle<Pair, P> {
                 .max_in_function_retry_delay,
             current_retry_policy_state,
             retry_properties: properties.clone(),
-            is_unpersisted_execution: self
-                .retry
-                .durable_execution_state()
-                .is_unpersisted_execution,
             worker,
         };
 
@@ -2714,35 +2708,28 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (
-        opens_scope,
-        is_live,
-        is_unpersisted_execution,
-        replay_handle,
-        replay_state,
-        oplog,
-        public_state,
-    ) = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        let opens_scope = ctx.state.opens_durable_scope(&function_type);
-        let is_live = ctx.state.is_live();
-        let replay_handle = if opens_scope && !is_live {
-            ctx.state.take_durable_scope_replay_handle(begin_index)
-        } else {
-            None
-        };
-        (
-            opens_scope,
-            is_live,
-            ctx.state.durability_is_suppressed(),
-            replay_handle,
-            ctx.state.replay_state.clone(),
-            ctx.state.oplog.clone(),
-            ctx.public_state.clone(),
-        )
-    });
+    let (opens_scope, is_live, snapshotting_mode, replay_handle, replay_state, oplog, public_state) =
+        store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            let opens_scope = ctx.state.opens_durable_scope(&function_type);
+            let is_live = ctx.state.is_live();
+            let replay_handle = if opens_scope && !is_live {
+                ctx.state.take_durable_scope_replay_handle(begin_index)
+            } else {
+                None
+            };
+            (
+                opens_scope,
+                is_live,
+                ctx.state.snapshotting_mode,
+                replay_handle,
+                ctx.state.replay_state.clone(),
+                ctx.state.oplog.clone(),
+                ctx.public_state.clone(),
+            )
+        });
 
-    if is_unpersisted_execution {
+    if snapshotting_mode {
         return Ok(());
     }
 
@@ -3391,24 +3378,51 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
     ) -> Result<CallHandle<Pair, P>, WorkerExecutorError> {
+        let request: HostRequest = request.into();
+        self.start_live_with_host_request_index(ctx, move |_| Ok(request))
+            .await
+    }
+
+    /// Second phase on the live path for requests whose durable identity depends on the exact
+    /// host-call `Start` index. The builder runs inside the oplog's serialized writer step after
+    /// that index is assigned and before the `Start` is appended.
+    pub async fn start_live_with_index<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        build_request: impl FnOnce(OplogIndex) -> Result<Pair::Req, WorkerExecutorError>
+        + Send
+        + 'static,
+    ) -> Result<CallHandle<Pair, P>, WorkerExecutorError>
+    where
+        Pair::Req: Send + 'static,
+    {
+        self.start_live_with_host_request_index(ctx, move |start_index| {
+            build_request(start_index).map(Into::into)
+        })
+        .await
+    }
+
+    async fn start_live_with_host_request_index<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        build_request: impl FnOnce(OplogIndex) -> Result<HostRequest, WorkerExecutorError>
+        + Send
+        + 'static,
+    ) -> Result<CallHandle<Pair, P>, WorkerExecutorError> {
         debug_assert!(self.is_live(), "start_live() called on a replay handle");
         let durable_execution_state = self.retry.durable_execution_state();
-        let durability_is_suppressed = durable_execution_state.snapshotting_mode
-            || durable_execution_state.is_unpersisted_execution;
+        let durability_is_suppressed = durable_execution_state.snapshotting_mode;
         // The host-call `Start` nests inside the enclosing durable scope captured at initiation
         // (its own opened scope, or the scope encoded in the function type), derived explicitly —
         // never from the set of temporally-open sibling scopes. `None` for a top-level unscoped call.
         let parent_start_index = self.execution_scope.parent_start_index;
         let (start_idx, persisted, request_upload) = if durability_is_suppressed {
-            // Snapshot and unpersisted execution write no durable call records.
+            // Snapshotting writes no durable call records.
             let oplog = ctx.state.oplog.clone();
-            (
-                oplog.current_oplog_index().await,
-                false,
-                PendingUpload::already_durable(),
-            )
+            let start_idx = oplog.current_oplog_index().await;
+            let _ = build_request(start_idx)?;
+            (start_idx, false, PendingUpload::already_durable())
         } else {
-            let request: HostRequest = request.into();
             let function_type = self.retry.function_type().clone();
             let oplog = ctx.state.oplog.clone();
             let observational_owner = self.execution_scope.observational_owner;
@@ -3419,8 +3433,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             // the `Start`, which is what keeps concurrent calls' `Start` entries in initiation
             // order. The returned upload is awaited before this call's `End` / `Cancelled`.
             let (idx, request_upload) = oplog
-                .add_start_with_reserved_payload(request, move |request_payload| {
-                    OplogEntry::Start {
+                .add_start_with_indexed_reserved_payload(
+                    move |start_index| {
+                        build_request(start_index).map_err(|error| error.to_string())
+                    },
+                    move |request_payload| OplogEntry::Start {
                         timestamp: Timestamp::now_utc(),
                         parent_start_index,
                         function_name: Pair::HOST_FUNCTION_NAME,
@@ -3428,8 +3445,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                         observational_owner,
                         request: Some(request_payload),
                         durable_function_type: function_type,
-                    }
-                })
+                    },
+                )
                 .await
                 .map_err(|err| {
                     WorkerExecutorError::runtime(format!(

@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::durable_session::{
+    DurableInputEndpoint, DurableInputProducer, ForwardedDurableInput,
+};
 use crate::durable_host::stream_transport::{
     LiveInputProducer, LiveStreamEndpoint, output_stream_pair,
 };
@@ -131,11 +134,6 @@ impl<Ctx: WorkerCtx> SchemaValueStreamResolver for StoreValueResolver<'_, '_, Ct
         &mut self,
         stream: SchemaValueStream,
     ) -> Result<Resource<SchemaValueStreamHandleRep>, Self::Error> {
-        if let Some(tracker) = self.store.data().durable_ctx().live_stream_tracker() {
-            stream
-                .with_host_endpoint::<LiveStreamEndpoint, _>(|endpoint| endpoint.attach(tracker))
-                .map_err(WorkerExecutorError::runtime)?;
-        }
         self.store
             .data_mut()
             .durable_ctx_mut()
@@ -182,11 +180,6 @@ impl<Ctx: WorkerCtx> SchemaValueStreamResolver for DurableWorkerCtx<Ctx> {
         &mut self,
         stream: SchemaValueStream,
     ) -> Result<Resource<SchemaValueStreamHandleRep>, Self::Error> {
-        if let Some(tracker) = self.live_stream_tracker() {
-            stream
-                .with_host_endpoint::<LiveStreamEndpoint, _>(|endpoint| endpoint.attach(tracker))
-                .map_err(WorkerExecutorError::runtime)?;
-        }
         self.table()
             .push(SchemaValueStreamHandleRep::new(stream))
             .map_err(|error| {
@@ -230,10 +223,22 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
     ) -> anyhow::Result<Resource<SchemaValueStreamHandleRep>> {
         accessor
             .with(|mut access| -> wasmtime::Result<_> {
-                let tracker = access.get().live_stream_tracker();
+                let reader = match reader.try_into::<ForwardedDurableInput>(&mut access) {
+                    Ok(forwarded) => {
+                        return access
+                            .get()
+                            .table()
+                            .push(SchemaValueStreamHandleRep::new(
+                                SchemaValueStream::from_host_endpoint(forwarded),
+                            ))
+                            .map_err(|error| wasmtime::Error::msg(error.to_string()));
+                    }
+                    Err(reader) => reader,
+                };
                 let capacity = access.get().live_stream_event_capacity();
+                let runtime_teardown = access.get().stream_runtime_teardown_probe();
                 let (consumer, stream) =
-                    output_stream_pair(tracker, capacity).map_err(wasmtime::Error::msg)?;
+                    output_stream_pair(capacity, runtime_teardown).map_err(wasmtime::Error::msg)?;
                 reader.pipe(&mut access, consumer)?;
                 access
                     .get()
@@ -256,10 +261,20 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                     .delete(value)
                     .map_err(|error| wasmtime::Error::msg(error.to_string()))
                     .map(SchemaValueStreamHandleRep::into_stream)?;
-                let endpoint = stream
-                    .take_host_endpoint::<LiveStreamEndpoint>()
-                    .map_err(wasmtime::Error::msg)?;
-                StreamReader::new(&mut access, LiveInputProducer::new(endpoint))
+                if stream
+                    .with_host_endpoint::<DurableInputEndpoint, _>(|_| ())
+                    .is_ok()
+                {
+                    let endpoint = stream
+                        .take_host_endpoint::<DurableInputEndpoint>()
+                        .map_err(wasmtime::Error::msg)?;
+                    StreamReader::new(&mut access, DurableInputProducer::new(endpoint))
+                } else {
+                    let endpoint = stream
+                        .take_host_endpoint::<LiveStreamEndpoint>()
+                        .map_err(wasmtime::Error::msg)?;
+                    StreamReader::new(&mut access, LiveInputProducer::new(endpoint))
+                }
             })
             .map_err(|error| anyhow::anyhow!(error.to_string()))
     }

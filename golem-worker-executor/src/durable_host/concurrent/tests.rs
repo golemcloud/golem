@@ -28,7 +28,6 @@ fn durable_execution_state() -> DurableExecutionState {
     DurableExecutionState {
         is_live: true,
         snapshotting_mode: false,
-        is_unpersisted_execution: false,
         assume_idempotence: true,
         max_in_function_retry_delay: Duration::from_secs(20),
     }
@@ -173,7 +172,6 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
     let durable_execution_state = DurableExecutionState {
         is_live: true,
         snapshotting_mode: false,
-        is_unpersisted_execution: false,
         assume_idempotence: false,
         max_in_function_retry_delay: Duration::ZERO,
     };
@@ -218,7 +216,6 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
     let durable_execution_state = DurableExecutionState {
         is_live: true,
         snapshotting_mode: false,
-        is_unpersisted_execution: false,
         assume_idempotence: false,
         max_in_function_retry_delay: Duration::ZERO,
     };
@@ -671,6 +668,24 @@ impl Oplog for InMemoryOplog {
             golem_common::model::oplog::RawOplogPayload::SerializedInline(serialized_request),
         )?;
         let index = self.add(entry.clone()).await;
+        Ok(crate::services::oplog::OrderedOplogStart {
+            index,
+            entry,
+            pending_upload: PendingUpload::already_durable(),
+        })
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: crate::services::oplog::IndexedReservedStartBuilder,
+    ) -> Result<crate::services::oplog::OrderedOplogStart, String> {
+        let mut entries = self.entries.lock().await;
+        let index = OplogIndex::from_u64(entries.len() as u64 + 1);
+        let (serialized_request, build_start) = build_request(index)?;
+        let entry = build_start(
+            golem_common::model::oplog::RawOplogPayload::SerializedInline(serialized_request),
+        )?;
+        entries.push(entry.clone());
         Ok(crate::services::oplog::OrderedOplogStart {
             index,
             entry,
@@ -1521,7 +1536,6 @@ fn can_reexecute_matches_internal_retry_eligibility() {
             DurableExecutionState {
                 is_live: true,
                 snapshotting_mode: false,
-                is_unpersisted_execution: false,
                 assume_idempotence,
                 max_in_function_retry_delay: Duration::ZERO,
             },

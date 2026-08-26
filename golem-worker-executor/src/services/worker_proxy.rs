@@ -20,16 +20,23 @@ use futures::Stream;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
     AgentError, CancelInvocationRequest, CancelInvocationResponse, CompletePromiseRequest,
-    CompletePromiseResponse, ForkWorkerRequest, InvokeAgentRequest, InvokeAgentResponse,
+    CompletePromiseResponse, DurableStreamAttachmentControlRequest,
+    DurableStreamAttachmentControlResponse, DurableStreamSegmentReadRequest,
+    DurableStreamSegmentReadResponse, ForkWorkerRequest, InvokeAgentRequest, InvokeAgentResponse,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, ProcessOplogEntriesRequest,
     ProcessOplogEntriesResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
     RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, agent_error,
-    cancel_invocation_response, complete_promise_response, fork_worker_response,
-    invoke_agent_response, launch_new_worker_response, process_oplog_entries_response,
-    resume_worker_response, revert_worker_response, update_worker_response,
+    cancel_invocation_response, complete_promise_response,
+    durable_stream_attachment_control_response, durable_stream_segment_read_response,
+    fork_worker_response, invoke_agent_response, launch_new_worker_response,
+    process_oplog_entries_response, resume_worker_response, revert_worker_response,
+    update_worker_response,
 };
 use golem_api_grpc::proto::golem::worker::{
     CompleteParameters, InvocationRequest, InvocationResponse, UpdateMode,
+};
+use golem_common::base_model::durable_stream::{
+    AttachedStreamSegmentRequestV1, StreamAttachmentControlRequestV1,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
@@ -120,6 +127,30 @@ pub trait WorkerProxy: Send + Sync {
         Err(WorkerProxyError::InternalError(
             WorkerExecutorError::invalid_request(
                 "invocation sessions are not supported by this worker proxy",
+            ),
+        ))
+    }
+
+    async fn control_durable_stream_attachment(
+        &self,
+        _request: StreamAttachmentControlRequestV1,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<bool, WorkerProxyError> {
+        Err(WorkerProxyError::InternalError(
+            WorkerExecutorError::invalid_request(
+                "durable stream attachment control is not supported by this worker proxy",
+            ),
+        ))
+    }
+
+    async fn read_durable_stream_segment(
+        &self,
+        _request: AttachedStreamSegmentRequestV1,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<Vec<u8>, WorkerProxyError> {
+        Err(WorkerProxyError::InternalError(
+            WorkerExecutorError::invalid_request(
+                "durable stream segment reads are not supported by this worker proxy",
             ),
         ))
     }
@@ -521,6 +552,95 @@ impl WorkerProxy for RemoteWorkerProxy {
         Ok(Box::pin(response.into_inner()))
     }
 
+    async fn control_durable_stream_attachment(
+        &self,
+        request: StreamAttachmentControlRequestV1,
+        auth_ctx: &AuthCtx,
+    ) -> Result<bool, WorkerProxyError> {
+        let key = request.operation.key();
+        let (target_agent_id, target_environment_id) = if request.operation.targets_consumer() {
+            (key.consumer.clone(), key.consumer_environment_id)
+        } else {
+            (key.producer.clone(), key.producer_environment_id)
+        };
+        let consumer_agent_id = key.consumer.clone();
+        let consumer_environment_id = key.consumer_environment_id;
+        let expected_consumer_fingerprint = key.expected_consumer_fingerprint;
+        let payload = golem_common::serialization::serialize(&request).map_err(|error| {
+            WorkerProxyError::InternalError(WorkerExecutorError::runtime(error))
+        })?;
+        let response: DurableStreamAttachmentControlResponse = self
+            .worker_service_client
+            .call("control_durable_stream_attachment", move |client| {
+                Box::pin(client.control_durable_stream_attachment(
+                    DurableStreamAttachmentControlRequest {
+                        producer_agent_id: Some(target_agent_id.clone().into()),
+                        producer_environment_id: Some(target_environment_id.into()),
+                        payload: payload.clone(),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        consumer_agent_id: Some(consumer_agent_id.clone().into()),
+                        consumer_environment_id: Some(consumer_environment_id.into()),
+                        expected_consumer_fingerprint: Some(expected_consumer_fingerprint.0.into()),
+                    },
+                ))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(durable_stream_attachment_control_response::Result::Replayed(replayed)) => {
+                Ok(replayed)
+            }
+            Some(durable_stream_attachment_control_response::Result::Error(error)) => {
+                Err(error.into())
+            }
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown(
+                    "Empty durable stream attachment control response".to_string(),
+                ),
+            )),
+        }
+    }
+
+    async fn read_durable_stream_segment(
+        &self,
+        request: AttachedStreamSegmentRequestV1,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Vec<u8>, WorkerProxyError> {
+        let key = &request.attachment;
+        let producer_agent_id = key.producer.clone();
+        let producer_environment_id = key.producer_environment_id;
+        let consumer_agent_id = key.consumer.clone();
+        let consumer_environment_id = key.consumer_environment_id;
+        let expected_consumer_fingerprint = key.expected_consumer_fingerprint;
+        let payload = golem_common::serialization::serialize(&request).map_err(|error| {
+            WorkerProxyError::InternalError(WorkerExecutorError::runtime(error))
+        })?;
+        let response: DurableStreamSegmentReadResponse = self
+            .worker_service_client
+            .call("read_durable_stream_segment", move |client| {
+                Box::pin(
+                    client.read_durable_stream_segment(DurableStreamSegmentReadRequest {
+                        producer_agent_id: Some(producer_agent_id.clone().into()),
+                        producer_environment_id: Some(producer_environment_id.into()),
+                        payload: payload.clone(),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        consumer_agent_id: Some(consumer_agent_id.clone().into()),
+                        consumer_environment_id: Some(consumer_environment_id.into()),
+                        expected_consumer_fingerprint: Some(expected_consumer_fingerprint.0.into()),
+                    }),
+                )
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(durable_stream_segment_read_response::Result::Payload(payload)) => Ok(payload),
+            Some(durable_stream_segment_read_response::Result::Error(error)) => Err(error.into()),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("empty durable stream segment response".to_string()),
+            )),
+        }
+    }
+
     async fn update(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -798,10 +918,21 @@ impl WorkerProxy for RemoteWorkerProxy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::rpc::{RemoteInvocationRpc, Rpc};
+    use crate::services::shard::ShardServiceDefault;
+    use futures::StreamExt;
+    use golem_api_grpc::proto::golem::schema::{
+        SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
+    };
     use golem_api_grpc::proto::golem::worker::v1::worker_service_server::{
         WorkerService, WorkerServiceServer,
     };
     use golem_api_grpc::proto::golem::worker::v1::{ForkWorkerResponse, InvokeAgentSuccess};
+    use golem_api_grpc::proto::golem::worker::{
+        DurableStreamHandle, DurableStreamMapping, InvocationAccepted, InvocationSessionResult,
+        InvocationStart, StreamInvocationIdentity, StreamMappingRole, invocation_request,
+        invocation_response, invocation_session_result,
+    };
     use golem_common::model::component::ComponentId;
     use std::sync::{Arc, Mutex};
     use test_r::test;
@@ -812,6 +943,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct FlakyWorkerService {
         dispositions: Arc<Mutex<Vec<i32>>>,
+        streaming_starts: Arc<Mutex<Vec<InvocationStart>>>,
     }
 
     macro_rules! unimplemented_rpc {
@@ -860,6 +992,16 @@ mod tests {
             CancelInvocationResponse
         );
         unimplemented_rpc!(
+            control_durable_stream_attachment,
+            DurableStreamAttachmentControlRequest,
+            DurableStreamAttachmentControlResponse
+        );
+        unimplemented_rpc!(
+            read_durable_stream_segment,
+            DurableStreamSegmentReadRequest,
+            DurableStreamSegmentReadResponse
+        );
+        unimplemented_rpc!(
             process_oplog_entries,
             ProcessOplogEntriesRequest,
             ProcessOplogEntriesResponse
@@ -867,9 +1009,59 @@ mod tests {
 
         async fn invoke_agent_session(
             &self,
-            _request: Request<tonic::Streaming<InvocationRequest>>,
+            request: Request<tonic::Streaming<InvocationRequest>>,
         ) -> Result<Response<Self::InvokeAgentSessionStream>, Status> {
-            Err(Status::unimplemented("invoke_agent_session"))
+            let request = request
+                .into_inner()
+                .next()
+                .await
+                .transpose()?
+                .ok_or_else(|| Status::invalid_argument("missing invocation Start"))?;
+            let Some(invocation_request::Request::Start(start)) = request.request else {
+                return Err(Status::invalid_argument("expected invocation Start"));
+            };
+            let invocation_number = {
+                let mut starts = self.streaming_starts.lock().unwrap();
+                starts.push(start.clone());
+                starts.len()
+            };
+            let responses = if invocation_number == 1 {
+                Vec::new()
+            } else {
+                let durable = !start.durable_input_mappings.is_empty();
+                let accepted = InvocationResponse {
+                    response: Some(invocation_response::Response::Accepted(
+                        InvocationAccepted {
+                            agent_id: start.agent_id.clone(),
+                            idempotency_key: start.idempotency_key.clone(),
+                            component_revision: Some(0),
+                            attachment_id: durable.then(|| uuid::Uuid::new_v4().into()),
+                            attempt_id: durable.then(|| start.attempt_id.clone().unwrap()),
+                            epoch: u64::from(durable),
+                            stream_mappings: start.durable_input_mappings.clone(),
+                            environment_id: durable.then(|| start.environment_id.clone().unwrap()),
+                            callee_fingerprint: durable
+                                .then(|| start.expected_callee_fingerprint.clone().unwrap()),
+                        },
+                    )),
+                };
+                let result = InvocationResponse {
+                    response: Some(invocation_response::Response::Result(
+                        InvocationSessionResult {
+                            result: Some(invocation_session_result::Result::MethodResult(
+                                ProtoSchemaValue::try_from(SchemaValue::U64(42)).unwrap(),
+                            )),
+                            component_revision: Some(0),
+                            agent_id: start.agent_id,
+                            idempotency_key: start.idempotency_key,
+                            agent_fingerprint: start.expected_callee_fingerprint,
+                            ..Default::default()
+                        },
+                    )),
+                };
+                vec![Ok(accepted), Ok(result)]
+            };
+            Ok(Response::new(Box::pin(tokio_stream::iter(responses))))
         }
 
         async fn invoke_agent(
@@ -947,5 +1139,93 @@ mod tests {
                     as i32,
             ]
         );
+    }
+
+    #[test]
+    async fn cross_shard_streaming_rpc_retries_the_identical_start_after_response_loss() {
+        let service = FlakyWorkerService::default();
+        let streaming_starts = service.streaming_starts.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(
+                    WorkerServiceServer::new(service)
+                        .accept_compressed(CompressionEncoding::Gzip)
+                        .send_compressed(CompressionEncoding::Gzip),
+                )
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        let proxy = Arc::new(RemoteWorkerProxy::new(&WorkerServiceGrpcConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            ..Default::default()
+        }));
+        let rpc = RemoteInvocationRpc::new(proxy, Arc::new(ShardServiceDefault::new()));
+        let callee = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "remote-callee".to_string(),
+        };
+        let caller = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "local-caller".to_string(),
+        };
+        let caller_environment = EnvironmentId::new();
+        let caller_fingerprint = AgentFingerprint::new();
+        let input = ProtoSchemaValue {
+            value: Some(schema_value::Value::StreamReference(
+                SchemaValueStreamReference { stream_id: 7 },
+            )),
+        };
+        let input_mapping = DurableStreamMapping {
+            transport_stream_id: 7,
+            handle: Some(DurableStreamHandle {
+                format_version: 1,
+                stream_id: Some(uuid::Uuid::new_v4().into()),
+                producer_environment_id: Some(caller_environment.into()),
+                producer: Some(caller.clone().into()),
+                expected_producer_fingerprint: Some(caller_fingerprint.0.into()),
+                source_invocation: Some(StreamInvocationIdentity {
+                    callee_environment_id: Some(caller_environment.into()),
+                    callee: Some(caller.clone().into()),
+                    callee_fingerprint: Some(caller_fingerprint.0.into()),
+                    idempotency_key: Some(IdempotencyKey::fresh().into()),
+                }),
+                component_revision: Some(0),
+                element_schema_fingerprint: vec![5; 32],
+            }),
+            high_water: None,
+            role: StreamMappingRole::Input as i32,
+        };
+
+        let result = rpc
+            .invoke_and_await_streaming(
+                &OwnedAgentId::new(EnvironmentId::new(), &callee),
+                IdempotencyKey::fresh(),
+                "streaming-method".to_string(),
+                input,
+                vec![input_mapping],
+                AgentFingerprint::new(),
+                uuid::Uuid::new_v4(),
+                AccountId::new(),
+                &caller,
+                &[],
+                InvocationContextStack::fresh(),
+                Vec::new(),
+                &AuthCtx::System,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.value,
+            ProtoSchemaValue::try_from(SchemaValue::U64(42)).unwrap()
+        );
+        let starts = streaming_starts.lock().unwrap();
+        assert_eq!(starts.len(), 2);
+        assert_eq!(starts[0], starts[1]);
     }
 }

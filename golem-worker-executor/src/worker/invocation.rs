@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::durable_host::schema_value_stream::{StoreValueResolver, contains_stream};
-use crate::durable_host::stream_transport::LiveStreamTracker;
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::TrapType;
 use crate::preview2::exports::golem::agent::guest as guest_exports;
@@ -23,7 +22,6 @@ use crate::preview2::oplog_processor_plugin::exports::golem::api1_5_0::oplog_pro
 use crate::preview2::{golem_agent, golem_api_1_x};
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
-use futures::channel::oneshot;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::AgentError as OplogAgentError;
@@ -32,18 +30,15 @@ use golem_common::schema::SchemaValue;
 #[cfg(test)]
 use golem_common::schema::agent::InputSchema;
 use golem_common::schema::agent::wit::decode_agent_error_rejecting_quota_with;
-use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema};
+use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema, contains_stream_in_graph};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{decode_value_with, encode_value_with, encode_value_with_streams};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use std::any::Any;
-use std::sync::Arc;
-use std::sync::Mutex;
 use tracing::{Instrument, Level, debug, span};
-use wasmtime::component::{Accessor, AccessorTask};
+use wasmtime::component::Accessor;
 use wasmtime::{AsContextMut, StoreContextMut};
 
 /// Describes how an invocation is being executed with respect to the oplog.
@@ -111,220 +106,6 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
             record_invocation(was_live_before, "success");
             result
         }
-    }
-}
-
-type LiveStreamingResponse = Result<SchemaValue, WorkerExecutorError>;
-type LiveStreamingResponseSender = Arc<Mutex<Option<oneshot::Sender<LiveStreamingResponse>>>>;
-
-fn publish_live_streaming_response(
-    response: &LiveStreamingResponseSender,
-    result: LiveStreamingResponse,
-) -> bool {
-    response
-        .lock()
-        .expect("live streaming response mutex poisoned")
-        .take()
-        .is_some_and(|response| response.send(result).is_ok())
-}
-
-fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_string()
-    } else {
-        "unknown panic payload".to_string()
-    }
-}
-
-/// Runs one live, non-durable agent RPC whose value tree may contain recursive
-/// streams. The result head is published as soon as `guest.invoke` returns;
-/// the Store remains exclusively owned by this call until every stream sourced
-/// by the guest reaches its terminal state or the downstream reader detaches.
-pub async fn invoke_live_streaming_rpc<Ctx: WorkerCtx>(
-    lowered: LoweredInvocation,
-    store: &mut impl AsContextMut<Data = Ctx>,
-    instance: &wasmtime::component::Instance,
-    response: oneshot::Sender<Result<SchemaValue, WorkerExecutorError>>,
-    cancellation: tokio_util::sync::CancellationToken,
-) -> Result<(), WorkerExecutorError> {
-    let mut store = store.as_context_mut();
-    let response = Arc::new(Mutex::new(Some(response)));
-    let LoweredInvocation {
-        display_name,
-        read_only_method,
-        call,
-    } = lowered;
-    let guest = match load_agent_guest(&mut store, instance) {
-        Ok(guest) => guest,
-        Err(error) => {
-            publish_live_streaming_response(&response, Err(error.clone()));
-            return Err(error);
-        }
-    };
-    if let Some(blocker) = store.data().snapshot_boundary_blocker() {
-        let error = WorkerExecutorError::runtime(format!(
-            "cannot start a live streaming invocation while {blocker}"
-        ));
-        publish_live_streaming_response(&response, Err(error.clone()));
-        return Err(error);
-    }
-    let LoweredCall::Invoke {
-        method_name,
-        input,
-        principal,
-        expected_output,
-    } = call
-    else {
-        let error = WorkerExecutorError::invalid_request(
-            "live streaming RPC is only supported for agent method invocations",
-        );
-        publish_live_streaming_response(&response, Err(error.clone()));
-        return Err(error);
-    };
-    let stream_capacity = store.data().durable_ctx().live_stream_event_capacity();
-    let tracker = Arc::new(LiveStreamTracker::new(cancellation, stream_capacity));
-    let mut tracker_installed = false;
-    let mut unpersisted_execution_active = false;
-    let mut read_only_active = false;
-    let mut invocation_started = false;
-    let response_for_call = response.clone();
-    let tracker_for_call = tracker.clone();
-    let validation_name = display_name.clone();
-
-    let call = std::panic::AssertUnwindSafe(async {
-        store
-            .data_mut()
-            .durable_ctx_mut()
-            .set_live_stream_tracker(tracker_for_call.clone());
-        tracker_installed = true;
-        store
-            .data_mut()
-            .durable_ctx_mut()
-            .begin_unpersisted_streaming_invocation();
-        unpersisted_execution_active = true;
-
-        let input = {
-            let mut resolver = StoreValueResolver::new(&mut store);
-            encode_value_with_streams(&input, &mut resolver).map_err(|error| {
-                WorkerExecutorError::runtime(format!(
-                    "Failed to encode live agent method input: {error}"
-                ))
-            })?
-        };
-
-        prepare_guest_call(&mut store, &display_name).await;
-        invocation_started = true;
-        store.data_mut().set_running();
-        let _deadline = store.data().durable_ctx().arm_invocation_deadline();
-
-        if let Some(method_name) = &read_only_method {
-            store.data_mut().enter_read_only_mode(method_name.clone());
-            read_only_active = true;
-        }
-
-        run_guest_call_settled(&mut store, async move |accessor| {
-            match guest
-                .call_invoke(accessor, method_name, input, principal)
-                .await
-            {
-                Ok(Ok(output)) => {
-                    let output = accessor.with(|mut access| match output {
-                        None => Ok(SchemaValue::Tuple {
-                            elements: Vec::new(),
-                        }),
-                        Some(tree) => {
-                            let mut store = access.as_context_mut();
-                            let mut resolver = StoreValueResolver::new(&mut store);
-                            decode_value_with(tree, &mut resolver)
-                                .map_err(|error| wasmtime::Error::msg(error.to_string()))
-                        }
-                    })?;
-                    validate_invoke_output(&validation_name, &expected_output, &output)
-                        .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
-                    if publish_live_streaming_response(&response_for_call, Ok(output)) {
-                        accessor
-                            .spawn(WaitForLiveStreamSources {
-                                tracker: tracker_for_call.clone(),
-                            })
-                            .await;
-                    }
-                    Ok(true)
-                }
-                Ok(Err(error)) => {
-                    let message = format!("agent method returned an error: {error:?}");
-                    publish_live_streaming_response(
-                        &response_for_call,
-                        Err(WorkerExecutorError::runtime(message)),
-                    );
-                    Ok(false)
-                }
-                Err(error) => {
-                    publish_live_streaming_response(
-                        &response_for_call,
-                        Err(WorkerExecutorError::runtime(error.to_string())),
-                    );
-                    Err(error)
-                }
-            }
-        })
-        .await
-        .and_then(|result| result)
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
-    })
-    .catch_unwind()
-    .await;
-
-    let (result, completed_successfully) = match call {
-        Ok(Ok(completed_successfully)) => (Ok(()), completed_successfully),
-        Ok(Err(error)) => (Err(error), false),
-        Err(payload) => (
-            Err(WorkerExecutorError::runtime(format!(
-                "live streaming invocation panicked: {}",
-                panic_payload_message(payload.as_ref())
-            ))),
-            false,
-        ),
-    };
-
-    if !completed_successfully {
-        tracker.cancellation_token().cancel();
-    }
-    if read_only_active {
-        store.data_mut().exit_read_only_mode();
-    }
-    if unpersisted_execution_active {
-        store
-            .data_mut()
-            .durable_ctx_mut()
-            .end_unpersisted_streaming_invocation_if_active();
-    }
-    if tracker_installed {
-        store
-            .data_mut()
-            .durable_ctx_mut()
-            .clear_live_stream_tracker();
-    }
-    if invocation_started {
-        let _ = finish_invocation_and_get_fuel_consumption(&mut store, &display_name).await?;
-        store.data().set_suspended();
-    }
-
-    if let Err(error) = &result {
-        publish_live_streaming_response(&response, Err(error.clone()));
-    }
-    result
-}
-
-struct WaitForLiveStreamSources {
-    tracker: Arc<LiveStreamTracker>,
-}
-
-impl<Ctx: WorkerCtx> AccessorTask<Ctx> for WaitForLiveStreamSources {
-    async fn run(self, _accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
-        self.tracker.wait_for_sources().await;
-        Ok(())
     }
 }
 
@@ -580,12 +361,23 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         } => {
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = run_guest_call_settled(store, async |accessor| {
-                guest
-                    .call_invoke(accessor, method_name, input, principal)
+            let result = if expected_output.uses_streams() {
+                store
+                    .as_context_mut()
+                    .run_concurrent(async |accessor| {
+                        guest
+                            .call_invoke(accessor, method_name, input, principal)
+                            .await
+                    })
                     .await
-            })
-            .await
+            } else {
+                run_guest_call_settled(store, async |accessor| {
+                    guest
+                        .call_invoke(accessor, method_name, input, principal)
+                        .await
+                })
+                .await
+            }
             .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
@@ -764,9 +556,9 @@ fn decode_invoke_output<Ctx: WorkerCtx>(
         None => Ok(SchemaValue::Tuple {
             elements: Vec::new(),
         }),
-        // The output is crossing a durable/materializing boundary. Quota-token
-        // handles are lifted into trusted snapshots, while live stream handles
-        // are rejected and remain exclusive to `invoke_live_streaming_rpc`.
+        // Quota-token handles are lifted into trusted snapshots. Durable stream
+        // sessions materialize stream handles before the invocation result is
+        // committed.
         Some(tree) => {
             let output =
                 decode_value_with(tree, store.data_mut().durable_ctx_mut()).map_err(|e| {
@@ -774,20 +566,21 @@ fn decode_invoke_output<Ctx: WorkerCtx>(
                         "Failed to decode agent method output: {e}"
                     ))
                 })?;
-            reject_stream_at_materializing_boundary(output)
+            Ok(output)
         }
     }
 }
 
+#[cfg(test)]
 fn reject_stream_at_materializing_boundary(
-    output: SchemaValue,
+    value: SchemaValue,
 ) -> Result<SchemaValue, WorkerExecutorError> {
-    if contains_stream(&output) {
+    if crate::durable_host::schema_value_stream::contains_stream(&value) {
         Err(WorkerExecutorError::runtime(
-            "Agent method output contains a live stream at a materializing invocation boundary",
+            "live stream at a materializing invocation boundary without a durable Stream Session",
         ))
     } else {
-        Ok(output)
+        Ok(value)
     }
 }
 
@@ -803,6 +596,12 @@ pub struct ExpectedInvokeOutput {
     /// The method's declared output type; the canonical empty tuple for
     /// `unit` outputs (see [`decode_invoke_output`]).
     root: SchemaType,
+}
+
+impl ExpectedInvokeOutput {
+    fn uses_streams(&self) -> bool {
+        contains_stream_in_graph(&self.graph, &self.root)
+    }
 }
 
 /// Validates the decoded output of an agent method invocation against the
@@ -1159,12 +958,14 @@ fn materialize_call<Ctx: WorkerCtx>(
             principal,
             expected_output,
         } => {
-            let input =
-                encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
+            let input = {
+                let mut resolver = StoreValueResolver::new(store);
+                encode_value_with_streams(&input, &mut resolver).map_err(|e| {
                     WorkerExecutorError::runtime(format!(
                         "Failed to encode agent method input: {e}"
                     ))
-                })?;
+                })?
+            };
             PreparedCall::Invoke {
                 method_name,
                 input,
@@ -1415,33 +1216,11 @@ mod tests {
 
     #[test]
     async fn live_streaming_response_is_published_exactly_once() {
-        let (sender, receiver) = oneshot::channel();
-        let response = Arc::new(Mutex::new(Some(sender)));
-
-        assert!(publish_live_streaming_response(
-            &response,
-            Ok(SchemaValue::Tuple {
-                elements: Vec::new(),
-            })
-        ));
-        assert!(!publish_live_streaming_response(
-            &response,
-            Err(WorkerExecutorError::runtime("late failure"))
-        ));
-
-        assert!(matches!(
-            receiver.await.unwrap(),
-            Ok(SchemaValue::Tuple { elements }) if elements.is_empty()
-        ));
-    }
-
-    #[test]
-    fn live_streaming_panic_payload_is_reported() {
-        let owned: Box<dyn Any + Send> = Box::new("owned panic".to_string());
-        let borrowed: Box<dyn Any + Send> = Box::new("borrowed panic");
-
-        assert_eq!(panic_payload_message(owned.as_ref()), "owned panic");
-        assert_eq!(panic_payload_message(borrowed.as_ref()), "borrowed panic");
+        let value = SchemaValue::U64(42);
+        assert_eq!(
+            reject_stream_at_materializing_boundary(value.clone()).unwrap(),
+            value
+        );
     }
 
     /// Component metadata with one agent type whose `do-work` method takes two

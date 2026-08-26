@@ -23,12 +23,15 @@ use golem_api_grpc::proto::golem::common::Empty;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     AgentError as GrpcAgentError, CancelInvocationRequest, CancelInvocationResponse,
-    CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest, ForkWorkerResponse,
-    InvokeAgentRequest, InvokeAgentResponse, InvokeAgentSuccess, LaunchNewWorkerRequest,
-    LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ProcessOplogEntriesRequest,
-    ProcessOplogEntriesResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
-    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, cancel_invocation_response,
-    complete_promise_response, fork_worker_response, invoke_agent_response,
+    CompletePromiseRequest, CompletePromiseResponse, DurableStreamAttachmentControlRequest,
+    DurableStreamAttachmentControlResponse, DurableStreamSegmentReadRequest,
+    DurableStreamSegmentReadResponse, ForkWorkerRequest, ForkWorkerResponse, InvokeAgentRequest,
+    InvokeAgentResponse, InvokeAgentSuccess, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ProcessOplogEntriesRequest, ProcessOplogEntriesResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, cancel_invocation_response,
+    complete_promise_response, durable_stream_attachment_control_response,
+    durable_stream_segment_read_response, fork_worker_response, invoke_agent_response,
     launch_new_worker_response, process_oplog_entries_response, resume_worker_response,
     revert_worker_response, update_worker_response,
 };
@@ -81,7 +84,7 @@ fn request_identity(
             (start.idempotency_key.clone(), start.agent_id.clone())
         }
         Some(invocation_request::Request::ResumeAttach(resume)) => {
-            (resume.idempotency_key.clone(), None)
+            (resume.idempotency_key.clone(), resume.agent_id.clone())
         }
         _ => (None, None),
     }
@@ -470,22 +473,20 @@ impl GrpcWorkerService for WorkerGrpcApi {
                 agent_id,
             )));
         }
-        let mut start = match first
+        let initial = match first
             .request
             .expect("validated invocation request has a payload")
         {
-            invocation_request::Request::Start(start) => start,
-            invocation_request::Request::ResumeAttach(_) => {
-                return Ok(Response::new(service_failure_stream(
-                    InvocationRejectionReason::ResumeUnsupported,
-                    "resume-attach is not supported by live sessions".to_string(),
-                    idempotency_key,
-                    None,
-                )));
-            }
+            request @ invocation_request::Request::Start(_)
+            | request @ invocation_request::Request::ResumeAttach(_) => request,
             _ => unreachable!("the session validator requires start or resume-attach first"),
         };
-        let auth = match start.auth_ctx.clone() {
+        let auth_ctx = match &initial {
+            invocation_request::Request::Start(start) => start.auth_ctx.clone(),
+            invocation_request::Request::ResumeAttach(resume) => resume.auth_ctx.clone(),
+            _ => unreachable!("the session validator requires start or resume-attach first"),
+        };
+        let auth = match auth_ctx {
             Some(auth) => match auth.try_into() {
                 Ok(auth) => auth,
                 Err(error) => {
@@ -507,26 +508,35 @@ impl GrpcWorkerService for WorkerGrpcApi {
             }
         };
         let trusted_internal_caller = matches!(&auth, AuthCtx::System | AuthCtx::Agent(_));
-        start.freshness_disposition = match sanitize_invocation_freshness_disposition(
-            start.freshness_disposition,
-            trusted_internal_caller,
-        ) {
-            InvocationFreshnessDisposition::MayExist => {
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32
-            }
-            InvocationFreshnessDisposition::KnownFresh => {
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
-                    as i32
-            }
-        };
         let state = Arc::new(tokio::sync::Mutex::new(state));
         let (tail, initial_requests_checked) = validated_request_tail(inbound, state.clone());
-        match self
-            .worker_service
-            .invoke_agent_session(start, tail, trusted_internal_caller, auth)
-            .await
-        {
+        let result = match initial {
+            invocation_request::Request::Start(mut start) => {
+                start.freshness_disposition = match sanitize_invocation_freshness_disposition(
+                    start.freshness_disposition,
+                    trusted_internal_caller,
+                ) {
+                    InvocationFreshnessDisposition::MayExist => {
+                        golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                            as i32
+                    }
+                    InvocationFreshnessDisposition::KnownFresh => {
+                        golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
+                            as i32
+                    }
+                };
+                self.worker_service
+                    .invoke_agent_session(start, tail, trusted_internal_caller, auth)
+                    .await
+            }
+            invocation_request::Request::ResumeAttach(resume) => {
+                self.worker_service
+                    .resume_agent_session(resume, tail, auth)
+                    .await
+            }
+            _ => unreachable!("the session validator requires start or resume-attach first"),
+        };
+        match result {
             Ok(response) => Ok(Response::new(validated_response_stream(
                 response,
                 state,
@@ -579,6 +589,59 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(CancelInvocationResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn control_durable_stream_attachment(
+        &self,
+        request: Request<DurableStreamAttachmentControlRequest>,
+    ) -> Result<Response<DurableStreamAttachmentControlResponse>, Status> {
+        let (_, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "control_durable_stream_attachment",
+            agent_id = proto_agent_id_string(&request.producer_agent_id),
+        );
+        let response = match self
+            .control_durable_stream_attachment_inner(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(replayed) => record
+                .succeed(durable_stream_attachment_control_response::Result::Replayed(replayed)),
+            Err(error) => record.fail(
+                durable_stream_attachment_control_response::Result::Error(error.clone()),
+                &mut WorkerTraceErrorKind(&error),
+            ),
+        };
+        Ok(Response::new(DurableStreamAttachmentControlResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn read_durable_stream_segment(
+        &self,
+        request: Request<DurableStreamSegmentReadRequest>,
+    ) -> Result<Response<DurableStreamSegmentReadResponse>, Status> {
+        let (_, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "read_durable_stream_segment",
+            agent_id = proto_agent_id_string(&request.producer_agent_id),
+        );
+        let response = match self
+            .read_durable_stream_segment_inner(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(payload) => record.succeed(durable_stream_segment_read_response::Result::Payload(
+                payload,
+            )),
+            Err(error) => record.fail(
+                durable_stream_segment_read_response::Result::Error(error.clone()),
+                &mut WorkerTraceErrorKind(&error),
+            ),
+        };
+        Ok(Response::new(DurableStreamSegmentReadResponse {
             result: Some(response),
         }))
     }
@@ -930,6 +993,106 @@ impl WorkerGrpcApi {
 
         Ok(canceled)
     }
+
+    async fn control_durable_stream_attachment_inner(
+        &self,
+        request: DurableStreamAttachmentControlRequest,
+    ) -> Result<bool, GrpcAgentError> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or_else(|| bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|error| bad_request_error(format!("invalid auth_ctx: {error}")))?;
+        if !matches!(&auth_ctx, AuthCtx::System | AuthCtx::Agent(_)) {
+            return Err(bad_request_error(
+                "durable stream attachment control requires an authenticated internal caller",
+            ));
+        }
+        let producer_agent_id = validate_protobuf_agent_id(request.producer_agent_id)?;
+        let producer_environment_id = request
+            .producer_environment_id
+            .ok_or_else(|| bad_request_error("Missing producer_environment_id"))?
+            .try_into()
+            .map_err(|error| {
+                bad_request_error(format!("invalid producer_environment_id: {error}"))
+            })?;
+        let consumer_agent_id = validate_protobuf_agent_id(request.consumer_agent_id)?;
+        let consumer_environment_id = request
+            .consumer_environment_id
+            .ok_or_else(|| bad_request_error("Missing consumer_environment_id"))?
+            .try_into()
+            .map_err(|error| {
+                bad_request_error(format!("invalid consumer_environment_id: {error}"))
+            })?;
+        let expected_consumer_fingerprint = AgentFingerprint(
+            request
+                .expected_consumer_fingerprint
+                .ok_or_else(|| bad_request_error("Missing expected_consumer_fingerprint"))?
+                .into(),
+        );
+        self.worker_service
+            .control_durable_stream_attachment(
+                &producer_agent_id,
+                producer_environment_id,
+                &consumer_agent_id,
+                consumer_environment_id,
+                expected_consumer_fingerprint,
+                request.payload,
+                auth_ctx,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn read_durable_stream_segment_inner(
+        &self,
+        request: DurableStreamSegmentReadRequest,
+    ) -> Result<Vec<u8>, GrpcAgentError> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or_else(|| bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|error| bad_request_error(format!("invalid auth_ctx: {error}")))?;
+        if !matches!(&auth_ctx, AuthCtx::System | AuthCtx::Agent(_)) {
+            return Err(bad_request_error(
+                "durable stream segment reads require an authenticated internal caller",
+            ));
+        }
+        let producer_agent_id = validate_protobuf_agent_id(request.producer_agent_id)?;
+        let producer_environment_id = request
+            .producer_environment_id
+            .ok_or_else(|| bad_request_error("Missing producer_environment_id"))?
+            .try_into()
+            .map_err(|error| {
+                bad_request_error(format!("invalid producer_environment_id: {error}"))
+            })?;
+        let consumer_agent_id = validate_protobuf_agent_id(request.consumer_agent_id)?;
+        let consumer_environment_id = request
+            .consumer_environment_id
+            .ok_or_else(|| bad_request_error("Missing consumer_environment_id"))?
+            .try_into()
+            .map_err(|error| {
+                bad_request_error(format!("invalid consumer_environment_id: {error}"))
+            })?;
+        let expected_consumer_fingerprint = AgentFingerprint(
+            request
+                .expected_consumer_fingerprint
+                .ok_or_else(|| bad_request_error("Missing expected_consumer_fingerprint"))?
+                .into(),
+        );
+        self.worker_service
+            .read_durable_stream_segment(
+                &producer_agent_id,
+                producer_environment_id,
+                &consumer_agent_id,
+                consumer_environment_id,
+                expected_consumer_fingerprint,
+                request.payload,
+                auth_ctx,
+            )
+            .await
+            .map_err(Into::into)
+    }
 }
 
 #[cfg(test)]
@@ -1029,6 +1192,7 @@ mod protocol_tests {
                 agent_id: agent_id(),
                 idempotency_key: key(),
                 component_revision: Some(1),
+                ..Default::default()
             },
         ))
     }

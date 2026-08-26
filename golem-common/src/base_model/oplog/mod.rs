@@ -18,6 +18,10 @@ pub(crate) mod public_types;
 
 use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
+use crate::base_model::durable_stream::{
+    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
+    StreamSessionRecordV1,
+};
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::SpanId;
 use crate::base_model::regions::OplogRegion;
@@ -758,6 +762,67 @@ oplog_entry! {
             parent_start_index: OplogIndex,
             kind: HostStreamKind,
             payload: TypedSchemaValue,
+        }
+    },
+    /// Registers a durable stream before its handle can be observed.
+    StreamRegistered {
+        hint: true
+        wit_raw_type: "raw-durable-stream-record-parameters"
+        wit_public_type: "durable-stream-record-parameters"
+        raw {
+            record: payload::OplogPayload<StreamRegisteredRecordV1>,
+        }
+        public {
+            record: TypedSchemaValue,
+        }
+    },
+    /// Records one complete stream value or an ordered packed-u8 batch before publication.
+    StreamItems {
+        hint: true
+        wit_raw_type: "raw-durable-stream-record-parameters"
+        wit_public_type: "durable-stream-record-parameters"
+        raw {
+            record: payload::OplogPayload<StreamItemsRecordV1>,
+        }
+        public {
+            record: TypedSchemaValue,
+        }
+    },
+    /// Records a stream's unique successful or error-context terminal.
+    StreamEnd {
+        hint: true
+        wit_raw_type: "raw-durable-stream-record-parameters"
+        wit_public_type: "durable-stream-record-parameters"
+        raw {
+            record: payload::OplogPayload<StreamEndRecordV1>,
+        }
+        public {
+            record: TypedSchemaValue,
+        }
+    },
+    /// Records a stream's unique role-aware cancellation terminal.
+    StreamCancel {
+        hint: true
+        wit_raw_type: "raw-durable-stream-record-parameters"
+        wit_public_type: "durable-stream-record-parameters"
+        raw {
+            record: payload::OplogPayload<StreamCancelRecordV1>,
+        }
+        public {
+            record: TypedSchemaValue,
+        }
+    },
+    /// Records durable Stream Session preparation, attachment, ingress, consumer-journal, result,
+    /// and completion facts.
+    StreamSession {
+        hint: true
+        wit_raw_type: "raw-durable-stream-record-parameters"
+        wit_public_type: "durable-stream-record-parameters"
+        raw {
+            record: payload::OplogPayload<StreamSessionRecordV1>,
+        }
+        public {
+            record: TypedSchemaValue,
         }
     },
     /// Marks that the successful completion (`End`) of the durable host call started by the

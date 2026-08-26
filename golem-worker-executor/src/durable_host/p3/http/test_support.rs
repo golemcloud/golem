@@ -142,6 +142,13 @@ impl Oplog for FrameTestOplog {
         unimplemented!()
     }
 
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        _build_request: crate::services::oplog::IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        unimplemented!()
+    }
+
     async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
         0
     }

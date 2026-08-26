@@ -100,7 +100,6 @@ pub(crate) async fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
             durable_state.max_in_function_retry_delay,
             state.begin_index,
             ctx.execution_status.clone(),
-            ctx.is_unpersisted_execution(),
         );
         HostFutureIncomingResponse::pending(retry_handle)
     } else {
@@ -185,7 +184,6 @@ pub(crate) async fn maybe_enable_http_pending_status_retry<Ctx: WorkerCtx>(
             agent_type,
             ctx.state.config.max_in_function_retry_delay,
             state.begin_index,
-            ctx.is_unpersisted_execution(),
         ))
     } else {
         old

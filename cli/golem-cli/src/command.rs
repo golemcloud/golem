@@ -1373,6 +1373,15 @@ pub mod worker {
             /// bytes and requires one direct stream<binary> or stream<u8> result.
             #[arg(long, value_enum, default_value = "value")]
             stdout_format: InvocationStdoutFormat,
+            /// Persist durable session identity and cursors for an explicit later resume.
+            #[arg(long, value_name = "PATH", conflicts_with_all = ["resume_session", "takeover_session"])]
+            save_session: Option<std::path::PathBuf>,
+            /// Explicitly resume a detached durable invocation from a saved session file.
+            #[arg(long, value_name = "PATH", conflicts_with_all = ["save_session", "takeover_session", "idempotency_key", "trigger"])]
+            resume_session: Option<std::path::PathBuf>,
+            /// Explicitly take over an attached durable invocation from a saved session file.
+            #[arg(long, value_name = "PATH", conflicts_with_all = ["save_session", "resume_session", "idempotency_key", "trigger"])]
+            takeover_session: Option<std::path::PathBuf>,
             #[command(flatten)]
             post_deploy_args: Option<PostDeployArgs>,
             /// Schedule the invocation at a specific time (ISO 8601 / RFC 3339 format, e.g. 2026-03-15T10:30:00Z)

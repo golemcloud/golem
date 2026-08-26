@@ -65,6 +65,11 @@ message RawOplogEntry {
     RawCardExpiredParameters card_expired = 50;
     RawHostStreamFrameParameters host_stream_frame = 51;
     RawCompletionDiscardedParameters completion_discarded = 52;
+    RawDurableStreamRecordParameters stream_registered = 53;
+    RawDurableStreamRecordParameters stream_items = 54;
+    RawDurableStreamRecordParameters stream_end = 55;
+    RawDurableStreamRecordParameters stream_cancel = 56;
+    RawDurableStreamRecordParameters stream_session = 57;
   }
 }
 
@@ -380,6 +385,10 @@ message RawHostStreamFrameParameters {
   uint64 parent_start_index = 1;
   HostStreamKind kind = 2;
   RawOplogPayload payload = 3;
+}
+
+message RawDurableStreamRecordParameters {
+  RawOplogPayload record = 1;
 }
 
 message RawOplogEntryWithIndex {

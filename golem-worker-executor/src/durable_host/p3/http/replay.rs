@@ -238,10 +238,7 @@ where
             Some(recorded_body) => {
                 let (oplog, recording_enabled) = accessor.with(|mut access| {
                     let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                    (
-                        ctx.state.oplog.clone(),
-                        !ctx.is_unpersisted_execution() && !ctx.state.snapshotting_mode,
-                    )
+                    (ctx.state.oplog.clone(), !ctx.state.snapshotting_mode)
                 });
                 if recording_enabled {
                     drain_replayed_request_body_completing_recording(

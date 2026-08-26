@@ -172,6 +172,10 @@ enum InitialPublicInvocation {
         Box<PublicInvocationStart>,
         Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
     ),
+    Resume(
+        Box<golem_api_grpc::proto::golem::worker::ResumeAttach>,
+        Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+    ),
     Closed,
     WriterStopped,
 }
@@ -218,7 +222,7 @@ async fn proxy_public_invocation_session(
     ));
     let mut state = InvocationSessionState::default();
 
-    let (start, idempotency_key) = match receive_public_invocation_start_while_writing(
+    let initial = match receive_public_invocation_start_while_writing(
         &mut websocket_stream,
         &websocket_sender,
         &mut state,
@@ -226,7 +230,12 @@ async fn proxy_public_invocation_session(
     )
     .await
     {
-        InitialPublicInvocation::Start(start, idempotency_key) => (*start, idempotency_key),
+        InitialPublicInvocation::Start(start, idempotency_key) => {
+            InitialPublicInvocation::Start(start, idempotency_key)
+        }
+        InitialPublicInvocation::Resume(resume, idempotency_key) => {
+            InitialPublicInvocation::Resume(resume, idempotency_key)
+        }
         InitialPublicInvocation::Closed => {
             drop(websocket_sender);
             let _ = writer.await;
@@ -238,10 +247,22 @@ async fn proxy_public_invocation_session(
     let (request_sender, request_receiver) =
         tokio::sync::mpsc::channel(INVOCATION_SESSION_CHANNEL_CAPACITY);
     let tail = tokio_stream::wrappers::ReceiverStream::new(request_receiver);
-    let responses = match worker_service
-        .invoke_public_agent_session(start, Box::pin(tail), auth)
-        .await
-    {
+    let (responses, idempotency_key) = match initial {
+        InitialPublicInvocation::Start(start, idempotency_key) => (
+            worker_service
+                .invoke_public_agent_session(*start, Box::pin(tail), auth)
+                .await,
+            idempotency_key,
+        ),
+        InitialPublicInvocation::Resume(resume, idempotency_key) => (
+            worker_service
+                .resume_public_agent_session(*resume, Box::pin(tail), auth)
+                .await,
+            idempotency_key,
+        ),
+        InitialPublicInvocation::Closed | InitialPublicInvocation::WriterStopped => unreachable!(),
+    };
+    let responses = match responses {
         Ok(responses) => responses,
         Err(error) => {
             let response = rejection_response(
@@ -291,8 +312,13 @@ where
     tokio::pin!(receive);
     tokio::select! {
         result = &mut receive => match result {
-            Some((start, idempotency_key)) => {
-                InitialPublicInvocation::Start(Box::new(start), idempotency_key)
+            Some((request, idempotency_key)) => match request {
+                PublicInvocationStartOrResume::Start(start) => {
+                    InitialPublicInvocation::Start(Box::new(start), idempotency_key)
+                }
+                PublicInvocationStartOrResume::Resume(resume) => {
+                    InitialPublicInvocation::Resume(Box::new(resume), idempotency_key)
+                }
             }
             None => InitialPublicInvocation::Closed,
         },
@@ -300,12 +326,17 @@ where
     }
 }
 
+enum PublicInvocationStartOrResume {
+    Start(PublicInvocationStart),
+    Resume(golem_api_grpc::proto::golem::worker::ResumeAttach),
+}
+
 async fn receive_public_invocation_start<S>(
     websocket_stream: &mut S,
     websocket_sender: &tokio::sync::mpsc::Sender<Message>,
     state: &mut InvocationSessionState,
 ) -> Option<(
-    PublicInvocationStart,
+    PublicInvocationStartOrResume,
     Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
 )>
 where
@@ -342,21 +373,14 @@ where
     match first_request.request {
         Some(public_invocation_request::Request::Start(start)) => {
             let idempotency_key = start.idempotency_key.clone();
-            Some((start, idempotency_key))
+            Some((PublicInvocationStartOrResume::Start(start), idempotency_key))
         }
         Some(public_invocation_request::Request::ResumeAttach(resume)) => {
-            let response = rejection_response(
-                InvocationRejectionReason::ResumeUnsupported,
-                "resume-attach is not supported by provisional live sessions".to_string(),
-                resume.idempotency_key,
-            );
-            if state.validate_response(&response).is_ok()
-                && queue_invocation_response(websocket_sender, response).await
-            {
-                queue_websocket_close(websocket_sender, CloseCode::Normal, "session rejected")
-                    .await;
-            }
-            None
+            let idempotency_key = resume.idempotency_key.clone();
+            Some((
+                PublicInvocationStartOrResume::Resume(resume),
+                idempotency_key,
+            ))
         }
         _ => {
             queue_websocket_close(
@@ -787,13 +811,16 @@ mod tests {
     use crate::service::worker::WorkerServiceError;
     use futures::StreamExt;
     use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+    use golem_api_grpc::proto::golem::common::{EnvironmentId, Uuid};
+    use golem_api_grpc::proto::golem::component::ComponentId;
     use golem_api_grpc::proto::golem::worker::{
-        AgentId, IdempotencyKey, InputStreamEnd, InputStreamItem, InvocationAccepted,
-        InvocationRejectionReason, InvocationRequest, InvocationResponse,
-        InvocationSessionCompletion, InvocationSessionResult, OutputStreamItem,
+        AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InputStreamEnd,
+        InputStreamItem, InvocationAccepted, InvocationRejectionReason, InvocationRequest,
+        InvocationResponse, InvocationSessionCompletion, InvocationSessionResult, OutputStreamItem,
         PublicInvocationRequest, PublicInvocationStart, ResumeAttach, StreamCancel,
-        StreamCancelReason, StreamCancelRole, input_stream_item, invocation_request,
-        invocation_response, invocation_session_result, public_invocation_request,
+        StreamCancelReason, StreamCancelRole, StreamInvocationIdentity, StreamMappingRole,
+        input_stream_item, invocation_request, invocation_response, invocation_session_result,
+        public_invocation_request,
     };
     use golem_service_base::clients::registry::RegistryServiceError;
     use poem::web::websocket::{CloseCode, Message};
@@ -805,6 +832,84 @@ mod tests {
 
     fn empty_parameter_record() -> Value {
         json!({ "kind": "record", "value": { "fields": [] } })
+    }
+
+    fn test_uuid(value: u64) -> Uuid {
+        Uuid {
+            high_bits: 0,
+            low_bits: value,
+        }
+    }
+
+    fn test_agent_id(name: &str) -> AgentId {
+        AgentId {
+            component_id: Some(ComponentId {
+                value: Some(test_uuid(10)),
+            }),
+            name: name.to_string(),
+        }
+    }
+
+    fn test_mapping(
+        transport_stream_id: u64,
+        role: StreamMappingRole,
+        idempotency_key: &IdempotencyKey,
+    ) -> DurableStreamMapping {
+        DurableStreamMapping {
+            transport_stream_id,
+            handle: Some(DurableStreamHandle {
+                format_version: 1,
+                stream_id: Some(test_uuid(100 + transport_stream_id)),
+                producer_environment_id: Some(EnvironmentId {
+                    value: Some(test_uuid(20)),
+                }),
+                producer: Some(test_agent_id("agent")),
+                expected_producer_fingerprint: Some(test_uuid(30)),
+                source_invocation: Some(StreamInvocationIdentity {
+                    callee_environment_id: Some(EnvironmentId {
+                        value: Some(test_uuid(20)),
+                    }),
+                    callee: Some(test_agent_id("agent")),
+                    callee_fingerprint: Some(test_uuid(30)),
+                    idempotency_key: Some(idempotency_key.clone()),
+                }),
+                component_revision: Some(1),
+                element_schema_fingerprint: vec![40; 32],
+            }),
+            high_water: None,
+            role: role as i32,
+        }
+    }
+
+    fn test_acceptance(
+        agent_id: AgentId,
+        idempotency_key: IdempotencyKey,
+        input_stream_ids: &[u64],
+    ) -> InvocationAccepted {
+        InvocationAccepted {
+            agent_id: Some(agent_id),
+            idempotency_key: Some(idempotency_key.clone()),
+            component_revision: Some(1),
+            attachment_id: Some(test_uuid(1)),
+            attempt_id: Some(test_uuid(2)),
+            epoch: 1,
+            environment_id: Some(EnvironmentId {
+                value: Some(test_uuid(20)),
+            }),
+            callee_fingerprint: Some(test_uuid(30)),
+            stream_mappings: input_stream_ids
+                .iter()
+                .map(|stream_id| {
+                    test_mapping(*stream_id, StreamMappingRole::Input, &idempotency_key)
+                })
+                .collect(),
+        }
+    }
+
+    fn test_durable_offset() -> Vec<u8> {
+        let mut offset = vec![0; 24];
+        offset[0] = 1;
+        offset
     }
 
     fn gated_websocket_sink(
@@ -881,8 +986,9 @@ mod tests {
         let request = PublicInvocationRequest {
             request: Some(public_invocation_request::Request::InputEnd(
                 InputStreamEnd {
-                    stream_id: 7,
-                    offset: 3,
+                    transport_stream_id: 7,
+                    sequence: 3,
+                    ..Default::default()
                 },
             )),
         };
@@ -895,8 +1001,9 @@ mod tests {
             PublicSessionMessage::Request(request) if matches!(*request, PublicInvocationRequest {
                 request: Some(public_invocation_request::Request::InputEnd(
                     InputStreamEnd {
-                        stream_id: 7,
-                        offset: 3,
+                        transport_stream_id: 7,
+                        sequence: 3,
+                        ..
                     }
                 )),
             })
@@ -937,8 +1044,9 @@ mod tests {
         let translated = trusted_tail_request(PublicInvocationRequest {
             request: Some(public_invocation_request::Request::InputEnd(
                 InputStreamEnd {
-                    stream_id: 4,
-                    offset: 9,
+                    transport_stream_id: 4,
+                    sequence: 9,
+                    ..Default::default()
                 },
             )),
         })
@@ -946,8 +1054,9 @@ mod tests {
         assert!(matches!(
             translated.request,
             Some(invocation_request::Request::InputEnd(InputStreamEnd {
-                stream_id: 4,
-                offset: 9,
+                transport_stream_id: 4,
+                sequence: 9,
+                ..
             }))
         ));
 
@@ -966,7 +1075,7 @@ mod tests {
         let request = PublicInvocationRequest {
             request: Some(public_invocation_request::Request::InputItem(
                 InputStreamItem {
-                    stream_id: 7,
+                    transport_stream_id: 7,
                     sequence: 0,
                     payload: Some(input_stream_item::Payload::Value(SchemaValue {
                         value: Some(schema_value::Value::RecordValue(RecordValue {
@@ -977,6 +1086,7 @@ mod tests {
                             }],
                         })),
                     })),
+                    ..Default::default()
                 },
             )),
         };
@@ -1052,16 +1162,11 @@ mod tests {
             )),
         };
         let accepted = InvocationResponse {
-            response: Some(invocation_response::Response::Accepted(
-                InvocationAccepted {
-                    agent_id: Some(AgentId {
-                        component_id: None,
-                        name: "agent".to_string(),
-                    }),
-                    idempotency_key: Some(idempotency_key),
-                    component_revision: Some(1),
-                },
-            )),
+            response: Some(invocation_response::Response::Accepted(test_acceptance(
+                test_agent_id("agent"),
+                idempotency_key,
+                &[stream_id],
+            ))),
         };
         let mut state = InvocationSessionState::default();
         state.validate_public_request(&start).unwrap();
@@ -1085,13 +1190,15 @@ mod tests {
         let input = PublicInvocationRequest {
             request: Some(public_invocation_request::Request::InputItem(
                 InputStreamItem {
-                    stream_id,
+                    transport_stream_id: stream_id,
                     sequence: 0,
                     payload: Some(input_stream_item::Payload::Value(
                         golem_common::schema::SchemaValue::U32(1)
                             .try_into()
                             .unwrap(),
                     )),
+                    durable_stream_id: Some(test_uuid(100 + stream_id)),
+                    epoch: 1,
                 },
             )),
         };
@@ -1107,10 +1214,7 @@ mod tests {
                         golem_api_grpc::proto::golem::common::Empty {},
                     )),
                     component_revision: Some(1),
-                    agent_id: Some(AgentId {
-                        component_id: None,
-                        name: "agent".to_string(),
-                    }),
+                    agent_id: Some(test_agent_id("agent")),
                     idempotency_key: Some(IdempotencyKey {
                         value: "input-backpressure".to_string(),
                     }),
@@ -1177,16 +1281,11 @@ mod tests {
             )),
         };
         let accepted = InvocationResponse {
-            response: Some(invocation_response::Response::Accepted(
-                InvocationAccepted {
-                    agent_id: Some(AgentId {
-                        component_id: None,
-                        name: "agent".to_string(),
-                    }),
-                    idempotency_key: Some(idempotency_key),
-                    component_revision: Some(1),
-                },
-            )),
+            response: Some(invocation_response::Response::Accepted(test_acceptance(
+                test_agent_id("agent"),
+                idempotency_key,
+                &[stream_id],
+            ))),
         };
         let mut state = InvocationSessionState::default();
         state.validate_public_request(&start).unwrap();
@@ -1211,11 +1310,13 @@ mod tests {
             let input = PublicInvocationRequest {
                 request: Some(public_invocation_request::Request::InputItem(
                     InputStreamItem {
-                        stream_id,
+                        transport_stream_id: stream_id,
                         sequence,
                         payload: Some(input_stream_item::Payload::Value(SchemaValue {
                             value: Some(schema_value::Value::U8Value(sequence as u32)),
                         })),
+                        durable_stream_id: Some(test_uuid(100 + stream_id)),
+                        epoch: 1,
                     },
                 )),
             };
@@ -1247,7 +1348,7 @@ mod tests {
             assert!(matches!(
                 request.request,
                 Some(invocation_request::Request::InputItem(InputStreamItem {
-                    stream_id: actual_stream_id,
+                    transport_stream_id: actual_stream_id,
                     sequence: actual_sequence,
                     ..
                 })) if actual_stream_id == stream_id && actual_sequence == expected_sequence
@@ -1292,16 +1393,11 @@ mod tests {
             )),
         };
         let accepted = InvocationResponse {
-            response: Some(invocation_response::Response::Accepted(
-                InvocationAccepted {
-                    agent_id: Some(AgentId {
-                        component_id: None,
-                        name: "agent".to_string(),
-                    }),
-                    idempotency_key: Some(idempotency_key),
-                    component_revision: Some(1),
-                },
-            )),
+            response: Some(invocation_response::Response::Accepted(test_acceptance(
+                test_agent_id("agent"),
+                idempotency_key,
+                &[stream_id],
+            ))),
         };
         let mut state = InvocationSessionState::default();
         state.validate_public_request(&start).unwrap();
@@ -1327,11 +1423,13 @@ mod tests {
             let input = PublicInvocationRequest {
                 request: Some(public_invocation_request::Request::InputItem(
                     InputStreamItem {
-                        stream_id,
+                        transport_stream_id: stream_id,
                         sequence,
                         payload: Some(input_stream_item::Payload::Value(SchemaValue {
                             value: Some(schema_value::Value::U8Value(sequence as u32)),
                         })),
+                        durable_stream_id: Some(test_uuid(100 + stream_id)),
+                        epoch: 1,
                     },
                 )),
             };
@@ -1379,18 +1477,13 @@ mod tests {
                 },
             )),
         };
-        let agent_id = AgentId {
-            component_id: None,
-            name: "agent".to_string(),
-        };
+        let agent_id = test_agent_id("agent");
         let accepted = InvocationResponse {
-            response: Some(invocation_response::Response::Accepted(
-                InvocationAccepted {
-                    agent_id: Some(agent_id.clone()),
-                    idempotency_key: Some(idempotency_key.clone()),
-                    component_revision: Some(1),
-                },
-            )),
+            response: Some(invocation_response::Response::Accepted(test_acceptance(
+                agent_id.clone(),
+                idempotency_key.clone(),
+                &[],
+            ))),
         };
         let mut initial_state = InvocationSessionState::default();
         initial_state.validate_public_request(&start).unwrap();
@@ -1412,6 +1505,13 @@ mod tests {
                     component_revision: Some(1),
                     agent_id: Some(agent_id),
                     idempotency_key: Some(idempotency_key),
+                    new_stream_mappings: vec![test_mapping(
+                        output_stream_id,
+                        StreamMappingRole::Output,
+                        &IdempotencyKey {
+                            value: "output-backpressure".to_string(),
+                        },
+                    )],
                     ..Default::default()
                 },
             )),
@@ -1422,11 +1522,15 @@ mod tests {
         let output_item = InvocationResponse {
             response: Some(invocation_response::Response::OutputItem(
                 OutputStreamItem {
-                    stream_id: output_stream_id,
-                    offset: 0,
+                    transport_stream_id: output_stream_id,
+                    producer_sequence: 0,
                     value: Some(SchemaValue {
                         value: Some(schema_value::Value::U8Value(42)),
                     }),
+                    durable_stream_id: Some(test_uuid(100 + output_stream_id)),
+                    durable_offset: test_durable_offset(),
+                    epoch: 1,
+                    new_stream_mappings: Vec::new(),
                 },
             )),
         };
@@ -1463,11 +1567,14 @@ mod tests {
         let cancel = PublicInvocationRequest {
             request: Some(public_invocation_request::Request::StreamCancel(
                 StreamCancel {
-                    stream_id: output_stream_id,
-                    offset: 0,
+                    transport_stream_id: output_stream_id,
+                    producer_sequence: 0,
                     role: StreamCancelRole::OutputConsumer as i32,
                     reason: StreamCancelReason::Cancelled as i32,
                     details: Some("stop output".to_string()),
+                    durable_stream_id: Some(test_uuid(100 + output_stream_id)),
+                    epoch: 1,
+                    durable_offset: Vec::new(),
                 },
             )),
         };
@@ -1485,7 +1592,7 @@ mod tests {
         assert!(matches!(
             forwarded.request,
             Some(invocation_request::Request::StreamCancel(StreamCancel {
-                stream_id,
+                transport_stream_id: stream_id,
                 role,
                 ..
             })) if stream_id == output_stream_id && role == StreamCancelRole::OutputConsumer as i32
@@ -1505,6 +1612,7 @@ mod tests {
                     idempotency_key: Some(IdempotencyKey {
                         value: "temporary-pre-start-stall".to_string(),
                     }),
+                    ..Default::default()
                 },
             )),
         };
@@ -1598,6 +1706,7 @@ mod tests {
                     idempotency_key: Some(IdempotencyKey {
                         value: "permanent-pre-start-stall".to_string(),
                     }),
+                    ..Default::default()
                 },
             )),
         };

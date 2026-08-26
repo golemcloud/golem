@@ -21,6 +21,8 @@ mod clocks;
 mod concurrent;
 mod config;
 pub mod durability;
+pub(crate) mod durable_session;
+pub(crate) mod durable_stream;
 mod filesystem;
 pub mod golem;
 pub mod http;
@@ -51,18 +53,14 @@ use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::storage::{
-    STORAGE_TYPE_FILESYSTEM, record_filesystem_pool_released, record_storage_bytes_deleted,
-    record_storage_bytes_written,
+    STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
 };
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
 };
-use crate::services::active_workers::{
-    FilesystemStoragePermit, MemoryGrant, bytes_to_filesystem_storage_permits,
-    filesystem_storage_permits_to_bytes,
-};
+use crate::services::active_workers::MemoryGrant;
 use crate::services::agent_storage_meter::AgentStorageMeter;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
@@ -185,88 +183,7 @@ impl WorkerDir {
     }
 }
 
-#[derive(Debug)]
-struct UnpersistedFilesystemStorage {
-    baseline_bytes: u64,
-    permit: Option<FilesystemStoragePermit>,
-}
-
-impl UnpersistedFilesystemStorage {
-    fn new(baseline_bytes: u64) -> Self {
-        Self {
-            baseline_bytes,
-            permit: None,
-        }
-    }
-
-    fn extra_permits_for(&self, current_bytes: u64) -> u32 {
-        bytes_to_filesystem_storage_permits(current_bytes)
-            .saturating_sub(bytes_to_filesystem_storage_permits(self.baseline_bytes))
-    }
-
-    fn capacity_growth(&self, current_bytes: u64, new_bytes: u64) -> u64 {
-        let before = self.extra_permits_for(current_bytes);
-        let after = self.extra_permits_for(current_bytes.saturating_add(new_bytes));
-        filesystem_storage_permits_to_bytes(after.saturating_sub(before))
-    }
-
-    fn merge(&mut self, permit: Option<FilesystemStoragePermit>) {
-        let Some(permit) = permit else {
-            return;
-        };
-        match &mut self.permit {
-            Some(existing) => existing.merge(permit),
-            None => self.permit = Some(permit),
-        }
-    }
-
-    fn reconcile(&mut self, current_bytes: u64) {
-        let target = self.extra_permits_for(current_bytes) as usize;
-        let held = self
-            .permit
-            .as_ref()
-            .map_or(0, FilesystemStoragePermit::num_permits);
-        let excess = held.saturating_sub(target);
-        if excess > 0
-            && let Some(permit) = &mut self.permit
-        {
-            record_filesystem_pool_released(filesystem_storage_permits_to_bytes(excess as u32));
-            drop(permit.split(excess));
-        }
-        if self
-            .permit
-            .as_ref()
-            .is_some_and(|permit| permit.num_permits() == 0)
-        {
-            self.permit = None;
-        }
-    }
-}
-
-impl Drop for UnpersistedFilesystemStorage {
-    fn drop(&mut self) {
-        let permits = self
-            .permit
-            .as_ref()
-            .map_or(0, FilesystemStoragePermit::num_permits);
-        if permits > 0 {
-            record_filesystem_pool_released(filesystem_storage_permits_to_bytes(permits as u32));
-        }
-    }
-}
-
-/// An execution that performs real host operations but must not create replayable worker history.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UnpersistedExecutionKind {
-    StreamingInvocation,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct UnpersistedExecution {
-    kind: UnpersistedExecutionKind,
-}
-
-type PreparedFilesystemStorageReservation<Ctx> = (Arc<Worker<Ctx>>, u64, bool);
+type PreparedFilesystemStorageReservation<Ctx> = (Arc<Worker<Ctx>>, u64);
 
 impl Drop for WorkerDir {
     fn drop(&mut self) {
@@ -286,7 +203,7 @@ use tracing::{Instrument, Level, debug, error, info, span, warn};
 use try_match::try_match;
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
-use wasmtime::{AsContext, AsContextMut};
+use wasmtime::{AsContext, AsContextMut, Store};
 use wasmtime_wasi::p2::FsResult;
 use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
 use wasmtime_wasi::{
@@ -468,22 +385,14 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     state: PrivateDurableWorkerState,
     worker_dir: Arc<WorkerDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
+    stream_runtime_teardown: Arc<AtomicBool>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
     linear_memory: LinearMemoryTracker,
     storage_meter: AgentStorageMeter,
-    /// Capacity acquired only for an unpersisted execution. Durable baseline capacity stays on
-    /// the running worker; this excess is Store-owned and is returned when the execution ends or
-    /// the Store is discarded.
-    unpersisted_filesystem_storage: Option<UnpersistedFilesystemStorage>,
     /// Per-instance cache of resolved typed guest export handles, populated
     /// lazily on first use during invocation dispatch.
     agent_export_funcs: AgentExportFuncs,
-    /// Source lifecycle for the live streaming invocation currently executing
-    /// in this Store. `schema-value-stream.wrap` attaches newly created source
-    /// endpoints to it so the invocation can keep the Store event loop alive
-    /// until downstream readers finish or detach.
-    live_stream_tracker: Option<Arc<stream_transport::LiveStreamTracker>>,
     _store_alive_guard: StoreAliveGuard,
 }
 
@@ -927,12 +836,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             state,
             worker_dir,
             execution_status,
+            stream_runtime_teardown: Arc::new(AtomicBool::new(false)),
             resource_limits,
             linear_memory,
             storage_meter,
-            unpersisted_filesystem_storage: None,
             agent_export_funcs: AgentExportFuncs::default(),
-            live_stream_tracker: None,
             _store_alive_guard: StoreAliveGuard::new(),
         })
     }
@@ -1143,29 +1051,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(());
         }
 
-        if self.is_unpersisted_execution() {
-            for pending_event in self.pending_card_events_at_boundary().await? {
-                match pending_event.event {
-                    QueuedCardEvent::Revoke(event) => {
-                        self.apply_card_revoked(event.card_id, pending_event.oplog_index, true)
-                            .await?;
-                    }
-                    QueuedCardEvent::Install(event) => {
-                        let Some(card) = event.card else {
-                            return Err(WorkerExecutorError::runtime(
-                                "queued card install is missing card payload",
-                            ));
-                        };
-                        let _ = self
-                            .apply_card_install(Some(pending_event.oplog_index), card)
-                            .await?;
-                    }
-                }
-            }
-            self.remove_expired_cards().await;
-            return Ok(());
-        }
-
         while let Some(pending_event) = self.pending_card_events_at_boundary().await?.first() {
             match &pending_event.event {
                 QueuedCardEvent::Revoke(event) => {
@@ -1281,9 +1166,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 _ => CardInstallFailure::NotFound,
             };
 
-            if let Some(queued_event_index) = queued_event_index
-                && !self.is_unpersisted_execution()
-            {
+            if let Some(queued_event_index) = queued_event_index {
                 self.public_state
                     .worker()
                     .add_and_commit_oplog(OplogEntry::card_install_failed(
@@ -1308,12 +1191,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
                 .await;
 
-            if !self.is_unpersisted_execution() {
-                self.public_state
-                    .worker()
-                    .add_and_commit_oplog(OplogEntry::card_installed(queued_event_index, card))
-                    .await;
-            }
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::card_installed(queued_event_index, card))
+                .await;
             Ok(Ok(()))
         }
     }
@@ -1342,12 +1223,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
                 .await;
 
-            if !self.is_unpersisted_execution() {
-                self.public_state
-                    .worker()
-                    .add_and_commit_oplog(OplogEntry::card_revoked(queued_event_index, card_id))
-                    .await;
-            }
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::card_revoked(queued_event_index, card_id))
+                .await;
         }
 
         Ok(())
@@ -1387,13 +1266,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .set_card_interest(self.owned_agent_id.clone(), &wallet_card_ids)
             .await;
 
-        if !self.is_unpersisted_execution() {
-            for card_id in cards_to_expire {
-                self.public_state
-                    .worker()
-                    .add_and_commit_oplog(OplogEntry::card_expired(card_id))
-                    .await;
-            }
+        for card_id in cards_to_expire {
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::card_expired(card_id))
+                .await;
         }
     }
 
@@ -1570,27 +1447,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.state.is_replay() {
             return Ok(());
         }
-        if self.is_unpersisted_execution() {
-            let current_bytes = self.state.current_filesystem_storage_usage;
-            let capacity_bytes = self
-                .unpersisted_filesystem_storage
-                .as_ref()
-                .expect(
-                    "unpersisted filesystem accounting must be active during unpersisted execution",
-                )
-                .capacity_growth(current_bytes, new_bytes);
-            let permit = self
-                .public_state
-                .worker()
-                .acquire_unpersisted_filesystem_storage_space(capacity_bytes)
-                .await?;
-            self.unpersisted_filesystem_storage
-                .as_mut()
-                .expect("unpersisted filesystem accounting must remain active across acquisition")
-                .merge(permit);
-            self.state.current_filesystem_storage_usage = current_bytes.saturating_add(new_bytes);
-            return Ok(());
-        }
         // Acquire the semaphore permit first (non-blocking try). Writing the
         // oplog entry after a confirmed acquire ensures the oplog accurately
         // reflects only committed storage changes — a failed acquire leaves no
@@ -1627,16 +1483,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         let freed_bytes = freed_bytes.min(self.state.current_filesystem_storage_usage);
         if freed_bytes == 0 {
-            return;
-        }
-        if self.is_unpersisted_execution() {
-            self.state.current_filesystem_storage_usage -= freed_bytes;
-            self.unpersisted_filesystem_storage
-                .as_mut()
-                .expect(
-                    "unpersisted filesystem accounting must be active during unpersisted execution",
-                )
-                .reconcile(self.state.current_filesystem_storage_usage);
             return;
         }
         self.public_state
@@ -1680,23 +1526,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(None);
         }
         self.check_filesystem_storage_quota(new_bytes)?;
-        let is_unpersisted_execution = self.is_unpersisted_execution();
-        let capacity_bytes = if is_unpersisted_execution {
-            self.unpersisted_filesystem_storage
-                .as_ref()
-                .expect(
-                    "unpersisted filesystem accounting must be active during unpersisted execution",
-                )
-                .capacity_growth(self.state.current_filesystem_storage_usage, new_bytes)
-        } else {
-            new_bytes
-        };
         self.state.current_filesystem_storage_usage += new_bytes;
-        Ok(Some((
-            self.public_state.worker(),
-            capacity_bytes,
-            is_unpersisted_execution,
-        )))
+        Ok(Some((self.public_state.worker(), new_bytes)))
     }
 
     pub(crate) fn rollback_filesystem_storage_reservation(&mut self, new_bytes: u64) {
@@ -1706,22 +1537,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.current_filesystem_storage_usage -= new_bytes;
     }
 
-    pub(crate) fn finish_filesystem_storage_reservation(
-        &mut self,
-        new_bytes: u64,
-        is_unpersisted_execution: bool,
-        unpersisted_permit: Option<FilesystemStoragePermit>,
-    ) {
+    pub(crate) fn finish_filesystem_storage_reservation(&mut self, new_bytes: u64) {
         if new_bytes == 0 || self.state.is_replay() {
             return;
         }
-        if is_unpersisted_execution {
-            if let Some(storage) = &mut self.unpersisted_filesystem_storage {
-                storage.merge(unpersisted_permit);
-            }
-            return;
-        }
-        debug_assert!(unpersisted_permit.is_none());
         let account_id = self.created_by().to_string();
         let environment_id = self.state.owned_agent_id.environment_id().to_string();
         record_storage_bytes_written(
@@ -1744,25 +1563,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             None
         } else {
             self.state.current_filesystem_storage_usage -= freed_bytes;
-            if self.is_unpersisted_execution() {
-                self.unpersisted_filesystem_storage
-                    .as_mut()
-                    .expect("unpersisted filesystem accounting must be active during unpersisted execution")
-                    .reconcile(self.state.current_filesystem_storage_usage);
-            }
             Some((self.public_state.worker(), freed_bytes))
         }
     }
 
-    pub(crate) fn finish_filesystem_storage_release(
-        &mut self,
-        freed_bytes: u64,
-        is_unpersisted_execution: bool,
-    ) {
+    pub(crate) fn finish_filesystem_storage_release(&mut self, freed_bytes: u64) {
         if freed_bytes == 0 || self.state.is_replay() {
-            return;
-        }
-        if is_unpersisted_execution {
             return;
         }
         let account_id = self.created_by().to_string();
@@ -1777,7 +1583,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn increase_memory(&mut self, delta: u64) {
         let (_, reconciling) = self.linear_memory.grow(delta, Instant::now());
-        if self.state.is_live() && !reconciling && !self.is_unpersisted_execution() {
+        if self.state.is_live() && !reconciling {
             // This is called from the `memory.grow` async resource limiter, which
             // Wasmtime runs through a blocking libcall on the store's fiber. While
             // that libcall waits, the store cannot make progress, so nothing may be
@@ -1821,11 +1627,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 crate::metrics::workers::record_worker_memory_grow_rejected();
                 return Err(GolemSpecificWasmTrap::WorkerOutOfMemory.into());
             };
-            if self.is_unpersisted_execution() {
-                tracker.retain_transient_growth_grant(grant);
-            } else {
-                tracker.retain_growth_grant(grant);
-            }
+            tracker.retain_growth_grant(grant);
         }
         Ok(true)
     }
@@ -2125,7 +1927,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &self.state.replay_state,
             &self.state.oplog,
             self.state.is_live(),
-            self.is_unpersisted_execution(),
         )
         .await;
     }
@@ -3345,10 +3146,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.tail_work_tracker()
     }
 
-    pub(crate) fn live_stream_tracker(&self) -> Option<Arc<stream_transport::LiveStreamTracker>> {
-        self.live_stream_tracker.clone()
-    }
-
     pub(crate) fn live_stream_event_capacity(&self) -> usize {
         self.state
             .config
@@ -3357,27 +3154,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .get()
     }
 
-    pub(crate) fn is_live_streaming_invocation(&self) -> bool {
-        self.live_stream_tracker.is_some()
+    pub(crate) fn stream_runtime_teardown_probe(
+        &self,
+    ) -> Arc<dyn Fn() -> bool + Send + Sync + 'static> {
+        let stream_runtime_teardown = self.stream_runtime_teardown.clone();
+        Arc::new(move || stream_runtime_teardown.load(Ordering::Acquire))
     }
 
-    pub(crate) fn is_unpersisted_execution(&self) -> bool {
-        self.state.is_unpersisted_execution()
-    }
-
-    pub(crate) fn set_live_stream_tracker(
-        &mut self,
-        tracker: Arc<stream_transport::LiveStreamTracker>,
-    ) {
-        assert!(
-            self.live_stream_tracker.is_none(),
-            "a live streaming invocation is already active in this Store"
-        );
-        self.live_stream_tracker = Some(tracker);
-    }
-
-    pub(crate) fn clear_live_stream_tracker(&mut self) {
-        self.live_stream_tracker = None;
+    pub(crate) fn begin_stream_runtime_teardown(&self) {
+        self.stream_runtime_teardown.store(true, Ordering::Release);
     }
 
     /// Arms the optional per-invocation wall-clock deadline (`limits.max_invocation_duration`)
@@ -3470,57 +3255,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &*self.execution_status.read().unwrap(),
             ExecutionStatus::Interrupting { .. }
         )
-    }
-
-    fn begin_unpersisted_execution(&mut self, kind: UnpersistedExecutionKind) {
-        assert!(
-            self.state.unpersisted_execution.is_none(),
-            "cannot begin {kind:?} while {:?} is active",
-            self.state
-                .unpersisted_execution
-                .map(|execution| execution.kind)
-        );
-        assert!(
-            self.unpersisted_filesystem_storage.is_none(),
-            "unpersisted filesystem accounting is already active"
-        );
-
-        self.unpersisted_filesystem_storage = Some(UnpersistedFilesystemStorage::new(
-            self.state.current_filesystem_storage_usage,
-        ));
-        self.state.unpersisted_execution = Some(UnpersistedExecution { kind });
-    }
-
-    fn end_unpersisted_execution(&mut self, expected_kind: UnpersistedExecutionKind) {
-        let execution = self.state.unpersisted_execution.take().unwrap_or_else(|| {
-            panic!("cannot end {expected_kind:?}: no unpersisted execution is active")
-        });
-        assert_eq!(
-            execution.kind, expected_kind,
-            "cannot end {expected_kind:?} while {:?} is active",
-            execution.kind
-        );
-
-        let storage = self
-            .unpersisted_filesystem_storage
-            .take()
-            .expect("unpersisted filesystem accounting must be active");
-        self.state.current_filesystem_storage_usage = storage.baseline_bytes;
-    }
-
-    pub(crate) fn begin_unpersisted_streaming_invocation(&mut self) {
-        self.begin_unpersisted_execution(UnpersistedExecutionKind::StreamingInvocation);
-    }
-
-    pub(crate) fn end_unpersisted_streaming_invocation_if_active(&mut self) {
-        if matches!(
-            self.state
-                .unpersisted_execution
-                .map(|execution| execution.kind),
-            Some(UnpersistedExecutionKind::StreamingInvocation)
-        ) {
-            self.end_unpersisted_execution(UnpersistedExecutionKind::StreamingInvocation);
-        }
     }
 
     pub(crate) fn end_call_snapshotting_function_if_active(&mut self) {
@@ -3868,13 +3602,6 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
                 return Some(*interrupt_kind);
             }
         }
-        if self
-            .live_stream_tracker
-            .as_ref()
-            .is_some_and(|tracker| tracker.cancellation_token().is_cancelled())
-        {
-            return Some(InterruptKind::Interrupt(Timestamp::now_utc()));
-        }
         // An exceeded invocation or tail-work deadline surfaces as a synthetic interrupt so work
         // traps at the next epoch check. The corresponding invocation boundary converts the
         // unwind into the appropriate timeout failure.
@@ -3999,12 +3726,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         trap_type: &TrapType,
     ) -> RetryDecision {
-        let is_unpersisted_execution = self.is_unpersisted_execution();
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
         if self.state.is_live()
             && !self.state.snapshotting_mode
-            && !is_unpersisted_execution
             && let Err(err) = concurrent::drain_queued_dropped_call_events(self).await
         {
             error!("failed to drain dropped durable calls before invocation failure entry: {err}");
@@ -4067,7 +3792,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )),
         };
 
-        if !is_unpersisted_execution && let Some(entry) = oplog_entry {
+        if let Some(entry) = oplog_entry {
             self.public_state.worker().add_and_commit_oplog(entry).await;
         };
 
@@ -4088,7 +3813,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             AgentStatus::Interrupted | AgentStatus::Exited
         ) || decision == RetryDecision::None;
 
-        if giving_up && !is_unpersisted_execution {
+        if giving_up {
             // Giving up, associating the stored result with the current and upcoming invocations
             if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                 self.public_state
@@ -4145,7 +3870,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         output: &mut AgentInvocationOutput,
     ) -> Result<(), WorkerExecutorError> {
         let is_live = self.state.is_live();
-        if is_live && !self.state.snapshotting_mode && !self.is_unpersisted_execution() {
+        if is_live && !self.state.snapshotting_mode {
             concurrent::drain_queued_dropped_call_events(self)
                 .await
                 .map_err(|err| err.source)?;
@@ -4313,7 +4038,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
     async fn add(&mut self, resource: ResourceAny, name: ResourceTypeId) -> u64 {
         let id = self.state.add(resource, name.clone()).await;
         let resource_id = AgentResourceId(id);
-        if self.state.is_live() && !self.is_unpersisted_execution() {
+        if self.state.is_live() {
             let entry = OplogEntry::create_resource(resource_id, name.clone());
             self.public_state.worker().add_to_oplog(entry).await;
         }
@@ -4324,7 +4049,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         let result = self.state.borrow(resource_id).await;
         if let Some((resource_type_id, _)) = &result {
             let id = AgentResourceId(resource_id);
-            if self.state.is_live() && !self.is_unpersisted_execution() {
+            if self.state.is_live() {
                 let entry = OplogEntry::drop_resource(id, resource_type_id.clone());
                 self.public_state.worker().add_to_oplog(entry).await;
             }
@@ -4480,7 +4205,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             span.set_attribute(name.clone(), value.clone());
         }
 
-        if is_live && !self.is_unpersisted_execution() {
+        if is_live {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::StartSpan {
@@ -4520,7 +4245,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        if self.is_live() && !self.is_unpersisted_execution() {
+        if self.is_live() {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
@@ -4558,7 +4283,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             .invocation_context
             .set_attribute(span_id, key.to_string(), value.clone())
             .map_err(WorkerExecutorError::runtime)?;
-        if self.is_live() && !self.is_unpersisted_execution() {
+        if self.is_live() {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::set_span_attribute(
@@ -4600,7 +4325,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     }
 
     async fn resume_replay(
-        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        store: &mut Store<Ctx>,
         instance: &Instance,
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
@@ -4679,6 +4404,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .metadata
                             .clone();
 
+                        let worker = store.as_context().data().get_public_state().worker();
+                        let agent_invocation = worker
+                            .rehydrate_durable_streaming_invocation(agent_invocation)
+                            .await?;
                         let agent_id = store.as_context().data().parsed_agent_id();
                         let lowered = lower_invocation(
                             agent_invocation,
@@ -4707,7 +4436,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         store
                             .as_context_mut()
                             .data_mut()
-                            .set_current_idempotency_key(idempotency_key)
+                            .set_current_idempotency_key(idempotency_key.clone())
                             .await;
 
                         let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
@@ -4738,9 +4467,70 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {
-                                result: invocation_result,
+                                result: mut invocation_result,
                                 consumed_fuel,
                             }) => {
+                                if let AgentInvocationResult::AgentMethod { output } =
+                                    &mut invocation_result
+                                {
+                                    let (graph, root, component_revision) = {
+                                        let component = store.data().component_metadata();
+                                        let agent_id = store.data().parsed_agent_id();
+                                        let agent_type = agent_id
+                                            .as_ref()
+                                            .and_then(|agent_id| {
+                                                component
+                                                    .metadata
+                                                    .find_agent_type_by_name_ref(
+                                                        &agent_id.agent_type,
+                                                    )
+                                            })
+                                            .ok_or_else(|| {
+                                                WorkerExecutorError::runtime(
+                                                    "durable invocation result schema is unavailable",
+                                                )
+                                            })?;
+                                        let method = agent_type
+                                            .methods
+                                            .iter()
+                                            .find(|method| method.name == full_function_name)
+                                            .ok_or_else(|| {
+                                                WorkerExecutorError::runtime(
+                                                    "durable invocation result method schema is unavailable",
+                                                )
+                                            })?;
+                                        (
+                                            agent_type.schema.clone(),
+                                            method.output_schema.schema().cloned().unwrap_or_else(
+                                                || {
+                                                    golem_common::schema::SchemaType::tuple(
+                                                        Vec::new(),
+                                                    )
+                                                },
+                                            ),
+                                            component.revision,
+                                        )
+                                    };
+                                    let worker = worker.clone();
+                                    let result_value = output.clone();
+                                    let replay_idempotency_key = idempotency_key.clone();
+                                    *output = store
+                                        .run_concurrent(async move |_accessor| {
+                                            worker
+                                                .materialize_durable_streaming_result(
+                                                    &replay_idempotency_key,
+                                                    result_value,
+                                                    &graph,
+                                                    &root,
+                                                    component_revision,
+                                                )
+                                                .await
+                                        })
+                                        .await
+                                        .map_err(|error| {
+                                            WorkerExecutorError::runtime(error.to_string())
+                                        })??;
+                                }
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
                                 let mut output = AgentInvocationOutput {
@@ -4845,7 +4635,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
-        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        store: &mut Store<Ctx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         debug!("Starting prepare_instance");
         let start = Instant::now();
@@ -5107,38 +4897,6 @@ mod tests {
     }
 
     #[test]
-    fn unpersisted_filesystem_capacity_reuses_the_durable_baseline() {
-        let storage = UnpersistedFilesystemStorage::new(1500);
-
-        assert_eq!(storage.capacity_growth(0, 1000), 0);
-        assert_eq!(storage.capacity_growth(0, 2200), 1024);
-        assert_eq!(storage.capacity_growth(1500, 600), 1024);
-        assert_eq!(storage.capacity_growth(2100, 300), 0);
-    }
-
-    #[test]
-    async fn unpersisted_filesystem_capacity_is_released_before_store_reuse() {
-        let semaphore = crate::services::active_workers::FilesystemStorageSemaphore::new(
-            4 * 1024,
-            Duration::from_millis(1),
-        );
-        let mut storage = UnpersistedFilesystemStorage::new(500);
-
-        let growth = storage.capacity_growth(500, 600);
-        storage.merge(semaphore.try_acquire(growth).await);
-        assert_eq!(semaphore.available_bytes(), 3 * 1024);
-
-        storage.reconcile(500);
-        assert_eq!(semaphore.available_bytes(), 4 * 1024);
-
-        let growth = storage.capacity_growth(500, 2000);
-        storage.merge(semaphore.try_acquire(growth).await);
-        assert_eq!(semaphore.available_bytes(), 2 * 1024);
-        drop(storage);
-        assert_eq!(semaphore.available_bytes(), 4 * 1024);
-    }
-
-    #[test]
     fn snapshot_boundary_all_clear_has_no_blocker() {
         assert_eq!(SnapshotBoundaryConditions::default().blocker(), None);
     }
@@ -5176,13 +4934,6 @@ mod tests {
             ),
             (
                 SnapshotBoundaryConditions {
-                    streaming_invocation: true,
-                    ..Default::default()
-                },
-                SnapshotBoundaryBlocker::StreamingInvocation,
-            ),
-            (
-                SnapshotBoundaryConditions {
                     in_flight_host_call: true,
                     ..Default::default()
                 },
@@ -5200,16 +4951,15 @@ mod tests {
 
     #[test]
     fn snapshot_boundary_any_condition_combination_blocks() {
-        // Exhaustive truth table over the six conditions: a snapshot is admitted iff every
+        // Exhaustive truth table over the five conditions: a snapshot is admitted iff every
         // condition is clear, and the reported blocker is always one of the set conditions.
-        for bits in 0u32..64 {
+        for bits in 0u32..32 {
             let conditions = SnapshotBoundaryConditions {
                 replaying: bits & 1 != 0,
                 open_atomic_region: bits & 2 != 0,
                 open_durable_scope: bits & 4 != 0,
                 snapshotting: bits & 8 != 0,
-                streaming_invocation: bits & 16 != 0,
-                in_flight_host_call: bits & 32 != 0,
+                in_flight_host_call: bits & 16 != 0,
             };
             let blocker = conditions.blocker();
             assert_eq!(
@@ -5223,7 +4973,6 @@ mod tests {
                     SnapshotBoundaryBlocker::OpenAtomicRegion => conditions.open_atomic_region,
                     SnapshotBoundaryBlocker::OpenDurableScope => conditions.open_durable_scope,
                     SnapshotBoundaryBlocker::Snapshotting => conditions.snapshotting,
-                    SnapshotBoundaryBlocker::StreamingInvocation => conditions.streaming_invocation,
                     SnapshotBoundaryBlocker::InFlightHostCall => conditions.in_flight_host_call,
                 };
                 assert!(
@@ -5242,18 +4991,18 @@ mod tests {
             let replaying = bits & 1 != 0;
             let open_atomic_region = bits & 2 != 0;
             let open_durable_scope = bits & 4 != 0;
-            let unpersisted_execution = bits & 8 != 0;
+            let snapshotting = bits & 8 != 0;
             assert_eq!(
                 PrivateDurableWorkerState::clean_checkpoint_boundary(
                     replaying,
                     open_atomic_region,
                     open_durable_scope,
-                    unpersisted_execution,
+                    snapshotting,
                 ),
                 bits == 0,
                 "checkpoint must be admitted iff no condition is set; replaying: {replaying}, \
                  open_atomic_region: {open_atomic_region}, open_durable_scope: {open_durable_scope}, \
-                 unpersisted_execution: {unpersisted_execution}"
+                 snapshotting: {snapshotting}"
             );
         }
     }
@@ -5262,20 +5011,19 @@ mod tests {
     fn snapshot_boundary_is_checkpoint_boundary_with_no_in_flight_host_call() {
         // The documented sync invariant between the two predicates: `blocker() == None` is
         // equivalent to `at_clean_checkpoint_boundary() && !has_in_flight_live_host_calls()`.
-        for bits in 0u32..64 {
+        for bits in 0u32..32 {
             let conditions = SnapshotBoundaryConditions {
                 replaying: bits & 1 != 0,
                 open_atomic_region: bits & 2 != 0,
                 open_durable_scope: bits & 4 != 0,
                 snapshotting: bits & 8 != 0,
-                streaming_invocation: bits & 16 != 0,
-                in_flight_host_call: bits & 32 != 0,
+                in_flight_host_call: bits & 16 != 0,
             };
             let at_checkpoint_boundary = PrivateDurableWorkerState::clean_checkpoint_boundary(
                 conditions.replaying,
                 conditions.open_atomic_region,
                 conditions.open_durable_scope,
-                conditions.snapshotting || conditions.streaming_invocation,
+                conditions.snapshotting,
             );
             assert_eq!(
                 conditions.blocker().is_none(),
@@ -6728,7 +6476,6 @@ struct PrivateDurableWorkerState {
     /// the HttpRequestState. Keyed by outgoing request rep.
     pending_http_retry_eligibility: HashMap<u32, HttpRetryEligibility>,
 
-    unpersisted_execution: Option<UnpersistedExecution>,
     snapshotting_mode: bool,
 
     /// Tracks whether the currently executing invocation is restricted to read-only side effects.
@@ -7073,7 +6820,6 @@ impl PrivateDurableWorkerState {
             open_filesystem_input_streams: HashSet::new(),
             file_stream_pollables: HashSet::new(),
             tcp_taken_streams: HashMap::new(),
-            unpersisted_execution: None,
             snapshotting_mode: false,
             invocation_strictness: InvocationStrictness::Normal,
             read_only_method_name: None,
@@ -7562,12 +7308,8 @@ impl PrivateDurableWorkerState {
         self.replay_state.is_live()
     }
 
-    pub fn is_unpersisted_execution(&self) -> bool {
-        self.unpersisted_execution.is_some()
-    }
-
     fn durability_is_suppressed(&self) -> bool {
-        self.snapshotting_mode || self.is_unpersisted_execution()
+        self.snapshotting_mode
     }
 
     /// Whether the current oplog tip is a structurally clean boundary at which a mid-invocation
@@ -7591,9 +7333,9 @@ impl PrivateDurableWorkerState {
         replaying: bool,
         open_atomic_region: bool,
         open_durable_scope: bool,
-        unpersisted_execution: bool,
+        snapshotting: bool,
     ) -> bool {
-        !replaying && !open_atomic_region && !open_durable_scope && !unpersisted_execution
+        !replaying && !open_atomic_region && !open_durable_scope && !snapshotting
     }
 
     /// The first condition currently blocking a snapshot, or `None` when the worker is at a safe
@@ -7617,10 +7359,6 @@ impl PrivateDurableWorkerState {
             open_atomic_region: !self.active_atomic_regions.is_empty(),
             open_durable_scope: !self.active_durable_scopes.is_empty(),
             snapshotting: self.snapshotting_mode,
-            streaming_invocation: matches!(
-                self.unpersisted_execution.map(|execution| execution.kind),
-                Some(UnpersistedExecutionKind::StreamingInvocation)
-            ),
             in_flight_host_call: self.has_in_flight_live_host_calls(),
         }
         .blocker()
@@ -7677,8 +7415,6 @@ struct SnapshotBoundaryConditions {
     open_durable_scope: bool,
     /// A snapshotting function (save/load) call is already in progress.
     snapshotting: bool,
-    /// A live streaming invocation is currently using the Store without persistence.
-    streaming_invocation: bool,
     /// A live durable host call is in flight: its `Start` may precede the cut while its
     /// terminal entry lands after it.
     in_flight_host_call: bool,
@@ -7696,8 +7432,6 @@ impl SnapshotBoundaryConditions {
             Some(SnapshotBoundaryBlocker::OpenDurableScope)
         } else if self.snapshotting {
             Some(SnapshotBoundaryBlocker::Snapshotting)
-        } else if self.streaming_invocation {
-            Some(SnapshotBoundaryBlocker::StreamingInvocation)
         } else if self.in_flight_host_call {
             Some(SnapshotBoundaryBlocker::InFlightHostCall)
         } else {
@@ -7714,7 +7448,6 @@ pub enum SnapshotBoundaryBlocker {
     OpenAtomicRegion,
     OpenDurableScope,
     Snapshotting,
-    StreamingInvocation,
     InFlightHostCall,
 }
 
@@ -7725,9 +7458,6 @@ impl Display for SnapshotBoundaryBlocker {
             Self::OpenAtomicRegion => write!(f, "an atomic region is still open"),
             Self::OpenDurableScope => write!(f, "a durable scope is still open"),
             Self::Snapshotting => write!(f, "a snapshot function call is already in progress"),
-            Self::StreamingInvocation => {
-                write!(f, "a live streaming invocation is already in progress")
-            }
             Self::InFlightHostCall => write!(f, "a durable host call is still in flight"),
         }
     }

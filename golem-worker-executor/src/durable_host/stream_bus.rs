@@ -13,10 +13,189 @@
 // limitations under the License.
 
 use async_broadcast::{Receiver, RecvError, Sender, TrySendError, broadcast};
+use golem_common::base_model::durable_stream::{
+    MAX_LIVE_JOIN_BUFFER_SIZE, MAX_LIVE_READERS_PER_STREAM, MIN_LIVE_JOIN_BUFFER_SIZE,
+    StreamOffsetV1,
+};
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{Mutex, Notify};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use tokio::sync::{Mutex, Notify, mpsc};
 use tokio_util::sync::CancellationToken;
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DurableLiveStreamEvent<T> {
+    pub(crate) offset: StreamOffsetV1,
+    pub(crate) payload: T,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DurableLiveStreamBusError {
+    InvalidCapacity,
+    ReaderLimit,
+    ReaderIdOverflow,
+    NonIncreasingOffset,
+}
+
+struct DurableLiveStreamBusState<T> {
+    high_water: Option<StreamOffsetV1>,
+    readers: HashMap<u64, mpsc::Sender<DurableLiveStreamEvent<T>>>,
+}
+
+/// Bounded live-tail optimization for events that have already committed to the producer oplog.
+/// With no readers publication is a non-blocking high-water update. With readers, each reader has
+/// its own bounded queue and the slowest attached reader backpressures publication without loss.
+pub(crate) struct DurableLiveStreamBus<T> {
+    capacity: usize,
+    max_readers: usize,
+    next_reader_id: AtomicU64,
+    state: Mutex<DurableLiveStreamBusState<T>>,
+}
+
+impl<T: Clone> DurableLiveStreamBus<T> {
+    pub(crate) fn new(capacity: usize) -> Result<Self, DurableLiveStreamBusError> {
+        Self::with_reader_limit(capacity, MAX_LIVE_READERS_PER_STREAM)
+    }
+
+    fn with_reader_limit(
+        capacity: usize,
+        max_readers: usize,
+    ) -> Result<Self, DurableLiveStreamBusError> {
+        if !(MIN_LIVE_JOIN_BUFFER_SIZE..=MAX_LIVE_JOIN_BUFFER_SIZE).contains(&capacity)
+            || max_readers == 0
+            || max_readers > MAX_LIVE_READERS_PER_STREAM
+        {
+            crate::metrics::durable_stream::record_limit_violation("live_join_capacity");
+            return Err(DurableLiveStreamBusError::InvalidCapacity);
+        }
+        Ok(Self {
+            capacity,
+            max_readers,
+            next_reader_id: AtomicU64::new(0),
+            state: Mutex::new(DurableLiveStreamBusState {
+                high_water: None,
+                readers: HashMap::new(),
+            }),
+        })
+    }
+
+    /// Installs a tail subscription and samples the committed high-water under the same lock used
+    /// by publication. The returned receiver therefore either contains a concurrent event or the
+    /// sampled high-water includes it for historical catch-up.
+    pub(crate) async fn subscribe(
+        &self,
+    ) -> Result<DurableLiveStreamSubscription<T>, DurableLiveStreamBusError> {
+        let mut state = self.state.lock().await;
+        if state.readers.len() >= self.max_readers {
+            crate::metrics::durable_stream::record_limit_violation("live_readers");
+            crate::metrics::durable_stream::record_live_join_rejected();
+            return Err(DurableLiveStreamBusError::ReaderLimit);
+        }
+        let reader_id = self
+            .next_reader_id
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |id| id.checked_add(1))
+            .map_err(|_| {
+                crate::metrics::durable_stream::record_limit_violation("reader_id");
+                crate::metrics::durable_stream::record_live_join_rejected();
+                DurableLiveStreamBusError::ReaderIdOverflow
+            })?;
+        let (sender, receiver) = mpsc::channel(self.capacity);
+        state.readers.insert(reader_id, sender);
+        crate::metrics::durable_stream::reader_attached();
+        Ok(DurableLiveStreamSubscription {
+            reader_id,
+            high_water: state.high_water,
+            receiver,
+        })
+    }
+
+    /// Publishes an event only after its producer-oplog commit has completed.
+    pub(crate) async fn publish_committed(
+        &self,
+        event: DurableLiveStreamEvent<T>,
+    ) -> Result<(), DurableLiveStreamBusError> {
+        let mut state = self.state.lock().await;
+        if state
+            .high_water
+            .is_some_and(|high_water| event.offset <= high_water)
+        {
+            return Err(DurableLiveStreamBusError::NonIncreasingOffset);
+        }
+        state.high_water = Some(event.offset);
+
+        let readers = state
+            .readers
+            .iter()
+            .map(|(reader_id, sender)| (*reader_id, sender.clone()))
+            .collect::<Vec<_>>();
+        for (reader_id, sender) in readers {
+            if sender.capacity() == 0 {
+                crate::metrics::durable_stream::record_backpressure();
+            }
+            if sender.send(event.clone()).await.is_err() {
+                state.readers.remove(&reader_id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Republishes an already committed event after replay. The durable offset may be at or below
+    /// the current high-water; attached readers discard the overlap by offset.
+    pub(crate) async fn republish_committed(&self, event: DurableLiveStreamEvent<T>) {
+        let mut state = self.state.lock().await;
+        if state
+            .high_water
+            .is_none_or(|high_water| event.offset > high_water)
+        {
+            state.high_water = Some(event.offset);
+        }
+
+        let readers = state
+            .readers
+            .iter()
+            .map(|(reader_id, sender)| (*reader_id, sender.clone()))
+            .collect::<Vec<_>>();
+        for (reader_id, sender) in readers {
+            if sender.capacity() == 0 {
+                crate::metrics::durable_stream::record_backpressure();
+            }
+            if sender.send(event.clone()).await.is_err() {
+                state.readers.remove(&reader_id);
+            }
+        }
+    }
+
+    pub(crate) async fn unsubscribe(&self, reader_id: u64) {
+        self.state.lock().await.readers.remove(&reader_id);
+    }
+
+    #[cfg(test)]
+    async fn reader_count(&self) -> usize {
+        self.state.lock().await.readers.len()
+    }
+}
+
+pub(crate) struct DurableLiveStreamSubscription<T> {
+    reader_id: u64,
+    pub(crate) high_water: Option<StreamOffsetV1>,
+    receiver: mpsc::Receiver<DurableLiveStreamEvent<T>>,
+}
+
+impl<T> DurableLiveStreamSubscription<T> {
+    pub(crate) fn reader_id(&self) -> u64 {
+        self.reader_id
+    }
+
+    pub(crate) async fn recv(&mut self) -> Option<DurableLiveStreamEvent<T>> {
+        self.receiver.recv().await
+    }
+}
+
+impl<T> Drop for DurableLiveStreamSubscription<T> {
+    fn drop(&mut self) {
+        crate::metrics::durable_stream::reader_detached();
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LiveStreamEvent<T> {
@@ -29,7 +208,6 @@ pub(crate) enum LiveStreamEventPayload<T> {
     Item(T),
     End,
     Error(String),
-    Cancel(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,14 +280,6 @@ impl<T: Clone> LiveStreamPublisher<T> {
             .await
     }
 
-    pub(crate) async fn publish_cancel(
-        &self,
-        reason: String,
-    ) -> Result<u64, LiveStreamPublishError> {
-        self.publish_terminal(LiveStreamEventPayload::Cancel(reason))
-            .await
-    }
-
     async fn publish_terminal(
         &self,
         payload: LiveStreamEventPayload<T>,
@@ -159,10 +329,6 @@ impl<T: Clone> LiveStreamPublisher<T> {
         AuxiliaryLiveStreamSubscriber {
             receiver: self.sender.new_receiver(),
         }
-    }
-
-    pub(crate) fn close(&self) {
-        self.sender.close();
     }
 }
 
@@ -297,35 +463,123 @@ pub(crate) fn live_output_stream_bus<T>(
     live_stream_bus(capacity, move || invocation_cancellation.cancel())
 }
 
-pub(crate) fn live_input_stream_bus<T>(
-    capacity: usize,
-    stream_cancellation: CancellationToken,
-    producer_notification: Arc<Notify>,
-) -> Result<
-    (
-        LiveStreamPublisher<T>,
-        ReservedPrimaryLiveStreamSubscriber<T>,
-    ),
-    LiveStreamBusCreateError,
-> {
-    live_stream_bus(capacity, move || {
-        stream_cancellation.cancel();
-        producer_notification.notify_one();
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
+        DurableLiveStreamBus, DurableLiveStreamBusError, DurableLiveStreamEvent,
         LiveStreamBusCreateError, LiveStreamEvent, LiveStreamEventPayload, LiveStreamPublishError,
-        live_input_stream_bus, live_output_stream_bus, live_stream_bus,
+        live_output_stream_bus, live_stream_bus,
     };
+    use golem_common::base_model::OplogIndex;
+    use golem_common::base_model::durable_stream::StreamOffsetV1;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
-    use test_r::test;
-    use tokio::sync::Notify;
+    use test_r::{test, timeout};
     use tokio_util::sync::CancellationToken;
+
+    #[test]
+    async fn durable_bus_supports_zero_readers_and_subscribe_high_water() {
+        let bus = DurableLiveStreamBus::new(2).unwrap();
+        let first = StreamOffsetV1::new(OplogIndex::from_u64(10), 0);
+        bus.publish_committed(DurableLiveStreamEvent {
+            offset: first,
+            payload: "historical",
+        })
+        .await
+        .unwrap();
+
+        let mut subscription = bus.subscribe().await.unwrap();
+        assert_eq!(subscription.high_water, Some(first));
+        let second = StreamOffsetV1::new(OplogIndex::from_u64(11), 0);
+        bus.publish_committed(DurableLiveStreamEvent {
+            offset: second,
+            payload: "live",
+        })
+        .await
+        .unwrap();
+        assert_eq!(subscription.recv().await.unwrap().offset, second);
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn durable_bus_enforces_reader_limit_and_per_reader_backpressure() {
+        let bus = Arc::new(DurableLiveStreamBus::with_reader_limit(1, 2).unwrap());
+        let mut fast = bus.subscribe().await.unwrap();
+        let mut slow = bus.subscribe().await.unwrap();
+        assert!(matches!(
+            bus.subscribe().await,
+            Err(DurableLiveStreamBusError::ReaderLimit)
+        ));
+
+        bus.publish_committed(DurableLiveStreamEvent {
+            offset: StreamOffsetV1::new(OplogIndex::from_u64(10), 0),
+            payload: 1,
+        })
+        .await
+        .unwrap();
+        let blocked = tokio::spawn({
+            let bus = bus.clone();
+            async move {
+                bus.publish_committed(DurableLiveStreamEvent {
+                    offset: StreamOffsetV1::new(OplogIndex::from_u64(11), 0),
+                    payload: 2,
+                })
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!blocked.is_finished());
+        fast.recv().await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(!blocked.is_finished());
+        slow.recv().await.unwrap();
+        assert_eq!(blocked.await.unwrap(), Ok(()));
+    }
+
+    #[test]
+    async fn durable_bus_rejects_non_increasing_committed_offsets() {
+        let bus = DurableLiveStreamBus::new(1).unwrap();
+        let offset = StreamOffsetV1::new(OplogIndex::from_u64(10), 0);
+        bus.publish_committed(DurableLiveStreamEvent { offset, payload: 1 })
+            .await
+            .unwrap();
+        assert_eq!(
+            bus.publish_committed(DurableLiveStreamEvent { offset, payload: 2 })
+                .await,
+            Err(DurableLiveStreamBusError::NonIncreasingOffset)
+        );
+        assert_eq!(bus.reader_count().await, 0);
+    }
+
+    #[test]
+    async fn durable_bus_allows_repair_publication_without_moving_high_water_backwards() {
+        let bus = DurableLiveStreamBus::new(2).unwrap();
+        let first = StreamOffsetV1::new(OplogIndex::from_u64(10), 0);
+        let second = StreamOffsetV1::new(OplogIndex::from_u64(11), 0);
+        bus.publish_committed(DurableLiveStreamEvent {
+            offset: first,
+            payload: 1,
+        })
+        .await
+        .unwrap();
+        bus.publish_committed(DurableLiveStreamEvent {
+            offset: second,
+            payload: 2,
+        })
+        .await
+        .unwrap();
+        let mut subscription = bus.subscribe().await.unwrap();
+
+        bus.republish_committed(DurableLiveStreamEvent {
+            offset: first,
+            payload: 1,
+        })
+        .await;
+        assert_eq!(subscription.recv().await.unwrap().offset, first);
+        let later = bus.subscribe().await.unwrap();
+        assert_eq!(later.high_water, Some(second));
+    }
 
     #[test]
     fn rejects_zero_capacity() {
@@ -487,37 +741,6 @@ mod tests {
     }
 
     #[test]
-    async fn input_primary_loss_is_stream_scoped_and_notifies_the_producer() {
-        let invocation_cancellation = CancellationToken::new();
-        let first_stream_cancellation = invocation_cancellation.child_token();
-        let second_stream_cancellation = invocation_cancellation.child_token();
-        let producer_notification = Arc::new(Notify::new());
-        let (_first_publisher, first_primary) = live_input_stream_bus::<u64>(
-            1,
-            first_stream_cancellation.clone(),
-            producer_notification.clone(),
-        )
-        .unwrap();
-        let (second_publisher, second_primary) = live_input_stream_bus(
-            1,
-            second_stream_cancellation.clone(),
-            Arc::new(Notify::new()),
-        )
-        .unwrap();
-        let mut second_primary = second_primary.activate();
-        let notification = producer_notification.notified();
-
-        drop(first_primary);
-
-        notification.await;
-        assert!(first_stream_cancellation.is_cancelled());
-        assert!(!second_stream_cancellation.is_cancelled());
-        assert!(!invocation_cancellation.is_cancelled());
-        assert_eq!(second_publisher.publish_item(1).await, Ok(0));
-        assert_eq!(second_primary.recv().await.unwrap().offset, 0);
-    }
-
-    #[test]
     async fn stream_scoped_primary_loss_does_not_cancel_a_sibling_bus() {
         let first_cancelled = Arc::new(AtomicBool::new(false));
         let second_cancelled = Arc::new(AtomicBool::new(false));
@@ -553,10 +776,6 @@ mod tests {
         assert_eq!(publisher.publish_error("failed".to_string()).await, Ok(1));
         assert_eq!(
             publisher.publish_end().await,
-            Err(LiveStreamPublishError::Terminated)
-        );
-        assert_eq!(
-            publisher.publish_cancel("cancelled".to_string()).await,
             Err(LiveStreamPublishError::Terminated)
         );
         assert_eq!(

@@ -73,6 +73,11 @@ message OplogEntry {
     CardExpiredParameters CardExpired = 51;
     HostStreamFrameParameters HostStreamFrame = 52;
     CompletionDiscardedParameters CompletionDiscarded = 53;
+    DurableStreamRecordParameters StreamRegistered = 54;
+    DurableStreamRecordParameters StreamItems = 55;
+    DurableStreamRecordParameters StreamEnd = 56;
+    DurableStreamRecordParameters StreamCancel = 57;
+    DurableStreamRecordParameters StreamSession = 58;
   }
 }
 
@@ -353,6 +358,11 @@ message HostStreamFrameParameters {
   uint64 parent_start_index = 2;
   HostStreamKind kind = 3;
   golem.schema.TypedSchemaValue payload = 4;
+}
+
+message DurableStreamRecordParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.schema.TypedSchemaValue record = 2;
 }
 
 message EndAtomicRegionParameters {

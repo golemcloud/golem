@@ -267,10 +267,6 @@ impl LinearMemoryTracker {
         self.retain_pending_growth_grant(grant, false);
     }
 
-    pub(crate) fn retain_transient_growth_grant(&self, grant: MemoryGrant) {
-        self.retain_pending_growth_grant(grant, true);
-    }
-
     fn retain_pending_growth_grant(&self, grant: MemoryGrant, transient: bool) {
         let _transition = self.inner.transitions.lock().unwrap();
         self.inner
@@ -565,41 +561,6 @@ mod tests {
             100,
             "a failed Wasmtime growth must return its pending admission reservation"
         );
-    }
-
-    #[test]
-    async fn transient_growth_grant_is_released_with_its_store_tracker() {
-        let now = Instant::now();
-        let controller = Arc::new(AdmissionController::new(
-            Box::new(FixedProbe::new(100, 0)),
-            AdmissionPolicy { usable_ratio: 1.0 },
-        ));
-        let retained_grant = Arc::new(Mutex::new(
-            controller.admit(40, &NoEvictionSource).await.unwrap(),
-        ));
-        let tracker = LinearMemoryTracker::new(
-            40,
-            40,
-            AgentMode::Durable,
-            false,
-            Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 0)),
-            retained_grant.clone(),
-            now,
-        );
-        tracker.reconcile(40, now);
-
-        let transient_grant = controller.admit(10, &NoEvictionSource).await.unwrap();
-        tracker.retain_transient_growth_grant(transient_grant);
-        tracker.grow(10, now);
-        assert_eq!(controller.headroom_bytes(), 50);
-
-        drop(tracker);
-        assert_eq!(
-            controller.headroom_bytes(),
-            60,
-            "snapshot-only capacity must not be retained by the running worker"
-        );
-        assert_eq!(retained_grant.lock().unwrap().bytes(), 40);
     }
 
     #[test]

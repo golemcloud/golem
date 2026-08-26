@@ -3659,6 +3659,7 @@ dependencies = [
 name = "golem-api-grpc"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "desert_rust",
  "miette",
  "prost 0.14.3",

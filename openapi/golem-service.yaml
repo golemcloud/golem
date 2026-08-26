@@ -13694,6 +13694,11 @@ components:
           CardRevoked: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
           CardExpired: '#/components/schemas/PublicOplogEntry_r#CardExpiredParams'
           HostStreamFrame: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
+          StreamRegistered: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
+          StreamItems: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
+          StreamEnd: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
+          StreamCancel: '#/components/schemas/PublicOplogEntry_r#StreamCancelParams'
+          StreamSession: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       type: object
       oneOf:
@@ -13743,6 +13748,11 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardRevokedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CardExpiredParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#HostStreamFrameParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamRegisteredParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamItemsParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamEndParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamCancelParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
@@ -14296,6 +14306,66 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#StartSpanParams'
+    PublicOplogEntry_r#StreamCancelParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: StreamCancel
+            type: string
+            enum:
+            - StreamCancel
+        required:
+        - type
+      - $ref: '#/components/schemas/r#StreamCancelParams'
+    PublicOplogEntry_r#StreamEndParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: StreamEnd
+            type: string
+            enum:
+            - StreamEnd
+        required:
+        - type
+      - $ref: '#/components/schemas/r#StreamEndParams'
+    PublicOplogEntry_r#StreamItemsParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: StreamItems
+            type: string
+            enum:
+            - StreamItems
+        required:
+        - type
+      - $ref: '#/components/schemas/r#StreamItemsParams'
+    PublicOplogEntry_r#StreamRegisteredParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: StreamRegistered
+            type: string
+            enum:
+            - StreamRegistered
+        required:
+        - type
+      - $ref: '#/components/schemas/r#StreamRegisteredParams'
+    PublicOplogEntry_r#StreamSessionParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: StreamSession
+            type: string
+            enum:
+            - StreamSession
+        required:
+        - type
+      - $ref: '#/components/schemas/r#StreamSessionParams'
     PublicOplogEntry_r#SuccessfulUpdateParams:
       allOf:
       - type: object
@@ -17124,6 +17194,66 @@ components:
       - timestamp
       - spanId
       - attributes
+    r#StreamCancelParams:
+      title: r#StreamCancelParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
+      required:
+      - timestamp
+      - record
+    r#StreamEndParams:
+      title: r#StreamEndParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
+      required:
+      - timestamp
+      - record
+    r#StreamItemsParams:
+      title: r#StreamItemsParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
+      required:
+      - timestamp
+      - record
+    r#StreamRegisteredParams:
+      title: r#StreamRegisteredParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
+      required:
+      - timestamp
+      - record
+    r#StreamSessionParams:
+      title: r#StreamSessionParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        record:
+          $ref: '#/components/schemas/TypedSchemaValue'
+      required:
+      - timestamp
+      - record
     r#SuccessfulUpdateParams:
       title: r#SuccessfulUpdateParams
       type: object
