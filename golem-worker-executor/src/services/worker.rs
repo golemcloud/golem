@@ -413,10 +413,18 @@ impl DefaultWorkerService {
         let mut workers = Vec::new();
 
         for owned_agent_id in value {
-            // A single unreadable worker is skipped instead of failing the whole scan. The index
-            // entry can outlive the worker (a delete that raced this read leaves no oplog), and
-            // recovery of every other worker on this executor - and executor startup itself -
-            // must not hinge on one of them.
+            // Only a worker that is genuinely gone may be skipped. The two outcomes are not the
+            // same failure wearing different clothes:
+            //
+            // - `Ok(None)` means there is no oplog, so the index entry outlived the worker - a
+            //   delete that raced this read. There is nothing to resume, and skipping is correct.
+            // - `Err` means the entry may well exist and we simply could not read it. Skipping
+            //   would leave a running agent suspended for as long as this executor owns the shard,
+            //   which breaks the guarantee that a reshard or a crash does not stop a running
+            //   worker - and it would do so silently. Failing the scan is the safe answer: a
+            //   transient cause is already absorbed by the storage retry budget, and one that
+            //   outlives it leaves this executor unable to do its job, so replacing it beats
+            //   carrying on with an unknown number of agents stranded.
             match self.get(&owned_agent_id).await {
                 Ok(Some(metadata)) => workers.push(metadata),
                 Ok(None) => {
@@ -425,7 +433,9 @@ impl DefaultWorkerService {
                     );
                 }
                 Err(err) => {
-                    error!("Skipping {owned_agent_id} during recovery: {err}");
+                    return Err(WorkerExecutorError::runtime(format!(
+                        "failed to read {owned_agent_id} during recovery, so it cannot be resumed: {err}"
+                    )));
                 }
             }
         }
@@ -1539,14 +1549,24 @@ mod tests {
     }
 
     /// Key-value storage whose every operation fails, standing in for an unreachable cluster.
-    #[derive(Debug)]
-    struct UnreachableKeyValueStorage;
+    #[derive(Debug, Default)]
+    struct UnreachableKeyValueStorage {
+        /// When set, `members_of_set` succeeds and returns these while every other read still
+        /// fails - the shape of an index that is readable but whose workers are not.
+        readable_index: Option<Vec<Bytes>>,
+    }
 
     impl UnreachableKeyValueStorage {
         fn error<T>() -> Result<T, KeyValueStorageError> {
             Err(KeyValueStorageError::NotAttempted(
                 "pool acquire timed out".to_string(),
             ))
+        }
+
+        fn with_readable_index(members: Vec<Bytes>) -> Self {
+            Self {
+                readable_index: Some(members),
+            }
         }
     }
 
@@ -1690,7 +1710,10 @@ mod tests {
             _namespace: KeyValueStorageNamespace,
             _key: &str,
         ) -> Result<Vec<Bytes>, KeyValueStorageError> {
-            Self::error()
+            match &self.readable_index {
+                Some(members) => Ok(members.clone()),
+                None => Self::error(),
+            }
         }
 
         async fn add_to_sorted_set(
@@ -1788,10 +1811,32 @@ mod tests {
         assert!(workers.is_empty());
     }
 
+    /// The distinction that matters more than the skip: an entry we could not *read* is not an
+    /// entry that is gone. Skipping it would leave a running agent suspended for as long as this
+    /// executor owns the shard, and would do it silently.
+    #[test]
+    async fn recovery_scan_fails_rather_than_stranding_a_worker_it_cannot_read() {
+        let shard_key = DefaultWorkerService::running_in_shard_key(&ShardId::new(0));
+        let stranded = test_owned_agent_id("running-but-unreadable");
+        let index = vec![Bytes::from(serialize(&stranded).unwrap())];
+
+        let service = test_worker_service(
+            Arc::new(UnreachableKeyValueStorage::with_readable_index(index)),
+            Arc::new(FakeOplogService::default()),
+        );
+
+        let result = service.enum_workers_at_key(&shard_key).await;
+
+        assert!(
+            result.is_err(),
+            "an unreadable worker must fail the scan, not be skipped: {result:?}"
+        );
+    }
+
     #[test]
     async fn delete_reports_an_unreachable_storage() {
         let service = test_worker_service(
-            Arc::new(UnreachableKeyValueStorage),
+            Arc::new(UnreachableKeyValueStorage::default()),
             Arc::new(FakeOplogService::default()),
         );
         let owned_agent_id = test_owned_agent_id("doomed");
@@ -1809,7 +1854,7 @@ mod tests {
     #[test]
     async fn recovery_scan_reports_an_unreadable_index() {
         let service = test_worker_service(
-            Arc::new(UnreachableKeyValueStorage),
+            Arc::new(UnreachableKeyValueStorage::default()),
             Arc::new(FakeOplogService::default()),
         );
 
