@@ -357,7 +357,17 @@ impl PromiseService for DefaultPromiseService {
         record_promise_created();
         crate::metrics::promises::inc_promise_pending_count();
 
-        // Start tracking the promise locally so poll does not need to go to storage.
+        // Intended to start tracking the promise locally so the first poll does not need to go to
+        // storage. It does not currently achieve that, and the entry is dead before this function
+        // returns: the registry holds `Weak<PromiseHandleInner>`, `get_or_insert` hands back the
+        // only strong reference, and discarding it here drops the strong count to zero - so the
+        // `Weak` can never upgrade and `PromiseRegistry::get` always misses for this promise.
+        //
+        // The effect is limited rather than absent: the first `poll` still pays an `exists()` read
+        // against storage, but it then registers a handle it *keeps*, so later polls hit the fast
+        // path for as long as some caller holds one. Making this pre-registration work would mean
+        // giving the handle an owner with a defined lifetime, which is a design question rather
+        // than a missing line.
         {
             let mut reg = self.registry.lock().await;
             reg.get_or_insert(&promise_id);
