@@ -1940,7 +1940,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .unread_range(current_idx);
 
         if let Some((start, count)) = unread_range {
-            let entries = oplog.read_many(start, count).await;
+            let entries = oplog.read_exact(start, count).await?;
             self.state
                 .card_event_boundary_scan
                 .as_mut()
@@ -2923,7 +2923,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .state
                         .replay_state
                         .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
-                        .await;
+                        .await?;
                     if end_index.is_none() {
                         // Must switch to live mode before failing to be able to commit an Error entry
                         self.switch_to_live().await;
@@ -2948,7 +2948,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             ScopeScanState::new(begin_index),
                             OplogEntry::track_scope_membership,
                         )
-                        .await;
+                        .await?;
                     match lookup_result {
                         OplogEntryLookupResult::Found { index, .. } => {
                             debug!(
@@ -3280,7 +3280,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     ScopeScanState::new(original_begin_index),
                     OplogEntry::track_scope_membership,
                 )
-                .await;
+                .await?;
 
             let tx_id = try_match!(
                 begin_entry,
@@ -3306,7 +3306,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             ScopeScanState::new(original_begin_index),
                             OplogEntry::track_scope_membership,
                         )
-                        .await;
+                        .await?;
 
                     match end_entry {
                         OplogEntryLookupResult::Found { .. } => {}
@@ -3817,20 +3817,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await;
 
         let (data_payload, mime_type) = match oplog_entry {
-            OplogEntry::Snapshot {
+            Ok(OplogEntry::Snapshot {
                 data, mime_type, ..
-            } => (data, mime_type),
-            OplogEntry::PendingUpdate {
+            }) => (data, mime_type),
+            Ok(OplogEntry::PendingUpdate {
                 description:
                     UpdateDescription::SnapshotBased {
                         payload, mime_type, ..
                     },
                 ..
-            } => (payload, mime_type),
-            _ => {
-                let error = format!(
-                    "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
-                );
+            }) => (payload, mime_type),
+            other => {
+                let error = match other {
+                    Ok(_) => format!(
+                        "Expected Snapshot entry at oplog index {snapshot_index}, found different entry; falling back to full replay"
+                    ),
+                    Err(error) => format!(
+                        "Failed to read Snapshot entry at oplog index {snapshot_index}: {error}; falling back to full replay"
+                    ),
+                };
                 warn!("{error}");
                 Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
                 if let Err(err) = store
@@ -5445,7 +5450,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
-    ) -> Option<LastError> {
+    ) -> Result<Option<LastError>, WorkerExecutorError> {
         last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
     }
 
@@ -5898,19 +5903,30 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             // other worker on this executor (which propagating would do — and would also fail
             // executor startup or the shard-assignment RPC, since one poison worker could
             // permanently block this executor from serving its shards).
-            let Some(latest_worker_status) = calculate_last_known_status_with_checkpoint(
+            let latest_worker_status = match calculate_last_known_status_with_checkpoint(
                 this,
                 &owned_agent_id,
                 agent_mode,
                 worker.last_known_status,
             )
             .await
-            else {
-                error!(
-                    agent_id = %owned_agent_id,
-                    "Failed to calculate worker status during shard-assignment recovery; skipping agent"
-                );
-                continue;
+            {
+                Ok(Some(status)) => status,
+                Ok(None) => {
+                    error!(
+                        agent_id = %owned_agent_id,
+                        "Worker oplog has no recoverable status during shard-assignment recovery; skipping agent"
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    error!(
+                        agent_id = %owned_agent_id,
+                        error = %error,
+                        "Failed to read worker oplog during shard-assignment recovery; skipping agent"
+                    );
+                    continue;
+                }
             };
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
@@ -8409,7 +8425,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     latest_worker_status: &AgentStatusRecord,
-) -> Option<LastError> {
+) -> Result<Option<LastError>, WorkerExecutorError> {
     // Short-circuit: there is nothing to report unless the worker is currently in an error-bearing
     // state. `last_error` otherwise scans backward to the start of the current invocation, which is
     // unbounded for long-running invocations. A failed/retrying worker always has its error near the
@@ -8420,7 +8436,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
         AgentStatus::Failed | AgentStatus::Retrying
     ) && latest_worker_status.current_retry_state.is_empty()
     {
-        return None;
+        return Ok(None);
     }
 
     let last_index = this
@@ -8428,7 +8444,7 @@ async fn last_error<T: HasOplogService + HasConfig>(
         .get_last_index(owned_agent_id, agent_mode)
         .await;
     if last_index == OplogIndex::NONE {
-        return None;
+        return Ok(None);
     }
 
     let mut first_error = None;
@@ -8442,8 +8458,13 @@ async fn last_error<T: HasOplogService + HasConfig>(
         let window_start = backward_scan_window_start(window_end);
         let entries = this
             .oplog_service()
-            .read_range(owned_agent_id, agent_mode, window_start, window_end)
-            .await;
+            .read_exact(
+                owned_agent_id,
+                agent_mode,
+                window_start,
+                window_end.as_u64() - window_start.as_u64() + 1,
+            )
+            .await?;
 
         let mut idx = window_end;
         loop {
@@ -8502,12 +8523,12 @@ async fn last_error<T: HasOplogService + HasConfig>(
     }
 
     match first_error {
-        Some(error) => Some(LastError {
+        Some(error) => Ok(Some(LastError {
             error,
-            stderr: recover_stderr_logs(this, owned_agent_id, agent_mode, last_error_index).await,
+            stderr: recover_stderr_logs(this, owned_agent_id, agent_mode, last_error_index).await?,
             retry_from: first_retry_from,
-        }),
-        None => None,
+        })),
+        None => Ok(None),
     }
 }
 
@@ -8526,7 +8547,7 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     last_oplog_idx: OplogIndex,
-) -> String {
+) -> Result<String, WorkerExecutorError> {
     let max_count = this.config().limits.event_history_size;
 
     // This might overestimate the size of stderr_entries by the size of current_stderr_entries_batch, but fine as we
@@ -8543,8 +8564,13 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
         let window_start = backward_scan_window_start(window_end);
         let entries = this
             .oplog_service()
-            .read_range(owned_agent_id, agent_mode, window_start, window_end)
-            .await;
+            .read_exact(
+                owned_agent_id,
+                agent_mode,
+                window_start,
+                window_end.as_u64() - window_start.as_u64() + 1,
+            )
+            .await?;
 
         let mut idx = window_end;
         loop {
@@ -8610,7 +8636,7 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
         window_end = window_start.previous();
     }
     stderr_entries.reverse();
-    stderr_entries.join("")
+    Ok(stderr_entries.join(""))
 }
 
 /// Transferable ownership of a P2 HTTP request's durable scope. The request state carrying this
@@ -9537,7 +9563,7 @@ impl PrivateDurableWorkerState {
                         }
                     };
                 if let Some(snapshot_idx) = last_snapshot_index {
-                    match oplog.read(snapshot_idx).await {
+                    match oplog.read(snapshot_idx).await? {
                         OplogEntry::Snapshot {
                             active_cards,
                             wallet_generation,

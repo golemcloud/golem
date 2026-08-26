@@ -474,7 +474,7 @@ pub(super) async fn record_frame_entry(
 }
 
 /// Loads one recorded data/trailers frame back from its `HostStreamFrame`
-/// entry. Uses `read_many`, which merges not-yet-committed buffered entries,
+/// entry. The canonical read merges not-yet-committed buffered entries,
 /// so a resend within the same session can replay frames that have not been
 /// committed yet.
 async fn load_recorded_frame(
@@ -483,10 +483,9 @@ async fn load_recorded_frame(
 ) -> Result<Frame<Bytes>, ErrorCode> {
     let internal = |message: String| ErrorCode::InternalError(Some(message));
     let entry = oplog
-        .read_many(index, 1)
+        .read(index)
         .await
-        .remove(&index)
-        .ok_or_else(|| internal(format!("recorded request-body frame missing at {index}")))?;
+        .map_err(|error| internal(error.to_string()))?;
     let OplogEntry::HostStreamFrame { payload, .. } = entry else {
         return Err(internal(format!(
             "oplog entry at {index} is not a recorded request-body frame"
@@ -582,10 +581,11 @@ pub(super) async fn scan_recorded_request_body_frames(
     let mut terminal: Option<RecordedRequestBodyTerminal> = None;
     let mut next = parent_start_index.next();
     while next <= scan_end {
-        let entries = oplog.read_many(next, SCAN_CHUNK).await;
-        if entries.is_empty() {
-            break;
-        }
+        let available = scan_end.as_u64() - next.as_u64() + 1;
+        let entries = oplog
+            .read_exact(next, SCAN_CHUNK.min(available))
+            .await
+            .map_err(|error| error.to_string())?;
         for (index, entry) in &entries {
             let OplogEntry::HostStreamFrame {
                 parent_start_index: frame_parent,

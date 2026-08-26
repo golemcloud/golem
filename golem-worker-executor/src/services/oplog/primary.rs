@@ -18,9 +18,11 @@ use crate::metrics::storage::{
     record_storage_objects_written,
 };
 use crate::model::ExecutionStatus;
+use crate::services::oplog::reader::{OplogReadSource, exact_from_source};
 use crate::services::oplog::{
-    CommitLevel, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor, OplogService,
-    OrderedOplogStart, PendingUpload, ReservedPayload, cursor_value, next_scan_cursor, scan_modes,
+    CommitLevel, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor, OplogReadError,
+    OplogService, OrderedOplogStart, PendingUpload, ReservedPayload, cursor_value,
+    next_scan_cursor, scan_modes,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -421,16 +423,33 @@ impl OplogService for PrimaryOplogService {
         }
     }
 
-    async fn read(
+    async fn read_exact(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
-        record_oplog_call("read");
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+        if n == 0 {
+            return Ok(BTreeMap::new());
+        }
+        let entries = self.read_source(owned_agent_id, agent_mode, idx, n).await?;
+        exact_from_source(OplogReadSource::Primary, idx, n, entries)
+    }
 
-        {
+    async fn read_source(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+        record_oplog_call("read");
+        if n == 0 {
+            return Ok(BTreeMap::new());
+        }
+
+        Ok({
             let is = self.indexed_storage.clone();
             let agent_id = owned_agent_id.agent_id();
             let key = Self::oplog_key(&owned_agent_id.agent_id);
@@ -453,7 +472,7 @@ impl OplogService for PrimaryOplogService {
             .into_iter()
             .map(|(k, v): (u64, OplogEntry)| (OplogIndex::from_u64(k), v))
             .collect()
-        }
+        })
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
@@ -936,7 +955,7 @@ struct OplogReader {
 }
 
 impl OplogReader {
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
         record_oplog_call("read");
 
         let buffer_start = self.last_committed_idx.next();
@@ -945,7 +964,7 @@ impl OplogReader {
             if let Ok(offset) = usize::try_from(offset)
                 && let Some(entry) = self.buffer.get(offset)
             {
-                return entry.clone();
+                return Ok(entry.clone());
             }
         }
 
@@ -974,16 +993,18 @@ impl OplogReader {
         entries
             .into_iter()
             .next()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Missing oplog entry {oplog_index} for {} in indexed storage",
-                    self.key
-                )
+            .map(|(_, entry)| entry)
+            .ok_or(OplogReadError::Gap {
+                start: oplog_index,
+                end: oplog_index,
             })
-            .1
     }
 
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("read_many");
 
         if n == 0 {
@@ -1408,14 +1429,28 @@ impl Oplog for PrimaryOplog {
         }
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        reader.read(oplog_index).await
+        let entries = reader.read_source(oplog_index, n).await;
+        exact_from_source(OplogReadSource::Primary, oplog_index, n, entries)
     }
 
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        reader.read_many(oplog_index, n).await
+        Ok(reader.read_source(oplog_index, n).await)
+    }
+
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
+        let reader = self.run_job(|done| OplogJob::Reader { done }).await;
+        reader.read(oplog_index).await
     }
 
     async fn length(&self) -> u64 {

@@ -36,7 +36,7 @@ use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use golem_worker_executor::services::component::ComponentService;
-use golem_worker_executor::services::oplog::Oplog;
+use golem_worker_executor::services::oplog::{Oplog, OplogReadError};
 use golem_worker_executor::services::worker_event::WorkerEventReceiver;
 use golem_worker_executor::services::{
     All, HasComponentService, HasConfig, HasExtraDeps, HasOplog, HasShardManagerService,
@@ -262,7 +262,13 @@ impl DebugServiceDefault {
                 ));
                 continue;
             }
-            let underlying = raw_oplog.read(index).await;
+            let underlying = match raw_oplog.read(index).await {
+                Ok(entry) => entry,
+                Err(err) => {
+                    errors.push(format!("Failed to read oplog index {index}: {err}"));
+                    continue;
+                }
+            };
             if let Err(err) = validate_override_preserves_pairing(
                 index,
                 &underlying,
@@ -297,7 +303,7 @@ impl DebugServiceDefault {
     pub async fn find_in_flight_durable_call_at(
         raw_oplog: Arc<dyn Oplog>,
         target_index: OplogIndex,
-    ) -> Option<(OplogIndex, String)> {
+    ) -> Result<Option<(OplogIndex, String)>, OplogReadError> {
         const CHUNK_SIZE: u64 = 1024;
 
         let scan_end = target_index.min(raw_oplog.current_oplog_index().await);
@@ -307,10 +313,9 @@ impl DebugServiceDefault {
         let mut index = OplogIndex::INITIAL;
         while index <= scan_end {
             let available = u64::from(scan_end) - u64::from(index) + 1;
-            let entries = raw_oplog.read_many(index, CHUNK_SIZE.min(available)).await;
-            if entries.is_empty() {
-                break;
-            }
+            let entries = raw_oplog
+                .read_exact(index, CHUNK_SIZE.min(available))
+                .await?;
             for (idx, entry) in &entries {
                 match entry {
                     OplogEntry::Start { function_name, .. } => {
@@ -329,10 +334,17 @@ impl DebugServiceDefault {
                     _ => {}
                 }
             }
-            index = entries.last_key_value().map(|(idx, _)| idx.next())?;
+            index =
+                entries
+                    .last_key_value()
+                    .map(|(idx, _)| idx.next())
+                    .ok_or(OplogReadError::Gap {
+                        start: index,
+                        end: scan_end,
+                    })?;
         }
 
-        unmatched.pop_first()
+        Ok(unmatched.pop_first())
     }
 
     /// Scans the full recorded oplog and returns the first durable call whose `End` lies at or
@@ -351,12 +363,12 @@ impl DebugServiceDefault {
     pub async fn find_split_completion_delivery_at(
         raw_oplog: Arc<dyn Oplog>,
         target_index: OplogIndex,
-    ) -> Option<(OplogIndex, OplogIndex, OplogIndex)> {
+    ) -> Result<Option<(OplogIndex, OplogIndex, OplogIndex)>, OplogReadError> {
         const CHUNK_SIZE: u64 = 1024;
 
         let scan_end = raw_oplog.current_oplog_index().await;
         if target_index >= scan_end {
-            return None;
+            return Ok(None);
         }
 
         // start_index -> End index, for End entries at or before the target
@@ -369,10 +381,9 @@ impl DebugServiceDefault {
         let mut index = OplogIndex::INITIAL;
         while index <= scan_end {
             let available = u64::from(scan_end) - u64::from(index) + 1;
-            let entries = raw_oplog.read_many(index, CHUNK_SIZE.min(available)).await;
-            if entries.is_empty() {
-                break;
-            }
+            let entries = raw_oplog
+                .read_exact(index, CHUNK_SIZE.min(available))
+                .await?;
             for (idx, entry) in &entries {
                 match entry {
                     OplogEntry::End { start_index, .. } if *idx <= target_index => {
@@ -397,13 +408,20 @@ impl DebugServiceDefault {
                     _ => {}
                 }
             }
-            index = entries.last_key_value().map(|(idx, _)| idx.next())?;
+            index =
+                entries
+                    .last_key_value()
+                    .map(|(idx, _)| idx.next())
+                    .ok_or(OplogReadError::Gap {
+                        start: index,
+                        end: scan_end,
+                    })?;
         }
 
-        markers.into_iter().find_map(|(marker_idx, start_idx)| {
+        Ok(markers.into_iter().find_map(|(marker_idx, start_idx)| {
             ends.get(&start_idx)
                 .map(|end_idx| (start_idx, *end_idx, marker_idx))
-        })
+        }))
     }
 
     pub async fn target_index_at_invocation_boundary(
@@ -437,7 +455,10 @@ impl DebugServiceDefault {
         let mut new_target_oplog_index = target_oplog_index;
 
         loop {
-            let entry = oplog.read(new_target_oplog_index).await;
+            let entry = oplog
+                .read(new_target_oplog_index)
+                .await
+                .map_err(|err| err.to_string())?;
 
             match entry {
                 OplogEntry::AgentInvocationFinished { .. } => {
@@ -594,7 +615,9 @@ impl DebugService for DebugServiceDefault {
         // (debug sessions never live-repair incomplete durable calls, as re-executing the
         // recorded side effects would not be a faithful playback).
         if let Some((start_index, function_name)) =
-            Self::find_in_flight_durable_call_at(raw_oplog.clone(), new_target_index).await
+            Self::find_in_flight_durable_call_at(raw_oplog.clone(), new_target_index)
+                .await
+                .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?
         {
             return Err(DebugServiceError::ValidationFailed {
                 agent_id: Some(agent_id.clone()),
@@ -608,7 +631,9 @@ impl DebugService for DebugServiceDefault {
         // without the marker replay would deliver at the End, either incorrectly delivering a
         // discarded completion or delivering a successful completion too early.
         if let Some((start_index, end_index, marker_index)) =
-            Self::find_split_completion_delivery_at(raw_oplog.clone(), new_target_index).await
+            Self::find_split_completion_delivery_at(raw_oplog.clone(), new_target_index)
+                .await
+                .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?
         {
             return Err(DebugServiceError::ValidationFailed {
                 agent_id: Some(agent_id.clone()),
@@ -775,7 +800,14 @@ impl DebugService for DebugServiceDefault {
         // replay could neither resolve the call from the entries before the target nor safely
         // re-execute it live (debug sessions never live-repair incomplete durable calls).
         if let Some((start_index, function_name)) =
-            Self::find_in_flight_durable_call_at(raw_oplog.clone(), new_target_index).await
+            Self::find_in_flight_durable_call_at(raw_oplog.clone(), new_target_index)
+                .await
+                .map_err(|e| {
+                    DebugServiceError::internal(
+                        e.to_string(),
+                        Some(owned_agent_id.agent_id.clone()),
+                    )
+                })?
         {
             return Err(DebugServiceError::ValidationFailed {
                 agent_id: Some(owned_agent_id.agent_id.clone()),
@@ -788,7 +820,14 @@ impl DebugService for DebugServiceDefault {
         // Refuse targets that split a completed durable call's `End` from its delivery marker,
         // exactly like playback.
         if let Some((start_index, end_index, marker_index)) =
-            Self::find_split_completion_delivery_at(raw_oplog.clone(), new_target_index).await
+            Self::find_split_completion_delivery_at(raw_oplog.clone(), new_target_index)
+                .await
+                .map_err(|e| {
+                    DebugServiceError::internal(
+                        e.to_string(),
+                        Some(owned_agent_id.agent_id.clone()),
+                    )
+                })?
         {
             return Err(DebugServiceError::ValidationFailed {
                 agent_id: Some(owned_agent_id.agent_id.clone()),
@@ -1141,6 +1180,7 @@ mod tests {
             OplogIndex::from_u64(target),
         )
         .await
+        .unwrap()
         .map(|(start, end, marker)| (u64::from(start), u64::from(end), u64::from(marker)))
     }
 
@@ -1265,25 +1305,28 @@ mod tests {
             unimplemented!()
         }
 
-        async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-            self.entries[(u64::from(oplog_index) - 1) as usize].clone()
+        async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
+            self.entries
+                .get((u64::from(oplog_index) - 1) as usize)
+                .cloned()
+                .ok_or(OplogReadError::Gap {
+                    start: oplog_index,
+                    end: oplog_index,
+                })
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             oplog_index: OplogIndex,
             n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
             let mut result = BTreeMap::new();
             let mut current = oplog_index;
             for _ in 0..n {
-                if u64::from(current) > self.entries.len() as u64 {
-                    break;
-                }
-                result.insert(current, self.read(current).await);
+                result.insert(current, self.read(current).await?);
                 current = current.next();
             }
-            result
+            Ok(result)
         }
 
         async fn length(&self) -> u64 {
@@ -1370,37 +1413,39 @@ mod tests {
             unimplemented!()
         }
 
-        async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-            if oplog_index == OplogIndex::from_u64(self.invocation_completion_index) {
-                OplogEntry::AgentInvocationFinished {
-                    timestamp: Timestamp::now_utc(),
-                    result: OplogPayload::Inline(Box::new(
-                        AgentInvocationResult::AgentInitialization,
-                    )),
-                    method_name: None,
-                    consumed_fuel: 0,
-                    component_revision: ComponentRevision::INITIAL,
-                }
-            } else {
-                // Any other oplog entry other than export function completed
-                OplogEntry::NoOp {
-                    timestamp: Timestamp::now_utc(),
-                }
-            }
+        async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
+            Ok(
+                if oplog_index == OplogIndex::from_u64(self.invocation_completion_index) {
+                    OplogEntry::AgentInvocationFinished {
+                        timestamp: Timestamp::now_utc(),
+                        result: OplogPayload::Inline(Box::new(
+                            AgentInvocationResult::AgentInitialization,
+                        )),
+                        method_name: None,
+                        consumed_fuel: 0,
+                        component_revision: ComponentRevision::INITIAL,
+                    }
+                } else {
+                    // Any other oplog entry other than export function completed
+                    OplogEntry::NoOp {
+                        timestamp: Timestamp::now_utc(),
+                    }
+                },
+            )
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             oplog_index: OplogIndex,
             n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
             let mut result = BTreeMap::new();
             let mut current = oplog_index;
             for _ in 0..n {
-                result.insert(current, self.read(current).await);
+                result.insert(current, self.read(current).await?);
                 current = current.next();
             }
-            result
+            Ok(result)
         }
 
         async fn length(&self) -> u64 {

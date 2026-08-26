@@ -372,13 +372,14 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
         .get_last_index(&owned_agent_id, AgentMode::Durable)
         .await;
     let raw_entries = oplog_service
-        .read(
+        .read_exact(
             &owned_agent_id,
             AgentMode::Durable,
             OplogIndex::INITIAL,
             Into::<u64>::into(last_index),
         )
-        .await;
+        .await
+        .unwrap();
 
     let components: Arc<dyn ComponentService> = Arc::new(PanicComponentService);
 

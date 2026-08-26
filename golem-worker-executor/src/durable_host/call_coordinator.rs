@@ -517,7 +517,7 @@ where
     });
 
     if let Some((start, count)) = unread_range {
-        let entries = oplog.read_many(start, count).await;
+        let entries = oplog.read_exact(start, count).await?;
         store.with(|mut access| {
             get_ctx(access.data_mut())
                 .state

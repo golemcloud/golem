@@ -1,5 +1,7 @@
 use super::*;
-use crate::services::oplog::{CommitLevel, OplogAddReceipt, OrderedOplogStart, PendingUpload};
+use crate::services::oplog::{
+    CommitLevel, OplogAddReceipt, OplogReadError, OrderedOplogStart, PendingUpload,
+};
 use async_trait::async_trait;
 use golem_common::model::card::{
     AgentCardHolder, Card, CardHolder, CardId, InvocationWalletPin, StoredCard, WalletVersionToken,
@@ -118,22 +120,22 @@ impl Oplog for InMemoryOplog {
         true
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        let entries = self.entries.lock().unwrap();
-        let idx: u64 = oplog_index.into();
-        entries[(idx - 1) as usize].clone()
-    }
-
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         let entries = self.entries.lock().unwrap();
         let start: u64 = oplog_index.into();
         let mut result = BTreeMap::new();
         for i in start..(start + n) {
-            if let Some(entry) = entries.get((i - 1) as usize) {
-                result.insert(OplogIndex::from_u64(i), entry.clone());
-            }
+            let entry = entries.get((i - 1) as usize).ok_or(OplogReadError::Gap {
+                start: oplog_index,
+                end: OplogIndex::from_u64(start + n - 1),
+            })?;
+            result.insert(OplogIndex::from_u64(i), entry.clone());
         }
-        result
+        Ok(result)
     }
 
     async fn length(&self) -> u64 {
@@ -3417,7 +3419,9 @@ async fn visible_terminal_scan_crosses_multiple_chunks() {
     let rs = replay_state_over(entries).await;
 
     assert!(
-        rs.has_visible_terminal(OplogIndex::from_u64(2)).await,
+        rs.has_visible_terminal(OplogIndex::from_u64(2))
+            .await
+            .unwrap(),
         "entity execution mode classification must scan through the complete replay prefix"
     );
 }

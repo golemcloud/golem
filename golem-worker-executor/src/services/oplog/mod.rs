@@ -39,6 +39,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 pub use ephemeral::EphemeralOplog;
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
+pub use reader::OplogReadError;
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -55,6 +56,7 @@ mod multilayer;
 pub mod plugin;
 mod primary;
 pub mod rate_limited;
+mod reader;
 
 #[cfg(test)]
 pub mod tests;
@@ -127,44 +129,27 @@ pub trait OplogService: Debug + Send + Sync {
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode);
 
-    async fn read(
+    /// Reads exactly `n` contiguous entries starting at `idx`.
+    async fn read_exact(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry>;
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError>;
 
-    /// Reads an inclusive range of entries from the oplog
-    async fn read_range(
+    /// Reads the part of the requested range physically present in this service.
+    ///
+    /// Composite services use this to fold their sources. Standalone services use the exact
+    /// logical read by default.
+    async fn read_source(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        start_idx: OplogIndex,
-        last_idx: OplogIndex,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
-        assert!(
-            start_idx <= last_idx,
-            "Invalid range passed to OplogService::read_range: start_idx = {start_idx}, last_idx = {last_idx}"
-        );
-
-        self.read(
-            owned_agent_id,
-            agent_mode,
-            start_idx,
-            Into::<u64>::into(last_idx) - Into::<u64>::into(start_idx) + 1,
-        )
-        .await
-    }
-
-    async fn read_prefix(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        last_idx: OplogIndex,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.read_range(owned_agent_id, agent_mode, OplogIndex::INITIAL, last_idx)
-            .await
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+        self.read_exact(owned_agent_id, agent_mode, idx, n).await
     }
 
     /// Checks whether the oplog exists in the oplog, without opening it
@@ -450,11 +435,32 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// otherwise false.
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool;
 
-    /// Reads the entry at the given oplog index
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry;
+    /// Reads exactly `n` contiguous entries starting at `oplog_index`.
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError>;
 
-    /// Reads the entry at the given oplog index
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry>;
+    /// Reads the part of the requested range physically present in this oplog.
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+        self.read_exact(oplog_index, n).await
+    }
+
+    /// Reads the entry at the given oplog index.
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
+        self.read_exact(oplog_index, 1)
+            .await?
+            .remove(&oplog_index)
+            .ok_or(OplogReadError::Gap {
+                start: oplog_index,
+                end: oplog_index,
+            })
+    }
 
     /// Notifies the oplog implementation that the worker's replay cursor committed a new
     /// position: `last_replayed_index` is the index of the last replayed entry. This fires only

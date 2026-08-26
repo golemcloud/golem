@@ -97,18 +97,23 @@ pub async fn get_public_oplog_chunk(
     initial_oplog_index: OplogIndex,
     count: usize,
 ) -> Result<PublicOplogChunk, String> {
-    let raw_entries = oplog_service
-        .read(
-            owned_agent_id,
-            agent_mode,
-            initial_oplog_index,
-            count as u64,
-        )
-        .await;
-
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
         .await;
+    let available = if initial_oplog_index <= last_index {
+        last_index.as_u64() - initial_oplog_index.as_u64() + 1
+    } else {
+        0
+    };
+    let raw_entries = oplog_service
+        .read_exact(
+            owned_agent_id,
+            agent_mode,
+            initial_oplog_index,
+            (count as u64).min(available),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
 
     let mut entries = Vec::new();
     let mut current_component_revision = initial_component_revision;
@@ -225,11 +230,9 @@ pub async fn find_component_revision_at(
     while current < start && current <= last_oplog_index {
         // NOTE: could be reading in pages for optimization
         let entry = oplog_service
-            .read(owned_agent_id, agent_mode, current, 1)
-            .await
-            .iter()
-            .next()
-            .map(|(_, v)| v.clone());
+            .read_exact(owned_agent_id, agent_mode, current, 1)
+            .await?
+            .remove(&current);
 
         if let Some(revision) = entry.and_then(|entry| entry.specifies_component_revision()) {
             initial_component_revision = revision;

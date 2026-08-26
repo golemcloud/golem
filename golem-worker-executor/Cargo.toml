@@ -120,6 +120,10 @@ harness = false
 name = "authorization"
 harness = false
 
+[[bench]]
+name = "oplog_read"
+harness = false
+
 [dev-dependencies]
 golem-test-framework = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }

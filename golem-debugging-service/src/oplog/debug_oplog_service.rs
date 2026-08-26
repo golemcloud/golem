@@ -23,7 +23,7 @@ use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCu
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::model::ExecutionStatus;
-use golem_worker_executor::services::oplog::{OpenOplogs, Oplog, OplogService};
+use golem_worker_executor::services::oplog::{OpenOplogs, Oplog, OplogReadError, OplogService};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -126,19 +126,33 @@ impl OplogService for DebugOplogService {
         self.inner.delete(owned_agent_id, agent_mode).await
     }
 
-    async fn read(
+    async fn read_exact(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         // This read must not move the debug session's current oplog index: service-level reads
         // also happen outside replay (for example folding the worker status when the worker is
         // created), and letting them move the session index would corrupt the session's replay
         // position. Replay progress is tracked by the sequential entry reads going through
         // `DebugOplog::read` instead.
-        self.inner.read(owned_agent_id, agent_mode, idx, n).await
+        self.inner
+            .read_exact(owned_agent_id, agent_mode, idx, n)
+            .await
+    }
+
+    async fn read_source(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+        self.inner
+            .read_source(owned_agent_id, agent_mode, idx, n)
+            .await
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {

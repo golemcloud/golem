@@ -1015,26 +1015,27 @@ impl Oplog for InMemoryOplog {
         true
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        let entries = self.entries.lock().await;
-        let idx: u64 = oplog_index.into();
-        entries[(idx - 1) as usize].clone()
-    }
-
-    async fn read_many(
+    async fn read_exact(
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<
+        std::collections::BTreeMap<OplogIndex, OplogEntry>,
+        crate::services::oplog::OplogReadError,
+    > {
         let entries = self.entries.lock().await;
         let start: u64 = oplog_index.into();
         let mut result = std::collections::BTreeMap::new();
         for i in start..(start + n) {
-            if let Some(entry) = entries.get((i - 1) as usize) {
-                result.insert(OplogIndex::from_u64(i), entry.clone());
-            }
+            let entry = entries.get((i - 1) as usize).ok_or(
+                crate::services::oplog::OplogReadError::Gap {
+                    start: oplog_index,
+                    end: OplogIndex::from_u64(start + n - 1),
+                },
+            )?;
+            result.insert(OplogIndex::from_u64(i), entry.clone());
         }
-        result
+        Ok(result)
     }
 
     async fn length(&self) -> u64 {

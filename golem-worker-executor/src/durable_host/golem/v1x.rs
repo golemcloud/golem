@@ -773,7 +773,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .state
                 .replay_state
                 .lookup_oplog_entry(begin_index, OplogEntry::is_end_atomic_region)
-                .await
+                .await?
             {
                 Some(end_index) => {
                     debug!(
@@ -1104,7 +1104,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         agent_mode,
                         result.last_known_status,
                     )
-                    .await
+                    .await?
                     {
                         metadata.last_known_status = status;
                     }

@@ -119,7 +119,7 @@ use golem_worker_executor::services::golem_config::{
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
-    CommitLevel, Oplog, OplogAddReceipt, OplogService, OrderedOplogStart,
+    CommitLevel, Oplog, OplogAddReceipt, OplogReadError, OplogService, OrderedOplogStart,
 };
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
@@ -1427,7 +1427,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
-    ) -> Option<LastError> {
+    ) -> Result<Option<LastError>, WorkerExecutorError> {
         DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
             this,
             owned_agent_id,
@@ -2959,14 +2959,26 @@ impl Oplog for TestOplog {
         self.oplog.wait_for_replicas(replicas, timeout).await
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
         self.oplog.read(oplog_index).await
     }
 
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "read_many");
-        self.oplog.read_many(oplog_index, n).await
+        self.oplog.read_exact(oplog_index, n).await
+    }
+
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+        self.oplog.read_source(oplog_index, n).await
     }
 
     async fn length(&self) -> u64 {

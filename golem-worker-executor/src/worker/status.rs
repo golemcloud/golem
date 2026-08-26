@@ -1,3 +1,4 @@
+use crate::services::oplog::OplogReadError;
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -23,13 +24,16 @@ pub async fn calculate_last_known_status_for_existing_worker<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
-) -> AgentStatusRecord
+) -> Result<AgentStatusRecord, OplogReadError>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
     calculate_last_known_status(this, owned_agent_id, agent_mode, last_known)
-        .await
-        .expect("Failed to calculate oplog index for existing worker")
+        .await?
+        .ok_or(OplogReadError::Gap {
+            start: OplogIndex::INITIAL,
+            end: OplogIndex::INITIAL,
+        })
 }
 
 /// Gets the last cached worker status record and the new oplog entries and calculates the new worker
@@ -46,7 +50,7 @@ pub async fn calculate_last_known_status<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
-) -> Option<AgentStatusRecord>
+) -> Result<Option<AgentStatusRecord>, OplogReadError>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
@@ -74,7 +78,7 @@ pub async fn calculate_last_known_status_with_checkpoint<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
-) -> Option<AgentStatusRecord>
+) -> Result<Option<AgentStatusRecord>, OplogReadError>
 where
     T: HasOplogService + HasConfig + HasComponentService + HasWorkerService + Sync,
 {
@@ -115,7 +119,7 @@ pub async fn calculate_last_known_status_with_checkpoint_reader<T, Fut>(
     agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
     read_checkpoint: impl FnOnce() -> Fut,
-) -> Option<AgentStatusRecord>
+) -> Result<Option<AgentStatusRecord>, OplogReadError>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
     Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
@@ -123,20 +127,20 @@ where
     // 1. Try folding forward from the live cached status.
     if let Some(last_known) = last_known
         && let Some(status) =
-            try_fold_status_from(this, owned_agent_id, agent_mode, last_known).await
+            try_fold_status_from(this, owned_agent_id, agent_mode, last_known).await?
     {
         crate::metrics::workers::record_agent_status_recompute("cache");
-        return Some(status);
+        return Ok(Some(status));
     }
 
     // 2. Live cache baseline missing or its fold was impossible (e.g. a jump deleted the cached
     //    index, or a revert moved the oplog behind it): try folding from the clean checkpoint.
     if let Some(checkpoint) = read_checkpoint().await
         && let Some(status) =
-            try_fold_status_from(this, owned_agent_id, agent_mode, checkpoint).await
+            try_fold_status_from(this, owned_agent_id, agent_mode, checkpoint).await?
     {
         crate::metrics::workers::record_agent_status_recompute("checkpoint");
-        return Some(status);
+        return Ok(Some(status));
     }
 
     // 3. Fall back to a full recompute from the start of the oplog.
@@ -146,11 +150,11 @@ where
         agent_mode,
         AgentStatusRecord::default(),
     )
-    .await;
+    .await?;
     if status.is_some() {
         crate::metrics::workers::record_agent_status_recompute("full");
     }
-    status
+    Ok(status)
 }
 
 /// Folds the oplog entries after `baseline.oplog_idx` onto `baseline`.
@@ -170,7 +174,7 @@ pub async fn try_fold_status_from<T>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     baseline: AgentStatusRecord,
-) -> Option<AgentStatusRecord>
+) -> Result<Option<AgentStatusRecord>, OplogReadError>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
@@ -182,30 +186,35 @@ where
     if last_oplog_index == OplogIndex::NONE {
         // Worker status can only be recovered if we have at least the Create oplog entry, otherwise
         // we cannot recover information like the component version.
-        return None;
+        return Ok(None);
     }
 
     if last_oplog_index < baseline.oplog_idx {
         // The baseline is ahead of the oplog (e.g. a revert truncated it below a stale checkpoint);
         // we cannot fold forward, so the caller must retry from an earlier baseline.
-        return None;
+        return Ok(None);
     }
 
     if baseline.oplog_idx == last_oplog_index {
-        return Some(baseline);
+        return Ok(Some(baseline));
     }
 
     let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
         .oplog_service()
-        .read_range(
+        .read_exact(
             owned_agent_id,
             agent_mode,
             baseline.oplog_idx.next(),
-            last_oplog_index,
+            last_oplog_index.as_u64() - baseline.oplog_idx.as_u64(),
         )
-        .await;
+        .await?;
 
-    update_status_with_new_entries(agent_mode, baseline, new_entries, &this.config().retry)
+    Ok(update_status_with_new_entries(
+        agent_mode,
+        baseline,
+        new_entries,
+        &this.config().retry,
+    ))
 }
 
 // update a worker status with new entries. Returns None if the status cannot be calculated from the new entries alone and needs to be recalculated from the beginning.
@@ -1382,7 +1391,7 @@ mod test {
     use crate::model::ExecutionStatus;
     use crate::services::component::ComponentService;
     use crate::services::golem_config::GolemConfig;
-    use crate::services::oplog::{Oplog, OplogService};
+    use crate::services::oplog::{Oplog, OplogReadError, OplogService};
     use crate::services::{HasComponentService, HasConfig, HasOplogService};
     use crate::worker::status::{
         calculate_last_known_status, calculate_last_known_status_for_existing_worker,
@@ -2068,6 +2077,7 @@ mod test {
             None,
         )
         .await
+        .unwrap()
         .unwrap();
         let from_before_atomic_pair = calculate_last_known_status_for_existing_worker(
             &test_case,
@@ -2075,7 +2085,8 @@ mod test {
             AgentMode::Durable,
             Some(pending_baseline),
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(from_start, expected);
         assert_eq!(from_before_atomic_pair, expected);
@@ -2147,7 +2158,8 @@ mod test {
 
         let result =
             calculate_last_known_status(&test_case, &owned_agent_id, AgentMode::Durable, None)
-                .await;
+                .await
+                .unwrap();
         assert2::assert!(let None = result);
     }
 
@@ -2199,7 +2211,8 @@ mod test {
             AgentMode::Durable,
             stale_live.clone(),
         )
-        .await;
+        .await
+        .unwrap();
         assert2::assert!(let None = direct);
 
         test_case.read_starts.lock().unwrap().clear();
@@ -2211,7 +2224,8 @@ mod test {
             Some(stale_live),
             || async { Some(checkpoint) },
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(repaired, Some(final_expected));
 
@@ -2239,7 +2253,8 @@ mod test {
             Some(stale_live),
             || async { None },
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(result, Some(final_expected));
 
@@ -2267,7 +2282,8 @@ mod test {
             Some(stale_live),
             || async { Some(unusable_checkpoint) },
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(result, Some(final_expected));
 
@@ -2733,7 +2749,7 @@ mod test {
     struct TestCase {
         owned_agent_id: OwnedAgentId,
         entries: Vec<TestEntry>,
-        /// Records the `start_idx` of every `read`/`read_range` so tests can assert which baseline
+        /// Records the `start_idx` of every exact read so tests can assert which baseline
         /// a recompute folded from. Shared across `self.clone()`s handed out by `oplog_service()`.
         read_starts: Arc<std::sync::Mutex<Vec<u64>>>,
     }
@@ -2813,22 +2829,36 @@ mod test {
             unreachable!()
         }
 
-        async fn read(
+        async fn read_exact(
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             idx: OplogIndex,
             n: u64,
-        ) -> BTreeMap<OplogIndex, OplogEntry> {
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
             let mut result = BTreeMap::new();
             let idx_u64: u64 = idx.into();
             self.read_starts.lock().unwrap().push(idx_u64);
-            for i in idx_u64..(idx_u64 + n) {
-                if let Some(entry) = self.entries.get((i - 1) as usize) {
-                    result.insert(OplogIndex::from_u64(i), entry.oplog_entry.clone());
-                }
+            if n == 0 {
+                return Ok(result);
             }
-            result
+            let end = idx_u64
+                .checked_add(n - 1)
+                .ok_or(OplogReadError::InvalidRange {
+                    start: idx,
+                    count: n,
+                })?;
+            for i in idx_u64..=end {
+                let entry = i
+                    .checked_sub(1)
+                    .and_then(|offset| self.entries.get(offset as usize))
+                    .ok_or(OplogReadError::Gap {
+                        start: idx,
+                        end: OplogIndex::from_u64(end),
+                    })?;
+                result.insert(OplogIndex::from_u64(i), entry.oplog_entry.clone());
+            }
+            Ok(result)
         }
 
         async fn exists(&self, _owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
@@ -2934,7 +2964,8 @@ mod test {
                 AgentMode::Durable,
                 last_known_status,
             )
-            .await;
+            .await
+            .unwrap();
 
             assert_eq!(
                 final_status, final_expected_status,

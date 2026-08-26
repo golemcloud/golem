@@ -611,6 +611,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_known_status,
             )
             .await
+            .expect("Failed to read oplog while calculating worker status")
             .expect("Failed to calculate worker status for worker even though it is initialized");
 
             initial_worker_metadata.last_known_status = last_known_status;
@@ -1395,7 +1396,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 agent_id = %self.owned_agent_id.agent_id,
                 idempotency_key = %idempotency_key,
             ))
-            .await;
+            .await?;
         let (result, enqueue_epoch) = match output {
             LookupResult::Complete(output) => (ResultOrSubscription::Finished(output), None),
             LookupResult::Interrupted => {
@@ -1501,17 +1502,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && ro.cacheable
             && !is_no_cache(&ro.cfg.cache_policy)
         {
-            Some((
-                ro,
-                async { self.lookup_invocation_result(&idempotency_key).await }
-                    .instrument(span!(
-                        Level::INFO,
-                        "lookup_invocation_result",
-                        agent_id = %self.owned_agent_id.agent_id,
-                        idempotency_key = %idempotency_key,
-                    ))
-                    .await,
-            ))
+            let lookup = async { self.lookup_invocation_result(&idempotency_key).await }
+                .instrument(span!(
+                    Level::INFO,
+                    "lookup_invocation_result",
+                    agent_id = %self.owned_agent_id.agent_id,
+                    idempotency_key = %idempotency_key,
+                ))
+                .await?;
+            Some((ro, lookup))
         } else {
             None
         };
@@ -1545,9 +1544,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Ok(LookupResult::New) => Err(WorkerExecutorError::unknown(
                         "Unexpected missing result after invoke",
                     )),
-                    Err(recv_error) => Err(WorkerExecutorError::unknown(format!(
-                        "Failed waiting for invocation result: {recv_error}"
-                    ))),
+                    Err(error) => Err(error),
                 };
             }
             _ => {}
@@ -1743,9 +1740,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Ok(LookupResult::New) => Err(WorkerExecutorError::unknown(
                         "Unexpected missing result after invoke",
                     )),
-                    Err(recv_error) => Err(WorkerExecutorError::unknown(format!(
-                        "Failed waiting for invocation result: {recv_error}"
-                    ))),
+                    Err(error) => Err(error),
                 }
             }
         }
@@ -1801,7 +1796,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         pending: &PendingInvocationRef,
     ) -> Result<TimestampedAgentInvocation, WorkerExecutorError> {
-        let entry = self.oplog.read(pending.oplog_index).await;
+        let entry = self.oplog.read(pending.oplog_index).await?;
         match entry {
             OplogEntry::PendingAgentInvocation {
                 timestamp,
@@ -1843,7 +1838,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         pending: &PendingUpdateRef,
     ) -> Result<TimestampedUpdateDescription, WorkerExecutorError> {
-        let entry = self.oplog.read(pending.oplog_index).await;
+        let entry = self.oplog.read(pending.oplog_index).await?;
         match entry {
             OplogEntry::PendingUpdate {
                 timestamp,
@@ -3181,7 +3176,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             region_end,
             &last_known_status.skipped_regions,
         )
-        .await
+        .await?
         {
             Err(WorkerExecutorError::invalid_request(format!(
                 "Cannot revert worker to oplog index {last_oplog_index}: the cut point is inside {spanning}"
@@ -3212,9 +3207,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         key: &IdempotencyKey,
         mut subscription: EventsSubscription,
-    ) -> Result<LookupResult, RecvError> {
+    ) -> Result<LookupResult, WorkerExecutorError> {
         loop {
-            match self.lookup_invocation_result(key).await {
+            match self.lookup_invocation_result(key).await? {
                 LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
                 LookupResult::New | LookupResult::Pending => {
                     let wait_result = subscription
@@ -3237,7 +3232,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             continue;
                         }
-                        Err(RecvError::Closed) => break Err(RecvError::Closed),
+                        Err(RecvError::Closed) => {
+                            break Err(WorkerExecutorError::unknown(
+                                "Invocation result event channel closed",
+                            ));
+                        }
                     }
                 }
                 LookupResult::Complete(result) => break Ok(LookupResult::Complete(result)),
@@ -3245,7 +3244,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
+    pub async fn lookup_invocation_result(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<LookupResult, WorkerExecutorError> {
         let status = self.last_known_status.load_full().as_ref().clone();
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
@@ -3256,8 +3258,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.initial_worker_metadata.fingerprint,
                     self,
                 )
-                .await;
-            lookup_result_from_cached_result(&status, key, result)
+                .await?;
+            Ok(lookup_result_from_cached_result(&status, key, result))
         } else {
             let is_pending = status
                 .pending_invocations
@@ -3265,9 +3267,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .any(|entry| entry.has_idempotency_key(key));
             let is_current = status.current_idempotency_key.as_ref() == Some(key);
             if is_pending || is_current {
-                LookupResult::Pending
+                Ok(LookupResult::Pending)
             } else {
-                LookupResult::New
+                Ok(LookupResult::New)
             }
         }
     }
@@ -3657,8 +3659,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     agent_mode,
                     last_known_status,
                 )
-                .await
-                .expect("Failed to calculate worker status for existing worker");
+                .await?
+                .ok_or_else(|| {
+                    WorkerExecutorError::runtime(
+                        "Failed to calculate worker status for existing worker",
+                    )
+                })?;
 
                 // Use the CREATE-time revision: `agent_id` parsing and
                 // `resolve_agent_properties` must stay tied to the metadata
@@ -4865,10 +4871,10 @@ impl InvocationResult {
         agent_mode: AgentMode,
         agent_fingerprint: AgentFingerprint,
         services: &T,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         if let Self::Lazy { oplog_idx } = self {
             let oplog_idx = *oplog_idx;
-            let entry = services.oplog().read(oplog_idx).await;
+            let entry = services.oplog().read(oplog_idx).await?;
 
             let result = match entry {
                 OplogEntry::AgentInvocationFinished {
@@ -4906,7 +4912,8 @@ impl InvocationResult {
                     ..
                 } => {
                     let stderr =
-                        recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
+                        recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx)
+                            .await?;
                     Err(FailedInvocationResult {
                         trap_type: TrapType::Error {
                             error,
@@ -4936,6 +4943,7 @@ impl InvocationResult {
 
             *self = Self::Cached { result }
         }
+        Ok(())
     }
 }
 

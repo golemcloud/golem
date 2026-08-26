@@ -687,8 +687,11 @@ impl WorkerService for DefaultWorkerService {
 
         let initial_oplog_entry = self
             .oplog_service
-            .read(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
+            .read_exact(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
             .await
+            .unwrap_or_else(|error| {
+                panic!("failed to read initial oplog entry for {owned_agent_id}: {error}")
+            })
             .into_iter()
             .next();
 
@@ -787,6 +790,7 @@ impl WorkerService for DefaultWorkerService {
                             || self.read_status_checkpoint(owned_agent_id, agent_mode),
                         )
                         .await
+                        .expect("Failed to read oplog while recomputing worker status")
                         .expect("Failed to recompute worker status for existing worker");
 
                         // Cold path: no in-memory previous, reconcile against stored fields.

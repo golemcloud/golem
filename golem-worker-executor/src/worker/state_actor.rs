@@ -560,6 +560,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 None,
             )
             .await
+            .expect("Failed to read oplog while recomputing worker status")
             .expect("Failed to recompute worker status for existing worker");
 
             // Install the recomputed status while still detached, so a concurrent background sweep
