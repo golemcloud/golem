@@ -321,6 +321,16 @@ impl CompletionDelivery {
         matches!(self.state, CompletionDeliveryState::ReplayDiscarded)
     }
 
+    /// Whether this replayed completion has a recorded delivery marker that must be reached
+    /// before cancellation can settle the guest-facing transfer. Callers inspect this before
+    /// [`Self::prepare_delivery`] replaces the marker position with an armed barrier.
+    pub fn is_replay_at_marker(&self) -> bool {
+        matches!(
+            self.state,
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtMarker { .. })
+        )
+    }
+
     /// Whether the token is live and armed (a torn delivery would record a marker). Callers use
     /// this to route ordered post-`End` appends through [`Self::append_ordered`] instead of a
     /// direct oplog append that would race the torn-drop marker.
