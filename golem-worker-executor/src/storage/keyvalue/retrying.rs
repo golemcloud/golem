@@ -59,6 +59,21 @@ enum Idempotence {
 /// (present or future) can opt out of it.
 ///
 /// Exhausted retries return the error to the caller rather than aborting the process.
+///
+/// # Why the by-value payloads are refcounted
+///
+/// Every method below re-runs its operation from a `FnMut` closure, so each attempt needs its own
+/// owned copy of the by-value arguments - the namespace, and the key list of the batch methods.
+/// Borrowing them instead is not an option: `PostgresPool::with_tx` binds its closure under a
+/// higher-ranked `for<'f>` lifetime, which a future capturing a borrow of the caller's data cannot
+/// satisfy, so the payloads have to be owned and `'static`.
+///
+/// That leaves the copy itself as the cost, and the retry budget multiplies it: a degraded backend
+/// makes it up to `max_attempts` times, precisely when the process is already under pressure. So
+/// the payloads carry `Arc` rather than `String` / `AgentId` / `Vec<String>`
+/// ([`KeyValueStorageNamespace`], and `keys: Arc<[String]>` on `get_many` / `del_many`). The
+/// per-attempt clone still happens - it must - but it is a refcount bump instead of an allocation,
+/// and for the batch methods instead of an O(N) copy of unbounded guest input.
 pub struct RetryingKeyValueStorage {
     inner: Arc<dyn KeyValueStorage + Send + Sync>,
     retry_config: RetryConfig,
