@@ -31,6 +31,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequestKVBucket, HostRequestKVBucketAndKeySizePairs,
     HostRequestKVBucketAndKeys, HostResponseKVGetMany, HostResponseKVKeys, HostResponseKVUnit,
 };
+use std::sync::Arc;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{IoView, ResourceTableError};
 
@@ -54,8 +55,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let result = if durability.is_live() {
             let input = HostRequestKVBucketAndKeys {
                 bucket: bucket.clone(),
-                keys: keys.clone(),
+                keys,
             };
+            // The key list is unbounded guest input, so it is materialised once and refcounted
+            // from here down: every retry - this loop, and the storage retry decorator below it -
+            // copies an `Arc`, not the list.
+            let keys: Arc<[String]> = input.keys.as_slice().into();
             let result = loop {
                 let result = self
                     .state
@@ -266,8 +271,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let count = keys.len() as u64;
             let input = HostRequestKVBucketAndKeys {
                 bucket: bucket.clone(),
-                keys: keys.clone(),
+                keys,
             };
+            // See `get_many`: one materialisation, refcounted through every retry below.
+            let keys: Arc<[String]> = input.keys.as_slice().into();
             let result = loop {
                 let result = self
                     .state

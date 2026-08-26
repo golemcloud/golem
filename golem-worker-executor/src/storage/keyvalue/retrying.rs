@@ -236,7 +236,7 @@ impl KeyValueStorage for RetryingKeyValueStorage {
         api_name: &'static str,
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         // Read-only.
         self.retry("get_many", Idempotent, || {
@@ -290,7 +290,7 @@ impl KeyValueStorage for RetryingKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<(), KeyValueStorageError> {
         // Same as `del`, for each key.
         self.retry("del_many", Idempotent, || {
@@ -666,7 +666,7 @@ mod tests {
             api_name: &'static str,
             entity_name: &'static str,
             namespace: KeyValueStorageNamespace,
-            keys: Vec<String>,
+            keys: Arc<[String]>,
         ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
             match self.fail_now() {
                 Some(err) => Err(err),
@@ -713,7 +713,7 @@ mod tests {
             svc_name: &'static str,
             api_name: &'static str,
             namespace: KeyValueStorageNamespace,
-            keys: Vec<String>,
+            keys: Arc<[String]>,
         ) -> Result<(), KeyValueStorageError> {
             match self.fail_now() {
                 Some(err) => Err(err),
@@ -1112,7 +1112,7 @@ mod tests {
                     .await
                     .map(|_| ()),
                 Op::GetMany => storage
-                    .get_many("test", "api", "entity", ns, vec!["key".to_string()])
+                    .get_many("test", "api", "entity", ns, ["key".to_string()].into())
                     .await
                     .map(|_| ()),
                 Op::GetAll => storage
@@ -1122,7 +1122,7 @@ mod tests {
                 Op::Del => storage.del("test", "api", ns, "key").await,
                 Op::DelMany => {
                     storage
-                        .del_many("test", "api", ns, vec!["key".to_string()])
+                        .del_many("test", "api", ns, ["key".to_string()].into())
                         .await
                 }
                 Op::Exists => storage.exists("test", "api", ns, "key").await.map(|_| ()),

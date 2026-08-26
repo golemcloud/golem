@@ -22,6 +22,7 @@ use golem_service_base::db::{DBValue, LabelledPoolApi, LabelledPoolTransaction, 
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use include_dir::include_dir;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 const DB_TYPE: &str = "sqlite";
 
@@ -189,7 +190,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         api_name: &'static str,
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         let placeholders = keys.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
@@ -198,7 +199,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         );
         let mut query = sqlx::query_as(&statement);
 
-        for key in &keys {
+        for key in keys.iter() {
             query = query.bind(key);
         }
         query = query.bind(Self::namespace(namespace));
@@ -216,8 +217,8 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .collect::<HashMap<String, Bytes>>();
 
         let values = keys
-            .into_iter()
-            .map(|key| result_map.remove(&key))
+            .iter()
+            .map(|key| result_map.remove(key))
             .collect::<Vec<Option<Bytes>>>();
 
         Ok(values)
@@ -266,11 +267,11 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<(), KeyValueStorageError> {
         let api = self.pool.with_rw(svc_name, api_name);
         let mut tx = api.begin().await.map_err(KeyValueStorageError::from)?;
-        for key in keys {
+        for key in keys.iter() {
             tx.execute(
                 sqlx::query("DELETE FROM kv_storage WHERE key = ? AND namespace = ?;")
                     .bind(key)

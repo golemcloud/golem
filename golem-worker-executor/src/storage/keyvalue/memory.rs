@@ -16,6 +16,7 @@ use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageError, KeyValueSt
 use async_trait::async_trait;
 use bytes::Bytes;
 use scc::hash_map::Entry;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct InMemoryKeyValueStorage {
@@ -144,15 +145,15 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _api_name: &'static str,
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         // Single read lock for the whole batch so the returned values are a consistent snapshot.
         let _guard = self.kvs_lock.read().await;
         let mut result = Vec::new();
-        for key in keys {
+        for key in keys.iter() {
             result.push(
                 self.kvs
-                    .read_async(&Self::composite_key(&namespace, &key), |_, value| {
+                    .read_async(&Self::composite_key(&namespace, key), |_, value| {
                         Bytes::from(value.clone())
                     })
                     .await,
@@ -202,12 +203,12 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<(), KeyValueStorageError> {
         let _guard = self.kvs_lock.write().await;
-        for key in keys {
+        for key in keys.iter() {
             self.kvs
-                .remove_async(&Self::composite_key(&namespace, &key))
+                .remove_async(&Self::composite_key(&namespace, key))
                 .await;
         }
         Ok(())

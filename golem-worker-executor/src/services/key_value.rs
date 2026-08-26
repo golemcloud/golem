@@ -35,7 +35,7 @@ pub trait KeyValueService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> anyhow::Result<()>;
 
     async fn exists(
@@ -62,7 +62,7 @@ pub trait KeyValueService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> anyhow::Result<Vec<Option<Vec<u8>>>>;
 
     async fn set(
@@ -118,7 +118,7 @@ impl KeyValueService for DefaultKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> anyhow::Result<()> {
         self.key_value_storage
             .with("key_value", "delete_many")
@@ -198,7 +198,7 @@ impl KeyValueService for DefaultKeyValueService {
         &self,
         environment_id: EnvironmentId,
         bucket: String,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
         let incoming_values: Vec<Option<Bytes>> = self
             .key_value_storage

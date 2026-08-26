@@ -19,6 +19,7 @@ use fred::types::SetOptions;
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
 use golem_common::redis::{RedisError, RedisPool};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageError, KeyValueStorageNamespace};
 
@@ -205,8 +206,11 @@ impl KeyValueStorage for RedisKeyValueStorage {
         api_name: &'static str,
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
+        // fred takes `Into<MultipleKeys>`, which `Arc<[String]>` does not implement, so the batch
+        // is materialised once here. The retry decorator no longer repeats it per attempt.
+        let keys = keys.to_vec();
         let serialized: Vec<Option<Bytes>> = match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis
@@ -289,8 +293,10 @@ impl KeyValueStorage for RedisKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<(), KeyValueStorageError> {
+        // See `get_many`: fred needs an owned collection it can convert into `MultipleKeys`.
+        let keys = keys.to_vec();
         match Self::use_hash(&namespace) {
             Some(ns) => self
                 .redis

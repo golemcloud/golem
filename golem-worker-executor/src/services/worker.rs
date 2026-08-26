@@ -575,7 +575,7 @@ impl DefaultWorkerService {
             to_delete.push(STATUS_CORE_FIELD.to_string());
             self.key_value_storage
                 .with("worker", "update_status")
-                .del_many(namespace.clone(), to_delete)
+                .del_many(namespace.clone(), to_delete.into())
                 .await
                 .map_err(|err| {
                     format!(
@@ -654,7 +654,7 @@ impl DefaultWorkerService {
         if !status_fields.is_empty() {
             self.key_value_storage
                 .with("worker", "remove")
-                .del_many(namespace, status_fields)
+                .del_many(namespace, status_fields.into())
                 .await
                 .map_err(|err| {
                     WorkerExecutorError::runtime(format!(
@@ -1604,7 +1604,7 @@ mod tests {
             _api_name: &'static str,
             _entity_name: &'static str,
             _namespace: KeyValueStorageNamespace,
-            _keys: Vec<String>,
+            _keys: Arc<[String]>,
         ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
             Self::error()
         }
@@ -1634,7 +1634,7 @@ mod tests {
             _svc_name: &'static str,
             _api_name: &'static str,
             _namespace: KeyValueStorageNamespace,
-            _keys: Vec<String>,
+            _keys: Arc<[String]>,
         ) -> Result<(), KeyValueStorageError> {
             Self::error()
         }

@@ -476,7 +476,7 @@ async fn get_set_get_many(
             "api",
             "entity",
             ns.clone(),
-            vec![key1.to_string(), key2.to_string(), key3.to_string()],
+            [key1.to_string(), key2.to_string(), key3.to_string()].into(),
         )
         .await
         .unwrap();
@@ -495,7 +495,7 @@ async fn get_set_get_many(
             "api",
             "entity",
             ns,
-            vec![key1.to_string(), key2.to_string(), key3.to_string()],
+            [key1.to_string(), key2.to_string(), key3.to_string()].into(),
         )
         .await
         .unwrap();
@@ -628,7 +628,7 @@ async fn del_many(
         "test",
         "api",
         ns.clone(),
-        vec![key1.to_string(), key2.to_string()],
+        [key1.to_string(), key2.to_string()].into(),
     )
     .await
     .unwrap(); // deleting non-existing key must succeed
@@ -650,7 +650,7 @@ async fn del_many(
         "test",
         "api",
         ns.clone(),
-        vec![key1.to_string(), key2.to_string()],
+        [key1.to_string(), key2.to_string()].into(),
     )
     .await
     .unwrap();

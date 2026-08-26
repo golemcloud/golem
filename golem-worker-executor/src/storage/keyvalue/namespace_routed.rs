@@ -120,7 +120,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         api_name: &'static str,
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .get_many(svc_name, api_name, entity_name, namespace, keys)
@@ -156,7 +156,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<(), KeyValueStorageError> {
         self.backend_for_namespace(&namespace)
             .del_many(svc_name, api_name, namespace, keys)

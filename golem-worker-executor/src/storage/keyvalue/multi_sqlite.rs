@@ -205,7 +205,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         api_name: &'static str,
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
@@ -244,7 +244,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<(), KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?

@@ -23,6 +23,7 @@ use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use include_dir::include_dir;
 use sqlx::{Postgres, QueryBuilder};
+use std::sync::Arc;
 
 const DB_TYPE: &str = "postgres";
 
@@ -234,7 +235,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         api_name: &'static str,
         _entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         if keys.is_empty() {
             return Ok(Vec::new());
@@ -317,7 +318,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<(), KeyValueStorageError> {
         if keys.is_empty() {
             return Ok(());

@@ -156,7 +156,7 @@ pub trait KeyValueStorage: Debug {
         api_name: &'static str,
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError>;
 
     /// Returns every `(field, value)` pair stored under `namespace` in a single atomic read.
@@ -186,7 +186,7 @@ pub trait KeyValueStorage: Debug {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<(), KeyValueStorageError>;
 
     async fn exists(
@@ -333,7 +333,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
     pub async fn del_many(
         &self,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<(), String> {
         self.storage
             .del_many(self.svc_name, self.api_name, namespace, keys)
@@ -538,7 +538,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
     pub async fn get_many<V: BinaryDeserializer>(
         &self,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<Vec<Option<V>>, String> {
         let maybe_bytes = self
             .storage
@@ -565,7 +565,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
     pub async fn get_many_raw(
         &self,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
+        keys: Arc<[String]>,
     ) -> Result<Vec<Option<Bytes>>, String> {
         self.storage
             .get_many(
