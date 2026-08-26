@@ -803,12 +803,12 @@ declare module 'golem:core/types@2.0.0' {
     val: QuotaToken
   } |
   {
-    tag: 'stream-value'
-    val: SchemaValueStream
-  } |
-  {
     tag: 'permission-card-handle'
     val: PermissionCard
+  } |
+  {
+    tag: 'stream-value'
+    val: SchemaValueStream
   };
   /**
    * ============================================================

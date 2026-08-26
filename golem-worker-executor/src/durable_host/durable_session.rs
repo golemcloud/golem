@@ -2076,7 +2076,7 @@ impl DurableSessionStreams {
                 source_kind: StreamSourceKindV1::InvocationOutput,
                 source_invocation: self.session_key.clone(),
                 component_revision,
-                element_schema_fingerprint: pending.element_schema_fingerprint.clone(),
+                element_schema_fingerprint: pending.element_schema_fingerprint,
                 session_mapping: Some(session_mapping.clone()),
             })
             .collect::<Vec<_>>();
@@ -3382,7 +3382,7 @@ impl DurableSessionStreams {
                     .await
                     .map_err(|error| error.to_string())?,
                 source: self.producer.clone(),
-                handle,
+                handle: Box::new(handle),
             }
         } else {
             let mapping = self
@@ -3400,7 +3400,7 @@ impl DurableSessionStreams {
             let auth_ctx = self.auth_ctx.clone().ok_or_else(|| {
                 "foreign durable stream consumer authorization is unavailable".to_string()
             })?;
-            DurableStreamReader::Attached(AttachedDurableCatchUpReader {
+            DurableStreamReader::Attached(Box::new(AttachedDurableCatchUpReader {
                 source: Arc::new(RoutedAttachedStreamSegmentSource::new(
                     rpc, mapping, auth_ctx,
                 )),
@@ -3410,7 +3410,7 @@ impl DurableSessionStreams {
                 after,
                 buffered: VecDeque::new(),
                 terminal: false,
-            })
+            }))
         };
         Ok(reader)
     }
@@ -3591,9 +3591,9 @@ enum DurableStreamReader {
     Owned {
         reader: DurableCatchUpReader,
         source: Arc<DurableStreamProducer>,
-        handle: DurableStreamHandleV1,
+        handle: Box<DurableStreamHandleV1>,
     },
-    Attached(AttachedDurableCatchUpReader),
+    Attached(Box<AttachedDurableCatchUpReader>),
 }
 
 impl DurableStreamReader {
@@ -4505,7 +4505,7 @@ mod tests {
         let mut reader = DurableStreamReader::Owned {
             reader: producer.catch_up(handle.clone(), None).await.unwrap(),
             source: producer.clone(),
-            handle: handle.clone(),
+            handle: Box::new(handle.clone()),
         };
 
         producer
@@ -4598,7 +4598,7 @@ mod tests {
             .activate_attachment(attachment.clone(), now_millis)
             .await
             .unwrap();
-        let mut reader = DurableStreamReader::Attached(AttachedDurableCatchUpReader {
+        let mut reader = DurableStreamReader::Attached(Box::new(AttachedDurableCatchUpReader {
             source: producer,
             attachment,
             handle,
@@ -4606,7 +4606,7 @@ mod tests {
             after: None,
             buffered: VecDeque::new(),
             terminal: false,
-        });
+        }));
 
         assert_eq!(reader.journal_lag_events(None).await.unwrap(), 3);
         let first = reader.next().await.unwrap().unwrap();
@@ -6292,7 +6292,7 @@ mod tests {
             source_coordinate,
             StreamSourceKindV1::InvocationOutput,
         );
-        request.element_schema_fingerprint = fingerprint.clone();
+        request.element_schema_fingerprint = fingerprint;
         let original = producer.register(request).await.unwrap().value;
         let streams = DurableSessionStreams::new(
             producer.clone(),

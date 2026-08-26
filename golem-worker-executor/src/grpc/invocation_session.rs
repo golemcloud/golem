@@ -226,9 +226,7 @@ where
                         Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                     }
                 }
-                if commit_observed {
-                    early_inbound = Some(request);
-                } else if commit_channel_open {
+                if commit_observed || commit_channel_open {
                     early_inbound = Some(request);
                 } else {
                     return AcceptanceRace::InboundBeforeAcceptance(request);
@@ -1037,7 +1035,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             fuel_consumed: None,
                             status: None,
                             oplog_index: None,
-                            agent_fingerprint: start.expected_callee_fingerprint.clone(),
+                            agent_fingerprint: start.expected_callee_fingerprint,
                             new_stream_mappings: persisted_result.1,
                         },
                     )),
@@ -1213,20 +1211,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 tokio::select! {
                     result = &mut invocation => result,
                     request = inbound.message() => {
-                        match request {
-                            Ok(Some(request)) => {
-                                let details = state
-                                    .lock()
-                                    .await
-                                    .validate_trusted_request(&request)
-                                    .err()
-                                    .unwrap_or_else(|| {
-                                        "scalar invocation received an unexpected stream-control request"
-                                            .to_string()
-                                    });
-                                send_protocol_failure(&responses, details).await;
-                            }
-                            Ok(None) | Err(_) => {}
+                        if let Ok(Some(request)) = request {
+                            let details = state
+                                .lock()
+                                .await
+                                .validate_trusted_request(&request)
+                                .err()
+                                .unwrap_or_else(|| {
+                                    "scalar invocation received an unexpected stream-control request"
+                                        .to_string()
+                                });
+                            send_protocol_failure(&responses, details).await;
                         }
                         return;
                     }
@@ -1567,8 +1562,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
         };
-        if let Some((result, new_stream_mappings)) = persisted_result {
-            if responses
+        if let Some((result, new_stream_mappings)) = persisted_result
+            && responses
                 .send(InvocationResponse {
                     response: Some(invocation_response::Response::Result(
                         InvocationSessionResult {
@@ -1596,7 +1591,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             {
                 return;
             }
-        }
 
         {
             let mut output_pump = tokio::task::JoinSet::new();
@@ -1724,7 +1718,6 @@ pub(crate) fn build_durable_streaming_request(
         .map_err(WorkerExecutorError::invalid_request)?;
     let environment_id = request
         .environment_id
-        .clone()
         .ok_or_else(|| WorkerExecutorError::invalid_request("environment_id not found"))?
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
@@ -1744,7 +1737,6 @@ pub(crate) fn build_durable_streaming_request(
     let attempt_id = AttemptId(
         request
             .attempt_id
-            .clone()
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(
                     "durable streaming invocations require a client attempt ID",
@@ -1757,10 +1749,7 @@ pub(crate) fn build_durable_streaming_request(
             "durable streaming invocation attempt ID must be a non-nil UUIDv4",
         ));
     }
-    require_expected_callee_fingerprint(
-        request.expected_callee_fingerprint.clone(),
-        callee_fingerprint,
-    )?;
+    require_expected_callee_fingerprint(request.expected_callee_fingerprint, callee_fingerprint)?;
     let parsed_agent_id = ParsedAgentId::parse(&callee.agent_id, component_metadata)
         .map_err(WorkerExecutorError::invalid_request)?;
     let agent_type = component_metadata
@@ -2515,7 +2504,7 @@ async fn route_durable_request(
             let handle = streams
                 .validate_frame(
                     item.transport_stream_id,
-                    item.durable_stream_id.clone(),
+                    item.durable_stream_id,
                     item.epoch,
                     SessionStreamRoleV1::Input,
                 )

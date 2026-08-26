@@ -179,7 +179,7 @@ async fn resume_public_input_with_end(
         .iter()
         .find(|mapping| mapping.transport_stream_id == transport_stream_id)
         .and_then(|mapping| mapping.handle.as_ref())
-        .and_then(|handle| handle.stream_id.clone())
+        .and_then(|handle| handle.stream_id)
         .ok_or_else(|| anyhow::anyhow!("acceptance omitted its input stream mapping"))?;
     let resume = PublicInvocationRequest {
         request: Some(public_invocation_request::Request::ResumeAttach(
@@ -710,7 +710,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             let stream_id = mapping
                 .handle
                 .as_ref()
-                .and_then(|handle| handle.stream_id.clone())
+                .and_then(|handle| handle.stream_id)
                 .ok_or_else(|| {
                     anyhow::anyhow!("input stream mapping omitted its durable stream ID")
                 })?;
@@ -730,7 +730,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
                             .try_into()
                             .map_err(anyhow::Error::msg)?,
                     )),
-                    durable_stream_id: Some(input_durable_stream_id.clone()),
+                    durable_stream_id: Some(input_durable_stream_id),
                     epoch: input_epoch,
                 },
             )),
@@ -870,7 +870,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         .iter()
         .find(|mapping| mapping.transport_stream_id == capability_stream_id)
         .and_then(|mapping| mapping.handle.as_ref())
-        .and_then(|handle| handle.stream_id.clone())
+        .and_then(|handle| handle.stream_id)
         .ok_or_else(|| anyhow::anyhow!("capability input mapping omitted its durable stream ID"))?;
     let capability_epoch = capability_acceptance.epoch;
     send_public_request(

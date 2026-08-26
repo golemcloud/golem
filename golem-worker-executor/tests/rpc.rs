@@ -229,7 +229,7 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
                         durable_stream_id: mapping
                             .handle
                             .as_ref()
-                            .and_then(|handle| handle.stream_id.clone()),
+                            .and_then(|handle| handle.stream_id),
                         epoch: 1,
                         durable_offset: Vec::new(),
                     })),
@@ -452,10 +452,10 @@ async fn durable_streaming_output_recovers_after_executor_restart(
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
             idempotency_key: start.idempotency_key.clone(),
             agent_id: start.agent_id.clone(),
-            environment_id: start.environment_id.clone(),
+            environment_id: start.environment_id,
             attachment_id: accepted.attachment_id,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: start.expected_callee_fingerprint.clone(),
+            expected_callee_fingerprint: start.expected_callee_fingerprint,
             expected_epoch: accepted.epoch,
             operation: ResumeOperation::Resume as i32,
             cursors: cursors.into_values().collect(),
@@ -602,7 +602,7 @@ async fn read_nested_sibling_output(
                     let durable_stream_id = mapping
                         .handle
                         .as_ref()
-                        .and_then(|handle| handle.stream_id.clone())
+                        .and_then(|handle| handle.stream_id)
                         .map(uuid::Uuid::from)
                         .ok_or_else(|| {
                             anyhow::anyhow!("nested sibling mapping has no durable stream ID")
@@ -721,10 +721,10 @@ async fn concurrent_nested_sibling_output_replays_after_executor_restart(
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
             idempotency_key: start.idempotency_key.clone(),
             agent_id: start.agent_id.clone(),
-            environment_id: start.environment_id.clone(),
+            environment_id: start.environment_id,
             attachment_id: accepted.attachment_id,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: start.expected_callee_fingerprint.clone(),
+            expected_callee_fingerprint: start.expected_callee_fingerprint,
             expected_epoch: accepted.epoch,
             operation: ResumeOperation::Resume as i32,
             cursors: Vec::new(),
@@ -955,7 +955,7 @@ async fn durable_streaming_input_recovers_after_executor_restart(
     let first_durable_stream_id = first_mapping
         .handle
         .as_ref()
-        .and_then(|handle| handle.stream_id.clone())
+        .and_then(|handle| handle.stream_id)
         .ok_or_else(|| anyhow::anyhow!("durable input mapping omitted its stream ID"))?;
     let first_item = InvocationRequest {
         request: Some(invocation_request::Request::InputItem(InputStreamItem {
@@ -994,7 +994,7 @@ async fn durable_streaming_input_recovers_after_executor_restart(
                         .try_into()
                         .map_err(anyhow::Error::msg)?,
                 )),
-                durable_stream_id: Some(first_durable_stream_id.clone()),
+                durable_stream_id: Some(first_durable_stream_id),
                 epoch: first_accepted.epoch,
             })),
         };
@@ -1059,10 +1059,10 @@ async fn durable_streaming_input_recovers_after_executor_restart(
         request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
             idempotency_key: start.idempotency_key.clone(),
             agent_id: start.agent_id.clone(),
-            environment_id: start.environment_id.clone(),
-            attachment_id: first_accepted.attachment_id.clone(),
+            environment_id: start.environment_id,
+            attachment_id: first_accepted.attachment_id,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
-            expected_callee_fingerprint: start.expected_callee_fingerprint.clone(),
+            expected_callee_fingerprint: start.expected_callee_fingerprint,
             expected_epoch: first_accepted.epoch,
             operation: ResumeOperation::Resume as i32,
             cursors: Vec::new(),

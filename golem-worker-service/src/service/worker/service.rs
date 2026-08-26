@@ -1632,7 +1632,7 @@ impl WorkerService {
                         auth_ctx.clone(),
                         start.context.clone(),
                         start.principal.clone(),
-                        start.expected_callee_fingerprint.clone(),
+                        start.expected_callee_fingerprint,
                     )
                     .await?;
                 start.expected_callee_fingerprint = Some(fingerprint.0.into());
@@ -1670,8 +1670,8 @@ impl WorkerService {
         tail: InvocationRequestStream,
         auth: AuthCtx,
     ) -> WorkerResult<InvocationResponseStream> {
-        let attempt_id = start.attempt_id.clone();
-        let expected_callee_fingerprint = start.expected_callee_fingerprint.clone();
+        let attempt_id = start.attempt_id;
+        let expected_callee_fingerprint = start.expected_callee_fingerprint;
         let app_name = ApplicationName::try_from(start.application_name)
             .map_err(WorkerServiceError::TypeChecker)?;
         let env_name = EnvironmentName::try_from(start.environment_name)

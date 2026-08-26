@@ -58,9 +58,7 @@ impl SourceLifecycle {
     }
 
     pub(crate) fn finish(&self) {
-        if self.finished.swap(true, Ordering::AcqRel) {
-            return;
-        }
+        self.finished.store(true, Ordering::Release);
     }
 }
 

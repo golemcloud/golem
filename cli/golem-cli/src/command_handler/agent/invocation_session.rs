@@ -486,7 +486,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     }
                     Some(invocation_response::Response::OutputItem(item)) => {
                         if let Some(stream_id) = &item.durable_stream_id {
-                            durable_streams.insert(item.transport_stream_id, stream_id.clone());
+                            durable_streams.insert(item.transport_stream_id, *stream_id);
                         }
                         insert_durable_mappings(
                             &mut durable_streams,
@@ -495,12 +495,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     }
                     Some(invocation_response::Response::OutputEnd(end)) => {
                         if let Some(stream_id) = &end.durable_stream_id {
-                            durable_streams.insert(end.transport_stream_id, stream_id.clone());
+                            durable_streams.insert(end.transport_stream_id, *stream_id);
                         }
                     }
                     Some(invocation_response::Response::OutputError(error)) => {
                         if let Some(stream_id) = &error.durable_stream_id {
-                            durable_streams.insert(error.transport_stream_id, stream_id.clone());
+                            durable_streams.insert(error.transport_stream_id, *stream_id);
                         }
                     }
                     Some(invocation_response::Response::InputAck(ack)) => {
@@ -772,8 +772,7 @@ fn required_checkpoint_uuid(
     value: &Option<golem_api_grpc::proto::golem::common::Uuid>,
     field: &str,
 ) -> anyhow::Result<uuid::Uuid> {
-    let value = value
-        .clone()
+    let value = (*value)
         .map(uuid::Uuid::from)
         .ok_or_else(|| anyhow!("durable invocation acceptance has no {field}"))?;
     if value.is_nil() {
@@ -889,8 +888,7 @@ fn add_checkpoint_mappings(
             .handle
             .as_ref()
             .ok_or_else(|| anyhow!("durable stream mapping has no handle"))?
-            .stream_id
-            .clone();
+            .stream_id;
         let stream_id = required_checkpoint_uuid(&stream_id, "durable stream identity")?;
         let cursor = mapping
             .high_water
@@ -1334,7 +1332,7 @@ fn insert_durable_mappings(
             .as_ref()
             .and_then(|handle| handle.stream_id.as_ref())
         {
-            streams.insert(mapping.transport_stream_id, stream_id.clone());
+            streams.insert(mapping.transport_stream_id, *stream_id);
         }
     }
 }
@@ -2565,7 +2563,7 @@ mod tests {
             resume
                 .cursors
                 .iter()
-                .map(|cursor| uuid::Uuid::from(cursor.stream_id.clone().unwrap()))
+                .map(|cursor| uuid::Uuid::from(cursor.stream_id.unwrap()))
                 .collect::<Vec<_>>(),
             checkpoint.cursors.keys().copied().collect::<Vec<_>>()
         );

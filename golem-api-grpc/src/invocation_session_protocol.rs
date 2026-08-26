@@ -26,6 +26,8 @@ use crate::proto::golem::worker::{
 use prost::Message;
 use std::collections::{HashMap, HashSet, VecDeque};
 
+type StreamBinding = (u64, (u64, u64));
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionPhase {
     Initial,
@@ -572,10 +574,10 @@ impl InvocationSessionState {
         self.resume = true;
         self.resume_cursors = cursors;
         self.resume_agent_id = resume.agent_id.clone();
-        self.resume_environment_id = resume.environment_id.clone();
-        self.resume_attachment_id = resume.attachment_id.clone();
-        self.resume_attempt_id = resume.attempt_id.clone();
-        self.resume_callee_fingerprint = resume.expected_callee_fingerprint.clone();
+        self.resume_environment_id = resume.environment_id;
+        self.resume_attachment_id = resume.attachment_id;
+        self.resume_attempt_id = resume.attempt_id;
+        self.resume_callee_fingerprint = resume.expected_callee_fingerprint;
         self.resume_accepted_epoch = Some(
             resume
                 .expected_epoch
@@ -1469,7 +1471,7 @@ impl InvocationSessionState {
         mappings: &[DurableStreamMapping],
         expected_transport_stream_ids: &[u64],
         expected_role: StreamMappingRole,
-    ) -> Result<Vec<(u64, (u64, u64))>, String> {
+    ) -> Result<Vec<StreamBinding>, String> {
         validate_accepted_mappings(mappings)?;
         let actual = mappings
             .iter()
@@ -2190,10 +2192,11 @@ mod tests {
             details: None,
             durable_stream_id: Some(uuid(100 + stream_id)),
             epoch: 1,
-            durable_offset: server_terminal
-                .then(|| durable_offset(offset + 10))
-                .unwrap_or_default(),
-            ..Default::default()
+            durable_offset: if server_terminal {
+                durable_offset(offset + 10)
+            } else {
+                Default::default()
+            },
         }
     }
 

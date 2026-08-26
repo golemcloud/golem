@@ -408,7 +408,7 @@ pub enum DurableStreamOplogRecord {
     Items(StreamItemsRecordV1),
     End(StreamEndRecordV1),
     Cancel(StreamCancelRecordV1),
-    Session(StreamSessionRecordV1),
+    Session(Box<StreamSessionRecordV1>),
     InlineEntry(OplogEntry),
 }
 
@@ -439,7 +439,7 @@ impl DurableStreamOplogRecord {
                 raw.into_payload_with_cache(Arc::new(record))?,
             )),
             Self::Session(record) => Ok(OplogEntry::stream_session(
-                raw.into_payload_with_cache(Arc::new(record))?,
+                raw.into_payload_with_cache(Arc::from(record))?,
             )),
             Self::InlineEntry(entry) => Ok(entry),
         }
@@ -455,9 +455,7 @@ impl DurableStreamOplogRecord {
             Self::Cancel(record) => {
                 OplogEntry::stream_cancel(OplogPayload::Inline(Box::new(record)))
             }
-            Self::Session(record) => {
-                OplogEntry::stream_session(OplogPayload::Inline(Box::new(record)))
-            }
+            Self::Session(record) => OplogEntry::stream_session(OplogPayload::Inline(record)),
             Self::InlineEntry(entry) => entry,
         }
     }

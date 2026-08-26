@@ -325,6 +325,7 @@ impl<T: Clone> LiveStreamPublisher<T> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn subscribe_tail(&self) -> AuxiliaryLiveStreamSubscriber<T> {
         AuxiliaryLiveStreamSubscriber {
             receiver: self.sender.new_receiver(),

@@ -1115,12 +1115,12 @@ mod tests {
                             idempotency_key: start.idempotency_key.clone(),
                             component_revision: Some(0),
                             attachment_id: durable.then(|| uuid::Uuid::new_v4().into()),
-                            attempt_id: durable.then(|| start.attempt_id.clone().unwrap()),
+                            attempt_id: durable.then(|| start.attempt_id.unwrap()),
                             epoch: u64::from(durable),
                             stream_mappings: start.durable_input_mappings.clone(),
-                            environment_id: durable.then(|| start.environment_id.clone().unwrap()),
+                            environment_id: durable.then(|| start.environment_id.unwrap()),
                             callee_fingerprint: durable
-                                .then(|| start.expected_callee_fingerprint.clone().unwrap()),
+                                .then(|| start.expected_callee_fingerprint.unwrap()),
                         },
                     )),
                 };

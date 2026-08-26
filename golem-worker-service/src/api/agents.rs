@@ -314,10 +314,10 @@ where
         result = &mut receive => match result {
             Some((request, idempotency_key)) => match request {
                 PublicInvocationStartOrResume::Start(start) => {
-                    InitialPublicInvocation::Start(Box::new(start), idempotency_key)
+                    InitialPublicInvocation::Start(start, idempotency_key)
                 }
                 PublicInvocationStartOrResume::Resume(resume) => {
-                    InitialPublicInvocation::Resume(Box::new(resume), idempotency_key)
+                    InitialPublicInvocation::Resume(resume, idempotency_key)
                 }
             }
             None => InitialPublicInvocation::Closed,
@@ -327,8 +327,8 @@ where
 }
 
 enum PublicInvocationStartOrResume {
-    Start(PublicInvocationStart),
-    Resume(golem_api_grpc::proto::golem::worker::ResumeAttach),
+    Start(Box<PublicInvocationStart>),
+    Resume(Box<golem_api_grpc::proto::golem::worker::ResumeAttach>),
 }
 
 async fn receive_public_invocation_start<S>(
@@ -373,12 +373,15 @@ where
     match first_request.request {
         Some(public_invocation_request::Request::Start(start)) => {
             let idempotency_key = start.idempotency_key.clone();
-            Some((PublicInvocationStartOrResume::Start(start), idempotency_key))
+            Some((
+                PublicInvocationStartOrResume::Start(Box::new(start)),
+                idempotency_key,
+            ))
         }
         Some(public_invocation_request::Request::ResumeAttach(resume)) => {
             let idempotency_key = resume.idempotency_key.clone();
             Some((
-                PublicInvocationStartOrResume::Resume(resume),
+                PublicInvocationStartOrResume::Resume(Box::new(resume)),
                 idempotency_key,
             ))
         }

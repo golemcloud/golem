@@ -18,6 +18,7 @@ pub(crate) mod public_types;
 
 use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
+#[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
     StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
     StreamSessionRecordV1,

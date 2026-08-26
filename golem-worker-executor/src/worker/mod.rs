@@ -3332,8 +3332,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "durable Stream Session contains multiple Attached records",
             ));
         }
-        if let Some(attached) = attached {
-            if attached.session_key != prepared.attempt.session_key
+        if let Some(attached) = attached
+            && (attached.session_key != prepared.attempt.session_key
                 || attached.attachment_id != prepared.attempt.attachment_id
                 || attached.attempt_id != prepared.attempt.attempt_id
                 || attached.epoch != 1
@@ -3341,12 +3341,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.oplog.read(attached.pending_invocation_oplog_index).await,
                     OplogEntry::PendingAgentInvocation { idempotency_key, .. }
                         if idempotency_key == prepared.attempt.session_key.idempotency_key
-                )
-            {
-                return Err(WorkerExecutorError::runtime(
-                    "durable Attached record does not exactly identify its Prepared attempt and pending invocation",
-                ));
-            }
+                ))
+        {
+            return Err(WorkerExecutorError::runtime(
+                "durable Attached record does not exactly identify its Prepared attempt and pending invocation",
+            ));
         }
         let already_attached = attached.is_some();
 
@@ -3442,10 +3441,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             self.state_actor.notify_status_changed();
         }
-        if !already_attached {
-            if let WorkerInstance::Running(running) = &*instance_guard {
-                running.sender.send(WorkerCommand::WorkAvailable).unwrap();
-            }
+        if !already_attached && let WorkerInstance::Running(running) = &*instance_guard {
+            running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         }
         drop(instance_guard);
         Ok(DurableStreamingInvocationAcceptance {
@@ -4368,10 +4365,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Timestamp::now_utc().to_millis(),
                 )
                 .await
+                && first_error.is_none()
             {
-                if first_error.is_none() {
-                    first_error = Some(error);
-                }
+                first_error = Some(error);
             }
         }
         if let Some(error) = first_error {

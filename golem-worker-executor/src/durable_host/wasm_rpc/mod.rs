@@ -2314,7 +2314,7 @@ async fn streaming_target_fingerprint<Ctx: WorkerCtx>(
 ) -> Result<(AgentFingerprint, Option<Box<dyn RpcDemand>>), Error> {
     if let Some(fingerprint) = ctx
         .table()
-        .get(&resource)?
+        .get(resource)?
         .payload
         .downcast_ref::<WasmRpcEntryPayload>()
         .expect("wasm RPC resource has the wrong payload")

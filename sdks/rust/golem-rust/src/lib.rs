@@ -30,9 +30,9 @@ pub use wasip3;
 pub use golem_schema;
 pub use golem_schema::schema;
 pub use golem_schema::schema::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema, SchemaGraph,
-    SchemaFingerprintError, SchemaFingerprintV1, SchemaType, SchemaValue, TypedSchemaValue,
-    schema_fingerprint_v1,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema,
+    SchemaFingerprintError, SchemaFingerprintV1, SchemaGraph, SchemaType, SchemaValue,
+    TypedSchemaValue, schema_fingerprint_v1,
 };
 pub use golem_schema::{AgentId, CardId, ComponentId, EnvironmentId, PromiseId};
 

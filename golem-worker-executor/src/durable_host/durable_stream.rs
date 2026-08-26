@@ -16,8 +16,10 @@ use crate::durable_host::stream_bus::{
     DurableLiveStreamBus, DurableLiveStreamBusError, DurableLiveStreamEvent,
     DurableLiveStreamSubscription,
 };
+#[cfg(test)]
+use crate::services::oplog::CommitLevel;
 use crate::services::oplog::{
-    CommitLevel, DurableStreamOplogRecord, Oplog, OplogOps, OplogService, OplogServiceOps,
+    DurableStreamOplogRecord, Oplog, OplogOps, OplogService, OplogServiceOps,
 };
 use crate::services::rpc::Rpc;
 use crate::services::worker::WorkerService;
@@ -1344,6 +1346,7 @@ pub(crate) struct DurableStreamProducer {
 }
 
 impl DurableStreamProducer {
+    #[cfg(test)]
     pub(crate) async fn load(
         oplog: Arc<dyn Oplog>,
         environment_id: EnvironmentId,
@@ -1482,7 +1485,7 @@ impl DurableStreamProducer {
                             producer_fingerprint,
                         )?;
                         if let StreamSessionRecordV1::Finished(record) = &record {
-                            index.apply_finished(&record)?;
+                            index.apply_finished(record)?;
                         }
                     }
                     _ => {
@@ -2017,11 +2020,11 @@ impl DurableStreamProducer {
                     epoch: 1,
                     pending_invocation_oplog_index,
                 };
-                result.push(DurableStreamOplogRecord::Session(prepared_record));
+                result.push(DurableStreamOplogRecord::Session(Box::new(prepared_record)));
                 result.push(DurableStreamOplogRecord::InlineEntry(pending_invocation));
-                result.push(DurableStreamOplogRecord::Session(
+                result.push(DurableStreamOplogRecord::Session(Box::new(
                     StreamSessionRecordV1::Attached(attached),
-                ));
+                )));
                 result
             }))
             .await
@@ -2166,7 +2169,9 @@ impl DurableStreamProducer {
             let mut entries = self
                 .oplog
                 .add_durable_stream_batch(Box::new(move |_| {
-                    vec![DurableStreamOplogRecord::Session(expected_for_entry)]
+                    vec![DurableStreamOplogRecord::Session(Box::new(
+                        expected_for_entry,
+                    ))]
                 }))
                 .await
                 .map_err(DurableStreamProducerError::Oplog)?;
@@ -2299,7 +2304,7 @@ impl DurableStreamProducer {
                 if !session_record.has_supported_format() {
                     return Vec::new();
                 }
-                result.push(DurableStreamOplogRecord::Session(session_record));
+                result.push(DurableStreamOplogRecord::Session(Box::new(session_record)));
                 result
             }))
             .await
@@ -2360,6 +2365,7 @@ impl DurableStreamProducer {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) async fn write_items(
         &self,
         stream_id: StreamId,
@@ -2501,6 +2507,7 @@ impl DurableStreamProducer {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn write_items_with_nested_at_depth(
         &self,
         stream_id: StreamId,
@@ -2694,7 +2701,7 @@ impl DurableStreamProducer {
                     .registrations
                     .get(existing_id)
                     .expect("coordinate index points at a missing registration");
-                if !registration_matches(existing, &request) {
+                if !registration_matches(existing, request) {
                     return Err(DurableStreamProducerError::RegistrationDivergence);
                 }
                 existing_nested.insert(request.coordinate.clone(), *existing_id);
@@ -2822,7 +2829,7 @@ impl DurableStreamProducer {
                         u32::try_from(logical_item_count - 1)
                             .expect("validated stream batch length fits in u32"),
                     );
-                    records.push(DurableStreamOplogRecord::Session(
+                    records.push(DurableStreamOplogRecord::Session(Box::new(
                         StreamSessionRecordV1::InputHighWater(
                             StreamSessionInputHighWaterRecordV1 {
                                 format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -2840,7 +2847,7 @@ impl DurableStreamProducer {
                                 },
                             },
                         ),
-                    ));
+                    )));
                 }
                 records
             }))
@@ -3088,19 +3095,6 @@ impl DurableStreamProducer {
             value: offset,
             replayed: false,
         })
-    }
-
-    pub(crate) async fn cancel(
-        &self,
-        stream_id: StreamId,
-        sequence: u64,
-        role: StreamCancelRoleV1,
-        reason: StreamCancelReasonV1,
-        details: Option<String>,
-    ) -> Result<ProducerWriteOutcomeV1<StreamOffsetV1>, DurableStreamProducerError> {
-        let index = self.index.lock().await;
-        self.cancel_locked(index, stream_id, sequence, role, reason, details)
-            .await
     }
 
     #[tracing::instrument(
@@ -3391,13 +3385,13 @@ impl DurableStreamProducer {
                         }
                     }
                 }
-                records.push(DurableStreamOplogRecord::Session(
+                records.push(DurableStreamOplogRecord::Session(Box::new(
                     StreamSessionRecordV1::Finished(StreamSessionFinishedRecordV1 {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         session_key: session_key_for_batch,
                         result: result_for_batch,
                     }),
-                ));
+                )));
                 records
             }))
             .await
@@ -4195,16 +4189,15 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         let Some(prepared_attempt_id) = prepared_attempt_id else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
-        if let Some(attached) = &initial_attachment {
-            if attached.attempt_id != prepared_attempt_id
+        if let Some(attached) = &initial_attachment
+            && (attached.attempt_id != prepared_attempt_id
                 || pending_invocations.get(&attached.pending_invocation_oplog_index)
-                    != Some(&key.session_key.idempotency_key)
-            {
-                return Err(DurableStreamProducerError::CorruptHistory(
+                    != Some(&key.session_key.idempotency_key))
+        {
+            return Err(DurableStreamProducerError::CorruptHistory(
                     "durable Attached record does not identify its Prepared attempt and pending invocation"
                         .to_string(),
                 ));
-            }
         }
         if attachment_authority.is_some_and(|(epoch, _, _)| epoch != key.epoch) {
             return Ok(ConsumerAttachmentStatus::EpochMismatch);
@@ -4746,7 +4739,7 @@ impl DurableStreamProducer {
                         details: None,
                     }));
                 }
-                records.push(DurableStreamOplogRecord::Session(
+                records.push(DurableStreamOplogRecord::Session(Box::new(
                     StreamSessionRecordV1::ProducerDeleting(StreamProducerDeletingRecordV1 {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         producer_environment_id: environment_id,
@@ -4754,7 +4747,7 @@ impl DurableStreamProducer {
                         producer_fingerprint,
                         deleting_at_millis: now_millis,
                     }),
-                ));
+                )));
                 records
             }))
             .await
@@ -6024,7 +6017,7 @@ pub(crate) mod tests {
         assert!(matches!(
             live.commit_deletion_barrier(1_000, true).await,
             Err(DurableStreamProducerError::DeletionBlocked(ref dependents))
-                if dependents == &[key.clone()]
+                if dependents == std::slice::from_ref(&key)
         ));
         live.activate_attachment(key.clone(), 110).await.unwrap();
         assert_eq!(
@@ -6041,7 +6034,7 @@ pub(crate) mod tests {
         assert!(matches!(
             live.commit_deletion_barrier(1_000, true).await,
             Err(DurableStreamProducerError::DeletionBlocked(ref dependents))
-                if dependents == &[key.clone()]
+                if dependents == std::slice::from_ref(&key)
         ));
         live.finalize_attachment(
             key,
