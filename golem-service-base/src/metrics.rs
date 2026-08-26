@@ -64,17 +64,6 @@ pub mod storage {
             &["storage_type", "environment_id"]
         )
         .unwrap();
-        pub static ref COMPILATION_CACHE_GET_TOTAL: IntCounterVec = register_int_counter_vec!(
-            "golem_compilation_cache_get_total",
-            "Compiled component cache lookups by artifact fingerprint, key format, and outcome",
-            &[
-                "environment_id",
-                "artifact_fingerprint",
-                "key_format",
-                "outcome"
-            ]
-        )
-        .unwrap();
     }
 
     pub fn record_storage_bytes_written(
@@ -131,17 +120,6 @@ pub mod storage {
         COMPILATION_CACHE_OBJECTS_WRITTEN_TOTAL
             .with_label_values(&[STORAGE_TYPE_COMPILATION_CACHE, environment_id])
             .inc_by(count as f64);
-    }
-
-    pub fn record_compilation_cache_get(
-        environment_id: &str,
-        artifact_fingerprint: &str,
-        key_format: &str,
-        outcome: &str,
-    ) {
-        COMPILATION_CACHE_GET_TOTAL
-            .with_label_values(&[environment_id, artifact_fingerprint, key_format, outcome])
-            .inc();
     }
 }
 
