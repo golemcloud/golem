@@ -19,11 +19,39 @@ function onwarn(warning, warn) {
   warn(warning);
 }
 
-export default defineConfig([
-  {
-    input: 'src/index.ts',
+function assertHostNeutralBundle() {
+  return {
+    name: 'assert-host-neutral-bundle',
+    generateBundle(_options, bundle) {
+      for (const output of Object.values(bundle)) {
+        if (output.type !== 'chunk') continue;
+        const forbiddenImports = [...output.imports, ...output.dynamicImports].filter((id) =>
+          id.startsWith('golem:tool/host'),
+        );
+        const forbiddenModules = Object.keys(output.modules).filter((id) => {
+          const normalized = id.replaceAll('\\', '/');
+          return (
+            normalized.endsWith('/src/bridge/tool.ts') || normalized.endsWith('/src/toolClient.ts')
+          );
+        });
+        if (forbiddenImports.length > 0 || forbiddenModules.length > 0) {
+          this.error(
+            `Host-neutral middleware bundle reached the ambient tool host:\n${[
+              ...forbiddenImports,
+              ...forbiddenModules,
+            ].join('\n')}`,
+          );
+        }
+      }
+    },
+  };
+}
+
+function javascript(input, output, { hostNeutral = false } = {}) {
+  return {
+    input,
     output: {
-      file: 'dist/index.mjs',
+      file: output,
       format: 'esm',
       sourcemap: true,
     },
@@ -41,35 +69,43 @@ export default defineConfig([
           compilerOptions: { declaration: false },
         },
       }),
+      ...(hostNeutral ? [assertHostNeutralBundle()] : []),
       terser(),
     ],
-  },
+  };
+}
 
-  {
-    input: 'src/index.ts',
+function prependVirtualTypes(output) {
+  return {
+    name: 'prepend-virtual-types',
+    writeBundle() {
+      const typesDir = path.resolve('types');
+      const files = fs.readdirSync(typesDir).filter((file) => file.endsWith('.d.ts'));
+      const refLines = files.map((file) => `/// <reference path="../types/${file}" />`).join('\n');
+      const outputPath = path.resolve(output);
+      const content = fs.readFileSync(outputPath, 'utf-8');
+      fs.writeFileSync(outputPath, `${refLines}\n${content}`, 'utf-8');
+    },
+  };
+}
+
+function declarations(input, output) {
+  return {
+    input,
     output: {
-      file: 'dist/index.d.mts',
+      file: output,
       format: 'esm',
     },
     external,
     onwarn,
-    plugins: [
-      dts(),
-      {
-        name: 'prepend-virtual-types',
-        writeBundle() {
-          const typesDir = path.resolve('types');
+    plugins: [dts(), prependVirtualTypes(output)],
+  };
+}
 
-          const files = fs.readdirSync(typesDir).filter((f) => f.endsWith('.d.ts'));
-
-          const refLines =
-            files.map((f) => `/// <reference path="../types/${f}" />`).join('\n') + '\n';
-
-          const mainDtsPath = path.resolve('dist/index.d.mts');
-          const mainContent = fs.readFileSync(mainDtsPath, 'utf-8');
-          fs.writeFileSync(mainDtsPath, refLines + mainContent, 'utf-8');
-        },
-      },
-    ],
-  },
+export default defineConfig([
+  javascript('src/index.ts', 'dist/index.mjs'),
+  javascript('src/middleware.ts', 'dist/middleware.mjs', { hostNeutral: true }),
+  javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs', { hostNeutral: true }),
+  declarations('src/index.ts', 'dist/index.d.mts'),
+  declarations('src/middleware.ts', 'dist/middleware.d.mts'),
 ]);

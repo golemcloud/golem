@@ -1549,7 +1549,7 @@ exec --fail-on-error ./build-components.sh benchmarks rebuild
 [tasks.run-benchmark-suite-orb]
 description = "Builds and runs the nightly spawned benchmark suite in an Amp orb"
 script_runner = "@duckscript"
-env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.1" }
+env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.2" }
 script = '''
 exec --fail-on-error docker info
 exec --fail-on-error cargo make --profile ci build-release

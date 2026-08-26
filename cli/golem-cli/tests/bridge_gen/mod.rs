@@ -17,6 +17,8 @@ pub mod moonbit;
 pub mod parameter_naming;
 pub mod rust;
 pub mod scala;
+// Scala compile checks reference the in-tree SDK and share its sbt target directories.
+test_r::sequential_suite!(scala);
 pub mod schema_graph_literals;
 #[path = "../../src/bridge_gen/schema_graph_test_fixture.rs"]
 #[allow(dead_code)]

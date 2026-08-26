@@ -22,6 +22,7 @@ mod build_and_deploy_all;
 mod cards;
 mod directory_source_ifs;
 mod plugins;
+mod tool_middleware;
 
 inherit_test_dep!(Tracing);
 

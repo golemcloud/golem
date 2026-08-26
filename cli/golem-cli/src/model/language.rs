@@ -64,6 +64,14 @@ impl GuestLanguage {
         }
     }
 
+    pub fn from_component_template_name(s: impl AsRef<str>) -> Option<GuestLanguage> {
+        let template_name = s.as_ref();
+        let language_id = template_name
+            .split_once('-')
+            .map_or(template_name, |(language_id, _)| language_id);
+        Self::from_id_string(language_id)
+    }
+
     pub fn id(&self) -> &'static str {
         match self {
             GuestLanguage::Rust => "rust",
@@ -100,5 +108,27 @@ impl FromStr for GuestLanguage {
                 .join(", ");
             format!("Unknown guest language: {s}. Expected one of {all}")
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GuestLanguage;
+    use test_r::test;
+
+    #[test]
+    fn component_template_names_retain_their_language_prefix() {
+        assert_eq!(
+            GuestLanguage::from_component_template_name("ts-tool-middleware"),
+            Some(GuestLanguage::TypeScript)
+        );
+        assert_eq!(
+            GuestLanguage::from_component_template_name("rust"),
+            Some(GuestLanguage::Rust)
+        );
+        assert_eq!(
+            GuestLanguage::from_component_template_name("custom-ts"),
+            None
+        );
     }
 }

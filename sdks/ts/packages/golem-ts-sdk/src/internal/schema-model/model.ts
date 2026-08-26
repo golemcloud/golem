@@ -40,8 +40,6 @@ import type {
   PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
-  Uuid,
-  EnvironmentId,
 } from 'golem:core/types@2.0.0';
 import { GuestSecretHandle } from './secretHandle';
 import { GuestQuotaTokenHandle } from './quotaTokenHandle';
@@ -62,8 +60,6 @@ export type {
   PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
-  Uuid,
-  EnvironmentId,
 };
 
 // These are part of the schema-model public surface but are only ever re-exported
@@ -75,6 +71,8 @@ export type {
   PathDirection,
   PathKind,
   FieldDiscriminator,
+  Uuid,
+  EnvironmentId,
 } from 'golem:core/types@2.0.0';
 
 // ============================================================
