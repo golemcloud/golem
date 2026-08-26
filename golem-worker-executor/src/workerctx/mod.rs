@@ -71,6 +71,15 @@ use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::p2::WasiHttpCtxView;
 use wasmtime_wasi_http::p3::WasiHttpView;
 
+/// Test-harness coordination for a P3 HTTP body reply that is ready before a
+/// guest cancels the matching stream read.
+#[doc(hidden)]
+pub trait P3HttpBodyProducerHook: Send + Sync {
+    fn should_defer_ready_reply(&self) -> bool;
+
+    fn ready_reply_deferred(&self);
+}
+
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
 /// well as providing hooks for the general worker executor logic.
@@ -121,6 +130,12 @@ pub trait WorkerCtx:
         _extra_deps: Self::ExtraDeps,
     ) -> Arc<dyn Oplog> {
         oplog
+    }
+
+    /// Supplies optional test-harness coordination for P3 HTTP body delivery.
+    #[doc(hidden)]
+    fn p3_http_body_producer_hook(&self) -> Option<Arc<dyn P3HttpBodyProducerHook>> {
+        None
     }
 
     /// Creates a new worker context

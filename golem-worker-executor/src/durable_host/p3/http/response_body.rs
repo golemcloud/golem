@@ -32,11 +32,11 @@ use crate::durable_host::http::policy::{
 };
 use crate::durable_host::http::types::classify_serializable_http_error_code;
 use crate::durable_host::p3::{
-    DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
+    DurableP3, DurableP3View, durable_worker_ctx, expect_ctx, observe_function_call,
     observe_function_call_store, wasi_http_view,
 };
 use crate::durable_host::tail_work::TailActivity;
-use crate::workerctx::WorkerCtx;
+use crate::workerctx::{P3HttpBodyProducerHook, WorkerCtx};
 use bytes::Bytes;
 use golem_common::model::RetryContext;
 use golem_common::model::oplog::host_functions::{
@@ -367,6 +367,7 @@ impl Drop for HttpTrailersDeliveryGuard {
 /// replay.
 pub(super) struct DurableHttpBodyProducer {
     demand_tx: mpsc::Sender<HttpBodyDemand>,
+    hook: Option<Arc<dyn P3HttpBodyProducerHook>>,
     pending: Option<PendingHttpBodyRead>,
     pending_cancel: Option<oneshot::Receiver<()>>,
     finished: bool,
@@ -374,15 +375,20 @@ pub(super) struct DurableHttpBodyProducer {
 
 pub(super) struct PendingHttpBodyRead {
     reply: oneshot::Receiver<HttpBodyChunkReply>,
+    ready_reply: Option<HttpBodyChunkReply>,
     cancel: Option<oneshot::Sender<()>>,
     cancel_ack: Option<oneshot::Receiver<()>>,
     cancelling: bool,
 }
 
 impl DurableHttpBodyProducer {
-    fn new(demand_tx: mpsc::Sender<HttpBodyDemand>) -> Self {
+    fn new(
+        demand_tx: mpsc::Sender<HttpBodyDemand>,
+        hook: Option<Arc<dyn P3HttpBodyProducerHook>>,
+    ) -> Self {
         Self {
             demand_tx,
+            hook,
             pending: None,
             pending_cancel: None,
             finished: false,
@@ -417,6 +423,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                 }
             }
 
+            let hook = self.hook.clone();
             if let Some(pending) = self.pending.as_mut() {
                 if finish && !pending.cancelling {
                     if let Some(cancel) = pending.cancel.take() {
@@ -424,7 +431,25 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                     }
                     pending.cancelling = true;
                 }
-                match Pin::new(&mut pending.reply).poll(cx) {
+                let reply = match pending.ready_reply.take() {
+                    Some(reply) => Poll::Ready(Ok(reply)),
+                    None => Pin::new(&mut pending.reply).poll(cx),
+                };
+                let reply = match reply {
+                    Poll::Ready(Ok(reply))
+                        if !finish
+                            && hook
+                                .as_ref()
+                                .is_some_and(|hook| hook.should_defer_ready_reply()) =>
+                    {
+                        pending.ready_reply = Some(reply);
+                        hook.expect("the checked hook must exist")
+                            .ready_reply_deferred();
+                        return Poll::Pending;
+                    }
+                    reply => reply,
+                };
+                match reply {
                     Poll::Pending => {
                         // A reply that is already queued wins over cancellation: it may contain
                         // bytes that were copied into guest memory before cancel-read completed
@@ -569,6 +594,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
             }
             self.pending = Some(PendingHttpBodyRead {
                 reply: reply_rx,
+                ready_reply: None,
                 cancel: Some(cancel_tx),
                 cancel_ack: Some(cancel_ack_rx),
                 cancelling: false,
@@ -1861,13 +1887,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         let (demand_tx, demand_rx) = mpsc::channel(1);
         let (trailers_tx, trailers_rx) = oneshot::channel();
         let trailers_delivery = HttpTrailersDelivery::new();
+        let producer_hook = {
+            let mut store_ctx = store.as_context_mut();
+            expect_ctx::<Ctx, U>(store_ctx.data_mut()).p3_http_body_producer_hook()
+        };
 
         // Build both guest-facing handles before spawning the durable task. The
         // task appends the `consume-body` `Start`; the guest cannot poll either
         // handle until this host call returns, so spawning first would risk
         // committing a `Start` with no terminal (orphaned `Start`) if a later
         // handle construction fails.
-        let mut stream = StreamReader::new(&mut store, DurableHttpBodyProducer::new(demand_tx))?;
+        let mut stream = StreamReader::new(
+            &mut store,
+            DurableHttpBodyProducer::new(demand_tx, producer_hook),
+        )?;
         let mut trailers = match FutureReader::new(
             &mut store,
             HttpTrailersFutureProducer::<Ctx, U>::new(trailers_rx),
@@ -1945,128 +1978,6 @@ mod tests {
         HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
     };
     use test_r::{test, timeout};
-    use wasmtime::component::{Component, Linker};
-    use wasmtime::{Config, Engine, Store};
-
-    const CANCEL_STREAM_READ_COMPONENT: &str = r#"
-(component
-  (core module $libc (memory (export "memory") 1))
-  (core instance $libc (instantiate $libc))
-
-  (core module $m
-    (import "libc" "memory" (memory 1))
-    (import "" "stream.read" (func $stream.read (param i32 i32 i32) (result i32)))
-    (import "" "stream.cancel-read" (func $stream.cancel-read (param i32) (result i32)))
-    (import "" "stream.drop-readable" (func $stream.drop-readable (param i32)))
-
-    (func (export "run") (param $stream i32) (result i64)
-      (local $code i32)
-
-      (call $stream.read (local.get $stream) (i32.const 0x100) (i32.const 3))
-      i32.const -1 ;; BLOCKED
-      i32.ne
-      if unreachable end
-
-      (local.set $code (call $stream.cancel-read (local.get $stream)))
-      (call $stream.drop-readable (local.get $stream))
-
-      (i64.or
-        (i64.shl (i64.extend_i32_u (local.get $code)) (i64.const 32))
-        (i64.extend_i32_u (i32.load (i32.const 0x100))))
-    )
-  )
-
-  (type $stream (stream u8))
-  (core func $stream.read (canon stream.read $stream async (memory $libc "memory")))
-  (core func $stream.cancel-read (canon stream.cancel-read $stream))
-  (core func $stream.drop-readable (canon stream.drop-readable $stream))
-
-  (core instance $i (instantiate $m
-    (with "libc" (instance $libc))
-    (with "" (instance
-      (export "stream.read" (func $stream.read))
-      (export "stream.cancel-read" (func $stream.cancel-read))
-      (export "stream.drop-readable" (func $stream.drop-readable))
-    ))
-  ))
-
-  (func (export "run") async (param "stream" $stream) (result u64)
-    (canon lift (core func $i "run") (memory $libc "memory")))
-)
-"#;
-
-    /// A synchronous raw `stream.cancel-read` can race a queued body reply. If both the reply and
-    /// cancellation acknowledgement are ready, the reply must win: Wasmtime copies its bytes into
-    /// guest memory and reports `N` transferred items, which is observably different from zero.
-    #[test]
-    #[timeout("10s")]
-    async fn cancel_read_delivers_a_simultaneously_ready_body_reply() -> anyhow::Result<()> {
-        let mut config = Config::new();
-        config.wasm_component_model_async(true);
-        let engine = Engine::new(&config)?;
-        let component = Component::new(&engine, CANCEL_STREAM_READ_COMPONENT)?;
-        let mut store = Store::new(&engine, ());
-        let instance = Linker::new(&engine)
-            .instantiate_async(&mut store, &component)
-            .await?;
-
-        let (demand_tx, mut demand_rx) = mpsc::channel(1);
-        let stream = StreamReader::new(&mut store, DurableHttpBodyProducer::new(demand_tx))?;
-        let run = instance.get_typed_func::<(StreamReader<u8>,), (u64,)>(&mut store, "run")?;
-
-        let call = run.call_async(&mut store, (stream,));
-        let reply = async move {
-            let demand = demand_rx
-                .recv()
-                .await
-                .expect("producer must request one body chunk");
-            let HttpBodyDemand::Read {
-                reply,
-                cancel,
-                cancel_ack,
-            } = demand
-            else {
-                panic!("producer must start a read before cancelling it")
-            };
-            cancel
-                .await
-                .expect("raw cancel-read must signal the pending body read");
-
-            let (delivery, observed) =
-                HttpBodyChunkDelivery::new(CompletionDelivery::test_replay_delivered_immediate());
-            assert!(
-                reply
-                    .send(HttpBodyChunkReply::Data {
-                        bytes: Bytes::from_static(b"abc"),
-                        delivery,
-                    })
-                    .is_ok(),
-                "the stream producer must still be waiting for the recorded reply"
-            );
-            // No await between queueing the reply and releasing cancellation: the next producer
-            // poll observes both as ready and must choose the reply.
-            drop(cancel_ack);
-            observed
-                .await
-                .expect("the producer must observe the queued bytes before cancellation settles");
-        };
-
-        let (result, ()) = tokio::join!(call, reply);
-        let (packed,) = result?;
-        let cancel_code = (packed >> 32) as u32;
-        let destination = (packed as u32).to_le_bytes();
-        assert_eq!(
-            cancel_code >> 4,
-            3,
-            "raw stream.cancel-read must report three transferred bytes"
-        );
-        assert_eq!(
-            &destination[..3],
-            b"abc",
-            "the cancelled read must still write its three recorded bytes"
-        );
-        Ok(())
-    }
 
     /// Seeds `oplog` with the durable prefix a live consume-body loop leaves behind right before
     /// the guest-facing transfer of its first chunk: the parent consume-body `Start`, the child
