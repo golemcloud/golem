@@ -321,6 +321,16 @@ impl CompletionDelivery {
         matches!(self.state, CompletionDeliveryState::ReplayDiscarded)
     }
 
+    /// Whether this replayed completion has a recorded delivery marker that must be reached
+    /// before cancellation can settle the guest-facing transfer. Callers inspect this before
+    /// [`Self::prepare_delivery`] replaces the marker position with an armed barrier.
+    pub fn is_replay_at_marker(&self) -> bool {
+        matches!(
+            self.state,
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtMarker { .. })
+        )
+    }
+
     /// Whether the token is live and armed (a torn delivery would record a marker). Callers use
     /// this to route ordered post-`End` appends through [`Self::append_ordered`] instead of a
     /// direct oplog append that would race the torn-drop marker.
@@ -575,24 +585,6 @@ impl CompletionDelivery {
             CompletionDeliveryState::ReplayDiscarded
             | CompletionDeliveryState::Unarmed
             | CompletionDeliveryState::Done => Ok(()),
-        }
-    }
-
-    /// Settles an internal transfer that lost its guest-side consumer after replay reached the
-    /// recorded delivery marker. This is narrower than [`Self::discarded`]: the durable result was
-    /// handed to an internal runtime producer live, but a competing guest future can win and tear
-    /// that producer down before it is scheduled at the same marker during replay. A later
-    /// guest-visible parent terminal still verifies whether the whole operation was delivered or
-    /// discarded.
-    ///
-    /// Live and pre-marker states retain their normal drop behavior. Only an armed replay marker
-    /// is acknowledged instead of poisoning replay.
-    pub(in crate::durable_host) fn settle_abandoned_internal_transfer(mut self) {
-        match std::mem::replace(&mut self.state, CompletionDeliveryState::Done) {
-            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(barrier)) => {
-                barrier.acknowledge();
-            }
-            state => self.state = state,
         }
     }
 

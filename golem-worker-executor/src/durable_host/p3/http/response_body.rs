@@ -228,18 +228,6 @@ impl HttpBodyChunkDelivery {
     }
 }
 
-impl Drop for HttpBodyChunkDelivery {
-    fn drop(&mut self) {
-        if let Some(delivery) = self.delivery.take() {
-            // The stream producer is an internal runtime bridge, not the externally observable
-            // parent completion. A competing guest future may cancel this bridge after replay has
-            // reached a marker that the live producer observed; acknowledge that marker and let
-            // the parent trailers disposition verify the guest-visible outcome.
-            delivery.settle_abandoned_internal_transfer();
-        }
-    }
-}
-
 /// Resolution delivered to the guest-facing trailers future once the body closes
 /// (or the durable task fails before recording the terminal).
 pub(super) enum HttpTrailersResolution {
@@ -436,20 +424,23 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                     }
                     pending.cancelling = true;
                 }
-                if pending.cancelling
-                    && let Some(cancel_ack) = pending.cancel_ack.as_mut()
-                {
-                    match Pin::new(cancel_ack).poll(cx) {
-                        Poll::Ready(_) => {
-                            self.pending = None;
-                            self.finished = true;
-                            return Poll::Ready(Ok(StreamResult::Cancelled));
-                        }
-                        Poll::Pending => {}
-                    }
-                }
                 match Pin::new(&mut pending.reply).poll(cx) {
                     Poll::Pending => {
+                        // A reply that is already queued wins over cancellation: it may contain
+                        // bytes that were copied into guest memory before cancel-read completed
+                        // live. Only settle cancellation when no reply is ready.
+                        if pending.cancelling
+                            && let Some(cancel_ack) = pending.cancel_ack.as_mut()
+                        {
+                            match Pin::new(cancel_ack).poll(cx) {
+                                Poll::Ready(_) => {
+                                    self.pending = None;
+                                    self.finished = true;
+                                    return Poll::Ready(Ok(StreamResult::Cancelled));
+                                }
+                                Poll::Pending => {}
+                            }
+                        }
                         // A demand is in flight. If `finish` was set above, the
                         // durable task has also been signalled to stop the
                         // upstream read and record a terminal, so this pending
@@ -1034,23 +1025,24 @@ where
 
         loop {
             // Safe park: waiting for the guest to demand the next body chunk.
-            let (demand, cancel_rx, read_cancel_ack) = match activity.park(demand_rx.recv()).await {
-                Some(HttpBodyDemand::Read {
-                    reply,
-                    cancel,
-                    cancel_ack,
-                }) => {
-                    if reply.is_closed() {
+            let (demand, cancel_rx, mut read_cancel_ack) =
+                match activity.park(demand_rx.recv()).await {
+                    Some(HttpBodyDemand::Read {
+                        reply,
+                        cancel,
+                        cancel_ack,
+                    }) => {
+                        if reply.is_closed() {
+                            break;
+                        }
+                        (reply, Some(cancel), Some(cancel_ack))
+                    }
+                    Some(HttpBodyDemand::Cancel(ack)) => {
+                        cancel_ack = Some(ack);
                         break;
                     }
-                    (reply, Some(cancel), Some(cancel_ack))
-                }
-                Some(HttpBodyDemand::Cancel(ack)) => {
-                    cancel_ack = Some(ack);
-                    break;
-                }
-                None => break,
-            };
+                    None => break,
+                };
 
             let mut child = match DurableCallSession::<
                 P3HttpClientConsumeBodyChunk,
@@ -1107,30 +1099,41 @@ where
                     .await
                 {
                     Ok(DeferredCallReplayOutcome::Replayed(response, delivery)) => {
+                        let replay_at_marker = delivery.is_replay_at_marker();
+                        let replay_discarded = delivery.is_replay_discarded();
                         let produced = match response.chunk {
                             SerializableP3HttpBodyChunk::Data(bytes) => {
-                                // Mirror the live path: once a frame is produced, the
-                                // read's cancel plumbing is released (live, the read
-                                // future owns it and is dropped when a frame wins the
-                                // select). Holding the `cancel_ack` sender across the
-                                // delivery boundary would leave a cancelling guest
-                                // blocked in `stream.cancel-read` while a
-                                // replay-discarded delivery parks on the demand —
-                                // a circular wait.
                                 drop(cancel_rx);
-                                drop(read_cancel_ack);
+                                // A marker-bearing replay must keep cancel-read pending until the
+                                // recorded bytes reach Wasmtime's destination. Markerless and
+                                // discarded completions retain the live cancellation race; the
+                                // latter must release the ack before parking to avoid a cycle.
+                                if !replay_at_marker {
+                                    drop(read_cancel_ack.take());
+                                }
                                 ProducedChunk::Data(Bytes::from(bytes))
                             }
                             SerializableP3HttpBodyChunk::End => {
                                 drop(cancel_rx);
-                                drop(read_cancel_ack);
+                                if !replay_at_marker {
+                                    drop(read_cancel_ack.take());
+                                }
                                 ProducedChunk::End
                             }
                             SerializableP3HttpBodyChunk::Cancelled => {
-                                if let Some(cancel_rx) = cancel_rx {
-                                    let _ = cancel_rx.await;
+                                if replay_discarded {
+                                    drop(cancel_rx);
+                                    drop(read_cancel_ack.take());
+                                } else {
+                                    if let Some(cancel_rx) = cancel_rx {
+                                        let _ = cancel_rx.await;
+                                    }
+                                    if replay_at_marker {
+                                        cancel_ack = read_cancel_ack.take();
+                                    } else {
+                                        drop(read_cancel_ack.take());
+                                    }
                                 }
-                                cancel_ack = read_cancel_ack;
                                 terminal = Ok(None);
                                 ProducedChunk::Cancelled
                             }
@@ -1942,6 +1945,128 @@ mod tests {
         HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
     };
     use test_r::{test, timeout};
+    use wasmtime::component::{Component, Linker};
+    use wasmtime::{Config, Engine, Store};
+
+    const CANCEL_STREAM_READ_COMPONENT: &str = r#"
+(component
+  (core module $libc (memory (export "memory") 1))
+  (core instance $libc (instantiate $libc))
+
+  (core module $m
+    (import "libc" "memory" (memory 1))
+    (import "" "stream.read" (func $stream.read (param i32 i32 i32) (result i32)))
+    (import "" "stream.cancel-read" (func $stream.cancel-read (param i32) (result i32)))
+    (import "" "stream.drop-readable" (func $stream.drop-readable (param i32)))
+
+    (func (export "run") (param $stream i32) (result i64)
+      (local $code i32)
+
+      (call $stream.read (local.get $stream) (i32.const 0x100) (i32.const 3))
+      i32.const -1 ;; BLOCKED
+      i32.ne
+      if unreachable end
+
+      (local.set $code (call $stream.cancel-read (local.get $stream)))
+      (call $stream.drop-readable (local.get $stream))
+
+      (i64.or
+        (i64.shl (i64.extend_i32_u (local.get $code)) (i64.const 32))
+        (i64.extend_i32_u (i32.load (i32.const 0x100))))
+    )
+  )
+
+  (type $stream (stream u8))
+  (core func $stream.read (canon stream.read $stream async (memory $libc "memory")))
+  (core func $stream.cancel-read (canon stream.cancel-read $stream))
+  (core func $stream.drop-readable (canon stream.drop-readable $stream))
+
+  (core instance $i (instantiate $m
+    (with "libc" (instance $libc))
+    (with "" (instance
+      (export "stream.read" (func $stream.read))
+      (export "stream.cancel-read" (func $stream.cancel-read))
+      (export "stream.drop-readable" (func $stream.drop-readable))
+    ))
+  ))
+
+  (func (export "run") async (param "stream" $stream) (result u64)
+    (canon lift (core func $i "run") (memory $libc "memory")))
+)
+"#;
+
+    /// A synchronous raw `stream.cancel-read` can race a queued body reply. If both the reply and
+    /// cancellation acknowledgement are ready, the reply must win: Wasmtime copies its bytes into
+    /// guest memory and reports `N` transferred items, which is observably different from zero.
+    #[test]
+    #[timeout("10s")]
+    async fn cancel_read_delivers_a_simultaneously_ready_body_reply() -> anyhow::Result<()> {
+        let mut config = Config::new();
+        config.wasm_component_model_async(true);
+        let engine = Engine::new(&config)?;
+        let component = Component::new(&engine, CANCEL_STREAM_READ_COMPONENT)?;
+        let mut store = Store::new(&engine, ());
+        let instance = Linker::new(&engine)
+            .instantiate_async(&mut store, &component)
+            .await?;
+
+        let (demand_tx, mut demand_rx) = mpsc::channel(1);
+        let stream = StreamReader::new(&mut store, DurableHttpBodyProducer::new(demand_tx))?;
+        let run = instance.get_typed_func::<(StreamReader<u8>,), (u64,)>(&mut store, "run")?;
+
+        let call = run.call_async(&mut store, (stream,));
+        let reply = async move {
+            let demand = demand_rx
+                .recv()
+                .await
+                .expect("producer must request one body chunk");
+            let HttpBodyDemand::Read {
+                reply,
+                cancel,
+                cancel_ack,
+            } = demand
+            else {
+                panic!("producer must start a read before cancelling it")
+            };
+            cancel
+                .await
+                .expect("raw cancel-read must signal the pending body read");
+
+            let (delivery, observed) =
+                HttpBodyChunkDelivery::new(CompletionDelivery::test_replay_delivered_immediate());
+            assert!(
+                reply
+                    .send(HttpBodyChunkReply::Data {
+                        bytes: Bytes::from_static(b"abc"),
+                        delivery,
+                    })
+                    .is_ok(),
+                "the stream producer must still be waiting for the recorded reply"
+            );
+            // No await between queueing the reply and releasing cancellation: the next producer
+            // poll observes both as ready and must choose the reply.
+            drop(cancel_ack);
+            observed
+                .await
+                .expect("the producer must observe the queued bytes before cancellation settles");
+        };
+
+        let (result, ()) = tokio::join!(call, reply);
+        let (packed,) = result?;
+        let cancel_code = (packed >> 32) as u32;
+        let destination = (packed as u32).to_le_bytes();
+        assert_eq!(
+            cancel_code >> 4,
+            3,
+            "raw stream.cancel-read must report three transferred bytes"
+        );
+        assert_eq!(
+            &destination[..3],
+            b"abc",
+            "the cancelled read must still write its three recorded bytes"
+        );
+        Ok(())
+    }
 
     /// Seeds `oplog` with the durable prefix a live consume-body loop leaves behind right before
     /// the guest-facing transfer of its first chunk: the parent consume-body `Start`, the child
