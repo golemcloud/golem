@@ -812,6 +812,24 @@ impl TestWorkerExecutor {
             .await
     }
 
+    /// Arms a one-shot artificial delay on `agent_id`'s next oplog commit and records the
+    /// interval that commit occupied. Armed right before a shard drain, the delayed commit is the
+    /// agent's teardown commit, so `teardown_commit_intervals` shows whether the drain tears
+    /// agents down concurrently or one by one. See
+    /// [`AdditionalTestDeps::arm_teardown_commit_delay`].
+    pub async fn arm_teardown_commit_delay(&self, agent_id: &AgentId, delay: std::time::Duration) {
+        self.additional_test_deps
+            .arm_teardown_commit_delay(agent_id.clone(), delay)
+            .await
+    }
+
+    /// The intervals occupied by the commits delayed with `arm_teardown_commit_delay`.
+    pub fn teardown_commit_intervals(
+        &self,
+    ) -> Vec<(AgentId, std::time::Instant, std::time::Instant)> {
+        self.additional_test_deps.teardown_commit_intervals()
+    }
+
     /// Returns the per-worker memory requirement that the executor uses when
     /// reserving from the worker memory semaphore. Lets tests sanity-check that
     /// they have constrained the memory budget tightly enough to force
@@ -3090,7 +3108,21 @@ impl Oplog for TestOplog {
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "commit");
-        self.oplog.commit(level).await
+        let delay = self
+            .additional_test_deps
+            .take_teardown_commit_delay(&self.owned_agent_id.agent_id)
+            .await;
+        let started = std::time::Instant::now();
+        let result = self.oplog.commit(level).await;
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+            self.additional_test_deps.record_teardown_commit_interval(
+                &self.owned_agent_id.agent_id,
+                started,
+                std::time::Instant::now(),
+            );
+        }
+        result
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -3443,6 +3475,13 @@ pub struct AdditionalTestDeps {
     consume_body_scope_start_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeStartGate>>>,
     consume_body_scope_end_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeEndGate>>>,
     consume_body_reply_defer_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyReplyDeferGate>>>,
+    /// One-shot artificial latency applied to an agent's next oplog commit inside the
+    /// [`TestOplog`] wrapper, and the intervals those delayed commits occupied. Armed right
+    /// before a shard drain, the delayed commit is the agent's teardown commit, so the recorded
+    /// intervals show whether the drain tears agents down concurrently or one by one.
+    teardown_commit_delays: Arc<scc::HashMap<AgentId, std::time::Duration>>,
+    teardown_commit_intervals:
+        Arc<std::sync::Mutex<Vec<(AgentId, std::time::Instant, std::time::Instant)>>>,
     /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
     /// read-only test helpers (`worker_is_loaded`,
     /// `worker_eviction_class`, `worker_memory_requirement`) to observe
@@ -3471,8 +3510,47 @@ impl AdditionalTestDeps {
             consume_body_scope_start_gates: Arc::new(scc::HashMap::new()),
             consume_body_scope_end_gates: Arc::new(scc::HashMap::new()),
             consume_body_reply_defer_gates: Arc::new(scc::HashMap::new()),
+            teardown_commit_delays: Arc::new(scc::HashMap::new()),
+            teardown_commit_intervals: Arc::new(std::sync::Mutex::new(Vec::new())),
             active_agents: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Arms a one-shot delay on the given agent's next oplog commit; see the field documentation.
+    /// Re-arming replaces a delay that has not fired yet.
+    pub async fn arm_teardown_commit_delay(&self, agent_id: AgentId, delay: std::time::Duration) {
+        self.teardown_commit_delays
+            .entry_async(agent_id)
+            .await
+            .and_modify(|existing| *existing = delay)
+            .or_insert(delay);
+    }
+
+    async fn take_teardown_commit_delay(&self, agent_id: &AgentId) -> Option<std::time::Duration> {
+        self.teardown_commit_delays
+            .remove_async(agent_id)
+            .await
+            .map(|(_, delay)| delay)
+    }
+
+    fn record_teardown_commit_interval(
+        &self,
+        agent_id: &AgentId,
+        started: std::time::Instant,
+        finished: std::time::Instant,
+    ) {
+        self.teardown_commit_intervals
+            .lock()
+            .unwrap()
+            .push((agent_id.clone(), started, finished));
+    }
+
+    /// The intervals occupied by the delayed commits armed with `arm_teardown_commit_delay`, in
+    /// completion order.
+    pub fn teardown_commit_intervals(
+        &self,
+    ) -> Vec<(AgentId, std::time::Instant, std::time::Instant)> {
+        self.teardown_commit_intervals.lock().unwrap().clone()
     }
 
     /// Arms a one-shot gate that pauses the given agent's next consume-body

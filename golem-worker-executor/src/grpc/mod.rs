@@ -41,6 +41,7 @@ use crate::worker::{Worker, WorkerUpdateMode};
 use crate::workerctx::WorkerCtx;
 use futures::Stream;
 use futures::StreamExt;
+use futures::future::join_all;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::worker::{Cursor, InvocationRequest, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
@@ -97,7 +98,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
@@ -105,7 +106,8 @@ use tracing::info_span;
 use tracing::{Instrument, Level, debug, error, info};
 use wasmtime::Error;
 
-/// A change of this executor's shard assignment, as received from the shard manager.
+/// The shard manager call that changed this executor's shard assignment. Only used to label the
+/// drain and recovery that follow, so they can be attributed to their cause in traces and logs.
 #[derive(Clone, Copy, Debug)]
 enum ShardAssignmentChange {
     Revoke,
@@ -121,22 +123,6 @@ impl ShardAssignmentChange {
             ShardAssignmentChange::Set => "set_shard_assignment",
         }
     }
-
-    /// Whether the change can take shards away, so resident agents may have to be interrupted.
-    fn interrupts_lost_agents(self) -> bool {
-        matches!(
-            self,
-            ShardAssignmentChange::Revoke | ShardAssignmentChange::Set
-        )
-    }
-
-    /// Whether the change can add shards, so their running agents have to be recovered.
-    fn recovers_gained_agents(self) -> bool {
-        matches!(
-            self,
-            ShardAssignmentChange::Assign | ShardAssignmentChange::Set
-        )
-    }
 }
 
 /// This is the implementation of the Worker Executor gRPC API
@@ -149,9 +135,6 @@ pub struct WorkerExecutorImpl<
     /// Holds the strong Arc to the worker activator so the Weak reference
     /// stored in LazyWorkerActivator remains valid while the gRPC server runs.
     _worker_activator: Arc<dyn WorkerActivator<Ctx>>,
-    /// Serializes the background application of shard assignment changes, so at most one
-    /// drain/recovery pass is in flight at a time; later changes queue behind it.
-    shard_assignment_change_lock: Arc<tokio::sync::Mutex<()>>,
     ctx: PhantomData<Ctx>,
 }
 
@@ -162,7 +145,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Self {
             services: self.services.clone(),
             _worker_activator: self._worker_activator.clone(),
-            shard_assignment_change_lock: self.shard_assignment_change_lock.clone(),
             ctx: PhantomData,
         }
     }
@@ -199,7 +181,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
             _worker_activator: worker_activator,
-            shard_assignment_change_lock: Arc::new(tokio::sync::Mutex::new(())),
             ctx: PhantomData,
         };
 
@@ -991,7 +972,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
 
         self.shard_service().revoke_shards(&shard_ids)?;
-        self.apply_shard_assignment_change_in_background(ShardAssignmentChange::Revoke);
+        self.drain_lost_agents(ShardAssignmentChange::Revoke)
+            .await?;
 
         Ok(())
     }
@@ -1005,7 +987,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
 
         self.shard_service().assign_shards(&shard_ids)?;
-        self.apply_shard_assignment_change_in_background(ShardAssignmentChange::Assign);
+        self.recover_gained_agents_in_background(ShardAssignmentChange::Assign);
 
         Ok(())
     }
@@ -1022,100 +1004,183 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.shard_service()
             .set_shard_assignment(number_of_shards, &shard_ids)?;
-        self.apply_shard_assignment_change_in_background(ShardAssignmentChange::Set);
+        self.drain_lost_agents(ShardAssignmentChange::Set).await?;
+        self.recover_gained_agents_in_background(ShardAssignmentChange::Set);
 
         Ok(())
     }
 
-    fn apply_shard_assignment_change_in_background(&self, change: ShardAssignmentChange) {
+    async fn drain_lost_agents(
+        &self,
+        change: ShardAssignmentChange,
+    ) -> Result<(), WorkerExecutorError> {
         let origin = TraceOrigin::capture_current();
         let this = self.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let span = related_span!(
                 origin,
                 Level::INFO,
-                "shard_assignment_change",
-                trigger = change.trigger(),
+                "shard_drain",
+                trigger = change.trigger()
             );
-            this.apply_shard_assignment_change(change)
+            this.drain_lost_agents_to_completion(change)
                 .instrument(span)
                 .await
         });
+        handle.await.map_err(|err| {
+            WorkerExecutorError::runtime(format!(
+                "Draining the agents of the revoked shards failed: {err}"
+            ))
+        })?
     }
 
-    async fn apply_shard_assignment_change(&self, change: ShardAssignmentChange) {
+    async fn drain_lost_agents_to_completion(
+        &self,
+        change: ShardAssignmentChange,
+    ) -> Result<(), WorkerExecutorError> {
         let trigger = change.trigger();
         let started = Instant::now();
         let shutdown = self.shutdown_token();
 
-        let _guard = tokio::select! {
-            guard = self.shard_assignment_change_lock.lock() => guard,
-            _ = shutdown.cancelled() => {
-                info!(trigger, "Shard assignment change skipped by executor shutdown");
-                return;
+        let drain = async {
+            let mut lost_total: usize = 0;
+            let mut signalled: usize = 0;
+            let mut acknowledged: usize = 0;
+            let mut passes: usize = 0;
+
+            loop {
+                passes += 1;
+
+                // Agents whose creation is still in flight are invisible to the snapshot, which
+                // is why this loops until a snapshot finds nothing loaded in a lost shard.
+                let mut lost = Vec::new();
+                for (agent_id, worker) in self.active_agents().snapshot().await {
+                    if self.shard_service().check_worker(&agent_id).is_err()
+                        && worker.is_loaded().await
+                    {
+                        lost.push((agent_id, worker));
+                    }
+                }
+                if lost.is_empty() {
+                    break;
+                }
+                lost_total += lost.len();
+
+                // Signal all of them at once.
+                let receivers: Vec<_> =
+                    join_all(lost.iter().map(|(agent_id, worker)| async move {
+                        worker
+                            .set_interrupting(InterruptKind::Restart)
+                            .await
+                            .map(|receiver| (agent_id.clone(), receiver))
+                    }))
+                    .await
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                signalled += receivers.len();
+
+                let acks = join_all(receivers.into_iter().map(
+                    |(agent_id, mut receiver)| async move {
+                        match receiver.recv().await {
+                            Ok(()) => true,
+                            Err(err) => {
+                                debug!(
+                                    agent_id = %agent_id,
+                                    error = %err,
+                                    "Agent went away before acknowledging its interruption"
+                                );
+                                false
+                            }
+                        }
+                    },
+                ))
+                .await;
+                acknowledged += acks.into_iter().filter(|acked| *acked).count();
+
+                // Wait until every lost agent has left memory. `is_loaded` only turns false after
+                // the worker's final oplog commit and status flush. The checks of a round are
+                // issued together and only for what is still loaded, with a backoff between
+                // rounds, so a wedged agent costs one lock touch per round rather than a busy
+                // wait.
+                let mut remaining = lost;
+                let mut backoff = Duration::from_millis(10);
+                loop {
+                    let still_loaded = join_all(remaining.iter().map(|(agent_id, worker)| {
+                        async move {
+                            // A shard handed back to this executor while the drain was running
+                            // is owned again: its agents will not unload, so stop waiting for
+                            // them.
+                            self.shard_service().check_worker(agent_id).is_err()
+                                && worker.is_loaded().await
+                        }
+                    }))
+                    .await;
+                    remaining = remaining
+                        .into_iter()
+                        .zip(still_loaded)
+                        .filter_map(|(entry, loaded)| loaded.then_some(entry))
+                        .collect();
+                    if remaining.is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_millis(100));
+                }
             }
+
+            (lost_total, signalled, acknowledged, passes)
         };
 
-        let mut signalled: usize = 0;
-        let mut acknowledged: usize = 0;
-
-        if change.interrupts_lost_agents() {
-            for (agent_id, worker) in self.active_agents().snapshot().await {
-                if self.shard_service().check_worker(&agent_id).is_ok() {
-                    continue;
-                }
-
-                let interrupt = async {
-                    match worker.set_interrupting(InterruptKind::Restart).await {
-                        Some(mut await_interrupted) => Some(await_interrupted.recv().await),
-                        None => None,
-                    }
-                };
-
-                tokio::select! {
-                    outcome = interrupt => {
-                        signalled += 1;
-                        match outcome {
-                            Some(Ok(())) => acknowledged += 1,
-                            Some(Err(err)) => debug!(
-                                agent_id = %agent_id,
-                                error = %err,
-                                "Agent went away before acknowledging its interruption"
-                            ),
-                            None => {}
-                        }
-                    }
-                    _ = shutdown.cancelled() => {
-                        info!(
-                            trigger,
-                            signalled,
-                            acknowledged,
-                            elapsed_ms = started.elapsed().as_millis() as u64,
-                            "Shard assignment change interrupted by executor shutdown"
-                        );
-                        return;
-                    }
-                }
+        tokio::select! {
+            (lost, signalled, acknowledged, passes) = drain => {
+                info!(
+                    trigger,
+                    lost,
+                    signalled,
+                    acknowledged,
+                    passes,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "Drained agents in revoked shards"
+                );
+                Ok(())
+            }
+            _ = shutdown.cancelled() => {
+                info!(
+                    trigger,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "Draining agents in revoked shards interrupted by executor shutdown"
+                );
+                Err(WorkerExecutorError::runtime("Executor is shutting down"))
             }
         }
+    }
 
-        if change.recovers_gained_agents()
-            && let Err(err) = Ctx::on_shard_assignment_changed(self).await
-        {
-            error!(
-                trigger,
-                error = %err,
-                "Failed to recover running agents after shard assignment change"
-            );
-        }
-
-        info!(
-            trigger,
-            signalled,
-            acknowledged,
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            "Shard assignment change applied"
-        );
+    fn recover_gained_agents_in_background(&self, change: ShardAssignmentChange) {
+        let trigger = change.trigger();
+        let origin = TraceOrigin::capture_current();
+        let this = self.clone();
+        tokio::spawn(async move {
+            let span = related_span!(origin, Level::INFO, "shard_assignment_recovery", trigger);
+            async move {
+                let started = Instant::now();
+                match Ctx::on_shard_assignment_changed(&this).await {
+                    Ok(()) => info!(
+                        trigger,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "Recovered running agents of newly owned shards"
+                    ),
+                    Err(err) => error!(
+                        trigger,
+                        error = %err,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "Failed to recover running agents of newly owned shards"
+                    ),
+                }
+            }
+            .instrument(span)
+            .await
+        });
     }
 
     async fn get_agent_metadata_internal(
