@@ -338,14 +338,19 @@ pub trait WorkerService: Send + Sync {
     ) -> Result<(), String>;
 
     /// Convenience cold-path helper that writes the blob *and* updates the recovery index in one
-    /// call. Panics on a blob write failure (cold paths cannot meaningfully recover). Hot paths use
-    /// the background flusher (blob) together with [`set_assignment_tracking`] (index) instead.
+    /// call. Hot paths use the background flusher (blob) together with [`set_assignment_tracking`]
+    /// (index) instead.
+    ///
+    /// The blob write is reported rather than fatal. Both callers reach this from a path that can
+    /// return an error, and a storage blip here would otherwise abort an executor holding live
+    /// agents - forcing every one of them to replay from oplog or snapshot, which is far more
+    /// expensive than failing the one operation that could not write.
     async fn update_cached_status(
         &self,
         owned_agent_id: &OwnedAgentId,
         previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
-    ) {
+    ) -> Result<(), String> {
         if let Err(err) = self
             .set_assignment_tracking(owned_agent_id, &status_value)
             .await
@@ -356,9 +361,7 @@ pub trait WorkerService: Send + Sync {
         }
         self.write_cached_status(owned_agent_id, previous_status, status_value)
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to write cached status for {owned_agent_id}: {err}")
-            });
+            .map(|_| ())
     }
 }
 
@@ -876,7 +879,8 @@ impl WorkerService for DefaultWorkerService {
 
                         // Cold path: no in-memory previous, reconcile against stored fields.
                         self.update_cached_status(owned_agent_id, None, last_known_status.clone())
-                            .await;
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?;
                         self.remove_legacy_cached_status(owned_agent_id).await?;
 
                         Some(last_known_status)

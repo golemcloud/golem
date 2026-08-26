@@ -2501,7 +2501,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let initial_status_value = initial_status.read().await.clone();
                 this.worker_service()
                     .update_cached_status(owned_agent_id, None, initial_status_value)
-                    .await;
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
 
                 Ok(GetOrCreateWorkerResult {
                     initial_worker_metadata,
