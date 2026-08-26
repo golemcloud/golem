@@ -437,7 +437,7 @@ impl DefaultWorkerService {
     /// `core`, `regions`, `updates`, and `ir:{idempotency_key}`).
     fn status_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentStatus {
-            agent_id: agent_id.clone(),
+            agent_id: Arc::new(agent_id.clone()),
         }
     }
 
@@ -447,7 +447,7 @@ impl DefaultWorkerService {
     /// fold baseline that always predates any later jump region.
     fn checkpoint_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentStatusCheckpoint {
-            agent_id: agent_id.clone(),
+            agent_id: Arc::new(agent_id.clone()),
         }
     }
 
@@ -674,7 +674,7 @@ impl DefaultWorkerService {
             .with("worker", "remove_legacy_status")
             .del(
                 KeyValueStorageNamespace::Worker {
-                    agent_id: owned_agent_id.agent_id(),
+                    agent_id: Arc::new(owned_agent_id.agent_id()),
                 },
                 &Self::legacy_status_key(&owned_agent_id.agent_id),
             )
@@ -697,7 +697,7 @@ impl DefaultWorkerService {
             .with_entity("worker", "read_cached_agent_mode", "agent_mode")
             .get_attempt_deserialize(
                 KeyValueStorageNamespace::Worker {
-                    agent_id: owned_agent_id.agent_id(),
+                    agent_id: Arc::new(owned_agent_id.agent_id()),
                 },
                 &Self::agent_mode_key(&owned_agent_id.agent_id),
             )
@@ -729,7 +729,7 @@ impl DefaultWorkerService {
             .with_entity("worker", "write_cached_agent_mode", "agent_mode")
             .set(
                 KeyValueStorageNamespace::Worker {
-                    agent_id: owned_agent_id.agent_id(),
+                    agent_id: Arc::new(owned_agent_id.agent_id()),
                 },
                 &Self::agent_mode_key(&owned_agent_id.agent_id),
                 &agent_mode,
@@ -958,7 +958,7 @@ impl WorkerService for DefaultWorkerService {
             .with("worker", "remove")
             .del(
                 KeyValueStorageNamespace::Worker {
-                    agent_id: agent_id.clone(),
+                    agent_id: Arc::new(agent_id.clone()),
                 },
                 &Self::agent_mode_key(agent_id),
             )

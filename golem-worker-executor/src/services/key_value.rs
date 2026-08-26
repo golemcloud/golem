@@ -105,7 +105,7 @@ impl KeyValueService for DefaultKeyValueService {
             .del(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 &key,
             )
@@ -125,7 +125,7 @@ impl KeyValueService for DefaultKeyValueService {
             .del_many(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 keys,
             )
@@ -146,7 +146,7 @@ impl KeyValueService for DefaultKeyValueService {
             .exists(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 &key,
             )
@@ -167,7 +167,7 @@ impl KeyValueService for DefaultKeyValueService {
             .get_raw(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 &key,
             )
@@ -187,7 +187,7 @@ impl KeyValueService for DefaultKeyValueService {
             .with("key_value", "get_keys")
             .keys(KeyValueStorageNamespace::UserDefined {
                 environment_id,
-                bucket,
+                bucket: bucket.into(),
             })
             .await
             .map_err(|err| anyhow!(err))?;
@@ -206,7 +206,7 @@ impl KeyValueService for DefaultKeyValueService {
             .get_many_raw(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 keys,
             )
@@ -230,7 +230,7 @@ impl KeyValueService for DefaultKeyValueService {
             .set_raw(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 &key,
                 &outgoing_value,
@@ -255,7 +255,7 @@ impl KeyValueService for DefaultKeyValueService {
             .set_many_raw(
                 KeyValueStorageNamespace::UserDefined {
                     environment_id,
-                    bucket,
+                    bucket: bucket.into(),
                 },
                 &key_values,
             )

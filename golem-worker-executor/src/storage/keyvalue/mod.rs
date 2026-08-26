@@ -29,6 +29,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::repo::RepoError;
 use std::fmt::{Debug, Display, Formatter};
+use std::sync::Arc;
 
 /// Error returned by every [`KeyValueStorage`] operation.
 ///
@@ -749,7 +750,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 pub enum KeyValueStorageNamespace {
     RunningWorkers,
     Worker {
-        agent_id: AgentId,
+        agent_id: Arc<AgentId>,
     },
     /// Per-agent cached status. Unlike `Worker` (a flat key space), this namespace is stored as
     /// one structure-per-agent (a Redis hash) so the cached `AgentStatusRecord` can be split into
@@ -758,7 +759,7 @@ pub enum KeyValueStorageNamespace {
     /// decoupled from the unbounded parts of the status. The `agent_id` is part of the namespace so
     /// each agent gets its own isolated key space (enabling per-agent `keys`/`del_many`).
     AgentStatus {
-        agent_id: AgentId,
+        agent_id: Arc<AgentId>,
     },
     /// Per-agent *clean* cached status checkpoint. Same physical layout as [`Self::AgentStatus`]
     /// (one structure-per-agent split into `core` / `regions` / `updates` / `ir:{key}`), but
@@ -767,15 +768,15 @@ pub enum KeyValueStorageNamespace {
     /// always holds a baseline before any later jump region and lets the status recompute fold
     /// forward from it instead of re-reading the whole oplog from index 1.
     AgentStatusCheckpoint {
-        agent_id: AgentId,
+        agent_id: Arc<AgentId>,
     },
     Promise {
-        agent_id: AgentId,
+        agent_id: Arc<AgentId>,
     },
     Schedule,
     UserDefined {
         environment_id: EnvironmentId,
-        bucket: String,
+        bucket: Arc<str>,
     },
 }
 

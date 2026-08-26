@@ -285,7 +285,7 @@ impl DefaultPromiseService {
             .with("promise", "complete")
             .exists(
                 KeyValueStorageNamespace::Promise {
-                    agent_id: promise_id.agent_id.clone(),
+                    agent_id: Arc::new(promise_id.agent_id.clone()),
                 },
                 &get_promise_redis_key(promise_id),
             )
@@ -306,7 +306,7 @@ impl DefaultPromiseService {
             .with_entity("promise", "get-completed", "promise")
             .get(
                 KeyValueStorageNamespace::Promise {
-                    agent_id: promise_id.agent_id.clone(),
+                    agent_id: Arc::new(promise_id.agent_id.clone()),
                 },
                 &get_promise_result_redis_key(promise_id),
             )
@@ -342,7 +342,7 @@ impl PromiseService for DefaultPromiseService {
             .with_entity("promise", "create", "promise")
             .set_if_not_exists(
                 KeyValueStorageNamespace::Promise {
-                    agent_id: agent_id.clone(),
+                    agent_id: Arc::new(agent_id.clone()),
                 },
                 &key,
                 &RedisPromiseState::Pending,
@@ -415,7 +415,7 @@ impl PromiseService for DefaultPromiseService {
             .with_entity("promise", "complete", "promise")
             .set_if_not_exists(
                 KeyValueStorageNamespace::Promise {
-                    agent_id: promise_id.agent_id.clone(),
+                    agent_id: Arc::new(promise_id.agent_id.clone()),
                 },
                 &key,
                 &RedisPromiseState::Complete(data.clone()),
