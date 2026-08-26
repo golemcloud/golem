@@ -557,8 +557,11 @@ impl RpcAuthTester for RpcAuthTesterImpl {
         let constructor = encode_single_parameter(counter_name);
 
         // Connect to the RpcCounter agent in the same component.
-        // WasmRpc::new resolves the component_id from the registered agent type.
-        let rpc = WasmRpc::new("RpcCounter", constructor, None, Vec::new());
+        // WasmRpc::create resolves the component_id from the registered agent type.
+        let rpc = match WasmRpc::create("RpcCounter", constructor, None, Vec::new()) {
+            Ok(rpc) => rpc,
+            Err(error) => return RpcCallOutcome::from(error),
+        };
 
         let arg = encode_single_parameter(1u64);
 
@@ -577,7 +580,8 @@ impl CancelTester for CancelTesterImpl {
 
     fn test_cancel_before_await(&self, counter_name: String) {
         let constructor_data = encode_single_parameter(counter_name);
-        let wasm_rpc = WasmRpc::new("RpcCounter", constructor_data, None, Vec::new());
+        let wasm_rpc = WasmRpc::create("RpcCounter", constructor_data, None, Vec::new())
+            .expect("failed to create RPC client");
 
         let input = encode_single_parameter(1u64);
         let future = wasm_rpc
@@ -592,7 +596,8 @@ impl CancelTester for CancelTesterImpl {
 
     async fn test_cancel_completed(&self, counter_name: String) -> u64 {
         let constructor_data = encode_single_parameter(counter_name.clone());
-        let wasm_rpc = WasmRpc::new("RpcCounter", constructor_data, None, Vec::new());
+        let wasm_rpc = WasmRpc::create("RpcCounter", constructor_data, None, Vec::new())
+            .expect("failed to create RPC client");
 
         // First, call inc_by to increment the counter
         let input = encode_single_parameter(5u64);

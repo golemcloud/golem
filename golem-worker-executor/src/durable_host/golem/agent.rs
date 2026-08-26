@@ -20,25 +20,26 @@ use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::secrets::secret_hold_target_for_path;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::host::{ConfigValueError, Host, WebhookError};
+use crate::services::HasWorkerService;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
-use golem_common::model::PromiseId;
 use golem_common::model::agent::{
     AgentConfigSource, AgentTypeName, ParsedAgentId, typed_constructor_parameters,
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::oplog::host_functions::{
-    GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
-    GolemAgentGetConfigValue,
+    GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAgentTypeFor,
+    GolemAgentGetAllAgentTypes, GolemAgentGetConfigValue,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestGolemAgentGetConfigValue,
-    HostRequestGolemApiPromiseId, HostRequestNoInput, HostResponseGolemAgentAgentType,
-    HostResponseGolemAgentAgentTypes, HostResponseGolemAgentGetConfigValue,
-    HostResponseGolemAgentWebhookUrl,
+    DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestGolemAgentGetAgentTypeFor,
+    HostRequestGolemAgentGetConfigValue, HostRequestGolemApiPromiseId, HostRequestNoInput,
+    HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
+    HostResponseGolemAgentGetConfigValue, HostResponseGolemAgentWebhookUrl,
 };
+use golem_common::model::{AgentId, OwnedAgentId, PromiseId};
 use golem_common::schema::agent::wit::{encode_registered_agent_type, wire};
 use golem_common::schema::agent::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
@@ -400,6 +401,82 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Err(err) => Err(anyhow!(err)),
         }
     }
+
+    /// Durable lookup of the registered agent type associated with an existing
+    /// agent instance. The worker's persisted component revision selects the
+    /// schema without exposing revision identifiers through the host API.
+    pub(crate) async fn get_agent_type_for_schema_model(
+        &mut self,
+        agent_id: AgentId,
+    ) -> anyhow::Result<Option<RegisteredAgentTypeSchema>> {
+        let mut handle = DurableCallSession::<GolemAgentGetAgentTypeFor, NotCancellable>::start(
+            self,
+            HostRequestGolemAgentGetAgentTypeFor {
+                agent_id: agent_id.clone(),
+            },
+            DurableFunctionType::ReadRemote,
+        )
+        .await?;
+
+        let response = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
+            let result = loop {
+                let owned_agent_id =
+                    OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
+                let result = match self.state.worker_service().get(&owned_agent_id).await {
+                    Some(metadata) => {
+                        let component_revision = metadata
+                            .last_known_status
+                            .as_ref()
+                            .map(|status| status.component_revision)
+                            .unwrap_or(
+                                metadata
+                                    .initial_worker_metadata
+                                    .last_known_status
+                                    .component_revision,
+                            );
+                        match ParsedAgentId::parse_agent_type_name(&agent_id.agent_id) {
+                            Ok(agent_type_name) => {
+                                self.agent_types_service()
+                                    .get(
+                                        self.owned_agent_id.environment_id,
+                                        agent_id.component_id,
+                                        component_revision,
+                                        &agent_type_name,
+                                    )
+                                    .await
+                            }
+                            Err(_) => Ok(None),
+                        }
+                    }
+                    None => Ok(None),
+                }
+                .map_err(|err| err.to_string());
+
+                match handle
+                    .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
+            handle
+                .complete(self, HostResponseGolemAgentAgentType { result })
+                .await?
+        };
+
+        match response.result {
+            Ok(result) => Ok(result),
+            Err(err) => Err(anyhow!(err)),
+        }
+    }
 }
 
 /// Cross-graph structural type equality, resolving any [`SchemaType::Ref`]
@@ -465,6 +542,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         agent_type_name: String,
     ) -> anyhow::Result<Option<wire::RegisteredAgentType>> {
         self.get_agent_type_schema_model(AgentTypeName(agent_type_name))
+            .await?
+            .map(encode_registered_agent_type_schema_wire)
+            .transpose()
+    }
+
+    async fn get_agent_type_for(
+        &mut self,
+        agent_id: core_wire::AgentId,
+    ) -> anyhow::Result<Option<wire::RegisteredAgentType>> {
+        self.get_agent_type_for_schema_model(agent_id.into())
             .await?
             .map(encode_registered_agent_type_schema_wire)
             .transpose()

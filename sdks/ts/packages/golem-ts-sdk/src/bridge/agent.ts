@@ -85,7 +85,7 @@ export function resolveRemoteAgent(
   const constructorTree = schemaValueToWit(constructorValue);
   const agentId =
     mode === 'ephemeral' ? agentTypeName : makeAgentId(agentTypeName, constructorTree, phantomId);
-  const rpc = new WasmRpc(
+  const rpc = WasmRpc.create(
     agentTypeName,
     constructorTree,
     phantomId,

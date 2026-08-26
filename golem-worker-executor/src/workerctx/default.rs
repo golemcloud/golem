@@ -677,7 +677,7 @@ impl FileSystemReading for Context {
 }
 
 impl HostWasmRpc for Context {
-    async fn new(
+    async fn create(
         &mut self,
         agent_type_name: String,
         constructor: golem_schema::schema::wit::wire::SchemaValueTree,
@@ -685,9 +685,9 @@ impl HostWasmRpc for Context {
         config: Vec<
             golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
+    ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
         self.durable_ctx
-            .new(agent_type_name, constructor, phantom_id, config)
+            .create(agent_type_name, constructor, phantom_id, config)
             .await
     }
 
@@ -790,6 +790,15 @@ impl AgentHost for Context {
         Option<golem_common::schema::agent::bindings::golem::agent::common::RegisteredAgentType>,
     > {
         AgentHost::get_agent_type(&mut self.durable_ctx, agent_type_name).await
+    }
+
+    async fn get_agent_type_for(
+        &mut self,
+        agent_id: golem_schema::schema::wit::wire::AgentId,
+    ) -> anyhow::Result<
+        Option<golem_common::schema::agent::bindings::golem::agent::common::RegisteredAgentType>,
+    > {
+        AgentHost::get_agent_type_for(&mut self.durable_ctx, agent_id).await
     }
 
     async fn make_agent_id(

@@ -135,6 +135,9 @@ oplog_payload! {
         GolemAgentGetAgentType {
             agent_type_name: AgentTypeName
         },
+        GolemAgentGetAgentTypeFor {
+            agent_id: AgentId
+        },
         GolemRdbmsRequest {
             request: Option<SerializableRdbmsRequest>
         },
@@ -800,6 +803,7 @@ pub mod host_functions {
         (P3SocketsIpNameLookupResolveAddresses => "sockets::ip-name-lookup", "resolve-addresses", P3SocketsResolveName, P3SocketsResolveName),
         (GolemAgentGetAllAgentTypes => "golem::agent", "get_all_agent_types", NoInput, GolemAgentAgentTypes),
         (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
+        (GolemAgentGetAgentTypeFor => "golem::agent", "get_agent_type_for", GolemAgentGetAgentTypeFor, GolemAgentAgentType),
         (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl),
         (GolemAgentGetConfigValue => "golem::agent", "get_config_value", GolemAgentGetConfigValue, GolemAgentGetConfigValue),
         (GolemApiCreatePromise => "golem::api", "create_promise", NoInput, GolemApiPromiseId),

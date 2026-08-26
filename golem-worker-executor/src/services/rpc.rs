@@ -40,7 +40,8 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentInvocationMode, AgentPrincipal, InvocationFreshnessDisposition, Principal,
+    AgentError as ModelAgentError, AgentInvocationMode, AgentPrincipal,
+    InvocationFreshnessDisposition, Principal,
 };
 use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb, ScopeCard};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -105,12 +106,13 @@ pub trait Rpc: Send + Sync {
     ) -> Result<(), RpcError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RpcError {
     ProtocolError { details: String },
     Denied { details: String },
     NotFound { details: String },
     RemoteInternalError { details: String },
+    RemoteAgentError { error: Box<ModelAgentError> },
 }
 
 impl From<SerializableRpcError> for RpcError {
@@ -122,6 +124,7 @@ impl From<SerializableRpcError> for RpcError {
             SerializableRpcError::RemoteInternalError { details } => {
                 Self::RemoteInternalError { details }
             }
+            SerializableRpcError::RemoteAgentError { error } => Self::RemoteAgentError { error },
         }
     }
 }
@@ -134,6 +137,9 @@ impl From<RpcError> for SerializableRpcError {
             RpcError::NotFound { details } => SerializableRpcError::NotFound { details },
             RpcError::RemoteInternalError { details } => {
                 SerializableRpcError::RemoteInternalError { details }
+            }
+            RpcError::RemoteAgentError { error } => {
+                SerializableRpcError::RemoteAgentError { error }
             }
         }
     }
@@ -148,6 +154,7 @@ impl Display for RpcError {
             RpcError::RemoteInternalError { details } => {
                 write!(f, "Remote internal error: {details}")
             }
+            RpcError::RemoteAgentError { error } => write!(f, "Remote agent error: {error}"),
         }
     }
 }
@@ -186,7 +193,9 @@ impl From<WorkerExecutorError> for RpcError {
                 details: "Invalid account".to_string(),
             },
             WorkerExecutorError::PermissionDenied { details } => RpcError::Denied { details },
-            WorkerExecutorError::InvalidRequest { details } => RpcError::ProtocolError { details },
+            WorkerExecutorError::InvalidRequest { details } => RpcError::RemoteAgentError {
+                error: Box::new(ModelAgentError::InvalidInput(details)),
+            },
             _ => RpcError::RemoteInternalError {
                 details: value.to_string(),
             },
@@ -217,9 +226,16 @@ impl From<crate::preview2::golem::agent::host::RpcError> for RpcError {
             WitRpcError::Denied(details) => Self::Denied { details },
             WitRpcError::NotFound(details) => Self::NotFound { details },
             WitRpcError::RemoteInternalError(details) => Self::RemoteInternalError { details },
-            WitRpcError::RemoteAgentError(err) => Self::RemoteInternalError {
-                details: format!("{err:?}"),
-            },
+            WitRpcError::RemoteAgentError(err) => {
+                match golem_common::schema::agent::wit::decode_agent_error(err) {
+                    Ok(error) => Self::RemoteAgentError {
+                        error: Box::new(error),
+                    },
+                    Err(err) => Self::RemoteInternalError {
+                        details: format!("Failed to decode remote agent error: {err}"),
+                    },
+                }
+            }
         }
     }
 }
@@ -231,6 +247,14 @@ impl From<RpcError> for crate::preview2::golem::agent::host::RpcError {
             RpcError::Denied { details } => Self::Denied(details),
             RpcError::NotFound { details } => Self::NotFound(details),
             RpcError::RemoteInternalError { details } => Self::RemoteInternalError(details),
+            RpcError::RemoteAgentError { error } => {
+                match golem_common::schema::agent::wit::encode_agent_error(&error) {
+                    Ok(error) => Self::RemoteAgentError(error),
+                    Err(err) => Self::RemoteInternalError(format!(
+                        "Failed to encode remote agent error: {err}"
+                    )),
+                }
+            }
         }
     }
 }
@@ -1077,5 +1101,45 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn invalid_remote_request_is_an_agent_input_error() {
+        let error = RpcError::from(WorkerExecutorError::invalid_request("wrong argument shape"));
+
+        assert_eq!(
+            error,
+            RpcError::RemoteAgentError {
+                error: Box::new(ModelAgentError::InvalidInput(
+                    "wrong argument shape".to_string()
+                )),
+            }
+        );
+    }
+
+    #[test]
+    fn remote_agent_error_survives_serializable_roundtrip() {
+        let error = RpcError::RemoteAgentError {
+            error: Box::new(ModelAgentError::InvalidMethod("missing".to_string())),
+        };
+
+        let serialized = SerializableRpcError::from(error.clone());
+        assert_eq!(RpcError::from(serialized), error);
+    }
+
+    #[test]
+    fn remote_agent_error_survives_wit_roundtrip() {
+        let error = RpcError::RemoteAgentError {
+            error: Box::new(ModelAgentError::InvalidAgentId("invalid".to_string())),
+        };
+
+        let wit = crate::preview2::golem::agent::host::RpcError::from(error.clone());
+        assert_eq!(RpcError::from(wit), error);
     }
 }

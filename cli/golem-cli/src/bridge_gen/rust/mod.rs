@@ -914,13 +914,14 @@ impl RustBridgeGenerator {
                     #(#constructor_param_defs),*
                 ) -> Result<Self, crate::__golem_bridge_runtime::ClientError> {
                     let constructor_value: crate::__golem_bridge_runtime::schema::SchemaValue = #constructor_params_value;
-                    let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
+                    let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::create(
                         #agent_type_name,
                         golem_rust::encode_schema_value(&constructor_value)
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::SchemaEncodeFailed { message: __e.to_string() })?,
                         #phantom_id_param.map(Into::into),
                         #agent_config_param,
-                    );
+                    )
+                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
 
                     Ok(Self { wasm_rpc })
                 }

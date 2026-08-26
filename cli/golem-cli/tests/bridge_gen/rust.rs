@@ -484,7 +484,7 @@ fn guest_generation_emits_wasm_rpc_cargo_dependencies_and_api_shape() {
         "pub fn get(",
         "pub fn get_phantom(",
         "pub fn new_phantom(",
-        "golem_rust::golem_agentic::golem::agent::host::WasmRpc::new",
+        "golem_rust::golem_agentic::golem::agent::host::WasmRpc::create",
         "pub async fn run(\n        &self,\n        value: i32,",
         "pub fn trigger_run(\n        &self,\n        value: i32,",
         "pub fn schedule_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::ScheduledTime,",

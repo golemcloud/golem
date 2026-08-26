@@ -1896,7 +1896,7 @@ impl FileSystemReading for TestWorkerCtx {
 }
 
 impl HostWasmRpc for TestWorkerCtx {
-    async fn new(
+    async fn create(
         &mut self,
         agent_type_name: String,
         constructor: golem_schema::schema::wit::wire::SchemaValueTree,
@@ -1904,9 +1904,9 @@ impl HostWasmRpc for TestWorkerCtx {
         config: Vec<
             golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
+    ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
         self.durable_ctx
-            .new(agent_type_name, constructor, phantom_id, config)
+            .create(agent_type_name, constructor, phantom_id, config)
             .await
     }
 

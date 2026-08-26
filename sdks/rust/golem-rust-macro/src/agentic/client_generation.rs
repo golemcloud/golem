@@ -122,13 +122,14 @@ pub fn get_remote_client(
                 )
                 .expect("Internal Error: Failed to make agent id");
 
-                let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
+                let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::create(
                     #type_name,
                     golem_rust::encode_schema_value(&#constructor_value_ident)
                         .expect("Failed to encode constructor parameters"),
                     #phantom_wire,
                     #config,
-                );
+                )
+                .expect("Failed to create RPC client");
 
                 #remote_client_type_name {
                     agent_id: #agent_id_ident,
@@ -314,13 +315,14 @@ fn build_ephemeral_constructor_body(
 ) -> proc_macro2::TokenStream {
     quote! {
         #encode_constructor
-        let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
+        let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::create(
             #type_name,
             golem_rust::encode_schema_value(&#constructor_value)
                 .expect("Failed to encode constructor parameters"),
             None,
             #config,
-        );
+        )
+        .expect("Failed to create RPC client");
         #client { wasm_rpc }
     }
 }
