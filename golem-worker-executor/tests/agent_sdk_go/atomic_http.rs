@@ -58,7 +58,7 @@ inherit_test_dep!(
 /// Rust's `transactions.rs` performs HTTP inside atomic regions successfully, so
 /// this is a Go-transport gap, not a platform limitation.
 #[test]
-#[ignore = "outbound HTTP inside an atomic region keeps a non-repairable durable call in flight, so the region cannot close — go transport gap"]
+#[ignore = "GOL-486: outbound HTTP inside an atomic region keeps a non-repairable durable call in flight, so the region cannot close"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_atomic_region_with_outgoing_http(

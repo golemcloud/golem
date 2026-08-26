@@ -58,7 +58,7 @@ inherit_test_dep!(
 ///     `saveState`/`loadState` round-trip in unit tests, and the built component
 ///     does export `golem:api/save-snapshot` and `load-snapshot` (wasm-tools).
 #[test]
-#[ignore = "enabling snapshotting on a go agent makes the worker fail to instantiate (wasm trap, no guest stderr) — needs an SDK/toolchain investigation"]
+#[ignore = "GOL-485: enabling snapshotting on a go agent breaks worker creation — go-guest replay divergence"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_custom_snapshot_round_trips_unexported_state(

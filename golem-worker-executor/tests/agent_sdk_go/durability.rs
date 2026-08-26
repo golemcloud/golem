@@ -155,7 +155,7 @@ async fn go_wall_clock_replayed_after_restart(
 /// This is the regression test for the mixed P2/P3 durable replay fix, so re-check
 /// it whenever the replay/delivery machinery changes.
 #[test]
-#[ignore = "hangs while replaying the recorded outbound-HTTP call after a restart — go-guest replay divergence, see the linked Linear issue"]
+#[ignore = "GOL-485: hangs while replaying the recorded outbound-HTTP call after a restart — go-guest replay divergence"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_outgoing_http_replayed_without_network(
