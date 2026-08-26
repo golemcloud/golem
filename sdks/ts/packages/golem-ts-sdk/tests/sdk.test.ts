@@ -516,7 +516,7 @@ describe('RPC client', () => {
   });
 
   const latestRpc = () =>
-    vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+    vi.mocked(WasmRpc.create).mock.results.at(-1)!.value as {
       invoke: ReturnType<typeof vi.fn>;
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
       scheduleInvocation: ReturnType<typeof vi.fn>;
@@ -530,7 +530,7 @@ describe('RPC client', () => {
 
     expect(phantom.phantomId).toBe(phantomId);
     expect(phantom.client.ping).toBeTypeOf('function');
-    const constructorArgs = vi.mocked(WasmRpc).mock.calls.at(-1)!;
+    const constructorArgs = vi.mocked(WasmRpc.create).mock.calls.at(-1)!;
     expect(constructorArgs[2]).toBe(phantomId);
     expect(constructorArgs[3]).toHaveLength(1);
     generate.mockRestore();
@@ -592,7 +592,7 @@ describe('RPC client', () => {
     await expect(client.ping()).resolves.toEqual({ metadata, value: undefined });
     expect(client.ping.trigger()).toBe(metadata);
     expect(client.ping.schedule({ seconds: 1n, nanoseconds: 0 })).toBe(receipt);
-    expect(vi.mocked(WasmRpc).mock.calls.at(-1)![2]).toBeUndefined();
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![2]).toBeUndefined();
     expect(vi.mocked(makeAgentId).mock.calls).toHaveLength(makeAgentIdCalls);
   });
 
@@ -621,7 +621,7 @@ describe('RPC client', () => {
     );
     expect(makeAgentId).toHaveBeenLastCalledWith(
       'MissingSingleOutputAgent',
-      vi.mocked(WasmRpc).mock.calls.at(-1)![1],
+      vi.mocked(WasmRpc.create).mock.calls.at(-1)![1],
       phantomId,
     );
   });
@@ -689,7 +689,7 @@ describe('RPC client', () => {
     expect(() =>
       (factory as unknown as (id: { tenant: string }) => unknown)({ tenant: 'acme' }),
     ).not.toThrow();
-    const constructorTree = vi.mocked(WasmRpc).mock.calls.at(-1)![1];
+    const constructorTree = vi.mocked(WasmRpc.create).mock.calls.at(-1)![1];
     expect(schemaValueFromWit(constructorTree)).toEqual({
       tag: 'record',
       fields: [{ tag: 'string', value: 'acme' }],
@@ -706,7 +706,7 @@ describe('RPC client', () => {
 
     clientFor(def)({}, undefined, {});
 
-    expect(vi.mocked(WasmRpc).mock.calls.at(-1)![3]).toEqual([]);
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![3]).toEqual([]);
   });
 
   it('rejects a non-object while traversing a nested RPC config override', () => {

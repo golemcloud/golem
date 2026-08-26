@@ -100,6 +100,8 @@ export type {
 } from './schema/markers';
 export { registerSchemaWalker, registeredVendors, compileSchema } from './schema/adapter';
 export type { SchemaCodec, SchemaWalker } from './schema/codec';
+export { SchemaRef, SchemaRenderError } from './schema/ref';
+export type { JsonValue, SchemaIssue, SchemaValidationResult } from './schema/ref';
 export {
   c,
   command,
@@ -187,6 +189,21 @@ export * as http from './http';
 export * as bridge from './bridge';
 export type { StartedToolInvocation } from './bridge/tool';
 export { ToolStreamError } from './internal/tool/startedToolInvocation';
+export * as reflection from './reflection';
+export {
+  AgentMethod as ReflectedAgentMethodDefinition,
+  AgentType as ReflectedAgentType,
+  DynamicAgentClient,
+  DynamicAgentMethod,
+  ReflectedAgentClient,
+  ReflectedAgentClientFactory,
+  ReflectedAgentMethod,
+  dynamicClient,
+  getAgentTypeFor,
+  getAllAgentTypes,
+  getAgentType as getReflectedAgentType,
+} from './reflection';
+export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
 
 let resolvedAgent: ResolvedAgent | undefined = undefined;
 let initializationPrincipal: Principal | undefined = undefined;

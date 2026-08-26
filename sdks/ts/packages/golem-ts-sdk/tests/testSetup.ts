@@ -19,8 +19,8 @@ import { AgentClassName } from '../src/agentClassName';
 // registry and RPC surfaces; tests that inspect an agent ID configure the exact
 // canonical host result they expect.
 vi.mock('golem:agent/host@2.0.0', () => ({
-  getAllAgentTypes: () => [],
-  getAgentType: (agentTypeName: string) => {
+  getAllAgentTypes: vi.fn(() => []),
+  getAgentType: vi.fn((agentTypeName: string) => {
     if (agentTypeName === 'FooAgent') {
       const agentType = AgentTypeRegistry.get(new AgentClassName('FooAgent'));
       if (!agentType) {
@@ -32,9 +32,10 @@ vi.mock('golem:agent/host@2.0.0', () => ({
       };
     }
     return undefined;
-  },
+  }),
+  getAgentTypeFor: vi.fn(() => undefined),
   makeAgentId: vi.fn(() => 'MockAgent()'),
-  parseAgentId: (agentId: string) => {
+  parseAgentId: vi.fn((agentId: string) => {
     const match = agentId.match(/^(.*)\((.*)\)(\[(\d+)-(\d+)])?$/);
     if (!match) {
       throw new Error(`Invalid agent ID: ${agentId}`);
@@ -51,18 +52,20 @@ vi.mock('golem:agent/host@2.0.0', () => ({
       phantomId = { highBits: BigInt(hiBits), lowBits: BigInt(loBits) };
     }
     return [typeName, typed, phantomId];
-  },
+  }),
   getConfigValue: () => {
     throw new Error('getConfigValue is not mocked in this test setup');
   },
   createWebhook: () => 'https://example.com/webhook',
-  WasmRpc: vi.fn().mockImplementation(() => ({
-    invokeAndAwait: vi.fn(),
-    invoke: vi.fn(),
-    asyncInvokeAndAwait: vi.fn(),
-    scheduleInvocation: vi.fn(),
-    scheduleCancelableInvocation: vi.fn(),
-  })),
+  WasmRpc: {
+    create: vi.fn(() => ({
+      invokeAndAwait: vi.fn(),
+      invoke: vi.fn(),
+      asyncInvokeAndAwait: vi.fn(),
+      scheduleInvocation: vi.fn(),
+      scheduleCancelableInvocation: vi.fn(),
+    })),
+  },
 }));
 
 vi.mock('golem:tool/host@0.1.0', () => ({
