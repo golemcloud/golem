@@ -427,7 +427,9 @@ declare module 'golem:tool/common@0.1.0' {
     scope: ToolMiddlewareScope;
   };
   /**
-   * Invocation contract — shared between guest and host
+   * Structured invocation terminal — shared between guest and host.
+   * Byte output is attached before invocation and is not part of this
+   * terminal, so callers can consume it while an incapable tool is running.
    */
   export type ToolError =
   {
@@ -469,7 +471,6 @@ declare module 'golem:tool/common@0.1.0' {
   };
   export type InvocationResult = {
     result?: TypedSchemaValue;
-    stdout?: AsyncIterable<number>;
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

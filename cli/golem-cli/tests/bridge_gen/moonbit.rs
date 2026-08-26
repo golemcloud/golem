@@ -478,13 +478,16 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
     assert!(!source.contains("@runtime"));
     for expected in [
         "pub(all) struct NewClient",
-        "pub async fn NewClient::new_2(",
-        "pub async fn NewClient::drop_2(",
+        "pub fn NewClient::new_2(",
+        "pub fn NewClient::drop_2(",
+        "pub fn NewClient::new_3(",
         "pub async fn NewClient::client(",
+        "@tool.TypedToolInvocation[String, NewError]",
+        "@tool.TypedToolInvocation[Unit, @tool.NoToolError]",
+        ".client.start(",
+        "@tool.typed_invocation(invocation, fn(result)",
         "stdin : @asyncCore.Stream[Byte]?",
         "stdin : @asyncCore.Stream[Byte]",
-        "@asyncCore.Stream[Byte]?",
-        "@asyncCore.Stream[Byte]",
         "pub(all) enum NewError",
         "Error(String)",
         "Error_2(UnstructuredText)",
@@ -513,6 +516,21 @@ fn guest_tool_mode_generates_schema_complete_buildable_consumer_module() {
         r#"pub async fn consume() -> Unit {
   let client = @client.NewClient::new()
   ignore(client.client())
+  match client.new_3() {
+    Ok(invocation) => {
+      ignore(invocation.stdout)
+      invocation.cancel()
+    }
+    Err(_) => ()
+  }
+  match client.new_3() {
+    Ok(invocation) => ignore(invocation.get())
+    Err(_) => ()
+  }
+  match client.new_3() {
+    Ok(invocation) => ignore(invocation.collect())
+    Err(_) => ()
+  }
   client.drop()
 }
 "#,

@@ -1529,6 +1529,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             oplog,
             worker,
             replay_state,
+            owner_execution,
             linear_memory,
             child_initiation,
             cleanup_sink,
@@ -1627,6 +1628,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                 ctx.state.oplog.clone(),
                 ctx.public_state.worker(),
                 ctx.state.replay_state.clone(),
+                ctx.owner_execution.clone(),
                 ctx.linear_memory_tracker(),
                 child_initiation,
                 ctx.state
@@ -1735,7 +1737,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             .await?
         {
             ResolutionOutcome::Incomplete => {
-                replay_state.switch_to_live().await;
+                let incomplete_calls = replay_state.switch_to_live().await;
+                owner_execution
+                    .release_incomplete_historical_reconstruction_fences(&incomplete_calls);
                 linear_memory.switch_to_live();
                 accessor.with(|mut access| {
                     access.get().state.active_custom_invocations.insert(
@@ -1819,7 +1823,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         let latest_status = self
             .public_state
             .worker()
-            .get_non_detached_last_known_status()
+            .get_attached_last_known_status()
             .await;
         latest_status.current_retry_state.get(&retry_from).cloned()
     }
@@ -2020,6 +2024,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             let status = self.execution_status.read().unwrap();
             status.create_await_interrupt_signal()
         };
+        let entity_cancellation = self.entity_cancellation();
         if self
             .state
             .invocation_deadline_exceeded
@@ -2037,7 +2042,18 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 Timestamp::now_utc(),
             )));
         }
-        interrupt_signal
+        match entity_cancellation {
+            Some(cancellation) => Box::pin(async move {
+                tokio::select! {
+                    biased;
+                    interrupt = interrupt_signal => interrupt,
+                    _ = cancellation.cancelled() => {
+                        InterruptKind::Interrupt(Timestamp::now_utc())
+                    }
+                }
+            }),
+            None => interrupt_signal,
+        }
     }
 
     fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {

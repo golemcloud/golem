@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
+import { createStdin, createStdout, ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
 import { type as arkType } from 'arktype';
 import { describe, expect, it, vi } from 'vitest';
 import * as z3 from 'zod3';
@@ -23,7 +23,7 @@ import {
   type ToolClientInvocationResult,
   type ToolClientTransport,
 } from '../src/tool';
-import { client, ToolCallError } from '../src/toolClient';
+import type { ByteStreamItem } from 'golem:tool/host@0.1.0';
 import { compileSchema } from '../src/schema/adapter';
 import {
   deepEqual,
@@ -36,28 +36,44 @@ import { Bytes, s } from '../src/schema/markers';
 
 interface RecordedInvocation {
   readonly commandPath: readonly string[];
-  readonly input: Parameters<ToolClientTransport['invokeAndAwait']>[1];
-  readonly stdin: AsyncIterable<number> | undefined;
+  readonly input: Parameters<ToolClientTransport['start']>[1];
+  readonly stdin: ReadableStream<Uint8Array> | undefined;
+}
+
+interface FakeResponse {
+  readonly result?: ReturnType<typeof wireValue>;
+  readonly stdout?: AsyncIterable<ByteStreamItem>;
 }
 
 class FakeTransport implements ToolClientTransport {
   readonly invocations: RecordedInvocation[] = [];
 
-  constructor(
-    private readonly respond: (
-      invocation: RecordedInvocation,
-    ) => ToolClientInvocationResult | Promise<ToolClientInvocationResult>,
-  ) {}
+  constructor(private readonly respond: (invocation: RecordedInvocation) => FakeResponse) {}
 
-  invokeAndAwait(
+  start(
     commandPath: readonly string[],
-    input: Parameters<ToolClientTransport['invokeAndAwait']>[1],
-    stdin: AsyncIterable<number> | undefined,
-  ): ToolClientInvocationResult | Promise<ToolClientInvocationResult> {
+    input: Parameters<ToolClientTransport['start']>[1],
+    stdin: ReadableStream<Uint8Array> | undefined,
+    withStdout: boolean,
+  ): ToolClientInvocationResult {
     const invocation = { commandPath: [...commandPath], input, stdin };
     this.invocations.push(invocation);
-    return this.respond(invocation);
+    let response: FakeResponse;
+    try {
+      response = this.respond(invocation);
+    } catch (error) {
+      return { result: Promise.reject(error), cancel: vi.fn() };
+    }
+    return {
+      result: Promise.resolve({ result: response.result }),
+      stdout: withStdout ? (response.stdout ?? streamItems(bytes())) : undefined,
+      cancel: vi.fn(),
+    };
   }
+}
+
+async function* streamItems(source: AsyncIterable<number>): AsyncIterable<ByteStreamItem> {
+  for await (const byte of source) yield { tag: 'ok' as const, val: Uint8Array.of(byte) };
 }
 
 function wireValue(schema: Parameters<typeof compileSchema>[0], value: unknown) {
@@ -74,6 +90,15 @@ function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
 
 async function* bytes(...values: number[]): AsyncIterable<number> {
   yield* values;
+}
+
+function byteStream(...values: number[]): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      if (values.length > 0) controller.enqueue(Uint8Array.from(values));
+      controller.close();
+    },
+  });
 }
 
 describe('tool runtime client', () => {
@@ -264,7 +289,7 @@ describe('tool runtime client', () => {
     const transport = new FakeTransport(() => ({}));
     const requiredClient = client(required, { transport });
     const optionalClient = client(optional, { transport });
-    const stdin = bytes(1, 2, 3);
+    const stdin = byteStream(1, 2, 3);
 
     await requiredClient.required({ stdin });
     await optionalClient.optional({});
@@ -297,13 +322,13 @@ describe('tool runtime client', () => {
     expect(failure).toMatchObject({
       cause: {
         tag: 'rpc',
-        error: { tag: 'protocol-error', val: expect.stringContaining('async iterable') },
+        error: { tag: 'protocol-error', val: expect.stringContaining('readable stream') },
       },
     });
     expect(transport.invocations).toHaveLength(0);
   });
 
-  it('rejects a non-async-iterable stdin before invoking the transport', async () => {
+  it('rejects a non-readable-stream stdin before invoking the transport', async () => {
     const definition = toolDefinition('invalid-stdin-stream').body((body) =>
       body.stdin({ required: true }).returns(z.void()),
     );
@@ -346,36 +371,75 @@ describe('tool runtime client', () => {
       client(structuredStdout, {
         transport: new FakeTransport(() => ({
           result: wireValue(z.string(), 'value'),
-          stdout,
+          stdout: streamItems(stdout),
         })),
       })['structured-stdout']({}),
-    ).resolves.toEqual({ result: 'value', stdout });
+    ).toMatchObject({ stdout: expect.any(ReadableStream), result: expect.any(Promise) });
     await expect(
-      client(unitStdout, { transport: new FakeTransport(() => ({ stdout })) })['unit-stdout']({}),
-    ).resolves.toBe(stdout);
+      client(structuredStdout, {
+        transport: new FakeTransport(() => ({
+          result: wireValue(z.string(), 'value'),
+          stdout: streamItems(bytes(4, 5, 6)),
+        })),
+      })
+        ['structured-stdout']({})
+        .collect(),
+    ).resolves.toEqual({ result: 'value', stdout: new Uint8Array([4, 5, 6]) });
+    await expect(
+      client(unitStdout, {
+        transport: new FakeTransport(() => ({ stdout: streamItems(bytes(4, 5, 6)) })),
+      })
+        ['unit-stdout']({})
+        .collect(),
+    ).resolves.toEqual({ result: undefined, stdout: new Uint8Array([4, 5, 6]) });
     await expect(
       client(optionalStdout, {
         transport: new FakeTransport(() => ({ result: wireValue(z.string(), 'value') })),
-      })['optional-stdout']({}),
-    ).resolves.toEqual({ result: 'value' });
+      })
+        ['optional-stdout']({})
+        .collect(),
+    ).resolves.toEqual({ result: 'value', stdout: new Uint8Array() });
   });
 
   it('combines stdin with structured results and stdout through the transport seam', async () => {
     const definition = toolDefinition('transform').body((body) =>
       body.stdin({ required: true }).stdout({ required: true }).returns(z.string()),
     );
-    const stdin = bytes(1, 2, 3);
+    const stdin = byteStream(1, 2, 3);
     const stdout = bytes(4, 5, 6);
     const transport = new FakeTransport(() => ({
       result: wireValue(z.string(), 'transformed'),
-      stdout,
+      stdout: streamItems(stdout),
     }));
 
-    await expect(client(definition, { transport }).transform({ stdin })).resolves.toEqual({
-      result: 'transformed',
-      stdout,
-    });
+    await expect(client(definition, { transport }).transform({ stdin }).collect()).resolves.toEqual(
+      {
+        result: 'transformed',
+        stdout: new Uint8Array([4, 5, 6]),
+      },
+    );
     expect(transport.invocations[0].stdin).toBe(stdin);
+  });
+
+  it('forwards cancellation to a transport invocation whose cancel method uses its receiver', () => {
+    const definition = toolDefinition('receiver-bound-cancel').body((body) =>
+      body.stdout({ required: true }).returns(z.void()),
+    );
+    const rawInvocation = {
+      cancelled: false,
+      result: new Promise<never>(() => undefined),
+      stdout: streamItems(bytes()),
+      cancel() {
+        this.cancelled = true;
+      },
+    };
+    const invocation = client(definition, {
+      transport: { start: () => rawInvocation },
+    })['receiver-bound-cancel']({});
+
+    invocation.cancel();
+
+    expect(rawInvocation.cancelled).toBe(true);
   });
 
   it.each([
@@ -388,18 +452,6 @@ describe('tool runtime client', () => {
       name: 'unexpected unit result',
       definition: toolDefinition('unexpected-result').body((body) => body.returns(z.void())),
       response: { result: wireValue(z.string(), 'unexpected') },
-    },
-    {
-      name: 'missing required stdout',
-      definition: toolDefinition('missing-stdout').body((body) =>
-        body.stdout({ required: true }).returns(z.void()),
-      ),
-      response: {},
-    },
-    {
-      name: 'unexpected stdout',
-      definition: toolDefinition('unexpected-stdout').body((body) => body.returns(z.void())),
-      response: { stdout: bytes(1) },
     },
   ])('rejects $name with a stable protocol error', async ({ definition, response }) => {
     const runtime = client(definition, { transport: new FakeTransport(() => response) }) as Record<
@@ -416,17 +468,22 @@ describe('tool runtime client', () => {
     const definition = toolDefinition('null-stdout').body((body) =>
       body.stdout({ required: true }).returns(z.void()),
     );
-    const failure = await rejectionOf(
+    let failure: unknown;
+    try {
       client(definition, {
-        transport: new FakeTransport(() => ({ stdout: null as never })),
-      })['null-stdout']({}),
-    );
+        transport: {
+          start: () => ({ result: Promise.resolve({}), stdout: null as never, cancel: vi.fn() }),
+        },
+      })['null-stdout']({});
+    } catch (error) {
+      failure = error;
+    }
 
     expect(failure).toBeInstanceOf(ToolCallError);
     expect(failure).toMatchObject({
       cause: {
         tag: 'rpc',
-        error: { tag: 'protocol-error', val: expect.stringContaining('async iterable') },
+        error: { tag: 'protocol-error', val: expect.stringContaining('stdout stream is missing') },
       },
     });
   });
@@ -435,11 +492,20 @@ describe('tool runtime client', () => {
     const definition = toolDefinition('invalid-stdout-stream').body((body) =>
       body.stdout({ required: true }).returns(z.void()),
     );
-    const failure = await rejectionOf(
+    let failure: unknown;
+    try {
       client(definition, {
-        transport: new FakeTransport(() => ({ stdout: 'invalid' as never })),
-      })['invalid-stdout-stream']({}),
-    );
+        transport: {
+          start: () => ({
+            result: Promise.resolve({}),
+            stdout: 'invalid' as never,
+            cancel: vi.fn(),
+          }),
+        },
+      })['invalid-stdout-stream']({});
+    } catch (error) {
+      failure = error;
+    }
 
     expect(failure).toBeInstanceOf(ToolCallError);
     expect(failure).toMatchObject({
@@ -447,33 +513,38 @@ describe('tool runtime client', () => {
     });
   });
 
-  it('returns the stdout iterator when another response validation fails', async () => {
+  it('keeps stdout consumable when another response validation fails', async () => {
     const iterator = bytes(1, 2, 3)[Symbol.asyncIterator]();
     const returnIterator = vi.spyOn(iterator, 'return');
     const stdout = { [Symbol.asyncIterator]: () => iterator };
     const definition = toolDefinition('invalid-streamed-result').body((body) =>
       body.stdout({ required: true }).returns(z.string()),
     );
-    const failure = await rejectionOf(
-      client(definition, {
-        transport: new FakeTransport(() => ({
-          result: wireValue(z.boolean(), true),
-          stdout,
-        })),
-      })['invalid-streamed-result']({}),
-    );
+    const invocation = client(definition, {
+      transport: new FakeTransport(() => ({
+        result: wireValue(z.boolean(), true),
+        stdout: streamItems(stdout),
+      })),
+    })['invalid-streamed-result']({});
+    const failure = await rejectionOf(invocation.result);
 
     expect(failure).toMatchObject({ cause: { tag: 'rpc', error: { tag: 'protocol-error' } } });
-    expect(returnIterator).toHaveBeenCalledOnce();
+    const output: number[] = [];
+    for await (const chunk of invocation.stdout) output.push(...chunk);
+    expect(output).toEqual([1, 2, 3]);
+    expect(returnIterator).not.toHaveBeenCalled();
   });
 
-  it('preserves a response validation failure when returning stdout also fails', async () => {
+  it('does not touch stdout when response validation fails', async () => {
     const returnIterator = vi.fn(() =>
       Promise.reject({ tag: 'denied', val: 'stdout return failed' } satisfies RpcError),
     );
-    const stdout: AsyncIterable<number> = {
+    const stdout: AsyncIterable<ByteStreamItem> = {
       [Symbol.asyncIterator]: () => ({
-        next: async () => ({ done: false, value: 1 }),
+        next: async () => ({
+          done: false,
+          value: { tag: 'ok' as const, val: Uint8Array.of(1) },
+        }),
         return: returnIterator,
       }),
     };
@@ -486,10 +557,10 @@ describe('tool runtime client', () => {
           result: wireValue(z.boolean(), true),
           stdout,
         })),
-      })['invalid-streamed-result']({}),
+      })['invalid-streamed-result']({}).result,
     );
 
-    expect(returnIterator).toHaveBeenCalledOnce();
+    expect(returnIterator).not.toHaveBeenCalled();
     expect(failure).toMatchObject({
       cause: { tag: 'rpc', error: { tag: 'protocol-error' } },
     });
@@ -794,15 +865,19 @@ describe('tool runtime client', () => {
 
   it('lazily creates and reuses the default ToolRpc for streamless calls', async () => {
     const resultCodec = compileSchema(z.string());
-    const invokeAndAwait = vi.fn((_path: string[]) => ({
-      result: typedSchemaValueToWit({
-        graph: resultCodec.graph,
-        value: resultCodec.toValue('ok'),
-      }),
+    const asyncInvokeAndAwait = vi.fn((_path: string[]) => ({
+      get: () =>
+        Promise.resolve({
+          result: typedSchemaValueToWit({
+            graph: resultCodec.graph,
+            value: resultCodec.toValue('ok'),
+          }),
+        }),
+      cancel: vi.fn(),
     }));
     vi.mocked(ToolRpc)
       .mockClear()
-      .mockImplementation(() => ({ invokeAndAwait }) as unknown as ToolRpc);
+      .mockImplementation(() => ({ asyncInvokeAndAwait }) as unknown as ToolRpc);
     const definition = toolDefinition('default').body((body) => body.returns(z.string()));
     const runtime = client(definition);
 
@@ -812,28 +887,53 @@ describe('tool runtime client', () => {
 
     expect(ToolRpc).toHaveBeenCalledOnce();
     expect(ToolRpc).toHaveBeenCalledWith('default');
-    expect(invokeAndAwait).toHaveBeenCalledTimes(2);
-    expect(invokeAndAwait.mock.calls.every(([path]) => deepEqual(path, []))).toBe(true);
+    expect(asyncInvokeAndAwait).toHaveBeenCalledTimes(2);
+    expect(asyncInvokeAndAwait.mock.calls.every(([path]) => deepEqual(path, []))).toBe(true);
   });
 
-  it('passes stdin and stdout async iterables through the default ToolRpc', async () => {
-    const stdin = bytes(1, 2, 3);
-    const iterator = bytes(4, 5, 6)[Symbol.asyncIterator]();
+  it('passes stdin readable streams and stdout async iterables through the default ToolRpc', async () => {
+    const stdin = byteStream(1, 2, 3);
+    const iterator = streamItems(bytes(4, 5, 6))[Symbol.asyncIterator]();
     const returnIterator = vi.spyOn(iterator, 'return');
     const stdout = { [Symbol.asyncIterator]: () => iterator };
-    const invokeAndAwait = vi.fn(() => ({ stdout }));
+    const stdinWriter = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const stdinCapability = {};
+    const stdinClosed = { wait: vi.fn(() => new Promise(() => undefined)) };
+    const stdoutCapability = {};
+    vi.mocked(createStdin).mockReturnValue([stdinWriter, stdinCapability, stdinClosed] as never);
+    vi.mocked(createStdout).mockReturnValue([stdoutCapability, stdout] as never);
+    const asyncInvokeAndAwait = vi.fn(() => ({
+      get: () => Promise.resolve({}),
+      cancel: vi.fn(),
+    }));
     vi.mocked(ToolRpc)
       .mockClear()
-      .mockImplementation(() => ({ invokeAndAwait }) as unknown as ToolRpc);
+      .mockImplementation(() => ({ asyncInvokeAndAwait }) as unknown as ToolRpc);
     const definition = toolDefinition('streams-host').body((body) =>
       body.stdin({ required: true }).stdout({ required: true }).returns(z.void()),
     );
 
-    await expect(client(definition)['streams-host']({ stdin })).resolves.toBe(stdout);
+    await expect(client(definition)['streams-host']({ stdin }).collect()).resolves.toEqual({
+      result: undefined,
+      stdout: new Uint8Array([4, 5, 6]),
+    });
 
     expect(ToolRpc).toHaveBeenCalledWith('streams-host');
-    expect(invokeAndAwait).toHaveBeenCalledOnce();
-    expect(invokeAndAwait).toHaveBeenCalledWith([], expect.anything(), stdin);
+    expect(asyncInvokeAndAwait).toHaveBeenCalledOnce();
+    expect(asyncInvokeAndAwait).toHaveBeenCalledWith(
+      [],
+      expect.anything(),
+      stdinCapability,
+      stdoutCapability,
+    );
+    await vi.waitFor(() =>
+      expect(stdinWriter.write).toHaveBeenCalledWith(new Uint8Array([1, 2, 3])),
+    );
+    await vi.waitFor(() => expect(stdinWriter.finish).toHaveBeenCalledOnce());
     expect(returnIterator).not.toHaveBeenCalled();
   });
 });

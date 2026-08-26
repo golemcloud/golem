@@ -41,8 +41,7 @@ object ToolInvokeError {
  * optional stdout stream handle.
  */
 final case class ToolInvokeResult(
-  result: Option[TypedSchemaValue],
-  stdout: Option[ToolOutputStream]
+  result: Option[TypedSchemaValue]
 )
 
 /** A registered tool's platform-neutral invocation entry point. */
@@ -61,7 +60,7 @@ trait ToolInvokeHandler {
  * implementation (backed by the tool registry); tests may use fakes.
  */
 trait ToolInvokeEnv {
-  def stdout(): ToolOutputStream
+  def stdout: Option[ToolOutputStream]
   def invokerFor(toolName: String): Option[ToolInvokeHandler]
   def extendedToolFor(toolName: String): Option[ExtendedToolType]
 }
@@ -290,9 +289,13 @@ object ToolInvokerRuntime {
             case Some(stream) => args += stream
           }
         case ToolParamDecoder.StdoutParam =>
-          val handle = ctx.env.stdout()
-          stdout = Some(handle)
-          args += handle
+          ctx.env.stdout match {
+            case Some(handle) =>
+              stdout = Some(handle)
+              args += handle
+            case None =>
+              return Left(ToolInvokeError.InvalidInput("tool invocation did not contain declared stdout stream"))
+          }
       }
     }
     Right((args.result(), stdout))
@@ -318,13 +321,13 @@ object ToolInvokerRuntime {
     intoSchema: IntoSchema[A],
     stdout: Option[ToolOutputStream]
   ): Either[ToolInvokeError, ToolInvokeResult] =
-    try Right(ToolInvokeResult(Some(intoSchema.toTyped(value)), stdout))
+    try Right(ToolInvokeResult(Some(intoSchema.toTyped(value))))
     catch {
       case e: SchemaEncodeError => Left(ToolInvokeError.InvalidResult(e.message))
     }
 
   def encodeUnit(stdout: Option[ToolOutputStream]): Either[ToolInvokeError, ToolInvokeResult] =
-    Right(ToolInvokeResult(None, stdout))
+    Right(ToolInvokeResult(None))
 
   /**
    * Encodes a declared tool error value (the `Left` of an `Either[E, T]`

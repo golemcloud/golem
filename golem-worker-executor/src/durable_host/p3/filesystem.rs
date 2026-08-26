@@ -23,7 +23,9 @@ use std::sync::OnceLock;
 use std::task::{Context, Poll};
 
 use crate::durable_host::LiveAuthorizationPermit;
-use crate::durable_host::authorization::targets::{CanonicalGuestPath, filesystem_target};
+use crate::durable_host::authorization::targets::{
+    CanonicalGuestPath, agent_owner, filesystem_target,
+};
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable,
     authorize_live_permissions_at_serialized_access,
@@ -37,7 +39,6 @@ use crate::durable_host::tail_work::TailActivity;
 use crate::workerctx::WorkerCtx;
 use cap_std::fs::FileExt;
 use golem_common::model::card::FilesystemVerb;
-use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::oplog::host_functions::{
     P3FilesystemTypesDescriptorAppendViaStream, P3FilesystemTypesDescriptorStat,
     P3FilesystemTypesDescriptorStatAt, P3FilesystemTypesDescriptorWriteViaStream,
@@ -68,19 +69,6 @@ fn descriptor_key<Ctx: WorkerCtx>(
     rep: u32,
 ) -> (String, u32) {
     (ctx.owned_agent_id().to_string(), rep)
-}
-
-fn agent_owner<Ctx: WorkerCtx>(
-    ctx: &crate::durable_host::DurableWorkerCtx<Ctx>,
-) -> AgentOwnerPattern {
-    let component = ctx.component_metadata();
-    AgentOwnerPattern::Agent {
-        account: component.account_email.clone(),
-        application: component.application_name.clone(),
-        environment: component.environment_name.clone(),
-        component: component.component_name.clone(),
-        agent: AgentOwnerLeafPattern::Agent(ctx.agent_id().agent_id.clone()),
-    }
 }
 
 fn remember_descriptor_path<Ctx: WorkerCtx>(

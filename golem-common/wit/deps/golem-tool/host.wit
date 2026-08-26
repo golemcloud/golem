@@ -50,34 +50,133 @@ interface host {
     not-found(string),
     remote-internal-error(string),
     remote-tool-error(tool-error),
+    /// The operation's explicit cancellation won terminal arbitration.
+    cancelled,
+    /// A filesystem-capable input or output attachment exceeded the
+    /// configured per-direction retained-byte limit.
+    resource-exhausted(string),
+  }
+
+  /// Recoverable attachment failures are stream values rather than Component
+  /// Model stream errors. A producer emits one final failure item and then
+  /// closes the underlying stream. Clean EOF is represented only by closure.
+  variant byte-stream-failure {
+    cancelled,
+    abandoned,
+    resource-exhausted,
+    failed(string),
+  }
+
+  /// Every successful item contains a non-empty byte chunk.
+  type byte-stream-item = result<list<u8>, byte-stream-failure>;
+
+  variant byte-stream-close-cause {
+    finished,
+    failed(byte-stream-failure),
+    consumer-cancelled,
+  }
+
+  variant stream-write-error {
+    closed(byte-stream-close-cause),
+    concurrent-operation,
+  }
+
+  /// Producer endpoint for caller-provided stdin. Exactly one write, finish,
+  /// or fail operation may be outstanding. The first terminal is immutable;
+  /// dropping an open writer selects `abandoned`.
+  resource tool-stdin-writer {
+    write: async func(bytes: list<u8>) -> result<_, stream-write-error>;
+    finish: async func() -> result<_, stream-write-error>;
+    fail: async func(reason: byte-stream-failure) -> result<_, stream-write-error>;
+  }
+
+  /// Single-use source capability consumed by one tool invocation. Dropping
+  /// it unused selects consumer cancellation for the paired writer.
+  resource tool-stdin;
+
+  /// Independent watcher used by an SDK pump to stop a blocked native source
+  /// read when the tool no longer consumes stdin.
+  resource tool-stdin-closed {
+    wait: async func() -> byte-stream-close-cause;
+  }
+
+  /// Creates caller stdin endpoints. The writer and closure watcher remain
+  /// with the caller; the source is moved into one invocation.
+  create-stdin: func() -> tuple<
+    own<tool-stdin-writer>,
+    own<tool-stdin>,
+    own<tool-stdin-closed>
+  >;
+
+  /// Transfers an SDK-native input stream across the component boundary and
+  /// pumps it into a directional stdin attachment. This is equivalent to
+  /// `create-stdin` plus a caller-owned pump, but also supports non-numeric
+  /// stream items that cannot rendezvous within one Component Model task.
+  create-stdin-from-stream: func(source: stream<byte-stream-item>) -> own<tool-stdin>;
+
+  /// Single-use output target consumed by one result-bearing invocation.
+  /// Dropping it unused fails the paired reader as abandoned.
+  resource tool-stdout;
+
+  /// Creates the output target and caller-readable stream before invocation.
+  /// Dropping the reader cancels only this attachment's consumer role.
+  create-stdout: func() -> tuple<own<tool-stdout>, stream<byte-stream-item>>;
+
+  /// Host-owned writer supplied to the tool implementation. Exactly one
+  /// write, finish, or fail operation may be outstanding. The first terminal
+  /// is immutable; dropping an open writer selects `abandoned`.
+  resource tool-stdout-writer {
+    write: async func(bytes: list<u8>) -> result<_, stream-write-error>;
+    finish: async func() -> result<_, stream-write-error>;
+    fail: async func(reason: byte-stream-failure) -> result<_, stream-write-error>;
   }
 
   resource tool-rpc {
     constructor(tool-name: string);
 
+    /// Waits for the structured terminal. Callers that supplied stdout must
+    /// drive this wait and the already-created reader concurrently.
     invoke-and-await: async func(
       command-path: list<string>,
       input:        typed-schema-value,
-      stdin:        option<stream<u8>>,
+      stdin:        option<own<tool-stdin>>,
+      stdout:       option<own<tool-stdout>>,
     ) -> result<invocation-result, rpc-error>;
 
-    invoke: async func(
+    /// Durably admits fire-and-forget work. Declared output is discarded by
+    /// the host so an absent caller reader cannot apply backpressure.
+    invoke: func(
       command-path: list<string>,
       input:        typed-schema-value,
-      stdin:        option<stream<u8>>,
+      stdin:        option<own<tool-stdin>>,
     ) -> result<_, rpc-error>;
 
-    async-invoke-and-await: async func(
+    /// Durably admits work and returns an independently owned structured
+    /// result observer. Stdout, when declared, was created by the caller and
+    /// is observed independently from this future.
+    async-invoke-and-await: func(
       command-path: list<string>,
       input:        typed-schema-value,
-      stdin:        option<stream<u8>>,
+      stdin:        option<own<tool-stdin>>,
+      stdout:       option<own<tool-stdout>>,
     ) -> future-invoke-result;
   }
 
   resource future-invoke-result {
+    /// Sequential calls return the same immutable terminal. Only one call may
+    /// be outstanding at a time.
     get: async func() -> result<invocation-result, rpc-error>;
+    /// Explicitly cancels the operation. Dropping this resource only detaches
+    /// result observation and does not cancel accepted work.
     cancel: func();
   }
+
+  /// Waits for an explicit set of result observers as one causal batch. The
+  /// input order controls the result order; filesystem-capable bodies become
+  /// eligible together and execute in durable Start order.
+  get-invoke-results: async func(
+    futures: list<borrow<future-invoke-result>>,
+  ) -> list<result<invocation-result, rpc-error>>;
 }
 
 world tool-host {

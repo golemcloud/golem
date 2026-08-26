@@ -610,8 +610,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn get_oplog_index(&mut self) -> anyhow::Result<golem_api_1_x::oplog::OplogIndex> {
         self.observe_function_call("golem::api", "get_oplog_index");
-        if self.state.durability_is_suppressed() {
-            Ok(self.state.current_oplog_index().await.into())
+        let marker = if self.state.durability_is_suppressed() {
+            self.state.current_oplog_index().await
         } else if self.state.is_live() {
             // Use the index returned by `add` — a concurrently running host task (a durable
             // call's terminal write, a drop-event `Cancelled`, a log hint entry) may append
@@ -631,7 +631,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Some(existing) => existing.min(marker),
                 None => marker,
             });
-            Ok(marker.into())
+            marker
         } else {
             let (oplog_index, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::NoOp)?;
             // The replayed `get_oplog_index` returns this same marker to the guest, which may feed
@@ -641,8 +641,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Some(existing) => existing.min(oplog_index),
                 None => oplog_index,
             });
-            Ok(oplog_index.into())
-        }
+            oplog_index
+        };
+        self.owner_execution.mark_reached_oplog_marker(marker);
+        Ok(marker.into())
     }
 
     async fn set_oplog_index(
@@ -1878,7 +1880,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
         match outcome {
             ParkOutcome::Ready => {}
             ParkOutcome::SuspendWorker => {
-                return Err(handle.trap(InterruptKind::Suspend(Timestamp::now_utc())));
+                handle.abandon_for_trap();
+                return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
             }
             ParkOutcome::Interrupted(kind) => {
                 // An interrupt is non-error control flow: abandon the durable call without a

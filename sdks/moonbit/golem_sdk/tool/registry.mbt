@@ -2,8 +2,103 @@
 pub type Principal = @agentCommon.Principal
 
 ///|
-pub fn new_stdout() -> (@async-core.Stream[Byte], @async-core.Sink[Byte]) {
-  @async-core.Stream::new()
+priv struct ProviderStdoutState {
+  writer : @toolHost.ToolStdoutWriter
+  mut open : Bool
+  mut busy : Bool
+  mut dropped : Bool
+}
+
+///|
+pub struct ProviderStdout {
+  priv state : Ref[ProviderStdoutState]
+  priv output : @async-core.Sink[Byte]
+}
+
+///|
+pub fn provider_stdout(writer : @toolHost.ToolStdoutWriter) -> ProviderStdout {
+  let state = @ref.new({ writer, open: true, busy: false, dropped: false })
+  let output = @async-core.Sink::from_callbacks(
+    async fn(bytes) {
+      if !state.val.open || state.val.dropped {
+        return 0
+      }
+      if state.val.busy {
+        raise @toolHost.StreamWriteError::ConcurrentOperation
+      }
+      state.val.busy = true
+      defer {
+        state.val.busy = false
+      }
+      let owned = FixedArray::from_array(bytes)
+      match state.val.writer.write(owned) {
+        Ok(_) => bytes.length()
+        Err(error) => {
+          if error is @toolHost.StreamWriteError::Closed(_) {
+            state.val.open = false
+          }
+          raise error
+        }
+      }
+    },
+    async fn() {
+      if !state.val.open || state.val.dropped {
+        return
+      }
+      if state.val.busy {
+        raise @toolHost.StreamWriteError::ConcurrentOperation
+      }
+      state.val.busy = true
+      defer {
+        state.val.busy = false
+      }
+      match state.val.writer.finish() {
+        Ok(_) => state.val.open = false
+        Err(error) => {
+          if error is @toolHost.StreamWriteError::Closed(_) {
+            state.val.open = false
+          }
+          raise error
+        }
+      }
+    },
+    fn() { state.val.open && !state.val.dropped },
+    None,
+  )
+  { state, output }
+}
+
+///|
+pub fn ProviderStdout::output(self : ProviderStdout) -> @async-core.Sink[Byte] {
+  self.output
+}
+
+///|
+pub async fn ProviderStdout::finish(self : ProviderStdout) -> Unit {
+  if !self.state.val.open || self.state.val.dropped {
+    return
+  }
+  if self.state.val.busy {
+    raise @toolHost.StreamWriteError::ConcurrentOperation
+  }
+  self.state.val.busy = true
+  defer {
+    self.state.val.busy = false
+  }
+  match self.state.val.writer.finish() {
+    Ok(_) => self.state.val.open = false
+    Err(@toolHost.StreamWriteError::Closed(_)) => self.state.val.open = false
+    Err(error) => raise error
+  }
+}
+
+///|
+pub fn ProviderStdout::drop(self : ProviderStdout) -> Unit {
+  if !self.state.val.dropped {
+    self.state.val.dropped = true
+    self.state.val.open = false
+    self.state.val.writer.drop()
+  }
 }
 
 ///|
@@ -11,6 +106,7 @@ type ToolInvoker = async (
   Array[String],
   @types.TypedSchemaValue,
   @async-core.Stream[Byte]?,
+  @async-core.Sink[Byte]?,
   @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError]
 
@@ -122,6 +218,7 @@ pub async fn invoke_registered_tool(
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
+  stdout : @async-core.Sink[Byte]?,
   principal : @agentCommon.Principal,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   invoke_registered_tool_with_resource_drops(
@@ -162,7 +259,7 @@ async fn invoke_registered_tool_with_resource_drops(
     _ => ()
   }
   invoke_registered_invoker(
-    tool_name, command_path, input, stdin, principal, drops,
+    tool_name, command_path, input, stdin, stdout, principal,
   )
 }
 
@@ -172,18 +269,13 @@ async fn invoke_registered_invoker(
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
+  stdout : @async-core.Sink[Byte]?,
   principal : @agentCommon.Principal,
   drops : @model.SchemaValueResourceDrops,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
   match state.invokers.get(tool_name) {
-    Some(invoker) => invoker(command_path, input, stdin, principal)
-    None =>
-      reject_wire_invocation_with_resource_drops(
-        input,
-        stdin,
-        @toolCommon.ToolError::InvalidToolName(tool_name),
-        drops,
-      )
+    Some(invoker) => invoker(command_path, input, stdin, stdout, principal)
+    None => Err(@toolCommon.ToolError::InvalidToolName(tool_name))
   }
 }
 
@@ -193,24 +285,7 @@ pub async fn invoke_registered_subtool(
   command_path : Array[String],
   fields : Array[CanonicalInputValue],
   stdin : @async-core.Stream[Byte]?,
-  principal : @agentCommon.Principal,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
-  invoke_registered_subtool_with_resource_drops(
-    tool_name,
-    command_path,
-    fields,
-    stdin,
-    principal,
-    @model_host.resource_drops(),
-  )
-}
-
-///|
-async fn invoke_registered_subtool_with_resource_drops(
-  tool_name : String,
-  command_path : Array[String],
-  fields : Array[CanonicalInputValue],
-  stdin : @async-core.Stream[Byte]?,
+  stdout : @async-core.Sink[Byte]?,
   principal : @agentCommon.Principal,
   drops : @model.SchemaValueResourceDrops,
 ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
@@ -322,4 +397,7 @@ fn drop_optional_stdin(stdin : @async-core.Stream[Byte]?) -> Unit {
     Some(stdin) => stdin.drop_sync()
     None => ()
   }
+  invoke_registered_invoker(
+    tool_name, command_path, input, stdin, stdout, principal,
+  )
 }

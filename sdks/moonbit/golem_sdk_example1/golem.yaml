@@ -48,3 +48,11 @@ components:
   golem:moonbit-examples:
     templates: moonbit-local
     dir: ""
+
+tools:
+  moonbit-streaming: {}
+
+agents:
+  MoonBitToolStreamingCaller:
+    tools:
+      moonbit-streaming: {}

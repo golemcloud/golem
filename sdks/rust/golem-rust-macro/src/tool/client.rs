@@ -14,7 +14,7 @@
 
 //! Typed same-language tool client generation.
 
-use crate::tool::helpers::to_kebab_case;
+use crate::tool::helpers::{StreamKind, is_stream_type, stream_type, to_kebab_case};
 use crate::tool::ir::{ArgPlacement, ArgSubKind, CommandIr, ParamIr, ToolDefinitionIr};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -159,14 +159,32 @@ fn synthesize_leaf_method(
         kept_client_args_omitting(ir, cmd, &inherited_params, false, omitted_names, tool_name);
     let (stdin_ident, has_stdout) = stream_idents(cmd);
     let stdin_expr = match stdin_ident {
-        Some(ident) => quote! { ::std::option::Option::Some(#ident) },
+        Some((ident, true)) => quote! { ::std::option::Option::Some(#ident) },
+        Some((ident, false)) => quote! { #ident },
         None => quote! { ::std::option::Option::None },
     };
     let value_inserts = value_inserts(ir, cmd, &inherited_params, tool_name, omitted_names);
     let result_ty = client_result_type(&cmd.output, has_stdout);
     let decode_result = decode_client_result(&cmd.output, has_stdout);
-    let invoke = invoke_call(&cmd.output, stdin_expr);
+    let invoke = invoke_call(&cmd.output, stdin_expr.clone());
     let input_expr = input_build_expr(&descriptor_fn_ident, quote! { __golem_param_values });
+
+    if has_stdout {
+        let started_ty = started_result_type(&cmd.output);
+        let start = start_call(&cmd.output, stdin_expr);
+        return quote! {
+            pub fn #method_ident(&self, #(#input_args),*) -> #started_ty {
+                #(#value_inserts)*
+
+                let __can_use_static_input_model = self.inherited_prefix.is_empty() && self.schema_path.is_empty();
+                let mut __command_path = self.command_path.clone();
+                let mut __schema_path = self.schema_path.clone();
+                #command_path_part
+                let __input = #input_expr;
+                #start
+            }
+        };
+    }
 
     quote! {
         pub async fn #method_ident(&self, #(#input_args),*) -> #result_ty {
@@ -251,16 +269,37 @@ fn synthesize_leaf_method_dynamic(
     let stdin_expr = match cmd
         .params
         .iter()
-        .find(|param| type_last_ident(&param.ty).as_deref() == Some("InputStream"))
-        .map(|param| &param.ident)
-    {
-        Some(ident) => quote! { ::std::option::Option::Some(#ident) },
+        .find_map(|param| match stream_type(&param.ty) {
+            Some((StreamKind::Input, required)) => Some((&param.ident, required)),
+            _ => None,
+        }) {
+        Some((ident, true)) => quote! { ::std::option::Option::Some(#ident) },
+        Some((ident, false)) => quote! { #ident },
         None => quote! { ::std::option::Option::None },
     };
     let result_ty = client_result_type(&cmd.output, has_stdout);
     let decode_result = decode_client_result(&cmd.output, has_stdout);
-    let invoke = invoke_call(&cmd.output, stdin_expr);
+    let invoke = invoke_call(&cmd.output, stdin_expr.clone());
     let input_expr = input_build_expr(&descriptor_fn_ident, param_values.clone());
+
+    if has_stdout {
+        let result_ty = started_result_type(&cmd.output);
+        let start = start_call(&cmd.output, stdin_expr);
+        return quote! {
+            pub fn #method_ident(&self #input_args) -> #result_ty {
+                let mut #param_values: ::std::vec::Vec<(&'static str, golem_rust::SchemaValue)> =
+                    ::std::vec::Vec::new();
+                #value_inserts
+
+                let __can_use_static_input_model = self.inherited_prefix.is_empty() && self.schema_path.is_empty();
+                let mut __command_path = self.command_path.clone();
+                let mut __schema_path = self.schema_path.clone();
+                #command_path_part
+                let __input = #input_expr;
+                #start
+            }
+        };
+    }
 
     quote! {
         pub async fn #method_ident(&self #input_args) -> #result_ty {
@@ -421,7 +460,7 @@ fn subtree_client_macro_leaf_command_arms(
         .chain(cmd.params.iter())
         .filter(|param| {
             !is_principal_type(&param.ty)
-                && type_last_ident(&param.ty).as_deref() != Some("OutputStream")
+                && !matches!(stream_type(&param.ty), Some((StreamKind::Output, _)))
         })
         .cloned()
         .collect();
@@ -670,7 +709,8 @@ fn kept_client_args_omitting(
                 .iter()
                 .any(|omitted| omitted_matches_param(ir, cmd, param, tool_name, omitted))
                 && !is_principal_type(&param.ty)
-                && (include_stdout || type_last_ident(&param.ty).as_deref() != Some("OutputStream"))
+                && (include_stdout
+                    || !matches!(stream_type(&param.ty), Some((StreamKind::Output, _))))
         })
         .map(|param| {
             let ident = &param.ident;
@@ -1115,13 +1155,13 @@ fn is_flag_param(cmd: &CommandIr, param: &ParamIr) -> bool {
         || type_last_ident(&param.ty).as_deref() == Some("bool")
 }
 
-pub(crate) fn stream_idents(cmd: &CommandIr) -> (Option<Ident>, bool) {
+fn stream_idents(cmd: &CommandIr) -> (Option<(Ident, bool)>, bool) {
     let mut stdin = None;
     let mut stdout = false;
     for param in &cmd.params {
-        match type_last_ident(&param.ty).as_deref() {
-            Some("InputStream") => stdin = Some(param.ident.clone()),
-            Some("OutputStream") => stdout = true,
+        match stream_type(&param.ty) {
+            Some((StreamKind::Input, required)) => stdin = Some((param.ident.clone(), required)),
+            Some((StreamKind::Output, _)) => stdout = true,
             _ => {}
         }
     }
@@ -1142,6 +1182,56 @@ fn client_result_type(output: &ReturnType, has_stdout: bool) -> TokenStream {
     quote! { ::std::result::Result<#ok_ty, golem_rust::agentic::ToolError<#err_ty>> }
 }
 
+fn started_result_type(output: &ReturnType) -> TokenStream {
+    let (ok, err) = split_result(output);
+    let ok = ok.map(|ty| quote! { #ty }).unwrap_or_else(|| quote! { () });
+    let err = err
+        .map(|ty| quote! { #ty })
+        .unwrap_or_else(|| quote! { ::std::convert::Infallible });
+    quote! {
+        ::std::result::Result<
+            golem_rust::agentic::ToolInvocation<#ok, #err>,
+            golem_rust::agentic::ToolError<#err>
+        >
+    }
+}
+
+fn start_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
+    let (ok, err) = split_result(output);
+    let decode = match ok {
+        Some(ok) => {
+            quote! { |__result| golem_rust::agentic::decode_result_value::<#ok, _>(__result) }
+        }
+        None => quote! { |__result| golem_rust::agentic::decode_result_empty(__result) },
+    };
+    match err {
+        Some(err) => quote! {
+            {
+                fn __golem_assert_tool_error_decodable<E: golem_rust::agentic::Schema>() {}
+                __golem_assert_tool_error_decodable::<#err>();
+                golem_rust::agentic::start_tool_invocation(
+                    &self.rpc,
+                    &__command_path,
+                    &__input,
+                    #stdin_expr,
+                    #decode,
+                    <#err as golem_rust::agentic::ToolErrorSchema>::from_error_payload_value,
+                )
+            }
+        },
+        None => quote! {
+            golem_rust::agentic::start_tool_invocation(
+                &self.rpc,
+                &__command_path,
+                &__input,
+                #stdin_expr,
+                #decode,
+                |_| ::std::result::Result::Err("unexpected custom tool error".to_string()),
+            )
+        },
+    }
+}
+
 fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
     let (_, err) = split_result(output);
     match err {
@@ -1153,7 +1243,8 @@ fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                     &self.rpc,
                     &__command_path,
                     &__input,
-                    #stdin_expr,
+                    (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
+                    ::std::option::Option::None,
                     <#err as golem_rust::agentic::ToolErrorSchema>::from_error_payload_value,
                 ).await
             }
@@ -1163,7 +1254,8 @@ fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                 &self.rpc,
                 &__command_path,
                 &__input,
-                #stdin_expr,
+                (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
+                ::std::option::Option::None,
             ).await
         },
     }
@@ -1233,14 +1325,7 @@ fn pascal_case(input: &str) -> String {
     out
 }
 
-pub(crate) fn is_stream_type(ty: &Type) -> bool {
-    matches!(
-        type_last_ident(ty).as_deref(),
-        Some("InputStream" | "OutputStream")
-    )
-}
-
-pub(crate) fn is_principal_type(ty: &Type) -> bool {
+fn is_principal_type(ty: &Type) -> bool {
     let Type::Path(tp) = ty else {
         return false;
     };

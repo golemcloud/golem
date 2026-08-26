@@ -16,10 +16,11 @@ pub mod preopens;
 pub mod types;
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::authorization::targets::{CanonicalGuestPath, filesystem_target};
+use crate::durable_host::authorization::targets::{
+    CanonicalGuestPath, agent_owner, filesystem_target,
+};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::card::FilesystemVerb;
-use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use wasmtime_wasi::p2::FsError;
@@ -72,14 +73,7 @@ pub(super) async fn authorize_paths<Ctx: WorkerCtx>(
     if !ctx.state.is_live() {
         return Ok(());
     }
-    let component = ctx.component_metadata();
-    let owner = AgentOwnerPattern::Agent {
-        account: component.account_email.clone(),
-        application: component.application_name.clone(),
-        environment: component.environment_name.clone(),
-        component: component.component_name.clone(),
-        agent: AgentOwnerLeafPattern::Agent(ctx.agent_id().agent_id.clone()),
-    };
+    let owner = agent_owner(ctx);
     let targets = paths
         .iter()
         .map(|(verb, path)| filesystem_target(owner.clone(), *verb, path))

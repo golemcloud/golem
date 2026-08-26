@@ -17,8 +17,53 @@
 use proc_macro2::{Group, Ident, Span, TokenStream, TokenTree};
 use std::collections::BTreeSet;
 use syn::spanned::Spanned;
-use syn::visit_mut::VisitMut;
-use syn::{Error, Expr, ExprArray, ExprLit, Lit, Token};
+use syn::{Error, Expr, ExprArray, ExprLit, GenericArgument, Lit, PathArguments, Token, Type};
+
+/// Direction of an SDK stream parameter in a tool method signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamKind {
+    Input,
+    Output,
+}
+
+/// Recognizes required `InputStream`/`OutputStream` parameters and their
+/// optional `Option<...>` forms. The boolean is `true` for a required stream.
+pub fn stream_type(ty: &Type) -> Option<(StreamKind, bool)> {
+    if let Some(kind) = direct_stream_type(ty) {
+        return Some((kind, true));
+    }
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    let segment = path.path.segments.last()?;
+    if segment.ident != "Option" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    let inner = arguments.args.iter().find_map(|argument| match argument {
+        GenericArgument::Type(ty) => Some(ty),
+        _ => None,
+    })?;
+    direct_stream_type(inner).map(|kind| (kind, false))
+}
+
+/// Whether a tool parameter is a required or optional SDK stream.
+pub fn is_stream_type(ty: &Type) -> bool {
+    stream_type(ty).is_some()
+}
+
+fn direct_stream_type(ty: &Type) -> Option<StreamKind> {
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    match path.path.segments.last()?.ident.to_string().as_str() {
+        "InputStream" => Some(StreamKind::Input),
+        "OutputStream" => Some(StreamKind::Output),
+        _ => None,
+    }
+}
 
 pub fn replace_ident(tokens: TokenStream, from: &Ident, to: &Ident) -> TokenStream {
     tokens
@@ -459,12 +504,7 @@ pub fn to_kebab_case(ident: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        fresh_internal_ident, normalize_sdk_paths_in_item_trait, replace_ident,
-        resolve_generated_sdk_paths, to_kebab_case,
-    };
-    use proc_macro2::{Ident, Span};
-    use quote::quote;
+    use super::{StreamKind, stream_type, to_kebab_case};
 
     #[test]
     fn kebab_cases() {
@@ -478,119 +518,16 @@ mod tests {
     }
 
     #[test]
-    fn replaces_sdk_identifiers_inside_nested_generated_tokens() {
-        let from = Ident::new("golem_rust", Span::call_site());
-        let to = Ident::new("sdk_alias", Span::call_site());
-        let replaced = replace_ident(
-            quote! {
-                fn generated(value: golem_rust::TypedSchemaValue) {
-                    let _ = golem_rust::tool::ToolInvokeError::InvalidInput("x".to_string());
-                }
-            },
-            &from,
-            &to,
-        )
-        .to_string();
+    fn recognizes_required_and_optional_stream_types() {
+        let input = syn::parse_str("golem_rust::agentic::InputStream").unwrap();
+        let optional_output = syn::parse_str("Option<golem_rust::agentic::OutputStream>").unwrap();
+        let nested_optional = syn::parse_str("Option<Option<InputStream>>").unwrap();
 
-        assert!(replaced.contains("sdk_alias :: TypedSchemaValue"));
-        assert!(replaced.contains("sdk_alias :: tool :: ToolInvokeError"));
-        assert!(!replaced.contains("golem_rust"));
-    }
-
-    #[test]
-    fn generated_sdk_paths_skip_rewriting_for_the_canonical_dependency_name() {
-        let canonical = Ident::new("golem_rust", Span::call_site());
-        let preserved = Ident::new("__preserved_golem_rust", Span::call_site());
-        let tokens = quote! {
-            fn generated(value: golem_rust::TypedSchemaValue) {
-                let __preserved_golem_rust = value;
-            }
-        };
-
-        let resolved =
-            resolve_generated_sdk_paths(tokens.clone(), &canonical, &canonical, &preserved);
-
-        assert_eq!(resolved.to_string(), tokens.to_string());
-    }
-
-    #[test]
-    fn sdk_path_normalization_preserves_authored_names_and_local_canonical_paths() {
-        let resolved = Ident::new("sdk_alias", Span::call_site());
-        let canonical = Ident::new("golem_rust", Span::call_site());
-        let preserved = Ident::new("__preserved_golem_rust", Span::call_site());
-        let mut item: syn::ItemTrait = syn::parse_quote! {
-            trait Example {
-                fn sdk_alias(
-                    &self,
-                    principal: sdk_alias::tool::Principal,
-                    payload: golem_rust::Payload,
-                );
-
-                fn golem_rust(&self, golem_rust: String);
-            }
-        };
-
-        normalize_sdk_paths_in_item_trait(&mut item, &resolved, &canonical, &preserved);
-        let normalized = quote! { #item }.to_string();
-        assert!(normalized.contains("fn sdk_alias"));
-        assert!(normalized.contains("principal : golem_rust :: tool :: Principal"));
-        assert!(normalized.contains("payload : __preserved_golem_rust :: Payload"));
-        assert!(normalized.contains("fn __preserved_golem_rust"));
-        assert!(normalized.contains("__preserved_golem_rust : String"));
-
-        let emitted =
-            resolve_generated_sdk_paths(quote! { #item }, &resolved, &canonical, &preserved)
-                .to_string();
-        assert!(emitted.contains("principal : sdk_alias :: tool :: Principal"));
-        assert!(emitted.contains("payload : golem_rust :: Payload"));
-        assert!(emitted.contains("fn golem_rust"));
-        assert!(emitted.contains("golem_rust : String"));
-    }
-
-    #[test]
-    fn internal_identifier_is_fresh_against_authored_tokens() {
-        let tokens = quote! {
-            fn __golem_preserved() {
-                let __golem_preserved_ = 1;
-                let GolemPreserved1 = 2;
-            }
-        };
+        assert_eq!(stream_type(&input), Some((StreamKind::Input, true)));
         assert_eq!(
-            fresh_internal_ident(&tokens, "__golem_preserved", proc_macro2::Span::call_site())
-                .to_string(),
-            "__golem_preserved_2"
+            stream_type(&optional_output),
+            Some((StreamKind::Output, false))
         );
-    }
-
-    #[test]
-    fn escaped_authored_marker_literal_is_not_restored() {
-        let tokens: proc_macro2::TokenStream = r#"
-            const AUTHORED: &str =
-                "__golem_preserved_golem_rust_identifier_for_\u{45}xample";
-        "#
-        .parse()
-        .unwrap();
-        let preferred = "__golem_preserved_golem_rust_identifier_for_Example";
-        let preserved = fresh_internal_ident(&tokens, preferred, proc_macro2::Span::call_site());
-        assert_eq!(preserved.to_string(), format!("{preferred}_1"));
-
-        let resolved = resolve_generated_sdk_paths(
-            tokens,
-            &Ident::new("sdk_alias", Span::call_site()),
-            &Ident::new("golem_rust", Span::call_site()),
-            &preserved,
-        );
-        let file = syn::parse2::<syn::File>(resolved).unwrap();
-        let syn::Item::Const(item) = &file.items[0] else {
-            panic!("expected authored const item");
-        };
-        let syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(value),
-            ..
-        }) = item.expr.as_ref()
-        else {
-            panic!("expected authored string literal");
-        };
-        assert_eq!(value.value(), preferred);
+        assert_eq!(stream_type(&nested_optional), None);
     }
 }

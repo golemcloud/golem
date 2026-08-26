@@ -442,8 +442,8 @@ object ToolRpcCodegen {
 
     private def okResultType(okType: Option[String], hasStdout: Boolean): String =
       (okType, hasStdout) match {
-        case (Some(ok), true)  => s"($ok, _root_.golem.tool.ToolOutputStream)"
-        case (None, true)      => "_root_.golem.tool.ToolOutputStream"
+        case (Some(ok), true)  => ok
+        case (None, true)      => "_root_.scala.Unit"
         case (Some(ok), false) => ok
         case (None, false)     => "_root_.scala.Unit"
       }
@@ -451,7 +451,10 @@ object ToolRpcCodegen {
     private def leafReturnType(shape: LeafReturn, hasStdout: Boolean): String = {
       val err = shape.errType.getOrElse("_root_.scala.Nothing")
       val ok  = okResultType(shape.okType, hasStdout)
-      s"_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[$err], $ok]]"
+      if (hasStdout)
+        s"_root_.scala.Either[_root_.golem.tool.ToolError[$err], _root_.golem.tool.ToolInvocation[$err, $ok]]"
+      else
+        s"_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[$err], $ok]]"
     }
 
     private def valueEntry(tool: Tool, m: Method, p: Param): String = {
@@ -543,9 +546,9 @@ $indent      _root_.golem.tool.ToolClientRuntime.buildDynamicInput($desc, ${stri
 
       val decodeExpr = (shape.okType, hasStdout) match {
         case (Some(ok), true) =>
-          s"_root_.golem.tool.ToolClientRuntime.decodeValueStdoutResult(__r, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
+          s"_root_.golem.tool.ToolClientRuntime.decodeValueResult(__r, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
         case (None, true) =>
-          "_root_.golem.tool.ToolClientRuntime.decodeStdoutResult(__r)"
+          "_root_.golem.tool.ToolClientRuntime.decodeUnitResult(__r)"
         case (Some(ok), false) =>
           s"_root_.golem.tool.ToolClientRuntime.decodeValueResult(__r, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
         case (None, false) =>
@@ -554,14 +557,22 @@ $indent      _root_.golem.tool.ToolClientRuntime.buildDynamicInput($desc, ${stri
 
       val paramDecls = kept.map(paramDecl).mkString(", ")
 
+      val invocationExpr =
+        if (hasStdout) {
+          val decodeError = shape.errType match {
+            case Some(err) => s"${errorSchemaVal(err)}.fromErrorPayloadValue(_)"
+            case None      => "_ => _root_.scala.Left(\"unexpected remote tool error\")"
+          }
+          s"_root_.golem.tool.ToolClientRuntime.start(__transport, $commandPathExpr, __input, $stdinExpr, $decodeError)(__r => $decodeExpr)"
+        } else
+          s"_root_.golem.tool.ToolClientRuntime.complete(\n$indent    $runExpr\n$indent  )(__r => $decodeExpr)"
+
       s"""${indent}def ${m.name}($paramDecls): $retType = {
 $indent  val __params = _root_.golem.tool.ToolClientRuntime.encodeParams(${listExpr(valueEntries, s"$indent ")})
 $indent  val __input = __params.flatMap { __values =>
 $indent    $inputExpr
 $indent  }
-$indent  _root_.golem.tool.ToolClientRuntime.complete(
-$indent    $runExpr
-$indent  )(__r => $decodeExpr)
+$indent  $invocationExpr
 $indent}"""
     }
 

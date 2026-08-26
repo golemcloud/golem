@@ -3926,7 +3926,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                 let execution_status = retry_params.execution_status;
                 let current_retry_policy_state = retry_params
                     .worker
-                    .get_non_detached_last_known_status()
+                    .get_attached_last_known_status()
                     .await
                     .current_retry_state
                     .get(&retry_params.retry_point)

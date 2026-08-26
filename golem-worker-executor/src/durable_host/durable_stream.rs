@@ -1390,7 +1390,7 @@ impl DurableStreamProducer {
         let current_index = oplog.current_oplog_index().await;
         if current_index.is_defined() {
             let entries = oplog
-                .read_many(OplogIndex::INITIAL, current_index.as_u64())
+                .read_exact(OplogIndex::INITIAL, current_index.as_u64())
                 .await;
             for (oplog_index, entry) in entries {
                 match entry {
@@ -1640,7 +1640,7 @@ impl DurableStreamProducer {
         if current.is_defined() {
             for (_, entry) in self
                 .oplog
-                .read_many(OplogIndex::INITIAL, current.as_u64())
+                .read_exact(OplogIndex::INITIAL, current.as_u64())
                 .await
             {
                 let OplogEntry::StreamSession { record, .. } = entry else {
@@ -2140,7 +2140,7 @@ impl DurableStreamProducer {
             if current.is_defined() {
                 for (_, entry) in self
                     .oplog
-                    .read_many(OplogIndex::INITIAL, current.as_u64())
+                    .read_exact(OplogIndex::INITIAL, current.as_u64())
                     .await
                 {
                     let OplogEntry::StreamSession { record, .. } = entry else {
@@ -2219,7 +2219,7 @@ impl DurableStreamProducer {
             if current.is_defined() {
                 for (_, entry) in self
                     .oplog
-                    .read_many(OplogIndex::INITIAL, current.as_u64())
+                    .read_exact(OplogIndex::INITIAL, current.as_u64())
                     .await
                 {
                     let OplogEntry::StreamSession { record, .. } = entry else {
@@ -4118,7 +4118,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         let mut pending_invocations = HashMap::new();
         for (oplog_index, entry) in self
             .oplog_service
-            .read(
+            .read_exact(
                 &session_owner,
                 session_mode,
                 OplogIndex::INITIAL,
@@ -4267,7 +4267,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         let mut deleting = false;
         for (_, entry) in self
             .oplog_service
-            .read(&consumer, agent_mode, OplogIndex::INITIAL, current.as_u64())
+            .read_exact(&consumer, agent_mode, OplogIndex::INITIAL, current.as_u64())
             .await
         {
             let OplogEntry::StreamSession { record, .. } = entry else {
@@ -4381,7 +4381,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         let mut overlay = None;
         for (_, entry) in self
             .oplog_service
-            .read(
+            .read_exact(
                 &consumer,
                 AgentMode::Durable,
                 OplogIndex::INITIAL,
@@ -5505,7 +5505,7 @@ pub(crate) mod tests {
                 .expect("missing test oplog entry")
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             oplog_index: OplogIndex,
             n: u64,
@@ -7269,7 +7269,7 @@ pub(crate) mod tests {
                 .replayed
         );
         assert_eq!(oplog.committed_length(), 3);
-        let entries = oplog.read_many(OplogIndex::INITIAL, 3).await;
+        let entries = oplog.read_exact(OplogIndex::INITIAL, 3).await;
         assert!(matches!(
             entries.get(&OplogIndex::from_u64(2)),
             Some(OplogEntry::StreamRegistered { .. })

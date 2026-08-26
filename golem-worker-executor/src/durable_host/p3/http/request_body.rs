@@ -1173,6 +1173,8 @@ where
             AccessClaimOptions {
                 scope_discriminator: None,
                 request_identity: None,
+                entity_invocation_identity: None,
+                tool_invocation_identity: None,
                 parent_start_index: None,
                 observational_owner,
             },

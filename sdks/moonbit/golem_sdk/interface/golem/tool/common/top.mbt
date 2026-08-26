@@ -333,7 +333,7 @@ pub(all) struct ToolMiddleware {
 } derive(Show, Eq)
 
 ///|
-/// Invocation contract — shared between guest and host
+/// Invocation contract — shared between guest and host.
 pub(all) suberror ToolError {
   InvalidToolName(String)
   InvalidCommandPath(Array[String])

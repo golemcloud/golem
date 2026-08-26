@@ -51,6 +51,14 @@ pub mod tool;
 pub mod wasm_rpc;
 pub mod websocket;
 
+tokio::task_local! {
+    static ENTITY_CANCELLATION_MASKED: ();
+}
+
+pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Output {
+    ENTITY_CANCELLATION_MASKED.scope((), future).await
+}
+
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
@@ -123,7 +131,7 @@ use futures::future::try_join_all;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, AgentPrincipal, ParsedAgentId, Principal};
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
     StoredCard, WalletVersionToken,
@@ -370,7 +378,9 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     runtime: OwnerRuntime,
     filesystem: FilesystemCapability,
     entity_invocation_scope: Option<EntityInvocationScope>,
+    entity_cancellation: Option<tokio_util::sync::CancellationToken>,
     primary_invocation_start_index: Option<OplogIndex>,
+    invocation_principal: Option<Principal>,
     owner_execution: Arc<OwnerExecution>,
     owner_resources: Arc<OwnerRuntimeResources>,
     pub public_state: PublicDurableWorkerState<Ctx>,
@@ -394,9 +404,13 @@ pub(crate) struct PrimaryInvocationBody {
 }
 
 impl PrimaryInvocationBody {
-    pub(crate) async fn complete(mut self) {
+    pub(crate) fn invocation(&self) -> Option<&crate::worker::owner_lane::OwnerInvocationId> {
+        self.permit.as_ref().map(OwnerInvocationPermit::invocation)
+    }
+
+    pub(crate) fn complete(mut self) {
         if let Some(permit) = self.permit.take() {
-            permit.complete_and_wait().await;
+            permit.complete();
         }
     }
 }
@@ -1018,6 +1032,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker.request_memory_limit_interrupt(memory_meter.clone());
             }
         }));
+        let tail_work = match &runtime {
+            OwnerRuntime::Agent => owner_execution.primary_tail_work_tracker(),
+            OwnerRuntime::Entity(_) => tail_work::TailWorkTracker::new(),
+        };
         let state = PrivateDurableWorkerState::new(
             agent_id,
             oplog_service,
@@ -1042,6 +1060,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             worker_proxy,
             replay_state,
             runtime.clone(),
+            tail_work,
             component_metadata,
             worker_config.owner_component_metadata,
             worker_config.current_filesystem_storage_usage,
@@ -1085,7 +1104,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             runtime,
             filesystem,
             entity_invocation_scope: None,
+            entity_cancellation: None,
             primary_invocation_start_index: None,
+            invocation_principal: None,
             owner_execution,
             owner_resources,
             websocket_connection_pool,
@@ -1272,6 +1293,44 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope> {
         self.entity_invocation_scope.as_ref()
+    }
+
+    pub(crate) fn set_invocation_principal(&mut self, principal: Option<Principal>) {
+        self.invocation_principal = principal;
+    }
+
+    pub(crate) fn invocation_principal(&self) -> Principal {
+        self.invocation_principal.clone().unwrap_or_else(|| {
+            Principal::Agent(AgentPrincipal {
+                agent_id: self.owned_agent_id.agent_id.clone(),
+            })
+        })
+    }
+
+    pub(crate) fn set_entity_cancellation(
+        &mut self,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<(), WorkerExecutorError> {
+        if !matches!(self.runtime, OwnerRuntime::Entity(_)) {
+            return Err(WorkerExecutorError::runtime(
+                "Cannot install entity cancellation in the primary Store",
+            ));
+        }
+        if self.entity_cancellation.is_some() {
+            return Err(WorkerExecutorError::runtime(
+                "Entity cancellation is already installed",
+            ));
+        }
+        self.entity_cancellation = Some(cancellation);
+        Ok(())
+    }
+
+    fn entity_cancellation(&self) -> Option<tokio_util::sync::CancellationToken> {
+        if ENTITY_CANCELLATION_MASKED.try_with(|()| ()).is_ok() {
+            None
+        } else {
+            self.entity_cancellation.clone()
+        }
     }
 
     pub(crate) fn child_parent_start_index(
@@ -1926,7 +1985,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let status = self
             .public_state
             .worker()
-            .get_non_detached_last_known_status()
+            .get_attached_last_known_status()
             .await;
         let status_idx = status.oplog_idx;
         let status_pending = status.pending_card_events;
@@ -2214,6 +2273,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    pub(crate) fn selected_tool_owner_failure(
+        &self,
+    ) -> Option<crate::durable_host::tool::operation::OwnerFailureWinner> {
+        self.owner_execution
+            .tool_operations()
+            .selected_owner_failure()
+    }
+
     pub fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig> {
         self.state.agent_id.as_ref().and_then(|agent_id| {
             self.owner_component_metadata()
@@ -2311,11 +2378,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn switch_to_live(&self) {
-        self.state.replay_state.switch_to_live().await;
+        let incomplete_calls = self.state.replay_state.switch_to_live().await;
+        self.owner_execution
+            .release_incomplete_historical_reconstruction_fences(&incomplete_calls);
         if self.runtime == OwnerRuntime::Agent {
-            // Incomplete concurrent calls must be woken first so their reconstruction tasks can
-            // repair the original Starts. The primary remains fenced at this await and cannot
-            // admit live guest execution until every historical entity coordinator exits.
+            // Completed reconstructions retain their fence until their coordinator exits. An
+            // incomplete outer Start releases its fence with the resolver decision above, before
+            // an exclusive P2 transition could block the accessor coordinator that observes it.
             self.owner_execution
                 .wait_for_historical_reconstructions()
                 .await;
@@ -3043,7 +3112,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // set the current retry point to the index of the begin entry.
             // The returned index, however, is going to be the current / last replayed index.
 
-            let begin_index = if self.state.replay_state.is_live() {
+            let begin_index = if self.state.is_live() {
                 self.state.oplog.current_oplog_index().await
             } else {
                 self.state.replay_state.last_replayed_non_hint_index()
@@ -4171,6 +4240,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         )
     }
 
+    pub(crate) fn invocation_deadline_exceeded(&self) -> bool {
+        self.state
+            .invocation_deadline_exceeded
+            .load(Ordering::Acquire)
+    }
+
     pub(crate) fn end_call_snapshotting_function_if_active(&mut self) {
         if self.state.snapshotting_mode {
             self.end_call_snapshotting_function();
@@ -4241,13 +4316,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 url: state.url.clone(),
                 headers: state.headers.clone(),
             })
-    }
-
-    /// Whether some task currently holds an open replay-cursor transaction. See
-    /// [`ReplayState::has_open_cursor_transaction`]; used by the invocation completion path to
-    /// keep the store's event loop alive until no store-spawned task holds the cursor lock.
-    pub fn has_open_replay_cursor_transaction(&self) -> bool {
-        self.state.replay_state.has_open_cursor_transaction()
     }
 
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
@@ -4665,6 +4733,21 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
             if let ExecutionStatus::Interrupting { interrupt_kind, .. } = &*execution_status {
                 return Some(*interrupt_kind);
             }
+        }
+        if self
+            .owner_execution
+            .tool_operations()
+            .selected_owner_failure()
+            .is_some()
+        {
+            return Some(InterruptKind::Interrupt(Timestamp::now_utc()));
+        }
+        if self
+            .entity_cancellation
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+        {
+            return Some(InterruptKind::Interrupt(Timestamp::now_utc()));
         }
         // An exceeded invocation or tail-work deadline surfaces as a synthetic interrupt so work
         // traps at the next epoch check. The corresponding invocation boundary converts the
@@ -9270,6 +9353,9 @@ struct PrivateDurableWorkerState {
     resources: HashMap<AgentResourceId, (ResourceTypeId, ResourceAny)>,
     last_resource_id: AgentResourceId,
     replay_state: ReplayState,
+    /// Per-Store live continuation after this entity's matching historical call was removed by a
+    /// replay jump while sibling Stores still have owner-oplog reconstruction work.
+    local_live_tail: Arc<AtomicBool>,
     assume_idempotence: bool,
 
     /// Custom durable invocations whose committed logical `Start` is currently executing live.
@@ -9596,6 +9682,7 @@ impl PrivateDurableWorkerState {
         worker_proxy: Arc<dyn WorkerProxy>,
         replay_state: ReplayState,
         runtime: OwnerRuntime,
+        tail_work: tail_work::TailWorkTracker,
         component_metadata: Component,
         owner_component_metadata: Option<Arc<Component>>,
         current_filesystem_storage_usage: u64,
@@ -9705,6 +9792,7 @@ impl PrivateDurableWorkerState {
             worker_proxy,
             resources: HashMap::new(),
             last_resource_id: AgentResourceId::INITIAL,
+            local_live_tail: Arc::new(AtomicBool::new(false)),
             assume_idempotence: true,
             active_custom_invocations: HashMap::new(),
             custom_invocation_ordinals: HashMap::new(),
@@ -9765,7 +9853,7 @@ impl PrivateDurableWorkerState {
             active_atomic_regions: Vec::new(),
             active_durable_scopes: Vec::new(),
             live_host_calls: Arc::new(AtomicUsize::new(0)),
-            tail_work: tail_work::TailWorkTracker::new(),
+            tail_work,
             suspendable_waits: Arc::new(Mutex::new(BTreeMap::new())),
             next_suspendable_wait_id: AtomicU64::new(1),
             invocation_deadline_exceeded: Arc::new(AtomicBool::new(false)),
@@ -10232,7 +10320,11 @@ impl PrivateDurableWorkerState {
 
     /// Returns whether we are in live mode where we are executing new calls.
     pub fn is_live(&self) -> bool {
-        self.replay_state.is_live()
+        self.local_live_tail.load(Ordering::Acquire) || self.replay_state.is_live()
+    }
+
+    pub(crate) fn local_live_tail(&self) -> Arc<AtomicBool> {
+        self.local_live_tail.clone()
     }
 
     fn durability_is_suppressed(&self) -> bool {

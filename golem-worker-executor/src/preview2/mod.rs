@@ -39,6 +39,11 @@ wasmtime::component::bindgen!({
         "golem:durability/durability.begin-custom-durable-invocation": store | async | trappable,
         "golem:durability/durability.[static]live-custom-durable-invocation.finish": store | async | trappable,
         "golem:durability/durability.[drop]live-custom-durable-invocation": store | trappable,
+        "golem:tool/host.create-stdin-from-stream": store | async | trappable,
+        "golem:tool/host.create-stdout": store | async | trappable,
+        "golem:tool/host.get-invoke-results": store | async | trappable,
+        "golem:tool/host.[method]tool-rpc.invoke": store | async | trappable,
+        "golem:tool/host.[method]tool-rpc.async-invoke-and-await": store | async | trappable,
         default: async | trappable,
     },
     exports: { default: async },
@@ -72,6 +77,11 @@ wasmtime::component::bindgen!({
         "golem:agent/host.future-invoke-result": super::durable_host::wasm_rpc::FutureInvokeResultEntry,
         "golem:agent/host.cancellation-token": super::durable_host::wasm_rpc::CancellationTokenEntry,
         "golem:tool/common": golem_schema::schema::tool::wit::wire,
+        "golem:tool/host.tool-stdin-writer": super::durable_host::tool::ToolStdinWriterEntry,
+        "golem:tool/host.tool-stdin": super::durable_host::tool::ToolStdinEntry,
+        "golem:tool/host.tool-stdin-closed": super::durable_host::tool::ToolStdinClosedEntry,
+        "golem:tool/host.tool-stdout": super::durable_host::tool::ToolStdoutEntry,
+        "golem:tool/host.tool-stdout-writer": super::durable_host::tool::ToolStdoutWriterEntry,
         "golem:tool/host.tool-rpc": super::durable_host::tool::ToolRpcEntry,
         "golem:tool/host.future-invoke-result": super::durable_host::tool::FutureInvokeResultEntry,
         // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
@@ -112,6 +122,29 @@ pub mod oplog_processor_plugin {
             "golem:api/context": crate::preview2::golem::api1_5_0::context,
             "golem:api/retry": golem_common::schema::agent::bindings::golem::api::retry,
             "wasi:clocks/system-clock": wasmtime_wasi::p3::bindings::clocks::system_clock,
+        },
+    });
+}
+
+/// Typed export accessor for components implementing `golem:tool/guest`.
+/// All imported interfaces and value types are mapped to the primary world bindings so a tool
+/// sidecar uses exactly the same host implementations and resource table entries as an agent.
+pub mod tool_guest {
+    wasmtime::component::bindgen!({
+        path: r"../wit",
+        world: "golem:tool/tool-guest",
+        imports: { default: async | trappable },
+        exports: { default: async },
+        require_store_data_send: true,
+        anyhow: true,
+        wasmtime_crate: ::wasmtime,
+        with: {
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:agent/common@2.0.0": golem_common::schema::agent::bindings::golem::agent::common,
+            "golem:agent/host@2.0.0": crate::preview2::golem::agent::host,
+            "golem:api/host@1.5.0": crate::preview2::golem::api1_5_0::host,
+            "golem:tool/common": golem_schema::schema::tool::wit::wire,
+            "golem:tool/host": crate::preview2::golem::tool::host,
         },
     });
 }

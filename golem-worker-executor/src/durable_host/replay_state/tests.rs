@@ -1222,6 +1222,65 @@ async fn claim_and_await_resolves_completed() {
 }
 
 #[test]
+async fn start_claim_reports_replay_ended_when_cursor_is_live() {
+    let rs = replay_state_over(vec![noop()]).await;
+
+    let outcome = rs
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, ReplayStartClaimOutcome::ReplayEnded));
+}
+
+#[test]
+async fn missing_start_claim_remains_divergence_while_replaying() {
+    let rs = replay_state_over(vec![noop(), start_now()]).await;
+
+    let result = rs
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::Custom("missing".to_string()),
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await;
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("missing Start must not be accepted while replay remains active"),
+    };
+
+    assert!(
+        format!("{error}").contains("missing"),
+        "missing replay claim must remain strict divergence: {error}"
+    );
+}
+
+#[test]
+async fn start_claim_reports_matching_deleted_region_while_replay_continues() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [noop(), start_now(), start_with_parent(1)] {
+        oplog.add(entry).await;
+    }
+    let oplog: Arc<dyn Oplog> = oplog;
+    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
+    let rs = ReplayState::new(test_agent_id(), oplog, skipped, None)
+        .await
+        .unwrap();
+
+    let outcome = rs
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, ReplayStartClaimOutcome::DeletedRegion));
+}
+
+#[test]
 async fn request_matching_downloads_uncached_external_payloads() {
     let oplog = Arc::new(InMemoryOplog::new());
     oplog.add(noop()).await;
@@ -3287,12 +3346,13 @@ async fn switch_to_live_wakes_parked_awaiter_as_incomplete() {
         "A must park on the unclaimed Start(B)"
     );
 
-    rs.switch_to_live().await;
+    let incomplete_calls = rs.switch_to_live().await;
 
     match a_fut.await.unwrap() {
         ResolutionOutcome::Incomplete => {}
         other => panic!("expected Incomplete, got {other:?}"),
     }
+    assert_eq!(incomplete_calls, HashSet::from([start_idx]));
     let internal = rs.cursor.state.lock().await;
     assert!(
         !internal.concurrent_resolver.is_pending(start_idx),
@@ -3437,6 +3497,32 @@ async fn visible_terminal_scan_crosses_multiple_chunks() {
     assert!(
         rs.has_visible_terminal(OplogIndex::from_u64(2)).await,
         "entity execution mode classification must scan through the complete replay prefix"
+    );
+}
+
+#[test]
+async fn visible_scope_descendant_distinguishes_owned_work_from_siblings() {
+    let only_sibling =
+        replay_state_over(vec![noop(), start_now(), start_now(), end_for(3, 41)]).await;
+    assert!(
+        !only_sibling
+            .has_visible_scope_descendant(OplogIndex::from_u64(2))
+            .await,
+        "a later sibling must not be mistaken for historical entity-body work"
+    );
+
+    let owned_child = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        end_for(3, 41),
+    ])
+    .await;
+    assert!(
+        owned_child
+            .has_visible_scope_descendant(OplogIndex::from_u64(2))
+            .await,
+        "a nested Start proves the historical entity body began execution"
     );
 }
 

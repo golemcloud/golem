@@ -396,6 +396,8 @@ pub struct Limits {
     pub epoch_ticks: u64,
     pub max_oplog_query_pages_size: usize,
     pub max_invocation_context_stack_depth: usize,
+    /// Maximum accepted payload bytes in each completion-buffered tool attachment direction.
+    pub max_tool_attachment_bytes: usize,
     /// Optional wall-clock upper bound for a single guest invocation. When exceeded, the
     /// invocation fails like a trap (no invocation-finished marker is written) and normal
     /// retry handling applies. `None` (the default) leaves invocations unbounded.
@@ -457,6 +459,11 @@ impl SafeDisplay for Limits {
             &mut result,
             "max invocation context stack depth: {}",
             self.max_invocation_context_stack_depth
+        );
+        let _ = writeln!(
+            &mut result,
+            "max tool attachment bytes: {}",
+            self.max_tool_attachment_bytes
         );
         let _ = writeln!(
             &mut result,
@@ -1783,6 +1790,7 @@ impl Default for Limits {
             epoch_ticks: 1,
             max_oplog_query_pages_size: 100,
             max_invocation_context_stack_depth: 1024,
+            max_tool_attachment_bytes: 16 * 1024 * 1024,
             max_invocation_duration: None,
             tail_work_settle_timeout: Duration::from_secs(30),
         }

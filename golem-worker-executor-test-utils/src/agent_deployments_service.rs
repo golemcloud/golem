@@ -28,8 +28,9 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_worker_executor::services::environment_state::{
-    EnvironmentStateService, ToolDiscoveryError, ToolDiscoverySnapshot,
+    EnvironmentStateService, ToolActivationSnapshot, ToolDiscoveryError, ToolDiscoverySnapshot,
     get_accessible_tool_from_snapshot, get_accessible_tools_from_snapshot,
+    get_tool_activation_from_deployment,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -257,6 +258,20 @@ impl EnvironmentStateService for TestEnvironmentStateService {
             .and_then(|(_, deployment)| deployment.state.agent_tool_bindings.get(agent_type))
             .and_then(|bindings| bindings.get(tool_name))
             .cloned())
+    }
+
+    async fn get_tool_activation(
+        &self,
+        environment_id: EnvironmentId,
+        agent_type: &AgentTypeName,
+        tool_name: &ToolName,
+    ) -> Result<Option<ToolActivationSnapshot>, ToolDiscoveryError> {
+        let deployments = self.tool_deployments.read().unwrap();
+        let deployment = deployments
+            .iter()
+            .find(|((candidate, _, _), _)| *candidate == environment_id)
+            .map(|(_, deployment)| &deployment.state);
+        get_tool_activation_from_deployment(deployment, agent_type, tool_name)
     }
 
     async fn get_accessible_tools(

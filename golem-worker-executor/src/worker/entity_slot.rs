@@ -20,6 +20,7 @@ use golem_common::model::entity::{
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 use tokio::task::AbortHandle;
 
 /// In-memory registry for one `(owner, entity)` pair.
@@ -29,6 +30,7 @@ use tokio::task::AbortHandle;
 pub struct EntitySlot {
     entity_id: OwnedAgentEntityId,
     state: Mutex<EntitySlotState>,
+    drained: Notify,
 }
 
 struct EntitySlotState {
@@ -51,6 +53,7 @@ pub struct ActiveEntityInvocationMetadata {
     pub activation_fingerprint: EntityActivationFingerprint,
     pub executable: ExecutableTarget,
     pub mode: InvocationExecutionMode,
+    pub store_attached: bool,
     pub linear_memory_bytes: u64,
 }
 
@@ -63,6 +66,7 @@ impl EntitySlot {
                 fence_generation: 0,
                 active: HashMap::new(),
             }),
+            drained: Notify::new(),
         }
     }
 
@@ -85,6 +89,7 @@ impl EntitySlot {
                     activation_fingerprint: invocation.activation_fingerprint,
                     executable: invocation.executable.clone(),
                     mode: invocation.mode,
+                    store_attached: invocation.linear_memory.is_some(),
                     linear_memory_bytes: invocation
                         .linear_memory
                         .as_ref()
@@ -99,6 +104,16 @@ impl EntitySlot {
 
     pub fn active_invocation_count(&self) -> usize {
         self.state.lock().unwrap().active.len()
+    }
+
+    pub(crate) async fn wait_drained(&self) {
+        loop {
+            let drained = self.drained.notified();
+            if self.state.lock().unwrap().active.is_empty() {
+                return;
+            }
+            drained.await;
+        }
     }
 
     pub fn charged_linear_memory_bytes(&self) -> u64 {
@@ -237,6 +252,7 @@ impl Drop for EntitySlotRegistration {
                 .unwrap()
                 .active
                 .remove(&invocation_id);
+            self.slot.drained.notify_waiters();
         }
     }
 }

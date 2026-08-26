@@ -41,6 +41,7 @@ use crate::durable_host::durable_stream::{
     StreamAttachmentControl,
 };
 use crate::durable_host::schema_value_stream::contains_stream;
+use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::durable_host::{
     agent_effective_surface_from_component_metadata, agent_monomorphization_context,
     recover_stderr_logs,
@@ -1195,14 +1196,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Transition the worker into a deleting state.
     /// Rejects all new invocations and stops any running execution.
     async fn start_deleting_internal(&self) -> Result<(), WorkerExecutorError> {
-        self.queue_interrupt(InterruptKind::Interrupt(Timestamp::now_utc()), false)
-            .await;
+        let interrupt_kind = InterruptKind::Interrupt(Timestamp::now_utc());
+        self.queue_interrupt(interrupt_kind, false).await;
         if let Some(active_agent) = self
             .active_agents()
             .try_get_active_agent(&self.owned_agent_id)
             .await
         {
-            active_agent.fence_entity_bodies();
+            active_agent
+                .fence_entity_bodies(OwnerFailureWinner::Lifecycle(interrupt_kind))
+                .await;
         }
         // Stop any future background flush or clean-checkpoint write from resurrecting the cached
         // status after the upcoming `WorkerService::remove`/`remove_cached_status` deletes it (the
@@ -1258,7 +1261,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if current.is_defined() {
             for (_, entry) in self
                 .oplog
-                .read_many(OplogIndex::INITIAL, current.as_u64())
+                .read_exact(OplogIndex::INITIAL, current.as_u64())
                 .await
             {
                 let OplogEntry::StreamSession { record, .. } = entry else {
@@ -1368,6 +1371,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
     }
 
+    pub(crate) fn interrupt_current_execution(&self) {
+        let interrupt_signal = match &*self.execution_status.read().unwrap() {
+            ExecutionStatus::Running {
+                interrupt_signal, ..
+            } => Some(interrupt_signal.clone()),
+            _ => None,
+        };
+        if let Some(interrupt_signal) = interrupt_signal {
+            let _ = interrupt_signal.send(InterruptKind::Interrupt(Timestamp::now_utc()));
+        }
+    }
+
     fn mark_as_loading(&self) {
         let mut execution_status = self.execution_status.write().unwrap();
         *execution_status = ExecutionStatus::Loading {
@@ -1402,6 +1417,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.state_actor.non_detached_status().await
     }
 
+    /// Returns the authoritative status, reattaching it to the oplog first when necessary.
+    /// Unlike [`Self::get_non_detached_last_known_status`], this is safe for independent store
+    /// tasks that can overlap an invocation-loop jump or replay completion.
+    pub async fn get_attached_last_known_status(&self) -> AgentStatusRecord {
+        self.state_actor.attached_status().await.as_ref().clone()
+    }
+
     pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
         &self.owned_agent_id
     }
@@ -1433,56 +1455,67 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return None;
         }
-        if let Some(active_agent) = self
+        let active_agent = self
             .active_agents()
             .try_get_active_agent(&self.owned_agent_id)
-            .await
-        {
-            active_agent.fence_entity_bodies();
+            .await;
+        if let Some(active_agent) = &active_agent {
+            debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Beginning entity fence for worker interruption");
+            active_agent
+                .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(interrupt_kind))
+                .await;
         }
         if let WorkerInstance::Running(running) = &*instance_guard {
             let _ = running.sender.send(WorkerCommand::WorkAvailable);
         }
         drop(instance_guard);
 
-        let mut execution_status = self.execution_status.write().unwrap();
-        let current_execution_status = execution_status.clone();
-        match current_execution_status {
-            ExecutionStatus::Running {
-                interrupt_signal, ..
-            } => {
-                let _ = interrupt_signal.send(interrupt_kind);
-                let (sender, receiver) = tokio::sync::broadcast::channel(1);
-                *execution_status = ExecutionStatus::Interrupting {
-                    interrupt_kind,
-                    await_interruption: Arc::new(sender),
-                    agent_mode: execution_status.agent_mode(),
-                    timestamp: Timestamp::now_utc(),
-                };
-                Some(receiver)
-            }
-            ExecutionStatus::Suspended { .. } => None,
-            ExecutionStatus::Interrupting {
-                interrupt_kind: current_kind,
-                await_interruption,
-                agent_mode,
-                timestamp,
-            } => {
-                let receiver = await_interruption.subscribe();
-                if matches!(current_kind, InterruptKind::Restart)
-                    && !matches!(interrupt_kind, InterruptKind::Restart)
-                {
+        let receiver = {
+            debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Signalling primary Store interruption");
+            let mut execution_status = self.execution_status.write().unwrap();
+            let current_execution_status = execution_status.clone();
+            match current_execution_status {
+                ExecutionStatus::Running {
+                    interrupt_signal, ..
+                } => {
+                    let _ = interrupt_signal.send(interrupt_kind);
+                    let (sender, receiver) = tokio::sync::broadcast::channel(1);
                     *execution_status = ExecutionStatus::Interrupting {
                         interrupt_kind,
-                        await_interruption,
-                        agent_mode,
-                        timestamp,
+                        await_interruption: Arc::new(sender),
+                        agent_mode: execution_status.agent_mode(),
+                        timestamp: Timestamp::now_utc(),
                     };
+                    Some(receiver)
                 }
-                Some(receiver)
+                ExecutionStatus::Suspended { .. } => None,
+                ExecutionStatus::Interrupting {
+                    interrupt_kind: current_kind,
+                    await_interruption,
+                    agent_mode,
+                    timestamp,
+                } => {
+                    let receiver = await_interruption.subscribe();
+                    if matches!(current_kind, InterruptKind::Restart)
+                        && !matches!(interrupt_kind, InterruptKind::Restart)
+                    {
+                        *execution_status = ExecutionStatus::Interrupting {
+                            interrupt_kind,
+                            await_interruption,
+                            agent_mode,
+                            timestamp,
+                        };
+                    }
+                    Some(receiver)
+                }
+                ExecutionStatus::Loading { .. } => None,
             }
-            ExecutionStatus::Loading { .. } => None,
+        };
+        if let Some(active_agent) = active_agent {
+            active_agent.drain_fenced_entity_bodies().await;
         }
+        debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Worker interruption entity drain completed");
+        receiver
     }
 
     async fn queue_interrupt(
@@ -3745,7 +3778,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let entries = self
             .oplog
-            .read_many(OplogIndex::INITIAL, current.as_u64())
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
             .await;
         let mut records = Vec::new();
         for (_, entry) in entries {
@@ -3778,7 +3811,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let entries = self
             .oplog
-            .read_many(OplogIndex::INITIAL, current.as_u64())
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
             .await;
         let mut prepared = None;
         for (_, entry) in entries {
@@ -3861,7 +3894,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let entries = self
             .oplog
-            .read_many(OplogIndex::INITIAL, current.as_u64())
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
             .await;
         let mut prepared = None;
         for (_, entry) in entries {
@@ -3946,7 +3979,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut finished = false;
         for (_, entry) in self
             .oplog
-            .read_many(OplogIndex::INITIAL, current.as_u64())
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
             .await
         {
             let OplogEntry::StreamSession { record, .. } = entry else {
@@ -4014,7 +4047,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut unfinished = HashSet::new();
         for (_, entry) in self
             .oplog
-            .read_many(OplogIndex::INITIAL, current.as_u64())
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
             .await
         {
             let OplogEntry::StreamSession { record, .. } = entry else {
@@ -4170,7 +4203,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut consumer_deleting = false;
         for (oplog_index, entry) in self
             .oplog
-            .read_many(OplogIndex::INITIAL, current.as_u64())
+            .read_exact(OplogIndex::INITIAL, current.as_u64())
             .await
         {
             if let OplogEntry::PendingAgentInvocation {

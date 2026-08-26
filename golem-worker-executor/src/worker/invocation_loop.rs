@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
@@ -389,7 +390,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .try_get_active_agent(&self.owned_agent_id)
             .await
         {
-            active_agent.fence_entity_bodies();
+            let failure = startup_failure.clone().map_or_else(
+                || OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(Timestamp::now_utc())),
+                OwnerFailureWinner::Infrastructure,
+            );
+            active_agent.fence_entity_bodies(failure).await;
         }
         self.parent
             .stop_internal(
@@ -1447,15 +1452,38 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .durable_ctx()
             .begin_stream_runtime_teardown();
         let details = format!("{result:?}");
-        let trap_type = match result {
-            Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
-            Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
-                error,
-                OplogIndex::INITIAL,
-                false,
-                false,
-                self.parent.agent_mode(),
-            )),
+        let owner_failure = self
+            .store
+            .data()
+            .durable_ctx()
+            .selected_tool_owner_failure();
+        debug!(
+            owner_id = %self.parent.owned_agent_id(),
+            owner_failure = ?owner_failure,
+            "Classifying failed invocation after tool owner arbitration"
+        );
+        let trap_type = match owner_failure {
+            Some(OwnerFailureWinner::Trap(trap)) => Some(trap),
+            Some(OwnerFailureWinner::Lifecycle(kind)) => Some(TrapType::Interrupt(kind)),
+            Some(OwnerFailureWinner::Infrastructure(error)) => {
+                Some(TrapType::from_worker_executor_error::<Ctx>(
+                    error,
+                    OplogIndex::INITIAL,
+                    false,
+                    false,
+                    self.parent.agent_mode(),
+                ))
+            }
+            None => match result {
+                Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
+                Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
+                    error,
+                    OplogIndex::INITIAL,
+                    false,
+                    false,
+                    self.parent.agent_mode(),
+                )),
+            },
         };
         let decision = match trap_type {
             Some(trap_type) => {

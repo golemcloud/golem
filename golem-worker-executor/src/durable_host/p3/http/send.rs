@@ -218,6 +218,8 @@ where
     let claim_options = AccessClaimOptions {
         scope_discriminator: Some(format!("req:{scope_discriminator}")),
         request_identity: Some(HostRequest::from(host_request.clone())),
+        entity_invocation_identity: None,
+        tool_invocation_identity: None,
         parent_start_index: None,
         observational_owner: None,
     };
@@ -1164,7 +1166,7 @@ where
         )
     });
     let current_retry_policy_state = worker
-        .get_non_detached_last_known_status()
+        .get_attached_last_known_status()
         .await
         .current_retry_state
         .get(&retry_point)

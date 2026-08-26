@@ -14,7 +14,7 @@ inputs:
     description: 'Whether to install wasm-rquickjs'
     default: 'true'
   wasm-rquickjs-version:
-    description: 'wasm-rquickjs-cli crates.io version or golemcloud/wasm-rquickjs git revision to install'
+    description: 'wasm-rquickjs-cli version or golemcloud/wasm-rquickjs git revision to install'
     required: true
   install-cargo-component:
     description: 'Whether to install cargo-component'
@@ -38,11 +38,7 @@ runs:
       env:
         WASM_RQUICKJS_VERSION: ${{ inputs.wasm-rquickjs-version }}
       run: |
-        if [[ "$WASM_RQUICKJS_VERSION" =~ ^[0-9a-f]{40}$ ]]; then
-          cargo install --force --locked --git https://github.com/golemcloud/wasm-rquickjs --rev "$WASM_RQUICKJS_VERSION" wasm-rquickjs-cli
-        else
-          cargo binstall --force --locked "wasm-rquickjs-cli@$WASM_RQUICKJS_VERSION"
-        fi
+        bash "$GITHUB_WORKSPACE/scripts/install-wasm-rquickjs.sh" "$WASM_RQUICKJS_VERSION"
 
     - name: Install cargo-component
       if: inputs.install-cargo-component == 'true'

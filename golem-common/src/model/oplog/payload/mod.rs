@@ -20,6 +20,7 @@ mod tests;
 use crate::model::agent::AgentTypeName;
 use crate::model::card::ScopeCard;
 use crate::model::component::ComponentRevision;
+use crate::model::entity::{EntityCallMode, ToolInputDecodeFailure};
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, PermissionCardRevokeError, SecretRevealAudit,
@@ -335,6 +336,16 @@ oplog_payload! {
         EntityInvocation {
             metadata: Vec<u8>,
             input: TypedSchemaValue,
+        },
+        GolemToolInvocationRejected {
+            tool_name: String,
+            command_path: Vec<String>,
+            input: Option<TypedSchemaValue>,
+            input_decode_failure: Option<ToolInputDecodeFailure>,
+            has_stdin: bool,
+            has_stdout: bool,
+            call_mode: EntityCallMode,
+            error: SerializableToolRpcError,
         },
     }
 }
@@ -888,7 +899,8 @@ pub mod host_functions {
         (GolemApiGetAgents => "golem::api::get-agents", "get-next", GolemApiGetAgents, GolemApiAgents),
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
         (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
-        (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation)
+        (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation),
+        (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation)
     }
 }
 

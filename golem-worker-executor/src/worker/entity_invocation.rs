@@ -13,8 +13,12 @@
 // limitations under the License.
 
 use super::entity_slot::EntitySlot;
-use super::instance::InstanceHost;
-use super::owner_lane::{EntityCallMode, OwnerInvocationId, OwnerLane, OwnerLaneError};
+use super::entity_slot::EntitySlotRegistration;
+use super::instance::{ClosureEntityInvocationBody, EntityInvocationBody, InstanceHost};
+use super::owner_lane::{
+    EntityCallMode, OwnerInvocationId, OwnerInvocationPermit, OwnerInvocationTicket, OwnerLane,
+    OwnerLaneError, OwnerLaneWait,
+};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::entity::{EntityInvocationScope, InvocationExecutionMode};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -80,7 +84,114 @@ pub struct EntityInvocationHandle<R> {
     invocation: OwnerInvocationId,
     mode: EntityCallMode,
     lane: OwnerLane,
-    task: Option<JoinHandle<Result<R, WorkerExecutorError>>>,
+    lane_await_required: bool,
+    task: Option<JoinHandle<EntityInvocationCompletion<R>>>,
+}
+
+pub(crate) struct EntityInvocationCompletion<R> {
+    result: Result<R, WorkerExecutorError>,
+    resources: EntityInvocationResources,
+}
+
+pub(crate) struct EntityInvocationResources {
+    hosted: Option<Box<dyn RetainedEntityStore>>,
+    registration: Option<EntitySlotRegistration>,
+    permit: Option<OwnerInvocationPermit>,
+    lane_wait: Option<OwnerLaneWait>,
+}
+
+trait RetainedEntityStore: Send {
+    fn prepare_parent_end(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>>;
+
+    fn settle(
+        self: Box<Self>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send>>;
+}
+
+struct RetainedHostedInstance<Ctx: WorkerCtx> {
+    hosted: super::instance::HostedInstance<Ctx>,
+    invocation: OwnerInvocationId,
+}
+
+impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedHostedInstance<Ctx> {
+    fn prepare_parent_end(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>> {
+        Box::pin(async {
+            self.hosted
+                .prepare_tool_parent_end(self.invocation.clone())
+                .await
+        })
+    }
+
+    fn settle(
+        mut self: Box<Self>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send>> {
+        Box::pin(async move {
+            self.hosted.settle_tool_children(self.invocation).await?;
+            Ok(())
+        })
+    }
+}
+
+impl<R> EntityInvocationCompletion<R> {
+    pub(crate) fn into_parts(self) -> (Result<R, WorkerExecutorError>, EntityInvocationResources) {
+        (self.result, self.resources)
+    }
+}
+
+impl EntityInvocationResources {
+    pub(crate) async fn prepare_parent_end(&mut self) -> Result<(), WorkerExecutorError> {
+        let Some(mut hosted) = self.hosted.take() else {
+            return Ok(());
+        };
+        let (hosted, result) = tokio::spawn(async move {
+            let result = hosted.prepare_parent_end().await;
+            (hosted, result)
+        })
+        .await
+        .map_err(|error| {
+            WorkerExecutorError::runtime(format!(
+                "Retained entity Store parent-end preparation task failed: {error}"
+            ))
+        })?;
+        self.hosted = Some(hosted);
+        result
+    }
+
+    pub(crate) fn release_for_owner_failure(&mut self) {
+        if let Some(permit) = self.permit.take() {
+            permit.complete();
+        }
+        drop(self.registration.take());
+    }
+
+    pub(crate) async fn settle_after_parent_end(mut self) -> Result<(), WorkerExecutorError> {
+        if let Some(permit) = self.permit.take() {
+            permit.complete();
+        }
+        let settlement = match self.hosted.take() {
+            Some(hosted) => tokio::spawn(hosted.settle()).await.map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "Retained entity Store settlement task failed: {error}"
+                ))
+            })?,
+            None => Ok(()),
+        };
+        drop(self.registration.take());
+        if let Some(lane_wait) = self.lane_wait.take() {
+            lane_wait.wait().await;
+        }
+        settlement?;
+        Ok(())
+    }
+
+    pub(crate) async fn release(mut self) -> Result<(), WorkerExecutorError> {
+        self.prepare_parent_end().await?;
+        self.settle_after_parent_end().await
+    }
 }
 
 impl<R: Send + 'static> EntityInvocationHandle<R> {
@@ -104,7 +215,17 @@ impl<R: Send + 'static> EntityInvocationHandle<R> {
 
     /// Waits for a result and makes a deferred capable body causally eligible at this await point.
     pub async fn await_result(self, caller: &OwnerInvocationId) -> Result<R, WorkerExecutorError> {
-        let lane_wait = if self.mode != EntityCallMode::Synchronous {
+        let completion = self.await_completion(caller).await?;
+        let (result, resources) = completion.into_parts();
+        resources.release().await?;
+        result
+    }
+
+    pub(crate) async fn await_completion(
+        self,
+        caller: &OwnerInvocationId,
+    ) -> Result<EntityInvocationCompletion<R>, WorkerExecutorError> {
+        let lane_wait = if self.mode != EntityCallMode::Synchronous && self.lane_await_required {
             match self
                 .lane
                 .await_invocations(caller, [self.invocation.clone()])
@@ -121,15 +242,22 @@ impl<R: Send + 'static> EntityInvocationHandle<R> {
         } else {
             None
         };
-        let result = self.join().await;
-        if let Some(lane_wait) = lane_wait {
-            lane_wait.wait().await;
-        }
-        result
+        let mut completion = self.join_completion().await?;
+        completion.resources.lane_wait = lane_wait;
+        Ok(completion)
     }
 
     /// Joins after eligibility was established by a batched poll through [`OwnerLane`].
-    pub async fn join(mut self) -> Result<R, WorkerExecutorError> {
+    pub async fn join(self) -> Result<R, WorkerExecutorError> {
+        let completion = self.join_completion().await?;
+        let (result, resources) = completion.into_parts();
+        resources.release().await?;
+        result
+    }
+
+    pub(crate) async fn join_completion(
+        mut self,
+    ) -> Result<EntityInvocationCompletion<R>, WorkerExecutorError> {
         let task = self
             .task
             .take()
@@ -140,7 +268,7 @@ impl<R: Send + 'static> EntityInvocationHandle<R> {
             } else {
                 format!("Entity body task was cancelled: {error}")
             })
-        })?
+        })
     }
 }
 
@@ -166,9 +294,6 @@ where
     Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
     Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
 {
-    let registration = slot.register(&scope)?;
-    let invocation_id = scope.invocation_id().clone();
-    let invocation = OwnerInvocationId::Entity(invocation_id.clone());
     let ticket = lane
         .register_entity(
             parent,
@@ -177,6 +302,62 @@ where
             scope.activation().filesystem(),
         )
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    start_entity_invocation_inner(
+        host,
+        slot,
+        lane,
+        scope,
+        mode,
+        Some(ticket),
+        ClosureEntityInvocationBody(invoke),
+        finalize,
+    )
+}
+
+/// Starts a body whose caller already owns the registered and granted lane node. This is used by
+/// staged tool operations, which keep the permit under operation/owner terminal arbitration until
+/// durable completion rather than transferring it into the sidecar task.
+pub(crate) fn start_pre_acquired_entity_invocation<Ctx, R, F, Finalize, Finalized>(
+    host: InstanceHost<Ctx>,
+    slot: Arc<EntitySlot>,
+    lane: OwnerLane,
+    scope: EntityInvocationScope,
+    mode: EntityCallMode,
+    invoke: F,
+    finalize: Finalize,
+) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+where
+    Ctx: WorkerCtx,
+    R: Send + 'static,
+    F: EntityInvocationBody<Ctx, R>,
+    Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+    Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+{
+    start_entity_invocation_inner(host, slot, lane, scope, mode, None, invoke, finalize)
+}
+
+fn start_entity_invocation_inner<Ctx, R, F, Finalize, Finalized>(
+    host: InstanceHost<Ctx>,
+    slot: Arc<EntitySlot>,
+    lane: OwnerLane,
+    scope: EntityInvocationScope,
+    mode: EntityCallMode,
+    ticket: Option<OwnerInvocationTicket>,
+    invoke: F,
+    finalize: Finalize,
+) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+where
+    Ctx: WorkerCtx,
+    R: Send + 'static,
+    F: EntityInvocationBody<Ctx, R>,
+    Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+    Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+{
+    let registration = slot.register(&scope)?;
+    let invocation_id = scope.invocation_id().clone();
+    let invocation = OwnerInvocationId::Entity(invocation_id.clone());
+    let task_invocation = invocation.clone();
+    let lane_await_required = ticket.is_some();
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let entity = scope.invocation_id().entity();
     let executable = scope.activation().executable();
@@ -196,35 +377,60 @@ where
         async move {
             let mut metrics = EntityInvocationMetricsGuard::new(&scope);
             debug!("Entity invocation started");
+            let mut permit = None;
+            let mut hosted = None;
             let result = if start_rx.await.is_err() {
-                finalize(Err(WorkerExecutorError::runtime(
+                Err(WorkerExecutorError::runtime(
                     "Entity invocation was fenced before its body started",
-                )))
-                .await
+                ))
             } else {
-                match ticket.acquire().await {
-                    Ok(permit) => {
-                        let result = match host.instantiate_entity_scoped(&scope).await {
-                            Ok(hosted) => {
-                                hosted
-                                    .invoke_scoped_registered(scope, &registration, invoke)
-                                    .await
-                            }
-                            Err(error) => Err(error),
-                        };
-                        let finalized = finalize(result).await;
-                        drop(registration);
-                        permit.complete_and_wait().await;
-                        finalized
+                permit = match ticket {
+                    Some(ticket) => match ticket.acquire().await {
+                        Ok(permit) => Some(permit),
+                        Err(error) => {
+                            let result =
+                                finalize(Err(WorkerExecutorError::runtime(error.to_string())))
+                                    .await;
+                            metrics.finish(&result);
+                            return EntityInvocationCompletion {
+                                result,
+                                resources: EntityInvocationResources {
+                                    hosted,
+                                    registration: Some(registration),
+                                    permit,
+                                    lane_wait: None,
+                                },
+                            };
+                        }
+                    },
+                    None => None,
+                };
+                match host.instantiate_entity_scoped(&scope).await {
+                    Ok(hosted_instance) => {
+                        let (result, retained) = hosted_instance
+                            .invoke_scoped_registered_retained(scope, &registration, invoke)
+                            .await;
+                        hosted = Some(Box::new(RetainedHostedInstance {
+                            hosted: retained,
+                            invocation: task_invocation.clone(),
+                        }) as Box<dyn RetainedEntityStore>);
+                        result
                     }
-                    Err(error) => {
-                        finalize(Err(WorkerExecutorError::runtime(error.to_string()))).await
-                    }
+                    Err(error) => Err(error),
                 }
             };
+            let result = finalize(result).await;
             metrics.finish(&result);
             debug!(succeeded = result.is_ok(), "Entity invocation finished");
-            result
+            EntityInvocationCompletion {
+                result,
+                resources: EntityInvocationResources {
+                    hosted,
+                    registration: Some(registration),
+                    permit,
+                    lane_wait: None,
+                },
+            }
         }
         .instrument(span),
     );
@@ -244,6 +450,112 @@ where
         invocation,
         mode,
         lane,
+        lane_await_required,
         task: Some(task),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::OplogIndex;
+    use std::sync::Mutex;
+    use test_r::test;
+
+    fn completed_handle(
+        lane: OwnerLane,
+        lane_await_required: bool,
+    ) -> EntityInvocationHandle<&'static str> {
+        let task = tokio::spawn(async {
+            EntityInvocationCompletion {
+                result: Ok("completed"),
+                resources: EntityInvocationResources {
+                    hosted: None,
+                    registration: None,
+                    permit: None,
+                    lane_wait: None,
+                },
+            }
+        });
+        EntityInvocationHandle {
+            invocation: OwnerInvocationId::Agent(OplogIndex::from_u64(2)),
+            mode: EntityCallMode::Asynchronous,
+            lane,
+            lane_await_required,
+            task: Some(task),
+        }
+    }
+
+    #[test]
+    async fn pre_acquired_body_does_not_repeat_lane_await_after_parent_end() {
+        let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "owner".to_string(),
+            },
+        ));
+        let inactive_parent = OwnerInvocationId::Agent(OplogIndex::from_u64(1));
+
+        let completion = completed_handle(lane.clone(), false)
+            .await_completion(&inactive_parent)
+            .await
+            .expect("pre-acquired body only joins its completion");
+        assert_eq!(completion.result.unwrap(), "completed");
+
+        let error = match completed_handle(lane, true)
+            .await_completion(&inactive_parent)
+            .await
+        {
+            Ok(_) => panic!("ordinary asynchronous body must require an active caller"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("is not active"));
+    }
+
+    struct RecordingStore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl RetainedEntityStore for RecordingStore {
+        fn prepare_parent_end(
+            &mut self,
+        ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>> {
+            Box::pin(async {
+                self.events.lock().unwrap().push("prepare");
+                Ok(())
+            })
+        }
+
+        fn settle(
+            self: Box<Self>,
+        ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send>> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("settle");
+                Ok(())
+            })
+        }
+    }
+
+    #[test]
+    async fn retained_store_prepares_before_terminal_commit_and_settlement() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut resources = EntityInvocationResources {
+            hosted: Some(Box::new(RecordingStore {
+                events: events.clone(),
+            })),
+            registration: None,
+            permit: None,
+            lane_wait: None,
+        };
+
+        resources.prepare_parent_end().await.unwrap();
+        events.lock().unwrap().push("terminal");
+        resources.settle_after_parent_end().await.unwrap();
+
+        assert_eq!(*events.lock().unwrap(), ["prepare", "terminal", "settle"]);
+    }
 }

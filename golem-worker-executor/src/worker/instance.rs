@@ -17,6 +17,7 @@ use super::entity_slot::{EntitySlot, EntitySlotRegistration};
 use super::owner_lane::OwnerLane;
 use super::state_actor::OwnerCommitController;
 use crate::durable_host::replay_state::ReplayState;
+use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_storage_meter::AgentStorageMeter;
@@ -48,7 +49,7 @@ use tempfile::TempDir;
 use tokio::sync::watch;
 use tracing::warn;
 use wasmtime::component::{Component, Instance};
-use wasmtime::{Store, StoreMemory, UpdateDeadline};
+use wasmtime::{AsContextMut, Store, StoreMemory, UpdateDeadline};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LinearMemoryEnumerationError {
@@ -427,14 +428,127 @@ pub struct OwnerExecution {
     replay: tokio::sync::RwLock<Option<ReplayState>>,
     commit: Arc<OwnerCommitController>,
     lane: OwnerLane,
-    historical_reconstructions: watch::Sender<usize>,
-    historical_reconstruction_bodies: watch::Sender<HashSet<OplogIndex>>,
+    primary_tail_work: crate::durable_host::tail_work::TailWorkTracker,
+    tool_operations: Arc<OwnerToolOperations>,
+    deferred_tool_admission: Arc<DeferredAdmissionTable>,
+    reached_oplog_marker: AtomicU64,
+    historical_reconstructions: Arc<HistoricalReconstructionTracker>,
+}
+
+#[derive(Default)]
+struct HistoricalReconstructionState {
+    resolved_before_registration: HashSet<OplogIndex>,
+}
+
+struct HistoricalReconstructionTracker {
+    state: Mutex<HistoricalReconstructionState>,
+    active_fences: watch::Sender<HashSet<OplogIndex>>,
+    active_bodies: watch::Sender<HashSet<OplogIndex>>,
 }
 
 pub(crate) struct HistoricalReconstruction {
-    active: watch::Sender<usize>,
-    active_bodies: watch::Sender<HashSet<OplogIndex>>,
+    tracker: Arc<HistoricalReconstructionTracker>,
+    start_index: OplogIndex,
     body: Option<OplogIndex>,
+}
+
+impl HistoricalReconstructionTracker {
+    fn new() -> Arc<Self> {
+        let (active_fences, _) = watch::channel(HashSet::new());
+        let (active_bodies, _) = watch::channel(HashSet::new());
+        Arc::new(Self {
+            state: Mutex::new(HistoricalReconstructionState::default()),
+            active_fences,
+            active_bodies,
+        })
+    }
+
+    fn register(self: &Arc<Self>, start_index: OplogIndex) -> HistoricalReconstruction {
+        let active = {
+            let mut state = self.state.lock().unwrap();
+            if !state.resolved_before_registration.remove(&start_index) {
+                self.active_fences.send_modify(|active| {
+                    assert!(
+                        active.insert(start_index),
+                        "historical entity reconstruction at {start_index} was registered twice"
+                    );
+                });
+            }
+            self.active_bodies.send_modify(|active| {
+                assert!(
+                    active.insert(start_index),
+                    "entity body reconstruction at {start_index} was registered twice"
+                );
+            });
+            self.active_fences.borrow().len()
+        };
+        tracing::debug!(
+            start_index = start_index.as_u64(),
+            active,
+            "Registered historical entity reconstruction"
+        );
+        HistoricalReconstruction {
+            tracker: self.clone(),
+            start_index,
+            body: Some(start_index),
+        }
+    }
+
+    fn release_incomplete(&self, incomplete_calls: &HashSet<OplogIndex>) -> (Vec<u64>, usize) {
+        let mut state = self.state.lock().unwrap();
+        let mut released = Vec::new();
+        let mut unresolved = Vec::new();
+        let mut remaining = 0;
+        self.active_fences.send_modify(|active| {
+            for start_index in incomplete_calls {
+                if active.remove(start_index) {
+                    released.push(start_index.as_u64());
+                } else {
+                    unresolved.push(*start_index);
+                }
+            }
+            remaining = active.len();
+        });
+        state.resolved_before_registration.extend(unresolved);
+        (released, remaining)
+    }
+
+    fn settle_fence(&self, start_index: OplogIndex) -> (bool, usize) {
+        let _state = self.state.lock().unwrap();
+        let mut removed = false;
+        let mut remaining = 0;
+        self.active_fences.send_modify(|active| {
+            removed = active.remove(&start_index);
+            remaining = active.len();
+        });
+        (removed, remaining)
+    }
+
+    fn settle_body(&self, start_index: OplogIndex) {
+        let _state = self.state.lock().unwrap();
+        self.active_bodies.send_modify(|active| {
+            assert!(
+                active.remove(&start_index),
+                "entity body reconstruction at {start_index} was not registered"
+            );
+        });
+    }
+
+    fn subscribe_fences(&self) -> watch::Receiver<HashSet<OplogIndex>> {
+        self.active_fences.subscribe()
+    }
+
+    fn subscribe_bodies(&self) -> watch::Receiver<HashSet<OplogIndex>> {
+        self.active_bodies.subscribe()
+    }
+
+    fn begin_generation(&self) {
+        self.state
+            .lock()
+            .unwrap()
+            .resolved_before_registration
+            .clear();
+    }
 }
 
 impl OwnerExecution {
@@ -444,16 +558,18 @@ impl OwnerExecution {
         commit: Arc<OwnerCommitController>,
     ) -> Self {
         let lane = OwnerLane::new(owner_id.clone());
-        let (historical_reconstructions, _) = watch::channel(0);
-        let (historical_reconstruction_bodies, _) = watch::channel(HashSet::new());
+        let primary_tail_work = crate::durable_host::tail_work::TailWorkTracker::new();
         Self {
             owner_id,
             oplog,
             replay: tokio::sync::RwLock::new(None),
             commit,
             lane,
-            historical_reconstructions,
-            historical_reconstruction_bodies,
+            tool_operations: OwnerToolOperations::new(),
+            primary_tail_work,
+            deferred_tool_admission: Arc::new(DeferredAdmissionTable::default()),
+            reached_oplog_marker: AtomicU64::new(OplogIndex::NONE.into()),
+            historical_reconstructions: HistoricalReconstructionTracker::new(),
         }
     }
 
@@ -469,35 +585,76 @@ impl OwnerExecution {
         self.lane.clone()
     }
 
+    pub fn tool_operation_metadata(&self) -> crate::durable_host::tool::ToolOperationSetMetadata {
+        self.tool_operations.metadata()
+    }
+
+    pub(crate) fn tool_operations(&self) -> Arc<OwnerToolOperations> {
+        self.tool_operations.clone()
+    }
+
+    pub(crate) fn primary_tail_work_tracker(
+        &self,
+    ) -> crate::durable_host::tail_work::TailWorkTracker {
+        self.primary_tail_work.clone()
+    }
+
+    pub(crate) fn deferred_tool_admission(&self) -> Arc<DeferredAdmissionTable> {
+        self.deferred_tool_admission.clone()
+    }
+
+    pub(crate) fn mark_reached_oplog_marker(&self, marker: OplogIndex) {
+        self.reached_oplog_marker
+            .store(marker.into(), Ordering::Release);
+    }
+
+    pub fn reached_oplog_marker(&self) -> Option<OplogIndex> {
+        let marker = OplogIndex::from_u64(self.reached_oplog_marker.load(Ordering::Acquire));
+        (marker != OplogIndex::NONE).then_some(marker)
+    }
+
     pub(crate) fn register_historical_reconstruction(
         &self,
         start_index: OplogIndex,
     ) -> HistoricalReconstruction {
-        self.historical_reconstructions
-            .send_modify(|active| *active += 1);
-        self.historical_reconstruction_bodies.send_modify(|active| {
-            assert!(
-                active.insert(start_index),
-                "entity body reconstruction at {start_index} was registered twice"
+        self.historical_reconstructions.register(start_index)
+    }
+
+    pub(crate) fn release_incomplete_historical_reconstruction_fences(
+        &self,
+        incomplete_calls: &HashSet<OplogIndex>,
+    ) {
+        if incomplete_calls.is_empty() {
+            return;
+        }
+        let (mut released, remaining) = self
+            .historical_reconstructions
+            .release_incomplete(incomplete_calls);
+        if !released.is_empty() {
+            released.sort_unstable();
+            tracing::debug!(
+                ?released,
+                active = remaining,
+                "Released incomplete historical entity reconstruction fences"
             );
-        });
-        HistoricalReconstruction {
-            active: self.historical_reconstructions.clone(),
-            active_bodies: self.historical_reconstruction_bodies.clone(),
-            body: Some(start_index),
         }
     }
 
     pub(crate) fn historical_reconstruction_bodies(&self) -> watch::Receiver<HashSet<OplogIndex>> {
-        self.historical_reconstruction_bodies.subscribe()
+        self.historical_reconstructions.subscribe_bodies()
     }
 
     pub(crate) async fn wait_for_historical_reconstructions(&self) {
-        let mut active = self.historical_reconstructions.subscribe();
+        let mut active = self.historical_reconstructions.subscribe_fences();
+        tracing::debug!(
+            active = active.borrow().len(),
+            "Waiting for historical entity reconstructions"
+        );
         active
-            .wait_for(|active| *active == 0)
+            .wait_for(|active| active.is_empty())
             .await
             .expect("owner execution retains the reconstruction tracker");
+        tracing::debug!("Historical entity reconstructions settled");
     }
 
     pub(crate) async fn begin_replay_generation(
@@ -518,6 +675,11 @@ impl OwnerExecution {
         deleted_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
+        self.tool_operations.begin_generation()?;
+        self.deferred_tool_admission.begin_generation()?;
+        self.historical_reconstructions.begin_generation();
+        self.reached_oplog_marker
+            .store(OplogIndex::NONE.into(), Ordering::Release);
         let replay = ReplayState::new(
             self.owner_id.clone(),
             self.oplog.clone(),
@@ -552,23 +714,21 @@ impl OwnerExecution {
 impl Drop for HistoricalReconstruction {
     fn drop(&mut self) {
         self.body_settled();
-        self.active.send_modify(|active| {
-            *active = active
-                .checked_sub(1)
-                .expect("historical reconstruction count underflowed");
-        });
+        let (removed, remaining) = self.tracker.settle_fence(self.start_index);
+        if removed {
+            tracing::debug!(
+                start_index = self.start_index.as_u64(),
+                active = remaining,
+                "Historical entity reconstruction settled"
+            );
+        }
     }
 }
 
 impl HistoricalReconstruction {
     pub(crate) fn body_settled(&mut self) {
         if let Some(start_index) = self.body.take() {
-            self.active_bodies.send_modify(|active| {
-                assert!(
-                    active.remove(&start_index),
-                    "entity body reconstruction at {start_index} was not registered"
-                );
-            });
+            self.tracker.settle_body(start_index);
         }
     }
 }
@@ -1005,9 +1165,54 @@ pub struct HostedInstance<Ctx: WorkerCtx> {
     _component_charge: Option<WorkerComponentCharge>,
 }
 
+pub trait EntityInvocationBody<Ctx: WorkerCtx, R>: Send + 'static {
+    fn invoke<'a>(
+        self,
+        instance: &'a Instance,
+        store: &'a mut Store<Ctx>,
+    ) -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>;
+}
+
+pub(crate) struct ClosureEntityInvocationBody<F>(pub(crate) F);
+
+impl<Ctx, R, F> EntityInvocationBody<Ctx, R> for ClosureEntityInvocationBody<F>
+where
+    Ctx: WorkerCtx,
+    F: Send + 'static,
+    F: for<'a> FnOnce(
+        &'a Instance,
+        &'a mut Store<Ctx>,
+    )
+        -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>,
+{
+    fn invoke<'a>(
+        self,
+        instance: &'a Instance,
+        store: &'a mut Store<Ctx>,
+    ) -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>> {
+        self.0(instance, store)
+    }
+}
+
 impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     pub(crate) fn into_parts(self) -> (Instance, Store<Ctx>) {
         (self.instance, self.store.into_inner())
+    }
+
+    pub(crate) async fn prepare_tool_parent_end(
+        &mut self,
+        parent: crate::worker::owner_lane::OwnerInvocationId,
+    ) -> Result<(), WorkerExecutorError> {
+        crate::durable_host::tool::prepare_tool_parent_end(&mut self.store.as_context_mut(), parent)
+            .await
+    }
+
+    pub(crate) async fn settle_tool_children(
+        &mut self,
+        parent: crate::worker::owner_lane::OwnerInvocationId,
+    ) -> Result<(), WorkerExecutorError> {
+        crate::durable_host::tool::settle_tool_children(&mut self.store.as_context_mut(), parent)
+            .await
     }
 
     /// Runs one entity export with an installed invocation scope and then destroys its Store.
@@ -1034,7 +1239,8 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
                 .as_ref()
                 .ok_or_else(|| WorkerExecutorError::runtime("Entity instance has no slot"))?
                 .register(&scope)?;
-            self.invoke_scoped_inner(scope, &registration, invoke).await
+            self.invoke_scoped_inner(scope, &registration, ClosureEntityInvocationBody(invoke))
+                .await
         })
         .await
         .map_err(|error| {
@@ -1046,23 +1252,20 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         })?
     }
 
-    pub(crate) async fn invoke_scoped_registered<R, F>(
-        self,
+    pub(crate) async fn invoke_scoped_registered_retained<R, F>(
+        mut self,
         scope: EntityInvocationScope,
         registration: &EntitySlotRegistration,
         invoke: F,
-    ) -> Result<R, WorkerExecutorError>
+    ) -> (Result<R, WorkerExecutorError>, Self)
     where
         R: Send + 'static,
-        F: Send + 'static,
-        F: for<'a> FnOnce(
-            &'a Instance,
-            &'a mut Store<Ctx>,
-        ) -> Pin<
-            Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
-        >,
+        F: EntityInvocationBody<Ctx, R>,
     {
-        self.invoke_scoped_inner(scope, registration, invoke).await
+        let result = self
+            .invoke_scoped_inner_retained(scope, registration, invoke)
+            .await;
+        (result, self)
     }
 
     async fn invoke_scoped_inner<R, F>(
@@ -1073,13 +1276,21 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     ) -> Result<R, WorkerExecutorError>
     where
         R: Send + 'static,
-        F: Send + 'static,
-        F: for<'a> FnOnce(
-            &'a Instance,
-            &'a mut Store<Ctx>,
-        ) -> Pin<
-            Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
-        >,
+        F: EntityInvocationBody<Ctx, R>,
+    {
+        self.invoke_scoped_inner_retained(scope, registration, invoke)
+            .await
+    }
+
+    async fn invoke_scoped_inner_retained<R, F>(
+        &mut self,
+        scope: EntityInvocationScope,
+        registration: &EntitySlotRegistration,
+        invoke: F,
+    ) -> Result<R, WorkerExecutorError>
+    where
+        R: Send + 'static,
+        F: EntityInvocationBody<Ctx, R>,
     {
         let OwnerRuntime::Entity(entity) = &self.runtime else {
             return Err(WorkerExecutorError::runtime(
@@ -1111,7 +1322,7 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
                 .data_mut()
                 .set_entity_invocation_scope(Some(scope))?,
         }
-        let result = std::panic::AssertUnwindSafe(invoke(&self.instance, &mut self.store))
+        let result = std::panic::AssertUnwindSafe(invoke.invoke(&self.instance, &mut self.store))
             .catch_unwind()
             .await;
         let cleanup = self.finish_scoped_invocation();
@@ -1136,15 +1347,13 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     }
 
     fn finish_scoped_invocation(&mut self) -> Result<(), WorkerExecutorError> {
-        let scope_cleanup = self.store.data_mut().set_entity_invocation_scope(None);
-        self.store.data().set_suspended();
-        scope_cleanup
+        self.store.data_mut().set_entity_invocation_scope(None)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{OwnerFilesystem, StoreFuelGuard};
+    use super::{HistoricalReconstructionTracker, OwnerFilesystem, StoreFuelGuard};
     use crate::worker::owner_lane::OwnerLane;
     use crate::workerctx::FuelManagement;
     use golem_common::model::component::ComponentId;
@@ -1152,6 +1361,7 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{AgentId, OwnedAgentId};
+    use std::collections::HashSet;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use test_r::test;
@@ -1205,6 +1415,73 @@ mod tests {
     }
 
     #[test]
+    async fn incomplete_reconstruction_release_before_registration_cannot_install_a_late_fence() {
+        let tracker = HistoricalReconstructionTracker::new();
+        let start = OplogIndex::from_u64(12);
+        let release_start = Arc::new(tokio::sync::Barrier::new(2));
+        let release_done = Arc::new(tokio::sync::Barrier::new(2));
+        let releasing_tracker = tracker.clone();
+        let releasing_start = release_start.clone();
+        let releasing_done = release_done.clone();
+        let release = tokio::spawn(async move {
+            releasing_start.wait().await;
+            assert_eq!(
+                releasing_tracker.release_incomplete(&HashSet::from([start])),
+                (Vec::new(), 0)
+            );
+            releasing_done.wait().await;
+        });
+
+        release_start.wait().await;
+        release_done.wait().await;
+        release.await.unwrap();
+        let mut active_fences = tracker.subscribe_fences();
+        let active_bodies = tracker.subscribe_bodies();
+        let mut reconstruction = tracker.register(start);
+
+        assert!(active_fences.borrow().is_empty());
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            active_fences.wait_for(HashSet::is_empty),
+        )
+        .await
+        .expect("primary fence wait must not block after release-before-registration")
+        .expect("tracker retains the primary-fence sender");
+        assert!(!active_fences.has_changed().unwrap());
+        assert_eq!(&*active_bodies.borrow(), &HashSet::from([start]));
+        reconstruction.body_settled();
+        assert!(active_bodies.borrow().is_empty());
+        drop(reconstruction);
+        assert!(active_fences.borrow().is_empty());
+
+        tracker.begin_generation();
+        let reconstruction = tracker.register(start);
+        assert_eq!(&*active_fences.borrow(), &HashSet::from([start]));
+        drop(reconstruction);
+        assert!(active_fences.borrow().is_empty());
+    }
+
+    #[test]
+    fn incomplete_reconstruction_registration_before_release_removes_the_existing_fence() {
+        let tracker = HistoricalReconstructionTracker::new();
+        let start = OplogIndex::from_u64(13);
+        let active_fences = tracker.subscribe_fences();
+        let active_bodies = tracker.subscribe_bodies();
+        let mut reconstruction = tracker.register(start);
+
+        assert_eq!(&*active_fences.borrow(), &HashSet::from([start]));
+        assert_eq!(
+            tracker.release_incomplete(&HashSet::from([start])),
+            (vec![start.as_u64()], 0)
+        );
+        assert!(active_fences.borrow().is_empty());
+        assert_eq!(&*active_bodies.borrow(), &HashSet::from([start]));
+        reconstruction.body_settled();
+        drop(reconstruction);
+        assert!(active_bodies.borrow().is_empty());
+    }
+
+    #[test]
     async fn owner_filesystem_generation_fences_stale_attachments_and_inspection_uses_lane()
     -> anyhow::Result<()> {
         let agent_id = AgentId {
@@ -1236,6 +1513,28 @@ mod tests {
         drop(primary);
         drop(inspection.await??);
 
+        let primary = lane
+            .enter_primary(OplogIndex::from_u64(2))?
+            .acquire()
+            .await?;
+        let updating_filesystem = filesystem.clone();
+        let updating_lane = lane.clone();
+        let updating_owner = owner_id.clone();
+        let update = tokio::spawn(async move {
+            updating_filesystem
+                .begin_primary_generation(&updating_lane, None, &updating_owner)
+                .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            !update.is_finished(),
+            "filesystem generation update must wait for the active owner lane holder"
+        );
+        drop(primary);
+        let updated = update.await??;
+        assert!(updated.generation() > first.generation());
+        assert!(!updated.path().join("old-generation").exists());
+
         filesystem.fence();
         assert!(filesystem.attach_entity().is_err());
         assert!(
@@ -1246,7 +1545,7 @@ mod tests {
         let second = filesystem
             .begin_primary_generation(&lane, None, &owner_id)
             .await?;
-        assert!(second.generation() > first.generation());
+        assert!(second.generation() > updated.generation());
         assert!(!second.path().join("old-generation").exists());
         assert!(
             filesystem.acquire_inspection(&lane, &first).await.is_err(),

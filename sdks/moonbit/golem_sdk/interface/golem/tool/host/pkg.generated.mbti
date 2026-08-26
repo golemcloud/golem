@@ -8,7 +8,15 @@ import {
 }
 
 // Values
+pub fn create_stdin() -> (ToolStdinWriter, ToolStdin, ToolStdinClosed)
+
+pub fn create_stdin_from_stream(@async-core.Stream[Result[FixedArray[Byte], ByteStreamFailure]]) -> ToolStdin
+
+pub fn create_stdout() -> (ToolStdout, @async-core.Stream[Result[FixedArray[Byte], ByteStreamFailure]])
+
 pub fn get_all_tools() -> Array[RegisteredTool]
+
+pub async fn get_invoke_results(Array[FutureInvokeResult]) -> Array[Result[@common.InvocationResult, RpcError]]
 
 pub fn get_tool(String) -> RegisteredTool?
 
@@ -19,9 +27,29 @@ pub(all) suberror RpcError {
   NotFound(String)
   RemoteInternalError(String)
   RemoteToolError(@common.ToolError)
+  Cancelled
+  ResourceExhausted(String)
+} derive(Eq, Show)
+
+pub(all) suberror StreamWriteError {
+  Closed(ByteStreamCloseCause)
+  ConcurrentOperation
 } derive(Eq, Show)
 
 // Types and methods
+pub(all) enum ByteStreamCloseCause {
+  Finished
+  Failed(ByteStreamFailure)
+  ConsumerCancelled
+} derive(Eq, Show)
+
+pub(all) enum ByteStreamFailure {
+  Cancelled
+  Abandoned
+  ResourceExhausted
+  Failed(String)
+} derive(Eq, Show)
+
 pub(all) struct FutureInvokeResult(Int) derive(Eq, Show)
 pub fn FutureInvokeResult::cancel(Self) -> Unit
 pub fn FutureInvokeResult::drop(Self) -> Unit
@@ -33,11 +61,33 @@ pub(all) struct RegisteredTool {
 } derive(Eq, Show)
 
 pub(all) struct ToolRpc(Int) derive(Eq, Show)
-pub async fn ToolRpc::async_invoke_and_await(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> FutureInvokeResult
+pub fn ToolRpc::async_invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> FutureInvokeResult
 pub fn ToolRpc::drop(Self) -> Unit
-pub async fn ToolRpc::invoke(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[Unit, RpcError]
-pub async fn ToolRpc::invoke_and_await(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[@common.InvocationResult, RpcError]
+pub fn ToolRpc::invoke(Self, Array[String], @types.TypedSchemaValue, ToolStdin?) -> Result[Unit, RpcError]
+pub async fn ToolRpc::invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> Result[@common.InvocationResult, RpcError]
 pub fn ToolRpc::tool_rpc(String) -> Self
+
+pub(all) struct ToolStdin(Int) derive(Eq, Show)
+pub fn ToolStdin::drop(Self) -> Unit
+
+pub(all) struct ToolStdinClosed(Int) derive(Eq, Show)
+pub fn ToolStdinClosed::drop(Self) -> Unit
+pub async fn ToolStdinClosed::wait(Self) -> ByteStreamCloseCause
+
+pub(all) struct ToolStdinWriter(Int) derive(Eq, Show)
+pub fn ToolStdinWriter::drop(Self) -> Unit
+pub async fn ToolStdinWriter::fail(Self, ByteStreamFailure) -> Result[Unit, StreamWriteError]
+pub async fn ToolStdinWriter::finish(Self) -> Result[Unit, StreamWriteError]
+pub async fn ToolStdinWriter::write(Self, FixedArray[Byte]) -> Result[Unit, StreamWriteError]
+
+pub(all) struct ToolStdout(Int) derive(Eq, Show)
+pub fn ToolStdout::drop(Self) -> Unit
+
+pub(all) struct ToolStdoutWriter(Int) derive(Eq, Show)
+pub fn ToolStdoutWriter::drop(Self) -> Unit
+pub async fn ToolStdoutWriter::fail(Self, ByteStreamFailure) -> Result[Unit, StreamWriteError]
+pub async fn ToolStdoutWriter::finish(Self) -> Result[Unit, StreamWriteError]
+pub async fn ToolStdoutWriter::write(Self, FixedArray[Byte]) -> Result[Unit, StreamWriteError]
 
 // Type aliases
 

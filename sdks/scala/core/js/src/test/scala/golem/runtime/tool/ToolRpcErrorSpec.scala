@@ -20,9 +20,10 @@ import golem.host.ToolWireInterop
 import golem.runtime.tool.host.ToolHostApi
 import golem.schema.{IntoSchema, TypedSchemaValue}
 import golem.schema.wire.SchemaWire
-import golem.tool.{ToolInvokeError, ToolRpcFailure}
+import golem.tool.{ByteStreamCloseCause, ByteStreamFailure, StreamWriteError, ToolInvokeError, ToolRpcFailure}
 import golem.tool.wire.WitToolError
 import zio.test._
+import zio.ZIO
 
 import scala.scalajs.js
 
@@ -79,6 +80,38 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
         ToolHostApi.decodeRpcFailure(variant("mystery", "x")) ==
           ToolRpcFailure.ProtocolError("unknown rpc error `mystery`")
       )
+    },
+    test("decodes stream write errors and nested close failures") {
+      val failed = variant("failed", variant("failed", "source failed"))
+      assertTrue(
+        ToolHostApi
+          .decodeStreamWriteError(js.Dynamic.literal("tag" -> "concurrent-operation"))
+          .contains(StreamWriteError.ConcurrentOperation),
+        ToolHostApi
+          .decodeStreamWriteError(variant("closed", js.Dynamic.literal("tag" -> "finished")))
+          .contains(StreamWriteError.Closed(ByteStreamCloseCause.Finished)),
+        ToolHostApi
+          .decodeStreamWriteError(variant("closed", failed))
+          .contains(
+            StreamWriteError.Closed(ByteStreamCloseCause.Failed(ByteStreamFailure.Failed("source failed")))
+          ),
+        ToolHostApi.decodeStreamWriteError(js.Dynamic.literal("tag" -> "unknown")).isEmpty
+      )
+    },
+    test("maps a rejected host writer promise to its typed stream error") {
+      val rejection = variant("closed", js.Dynamic.literal("tag" -> "consumer-cancelled"))
+      val writer    = js.Dynamic
+        .literal(
+          "write" -> js.Any.fromFunction1((_: js.typedarray.Uint8Array) =>
+            js.Promise.reject(rejection).asInstanceOf[js.Promise[Unit]]
+          ),
+          "finish" -> js.Any.fromFunction0(() => js.Promise.resolve[Unit](())),
+          "fail"   -> js.Any.fromFunction1((_: js.Any) => js.Promise.resolve[Unit](()))
+        )
+        .asInstanceOf[ToolHostApi.RawToolStdoutWriter]
+      ZIO.fromFuture(_ => new JsToolOutputStream(writer).write(Array[Byte](1))).map { result =>
+        assertTrue(result == Left(StreamWriteError.Closed(ByteStreamCloseCause.ConsumerCancelled)))
+      }
     }
   )
 }

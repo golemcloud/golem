@@ -24,10 +24,7 @@ use crate::tool::arg::parse_arg;
 use crate::tool::command::{CommandAttr, parse_command_into};
 use crate::tool::constraint::parse_constraint;
 use crate::tool::doc::parse_doc_full;
-use crate::tool::helpers::{
-    SeenKeys, fresh_internal_ident, normalize_sdk_paths_in_item_trait, resolve_generated_sdk_paths,
-    to_kebab_case,
-};
+use crate::tool::helpers::{SeenKeys, StreamKind, stream_type, to_kebab_case};
 use crate::tool::ir::{ArgIr, ArgPlacement, CommandIr, ParamIr, ToolDefinitionIr};
 use crate::tool::result::parse_result;
 use proc_macro::TokenStream;
@@ -373,7 +370,8 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
         fn __tool_invoke(
             __command_path: ::std::vec::Vec<::std::string::String>,
             __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
-            __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
+            mut __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
+            mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::host::ToolStdoutWriter>,
             __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
         ) -> golem_rust::agentic::ToolInvokeFuture
         where
@@ -491,7 +489,6 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
             ::std::boxed::Box::pin(async move {
                 fn __encode_success_value<T: golem_rust::IntoSchema + ?Sized>(
                     __value: &T,
-                    __stdout: ::std::option::Option<golem_rust::agentic::InputStream>,
                 ) -> ::std::result::Result<
                     golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult,
                     golem_rust::golem_agentic::exports::golem::tool::guest::ToolError,
@@ -502,19 +499,15 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                         .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidResult(__err.to_string()))?;
                     ::std::result::Result::Ok(golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult {
                         result: ::std::option::Option::Some(__value),
-                        stdout: __stdout,
                     })
                 }
 
-                fn __encode_success_unit(
-                    __stdout: ::std::option::Option<golem_rust::agentic::InputStream>,
-                ) -> ::std::result::Result<
+                fn __encode_success_unit() -> ::std::result::Result<
                     golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult,
                     golem_rust::golem_agentic::exports::golem::tool::guest::ToolError,
                 > {
                     ::std::result::Result::Ok(golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult {
                         result: ::std::option::Option::None,
-                        stdout: __stdout,
                     })
                 }
 
@@ -596,6 +589,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                             golem_rust::encode_typed_schema_value_owned(__subtool_input)
                                 .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(__err.to_string()))?,
                             __stdin,
+                            __stdout,
                             __principal,
                         ).await;
                     }
@@ -632,21 +626,31 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
         .map(|cmd| {
             let method_ident = &cmd.method_ident;
             let method_name = method_ident.to_string();
-            let has_stdout = cmd
+            let stdout_required = cmd
                 .params
                 .iter()
-                .any(|param| type_last_ident(&param.ty).as_deref() == Some("OutputStream"));
-            let stdout_idents = has_stdout.then(|| {
-                (
-                    fresh_command_local_ident(cmd, "__golem_stdout_writer"),
-                    fresh_command_local_ident(cmd, "__golem_stdout_reader"),
-                )
+                .find_map(|param| match stream_type(&param.ty) {
+                    Some((StreamKind::Output, required)) => Some(required),
+                    _ => None,
+                });
+            let stdout_writer = stdout_required
+                .is_some()
+                .then(|| fresh_command_local_ident(cmd, "__golem_stdout_writer"));
+            let stdout_setup = stdout_writer.as_ref().map(|writer| {
+                if stdout_required == Some(true) {
+                    quote! {
+                        let #writer = golem_rust::agentic::OutputStream::new(__stdout.take().ok_or_else(|| {
+                            golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
+                                "tool invocation did not contain declared stdout stream".to_string()
+                            )
+                        })?);
+                    }
+                } else {
+                    quote! {
+                        let #writer = __stdout.take().map(golem_rust::agentic::OutputStream::new);
+                    }
+                }
             });
-            let stdout_setup = stdout_idents.as_ref().map(|(writer, reader)| quote! {
-                let (#writer, #reader) =
-                    golem_rust::agentic::new_tool_stdout();
-            });
-            let stdout_writer = stdout_idents.as_ref().map(|(writer, _)| writer);
             let args = cmd.params.iter().map(|param| {
                 let ident = &param.ident;
                 let ty = &param.ty;
@@ -655,17 +659,21 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
                     quote! {
                         let #ident = __principal.clone();
                     }
-                } else if type_last_ident(ty).as_deref() == Some("InputStream") {
-                    quote! {
-                        let #ident = __stdin.take().ok_or_else(|| {
-                            golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
-                                "tool invocation did not contain declared stdin stream".to_string()
-                            )
-                        })?;
-                    }
-                } else if type_last_ident(ty).as_deref() == Some("OutputStream") {
-                    quote! {
-                        let #ident = #stdout_writer;
+                } else if let Some((kind, required)) = stream_type(ty) {
+                    match (kind, required) {
+                        (StreamKind::Input, true) => quote! {
+                            let #ident = __stdin.take().ok_or_else(|| {
+                                golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
+                                    "tool invocation did not contain declared stdin stream".to_string()
+                                )
+                            })?;
+                        },
+                        (StreamKind::Input, false) => quote! {
+                            let #ident = __stdin.take();
+                        },
+                        (StreamKind::Output, _) => quote! {
+                            let #ident = #stdout_writer.clone();
+                        },
                     }
                 } else {
                     quote! {
@@ -690,8 +698,26 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
             } else {
                 quote! { __impl.#method_ident(#(#arg_idents),*) }
             };
-            let stdout_reader = stdout_idents.as_ref().map(|(_, reader)| reader);
-            let encode = encode_invocation_result(&cmd.output, call, stdout_reader);
+            let call = if let Some(stdout_writer) = stdout_writer.as_ref() {
+                if stdout_required == Some(true) {
+                    quote! {{
+                        let __golem_result = #call;
+                        let _ = #stdout_writer.finish().await;
+                        __golem_result
+                    }}
+                } else {
+                    quote! {{
+                        let __golem_result = #call;
+                        if let ::std::option::Option::Some(__golem_stdout_writer) = #stdout_writer {
+                            let _ = __golem_stdout_writer.finish().await;
+                        }
+                        __golem_result
+                    }}
+                }
+            } else {
+                call
+            };
+            let encode = encode_invocation_result(&cmd.output, call, None);
             command_match_arm(&method_name, quote! {
                 #stdout_setup
                 #(#args)*
@@ -745,25 +771,20 @@ fn command_match_arm(
 fn encode_invocation_result(
     output: &ReturnType,
     call: proc_macro2::TokenStream,
-    stdout_reader: Option<&syn::Ident>,
+    _stdout_reader: Option<&syn::Ident>,
 ) -> proc_macro2::TokenStream {
     let (ok, err) = split_result(output);
-    let stdout_expr = if let Some(stdout_reader) = stdout_reader {
-        quote! { ::std::option::Option::Some(#stdout_reader) }
-    } else {
-        quote! { ::std::option::Option::None }
-    };
     if err.is_some() {
         match ok {
             Some(_) => quote! {
                 match #call {
-                    ::std::result::Result::Ok(__value) => return __encode_success_value(&__value, #stdout_expr),
+                    ::std::result::Result::Ok(__value) => return __encode_success_value(&__value),
                     ::std::result::Result::Err(__error) => return ::std::result::Result::Err(__encode_custom_error(&__error)?),
                 }
             },
             None => quote! {
                 match #call {
-                    ::std::result::Result::Ok(()) => return __encode_success_unit(#stdout_expr),
+                    ::std::result::Result::Ok(()) => return __encode_success_unit(),
                     ::std::result::Result::Err(__error) => return ::std::result::Result::Err(__encode_custom_error(&__error)?),
                 }
             },
@@ -771,20 +792,13 @@ fn encode_invocation_result(
     } else {
         match ok {
             Some(_) => quote! {
-                return __encode_success_value(&#call, #stdout_expr);
+                return __encode_success_value(&#call);
             },
             None => quote! {
                 #call;
-                return __encode_success_unit(#stdout_expr);
+                return __encode_success_unit();
             },
         }
-    }
-}
-
-fn type_last_ident(ty: &Type) -> Option<String> {
-    match ty {
-        Type::Path(tp) => tp.path.segments.last().map(|s| s.ident.to_string()),
-        _ => None,
     }
 }
 

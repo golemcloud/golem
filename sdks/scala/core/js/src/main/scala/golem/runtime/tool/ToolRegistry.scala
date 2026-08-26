@@ -17,7 +17,7 @@
 package golem.runtime.tool
 
 import golem.Principal
-import golem.host.js.tool.{JsWasiInputStream, JsWasiOutputStream}
+import golem.runtime.tool.host.ToolHostApi
 import golem.schema.wire.WitTypedSchemaValue
 import golem.tool.ExtendedToolType
 import golem.tool.wire.{WitTool, WitToolError}
@@ -27,12 +27,11 @@ import scala.concurrent.Future
 
 /**
  * The value a tool invoker produces on success: the optional structured result
- * (a self-contained `typed-schema-value`) and the optional stdout stream
- * handle, mirroring `golem:tool/common@0.1.0`'s `invocation-result`.
+ * as a self-contained `typed-schema-value`. Stdout is supplied and observed
+ * through independent capabilities.
  */
 final case class ToolInvocationResult(
-  result: Option[WitTypedSchemaValue],
-  stdout: Option[JsWasiOutputStream]
+  result: Option[WitTypedSchemaValue]
 )
 
 /**
@@ -55,7 +54,8 @@ private[golem] object ToolRegistry {
     (
       List[String],
       WitTypedSchemaValue,
-      Option[JsWasiInputStream],
+      Option[ToolHostApi.RawByteStream],
+      Option[ToolHostApi.RawToolStdoutWriter],
       Principal
     ) => Future[Either[WitToolError, ToolInvocationResult]]
 

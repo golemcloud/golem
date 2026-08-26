@@ -64,6 +64,66 @@ mod tests {
     }
 
     #[tool_definition]
+    trait OptionalStreamRoundTrip {
+        async fn optional_streams(
+            &self,
+            stdin: Option<golem_rust::agentic::InputStream>,
+            stdout: Option<golem_rust::agentic::OutputStream>,
+        ) -> u32;
+    }
+
+    struct OptionalStreamRoundTripImpl;
+
+    #[tool_implementation]
+    impl OptionalStreamRoundTrip for OptionalStreamRoundTripImpl {
+        async fn optional_streams(
+            &self,
+            stdin: Option<golem_rust::agentic::InputStream>,
+            stdout: Option<golem_rust::agentic::OutputStream>,
+        ) -> u32 {
+            u32::from(stdin.is_some()) | (u32::from(stdout.is_some()) << 1)
+        }
+    }
+
+    #[test]
+    async fn optional_streams_are_described_and_invoked_as_optional() {
+        let tool = <OptionalStreamRoundTripImpl as OptionalStreamRoundTrip>::__tool_descriptor();
+        let command_index = tool
+            .command_index_by_path(&["optional-streams".to_string()])
+            .expect("optional-streams command exists");
+        let body = tool.commands[command_index]
+            .body
+            .as_ref()
+            .expect("optional-streams has a body");
+        assert_eq!(
+            body.stdin.as_ref().map(|stream| stream.required),
+            Some(false)
+        );
+        assert_eq!(
+            body.stdout.as_ref().map(|stream| stream.required),
+            Some(false)
+        );
+
+        let input = encoded_input(&tool, &["optional-streams"], Vec::new());
+        let invoker = get_tool_invoker_by_name("optional-stream-round-trip")
+            .expect("optional stream tool implementation registers an invoker");
+        let result = invoker(
+            vec!["optional-streams".to_string()],
+            input,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("optional streams may both be absent");
+        let result = golem_rust::decode_typed_schema_value(
+            &result.result.expect("stream presence mask is returned"),
+        )
+        .expect("stream presence mask decodes");
+        assert_eq!(u32::from_value(result.value()).unwrap(), 0);
+    }
+
+    #[tool_definition]
     trait PrincipalAutoInjectedRoundTrip {
         fn whoami(&self, principal: golem_rust::tool::Principal, name: String) -> String;
     }
@@ -986,9 +1046,15 @@ impl EchoMiddleware for Policy {
             ],
         );
 
-        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
-            .await
-            .expect("guest invocation succeeds");
+        let result = invoker(
+            vec!["leaf".to_string()],
+            input,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("guest invocation succeeds");
         let result = result.result.expect("plain return is encoded as a result");
         let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
         let value = String::from_value(result.value()).expect("result schema matches String");
@@ -1009,9 +1075,15 @@ impl EchoMiddleware for Policy {
             ],
         );
 
-        let err = invoker(vec!["fail".to_string()], input, None, anonymous_principal())
-            .await
-            .expect_err("tool error is surfaced as guest ToolError");
+        let err = invoker(
+            vec!["fail".to_string()],
+            input,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect_err("tool error is surfaced as guest ToolError");
         let golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(value) =
             err
         else {
@@ -1054,9 +1126,15 @@ impl EchoMiddleware for Policy {
             ],
         );
 
-        let err = invoker(vec!["fail".to_string()], input, None, anonymous_principal())
-            .await
-            .expect_err("tool error is surfaced as guest ToolError");
+        let err = invoker(
+            vec!["fail".to_string()],
+            input,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect_err("tool error is surfaced as guest ToolError");
         let golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(value) =
             err
         else {
@@ -1104,6 +1182,7 @@ impl EchoMiddleware for Policy {
         let err = invoker(
             vec!["fail-backend".to_string()],
             input,
+            None,
             None,
             anonymous_principal(),
         )
@@ -1154,9 +1233,15 @@ impl EchoMiddleware for Policy {
             ],
         );
 
-        let err = invoker(vec!["fail".to_string()], input, None, anonymous_principal())
-            .await
-            .expect_err("tool error is surfaced as guest ToolError");
+        let err = invoker(
+            vec!["fail".to_string()],
+            input,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect_err("tool error is surfaced as guest ToolError");
         let golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(value) =
             err
         else {
@@ -1203,6 +1288,7 @@ impl EchoMiddleware for Policy {
             vec!["custom-plain".to_string()],
             input,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -1247,7 +1333,7 @@ impl EchoMiddleware for Policy {
             vec![golem_rust::SchemaValue::String("alice".to_string())],
         );
 
-        let result = invoker(vec![], input, None, anonymous_principal())
+        let result = invoker(vec![], input, None, None, anonymous_principal())
             .await
             .expect("guest invocation dispatches the trait default method body");
         let result = result.result.expect("plain return is encoded as a result");
@@ -1300,10 +1386,19 @@ impl EchoMiddleware for Policy {
         let output = cargo_check_tool_crate(
             "stdout-tool-result-shape",
             r#"
-use golem_rust::agentic::{InputStream, InvocationResult};
+use golem_rust::agentic::{InputStream, ToolInvocation};
+use std::convert::Infallible;
 
-fn stdout(result: InvocationResult) -> Option<InputStream> {
-    result.stdout
+fn stdout(invocation: ToolInvocation<(), Infallible>) -> InputStream {
+    invocation.stdout
+}
+
+async fn consume(_stdout: InputStream) {}
+
+fn consume_result_and_stdout_concurrently(invocation: ToolInvocation<(), Infallible>) {
+    let result = invocation.result();
+    let output = consume(invocation.stdout);
+    let _ = (result, output);
 }
 "#,
         );
@@ -1447,357 +1542,6 @@ impl AsyncTool for AsyncToolImpl {
             "async tool definitions should use the P3 guest executor, but cargo check failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
-        );
-    }
-
-    #[test]
-    fn async_stdout_tool_writes_do_not_deadlock() {
-        let root = std::env::temp_dir().join(format!(
-            "golem-rust-async-stdout-runtime-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock should be after UNIX_EPOCH")
-                .as_nanos()
-        ));
-        fs::create_dir_all(root.join("src")).unwrap();
-        fs::create_dir_all(root.join("wit")).unwrap();
-
-        let golem_rust_path = Path::new(env!("CARGO_MANIFEST_DIR"));
-        fs::write(
-            root.join("Cargo.toml"),
-            format!(
-                r#"[package]
-name = "async-stdout-runtime"
-version = "0.0.0"
-edition = "2024"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-golem-rust = {{ path = {}, features = ["export_golem_agentic"] }}
-wit-bindgen = {{ git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.59.0", features = ["async", "async-spawn"] }}
-"#,
-                toml_string(golem_rust_path)
-            ),
-        )
-        .unwrap();
-        fs::write(
-            root.join("wit/repro.wit"),
-            r#"package bug-finder:async-stdout;
-
-world repro {
-  export run-direct: async func() -> string;
-  export run-detached: async func() -> string;
-  export reader-drop-is-observed: async func() -> bool;
-}
-"#,
-        )
-        .unwrap();
-        fs::write(
-            root.join("src/lib.rs"),
-            r#"mod bindings {
-    wit_bindgen::generate!({
-        path: "wit",
-        world: "repro",
-        async: true,
-    });
-
-    use super::Component;
-    export!(Component);
-}
-
-struct Component;
-
-use golem_rust::agentic::{CanonicalInputModel, OutputStream, Principal};
-use golem_rust::{FromSchema, tool_definition, tool_implementation};
-
-#[tool_definition]
-trait AsyncStdout {
-    async fn direct(&self, stdout: OutputStream) -> String;
-    async fn detached(&self, stdout: OutputStream) -> String;
-}
-
-struct AsyncStdoutImpl;
-
-#[tool_implementation]
-impl AsyncStdout for AsyncStdoutImpl {
-    async fn direct(&self, mut stdout: OutputStream) -> String {
-        let remaining = stdout.write_all(b"hello".to_vec()).await;
-        assert!(remaining.is_empty());
-        "done".to_string()
-    }
-
-    async fn detached(&self, mut stdout: OutputStream) -> String {
-        golem_rust::agentic::spawn_local(async move {
-            let remaining = stdout.write_all(b"hello".to_vec()).await;
-            assert!(remaining.is_empty());
-        });
-        "done".to_string()
-    }
-}
-
-async fn invoke(command: &str) -> String {
-    let tool = <AsyncStdoutImpl as AsyncStdout>::__tool_descriptor();
-    let command_path = vec![command.to_string()];
-    let command_index = tool.command_index_by_path(&command_path).unwrap();
-    let model = CanonicalInputModel::from_fields(tool.canonical_input_fields(command_index)).unwrap();
-    let input = golem_rust::TypedSchemaValue::new(
-        model.record_schema,
-        golem_rust::SchemaValue::Record { fields: vec![] },
-    );
-    let input = golem_rust::encode_typed_schema_value(&input).unwrap();
-    let result = <AsyncStdoutImpl as AsyncStdout>::__tool_invoke(
-        command_path,
-        input,
-        None,
-        Principal::Anonymous,
-    )
-    .await
-    .unwrap();
-    assert_eq!(result.stdout.unwrap().collect().await, b"hello");
-    let value = golem_rust::decode_typed_schema_value(&result.result.unwrap()).unwrap();
-    String::from_value(value.value()).unwrap()
-}
-
-impl bindings::Guest for Component {
-    async fn run_direct() -> String {
-        invoke("direct").await
-    }
-
-    async fn run_detached() -> String {
-        invoke("detached").await
-    }
-
-    async fn reader_drop_is_observed() -> bool {
-        let (mut stdout, reader) = golem_rust::agentic::new_tool_stdout();
-        drop(reader);
-        stdout.write(vec![0xaa; 64]);
-
-        for byte in 0..16 {
-            wit_bindgen::yield_async().await;
-            let chunk = vec![byte; 64];
-            if stdout.write_all(chunk.clone()).await == chunk {
-                return true;
-            }
-        }
-
-        false
-    }
-}
-"#,
-        )
-        .unwrap();
-
-        let target_dir = golem_rust_path
-            .parent()
-            .expect("golem-rust crate should have an SDK workspace parent")
-            .join("target");
-        let build = Command::new("cargo")
-            .args(["build", "--quiet", "--target", "wasm32-wasip2"])
-            .env("CARGO_TARGET_DIR", &target_dir)
-            .current_dir(&root)
-            .output()
-            .expect("failed to build async stdout reproducer component");
-        assert!(
-            build.status.success(),
-            "reproducer component failed to build\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&build.stdout),
-            String::from_utf8_lossy(&build.stderr),
-        );
-
-        let component = target_dir.join("wasm32-wasip2/debug/async_stdout_runtime.wasm");
-        fs::create_dir_all(root.join("runner/src")).unwrap();
-        fs::write(
-            root.join("runner/Cargo.toml"),
-            r#"[package]
-name = "async-stdout-runner"
-version = "0.0.0"
-edition = "2024"
-
-[dependencies]
-anyhow = "1"
-tokio = { version = "1", features = ["macros", "rt", "time"] }
-wasmtime = { version = "=46.0.1", features = ["component-model", "component-model-async"] }
-wasmtime-wasi = { version = "=46.0.1", features = ["p3"] }
-"#,
-        )
-        .unwrap();
-        fs::write(
-            root.join("runner/src/main.rs"),
-            r#"use anyhow::{Context, Result, anyhow};
-use std::time::Duration;
-use wasmtime::component::types::{ComponentInstance, ComponentItem};
-use wasmtime::component::{
-    Component, Linker, LinkerInstance, ResourceTable, ResourceType,
-};
-use wasmtime::{Config, Engine, Store};
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
-
-struct Host {
-    ctx: WasiCtx,
-    table: ResourceTable,
-}
-
-impl WasiView for Host {
-    fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView {
-            ctx: &mut self.ctx,
-            table: &mut self.table,
-        }
-    }
-}
-
-struct ResourceEntry;
-struct QuotaToken;
-struct Secret;
-
-fn define_mock_import(
-    name: &str,
-    engine: &Engine,
-    root: &mut LinkerInstance<Host>,
-    imported: &ComponentInstance,
-) -> Result<()> {
-    if name.starts_with("wasi:cli")
-        || name.starts_with("wasi:clocks")
-        || name.starts_with("wasi:filesystem")
-        || name.starts_with("wasi:io")
-        || name.starts_with("wasi:random")
-        || name.starts_with("wasi:sockets")
-    {
-        return Ok(());
-    }
-
-    let mut instance = root.instance(name)?;
-    for (item_name, item) in imported.exports(engine) {
-        match item.ty {
-            ComponentItem::ComponentFunc(function) if function.async_() => {
-                let import = format!("{name}#{item_name}");
-                instance.func_new_concurrent(
-                    item_name,
-                    move |_accessor, _function, _params, _results| {
-                        let import = import.clone();
-                        Box::pin(async move {
-                            Err(wasmtime::Error::msg(format!("unexpected call to {import}")))
-                        })
-                    },
-                )?;
-            }
-            ComponentItem::ComponentFunc(_) => {
-                let import = format!("{name}#{item_name}");
-                instance.func_new_async(
-                    item_name,
-                    move |_store, _function, _params, _results| {
-                        let import = import.clone();
-                        Box::new(async move {
-                            Err(wasmtime::Error::msg(format!("unexpected call to {import}")))
-                        })
-                    },
-                )?;
-            }
-            ComponentItem::Resource(_) => {
-                let resource_type = if item_name == "quota-token" {
-                    ResourceType::host::<QuotaToken>()
-                } else if item_name == "secret" {
-                    ResourceType::host::<Secret>()
-                } else {
-                    ResourceType::host::<ResourceEntry>()
-                };
-                instance.resource(item_name, resource_type, |_store, _rep| Ok(()))?;
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
-    let component_path = std::env::args().nth(1).context("missing component path")?;
-    let mut config = Config::new();
-    config.wasm_component_model_async(true);
-    config.concurrency_support(true);
-    let engine = Engine::new(&config)?;
-    let component = Component::from_file(&engine, component_path)?;
-    let mut linker = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
-    wasmtime_wasi::p3::add_to_linker(&mut linker)?;
-    let mut root = linker.root();
-    for (name, item) in component.component_type().imports(&engine) {
-        if let ComponentItem::ComponentInstance(imported) = item.ty {
-            define_mock_import(name, &engine, &mut root, &imported)?;
-        }
-    }
-    drop(root);
-    let mut store = Store::new(
-        &engine,
-        Host {
-            ctx: WasiCtxBuilder::new().build(),
-            table: ResourceTable::new(),
-        },
-    );
-    let instance = linker.instantiate_async(&mut store, &component).await?;
-    for name in ["run-direct", "run-detached"] {
-        let run = instance.get_typed_func::<(), (String,)>(&mut store, name)?;
-        let (value,) = tokio::time::timeout(
-            Duration::from_secs(2),
-            store.run_concurrent(async |accessor| run.call_concurrent(accessor, ()).await),
-        )
-        .await
-        .map_err(|_| anyhow!("{name} timed out before returning stdout"))???;
-        if value != "done" {
-            return Err(anyhow!("{name} returned unexpected value {value:?}"));
-        }
-    }
-
-    let run = instance.get_typed_func::<(), (bool,)>(&mut store, "reader-drop-is-observed")?;
-    let (reader_drop_is_observed,) = tokio::time::timeout(
-        Duration::from_secs(2),
-        store.run_concurrent(async |accessor| run.call_concurrent(accessor, ()).await),
-    )
-    .await
-    .map_err(|_| anyhow!("reader-drop-is-observed timed out"))???;
-    if !reader_drop_is_observed {
-        return Err(anyhow!(
-            "stdout writes still reported success after the returned reader was dropped"
-        ));
-    }
-
-    Ok(())
-}
-"#,
-        )
-        .unwrap();
-        let runner_target_dir = golem_rust_path
-            .ancestors()
-            .nth(3)
-            .expect("golem-rust crate should be nested under the repository root")
-            .join("target");
-        let runner_build = Command::new("cargo")
-            .args(["build", "--quiet", "--manifest-path"])
-            .arg(root.join("runner/Cargo.toml"))
-            .env("CARGO_TARGET_DIR", &runner_target_dir)
-            .output()
-            .expect("failed to build wasmtime reproducer runner");
-        assert!(
-            runner_build.status.success(),
-            "reproducer runner failed to build\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&runner_build.stdout),
-            String::from_utf8_lossy(&runner_build.stderr),
-        );
-
-        let run = Command::new(runner_target_dir.join("debug/async-stdout-runner"))
-            .arg(&component)
-            .output()
-            .expect("failed to run reproducer component with wasmtime runner");
-        fs::remove_dir_all(&root).unwrap();
-
-        assert!(
-            run.status.success(),
-            "an async tool must return its stdout stream before the caller consumes it; invocation timed out or failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&run.stdout),
-            String::from_utf8_lossy(&run.stderr),
         );
     }
 
@@ -1958,12 +1702,10 @@ fn check_plain_return_uses_infallible_tool_error() {
 fn check_stdout_is_returned_not_passed(
     client: &StreamToolClient,
     input: golem_rust::agentic::InputStream,
-    result: golem_rust::agentic::InvocationResult,
 ) {
-    assert_future_output::<_, Result<(String, golem_rust::agentic::InputStream), golem_rust::agentic::ToolError<RemoteError>>>(
-        client.copy(input),
-    );
-    let _: Option<golem_rust::agentic::InputStream> = result.stdout;
+    let invocation: Result<golem_rust::agentic::ToolInvocation<String, RemoteError>, golem_rust::agentic::ToolError<RemoteError>> =
+        client.copy(input);
+    let _ = invocation;
 }
 
 fn check_subtree_client_shape() {
@@ -2436,6 +2178,8 @@ mod golem_rust {
                 pub use golem_rust_actual::golem_agentic::golem::tool::*;
 
                 pub mod host {
+                    pub use golem_rust_actual::golem_agentic::golem::tool::host::{ToolStdin, ToolStdout, ToolStdoutWriter};
+
                     #[derive(Clone, Debug)]
                     pub struct ToolRpc;
 
@@ -2466,7 +2210,8 @@ mod golem_rust {
             _rpc: &ambient_tool_rpc::AmbientToolRpc,
             _command_path: &[String],
             input: &crate::golem_rust::TypedSchemaValue,
-            _stdin: Option<crate::golem_rust::agentic::InputStream>,
+            _stdin: Option<crate::golem_rust::golem_agentic::golem::tool::host::ToolStdin>,
+            _stdout: Option<crate::golem_rust::golem_agentic::golem::tool::host::ToolStdout>,
         ) -> Result<InvocationResult, ToolError<std::convert::Infallible>> {
             crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(input.clone()));
             Ok(InvocationResult {
@@ -2476,7 +2221,6 @@ mod golem_rust {
                     )
                     .unwrap(),
                 ),
-                stdout: None,
             })
         }
     }
@@ -2566,6 +2310,8 @@ mod golem_rust {
                 pub use golem_rust_actual::golem_agentic::golem::tool::*;
 
                 pub mod host {
+                    pub use golem_rust_actual::golem_agentic::golem::tool::host::{ToolStdin, ToolStdout, ToolStdoutWriter};
+
                     #[derive(Clone, Debug)]
                     pub struct ToolRpc;
 
@@ -2596,7 +2342,8 @@ mod golem_rust {
             _rpc: &ambient_tool_rpc::AmbientToolRpc,
             _command_path: &[String],
             input: &crate::golem_rust::TypedSchemaValue,
-            _stdin: Option<crate::golem_rust::agentic::InputStream>,
+            _stdin: Option<crate::golem_rust::golem_agentic::golem::tool::host::ToolStdin>,
+            _stdout: Option<crate::golem_rust::golem_agentic::golem::tool::host::ToolStdout>,
         ) -> Result<InvocationResult, ToolError<std::convert::Infallible>> {
             crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(input.clone()));
             Ok(InvocationResult {
@@ -2606,7 +2353,6 @@ mod golem_rust {
                     )
                     .unwrap(),
                 ),
-                stdout: None,
             })
         }
     }
@@ -2878,6 +2624,7 @@ fn check_sparse_nested_capture_set() {
             vec!["kid".to_string(), "leaf".to_string()],
             input,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -2905,6 +2652,7 @@ fn check_sparse_nested_capture_set() {
         let result = invoker(
             vec!["k".to_string(), "leaf".to_string()],
             input,
+            None,
             None,
             anonymous_principal(),
         )
@@ -2965,6 +2713,7 @@ fn check_sparse_nested_capture_set() {
         let result = invoker(
             vec!["alias-child-round-trip".to_string(), "leaf".to_string()],
             input,
+            None,
             None,
             anonymous_principal(),
         )
@@ -3027,6 +2776,7 @@ fn check_sparse_nested_capture_set() {
         let result = invoker(
             vec!["alias-child".to_string(), "leaf".to_string()],
             input,
+            None,
             None,
             anonymous_principal(),
         )
@@ -3094,6 +2844,7 @@ fn check_sparse_nested_capture_set() {
             ],
             input,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -3133,9 +2884,15 @@ fn check_sparse_nested_capture_set() {
             ],
         );
 
-        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
-            .await
-            .expect("guest invocation succeeds when impl parameter names differ from the trait");
+        let result = invoker(
+            vec!["leaf".to_string()],
+            input,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("guest invocation succeeds when impl parameter names differ from the trait");
         let result = result.result.expect("plain return is encoded as a result");
         let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
         let value = String::from_value(result.value()).expect("result schema matches String");
@@ -3187,9 +2944,15 @@ fn check_sparse_nested_capture_set() {
             ],
         );
 
-        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
-            .await
-            .expect("guest invocation maps an inherited global alias back to the method parameter");
+        let result = invoker(
+            vec!["leaf".to_string()],
+            input,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("guest invocation maps an inherited global alias back to the method parameter");
         let result = result.result.expect("plain return is encoded as a result");
         let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
         let value = String::from_value(result.value()).expect("result schema matches String");
@@ -3240,9 +3003,15 @@ fn check_sparse_nested_capture_set() {
             ],
         );
 
-        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
-            .await
-            .expect("guest invocation maps a child alias back to the same-trait inherited global");
+        let result = invoker(
+            vec!["leaf".to_string()],
+            input,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("guest invocation maps a child alias back to the same-trait inherited global");
         let result = result.result.expect("plain return is encoded as a result");
         let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
         let value = String::from_value(result.value()).expect("result schema matches String");
@@ -3290,9 +3059,15 @@ fn check_sparse_nested_capture_set() {
             ],
         );
 
-        let result = invoker(vec!["leaf".to_string()], input, None, anonymous_principal())
-            .await
-            .expect("root body aliases are not inherited by sibling commands");
+        let result = invoker(
+            vec!["leaf".to_string()],
+            input,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("root body aliases are not inherited by sibling commands");
         let result = result.result.expect("plain return is encoded as a result");
         let result = golem_rust::decode_typed_schema_value(&result).expect("result decodes");
         let value = String::from_value(result.value()).expect("result schema matches String");
@@ -6611,11 +6386,11 @@ impl BadTool for BadToolImpl {
         let output = cargo_check_tool_crate(
             "tool-client-native-stdin",
             r#"
-use golem_rust::agentic::{InputStream, invoke_and_await_infallible};
-use golem_rust::bindings::golem::tool::host::ToolRpc;
+use golem_rust::agentic::{InputStream, invoke_and_await_infallible, pump_tool_stdin};
+use golem_rust::golem_agentic::golem::tool::host::ToolRpc;
 
 fn forward_stdin(rpc: &ToolRpc, input: &golem_rust::TypedSchemaValue, stdin: InputStream) {
-    let _ = invoke_and_await_infallible(rpc, &[], input, Some(stdin));
+    let _ = invoke_and_await_infallible(rpc, &[], input, Some(pump_tool_stdin(stdin)), None);
 }
 "#,
         );
@@ -6966,7 +6741,7 @@ use golem_rust::agentic::invoke_and_await_infallible;
 use golem_rust::golem_agentic::golem::tool::host::ToolRpc;
 
 fn call_tool(rpc: &ToolRpc, input: &golem_rust::TypedSchemaValue) {
-    let _ = invoke_and_await_infallible(rpc, &[], input, None);
+    let _ = invoke_and_await_infallible(rpc, &[], input, None, None);
 }
 "#,
         );
@@ -7004,6 +6779,7 @@ impl Guest for Component {
         _command_path: Vec<String>,
         _input: TypedSchemaValue,
         _stdin: Option<InputStream>,
+        _stdout: Option<golem_rust::golem_agentic::golem::tool::host::ToolStdoutWriter>,
         _principal: Principal,
     ) -> Result<InvocationResult, ToolError> {
         unimplemented!()

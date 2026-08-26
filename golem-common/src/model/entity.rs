@@ -20,6 +20,7 @@ use crate::model::oplog::OplogIndex;
 use crate::model::tool::{
     CompiledToolBinding, SecretKeyScope, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
 };
+use crate::schema::TypedSchemaValue;
 use desert_rust::BinaryCodec;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -505,7 +506,18 @@ pub enum InvocationExecutionMode {
     ReplayingIncomplete,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum EntityCallMode {
     Synchronous,
@@ -513,15 +525,125 @@ pub enum EntityCallMode {
     FireAndForget,
 }
 
+/// Semantic operation data pinned into an entity invocation `Start`. Resource-table keys and live
+/// attachment state are intentionally excluded: only facts needed to reconstruct dispatch belong
+/// in the owner oplog.
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub enum EntityInvocationDescriptor {
+    Tool(ToolInvocationDescriptor),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
+#[desert(evolution(FieldAdded("declares_stdout", false)))]
+pub struct ToolInvocationDescriptor {
+    pub command_path: Vec<String>,
+    pub args: Vec<String>,
+    pub has_stdin: bool,
+    pub has_stdout: bool,
+    pub declares_stdout: bool,
+}
+
+/// Activation-independent identity used to claim an entity invocation `Start` during historical
+/// replay. Rendered arguments are intentionally excluded because they are derived from the pinned
+/// activation stored in the claimed request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EntityInvocationRequestIdentity {
+    pub entity: AgentEntity,
+    pub calling_principal: CallingAgentPrincipal,
+    pub call_mode: EntityCallMode,
+    pub operation: Option<EntityInvocationDescriptorIdentity>,
+    pub input: TypedSchemaValue,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EntityInvocationDescriptorIdentity {
+    Tool(ToolInvocationDescriptorIdentity),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolInvocationDescriptorIdentity {
+    pub command_path: Vec<String>,
+    pub has_stdin: bool,
+    pub has_stdout: bool,
+}
+
+/// Stable invocation-attempt identity used while replay has not yet determined whether the live
+/// call was accepted as an entity invocation or durably rejected before dispatch.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolInvocationClaimIdentity {
+    pub accepted: Option<EntityInvocationRequestIdentity>,
+    pub rejected: ToolInvocationRejectedIdentity,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+pub enum ToolInputDecodeFailure {
+    InvalidSchemaGraph,
+    InvalidSchemaValue,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolInvocationRejectedIdentity {
+    pub tool_name: ToolName,
+    pub command_path: Vec<String>,
+    pub input: Option<TypedSchemaValue>,
+    pub input_decode_failure: Option<ToolInputDecodeFailure>,
+    pub has_stdin: bool,
+    pub has_stdout: bool,
+    pub call_mode: EntityCallMode,
+}
+
+impl EntityInvocationRequestIdentity {
+    pub fn matches(&self, request: &EntityInvocationRequest, input: &TypedSchemaValue) -> bool {
+        self.entity == request.entity
+            && self.calling_principal == request.calling_principal
+            && self.call_mode == request.call_mode
+            && self.operation == request.operation.as_ref().map(Into::into)
+            && &self.input == input
+    }
+}
+
+impl From<&EntityInvocationDescriptor> for EntityInvocationDescriptorIdentity {
+    fn from(value: &EntityInvocationDescriptor) -> Self {
+        match value {
+            EntityInvocationDescriptor::Tool(tool) => Self::Tool(tool.into()),
+        }
+    }
+}
+
+impl From<&ToolInvocationDescriptor> for ToolInvocationDescriptorIdentity {
+    fn from(value: &ToolInvocationDescriptor) -> Self {
+        Self {
+            command_path: value.command_path.clone(),
+            has_stdin: value.has_stdin,
+            has_stdout: value.has_stdout,
+        }
+    }
+}
+
 /// Binary owner-oplog request metadata for one entity invocation. The host payload wraps this as
 /// opaque bytes because it is an executor control record rather than a guest-facing schema value.
 #[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
-#[desert(evolution())]
+#[desert(evolution(
+    FieldAdded("operation", None::<EntityInvocationDescriptor>),
+    FieldAdded("principal", None::<Principal>)
+))]
 pub struct EntityInvocationRequest {
     pub entity: AgentEntity,
     pub activation: EntityActivation,
     pub calling_principal: CallingAgentPrincipal,
     pub call_mode: EntityCallMode,
+    pub operation: Option<EntityInvocationDescriptor>,
+    pub principal: Option<Principal>,
 }
 
 pub type CallingAgentPrincipal = Principal;
@@ -1029,7 +1151,7 @@ mod tests {
     use super::*;
     use crate::model::AgentId;
     use crate::model::account::{AccountEmail, AccountId};
-    use crate::model::agent::{AgentPrincipal, AgentTypeName};
+    use crate::model::agent::{AgentPrincipal, AgentTypeName, GolemUserPrincipal};
     use crate::model::component::ComponentName;
     use crate::model::environment::EnvironmentId;
     use crate::model::json::NormalizedJsonValue;
@@ -1173,12 +1295,121 @@ mod tests {
                 agent_id: owner.agent_id,
             }),
             call_mode: EntityCallMode::Asynchronous,
+            operation: Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+                command_path: vec!["files".to_string(), "search".to_string()],
+                args: vec!["--ignore-case".to_string(), "needle".to_string()],
+                has_stdin: true,
+                has_stdout: true,
+                declares_stdout: true,
+            })),
+            principal: Some(Principal::GolemUser(GolemUserPrincipal {
+                account_id: AccountId::new(),
+            })),
         };
 
         let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
         let decoded: EntityInvocationRequest = desert_rust::deserialize(&bytes).unwrap();
 
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
+        let owner = owner();
+        let input = TypedSchemaValue::new(
+            crate::schema::SchemaGraph::anonymous(crate::schema::SchemaType::tuple(Vec::new())),
+            crate::schema::SchemaValue::Tuple {
+                elements: Vec::new(),
+            },
+        );
+        let request = EntityInvocationRequest {
+            entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
+            activation: activation(),
+            calling_principal: Principal::Agent(AgentPrincipal {
+                agent_id: owner.agent_id,
+            }),
+            call_mode: EntityCallMode::Asynchronous,
+            operation: Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+                command_path: vec!["files".to_string(), "search".to_string()],
+                args: vec!["--recorded-rendering".to_string()],
+                has_stdin: true,
+                has_stdout: false,
+                declares_stdout: false,
+            })),
+            principal: None,
+        };
+        let identity = EntityInvocationRequestIdentity {
+            entity: request.entity.clone(),
+            calling_principal: request.calling_principal.clone(),
+            call_mode: request.call_mode,
+            operation: request.operation.as_ref().map(Into::into),
+            input: input.clone(),
+        };
+        let mut differently_pinned = request.clone();
+        differently_pinned.activation = activation();
+        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
+            differently_pinned.operation.as_mut()
+        {
+            descriptor.args = vec!["--new-rendering".to_string()];
+            descriptor.declares_stdout = true;
+        }
+
+        assert!(identity.matches(&differently_pinned, &input));
+
+        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
+            differently_pinned.operation.as_mut()
+        {
+            descriptor.command_path.push("other".to_string());
+        }
+        assert!(!identity.matches(&differently_pinned, &input));
+        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
+            differently_pinned.operation.as_mut()
+        {
+            descriptor.command_path.pop();
+            descriptor.has_stdout = true;
+        }
+        assert!(!identity.matches(&differently_pinned, &input));
+
+        let different_input = TypedSchemaValue::new(
+            crate::schema::SchemaGraph::anonymous(crate::schema::SchemaType::tuple(vec![
+                crate::schema::SchemaType::bool(),
+            ])),
+            crate::schema::SchemaValue::Tuple {
+                elements: vec![crate::schema::SchemaValue::Bool(true)],
+            },
+        );
+        assert!(!identity.matches(&request, &different_input));
+    }
+
+    #[test]
+    fn legacy_entity_invocation_request_decodes_without_operation_descriptor() {
+        #[derive(BinaryCodec)]
+        #[desert(evolution())]
+        struct LegacyEntityInvocationRequest {
+            entity: AgentEntity,
+            activation: EntityActivation,
+            calling_principal: CallingAgentPrincipal,
+            call_mode: EntityCallMode,
+        }
+
+        let owner = owner();
+        let legacy = LegacyEntityInvocationRequest {
+            entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
+            activation: activation(),
+            calling_principal: Principal::Agent(AgentPrincipal {
+                agent_id: owner.agent_id,
+            }),
+            call_mode: EntityCallMode::Synchronous,
+        };
+        let bytes = desert_rust::serialize_to_byte_vec(&legacy).unwrap();
+        let decoded: EntityInvocationRequest = desert_rust::deserialize(&bytes).unwrap();
+
+        assert_eq!(decoded.entity, legacy.entity);
+        assert_eq!(decoded.activation, legacy.activation);
+        assert_eq!(decoded.calling_principal, legacy.calling_principal);
+        assert_eq!(decoded.call_mode, legacy.call_mode);
+        assert_eq!(decoded.operation, None);
+        assert_eq!(decoded.principal, None);
     }
 
     #[test]
@@ -1237,6 +1468,8 @@ mod tests {
             activation: activation.as_ref().clone(),
             calling_principal: scope.calling_principal().clone(),
             call_mode: EntityCallMode::Synchronous,
+            operation: None,
+            principal: None,
         };
 
         let request_bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();

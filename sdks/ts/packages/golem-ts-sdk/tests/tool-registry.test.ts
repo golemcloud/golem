@@ -803,9 +803,16 @@ describe('tool guest exports', () => {
       .canonicalInputModel(commandNode)
       .encodeTyped({ message: 'hello' });
 
-    const result = await tool.invoke('echo', [], typedSchemaValueToWit(input), undefined, {
-      tag: 'anonymous',
-    });
+    const result = await tool.invoke(
+      'echo',
+      [],
+      typedSchemaValueToWit(input),
+      undefined,
+      undefined,
+      {
+        tag: 'anonymous',
+      },
+    );
 
     expect(received).toEqual({ input: { message: 'hello' }, principalTag: 'anonymous' });
     expect(result.stdout).toBeUndefined();
@@ -825,10 +832,10 @@ describe('tool guest exports', () => {
     const validInput = typedSchemaValueToWit(inputModel.encodeTyped({ message: 'hello' }));
 
     await expect(
-      tool.invoke('missing', [], validInput, undefined, { tag: 'anonymous' }),
+      tool.invoke('missing', [], validInput, undefined, undefined, { tag: 'anonymous' }),
     ).rejects.toEqual({ tag: 'invalid-tool-name', val: 'missing' });
     await expect(
-      tool.invoke('echo', ['missing'], validInput, undefined, { tag: 'anonymous' }),
+      tool.invoke('echo', ['missing'], validInput, undefined, undefined, { tag: 'anonymous' }),
     ).rejects.toEqual({ tag: 'invalid-command-path', val: ['missing'] });
 
     const invalidValue = typedSchemaValueToWit({
@@ -836,7 +843,7 @@ describe('tool guest exports', () => {
       value: v.record([v.bool(true)]),
     });
     await expect(
-      tool.invoke('echo', [], invalidValue, undefined, { tag: 'anonymous' }),
+      tool.invoke('echo', [], invalidValue, undefined, undefined, { tag: 'anonymous' }),
     ).rejects.toMatchObject({ tag: 'invalid-input' });
   });
 
@@ -860,7 +867,7 @@ describe('tool guest exports', () => {
     );
 
     const customError = await tool
-      .invoke('fallible', [], fallibleInput, undefined, { tag: 'anonymous' })
+      .invoke('fallible', [], fallibleInput, undefined, undefined, { tag: 'anonymous' })
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -886,7 +893,7 @@ describe('tool guest exports', () => {
     );
 
     const payloadlessError = await tool
-      .invoke('payloadless', [], payloadlessInput, undefined, { tag: 'anonymous' })
+      .invoke('payloadless', [], payloadlessInput, undefined, undefined, { tag: 'anonymous' })
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -959,7 +966,7 @@ describe('tool guest exports', () => {
       const input = typedSchemaValueToWit(
         registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
       );
-      return await tool.invoke(name, [], input, undefined, { tag: 'anonymous' });
+      return await tool.invoke(name, [], input, undefined, undefined, { tag: 'anonymous' });
     };
 
     await expect(invoke('invalid-success-type')).rejects.toEqual({
@@ -1011,7 +1018,7 @@ describe('tool guest exports', () => {
     );
 
     await expect(
-      tool.invoke('invalid-result', [], invalidInput, undefined, { tag: 'anonymous' }),
+      tool.invoke('invalid-result', [], invalidInput, undefined, undefined, { tag: 'anonymous' }),
     ).rejects.toEqual({
       tag: 'invalid-result',
       val: 'tool result: is not canonical for its declared schema',
@@ -1031,7 +1038,7 @@ describe('tool guest exports', () => {
       registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
     );
 
-    const result = await tool.invoke('transformed-result', [], input, undefined, {
+    const result = await tool.invoke('transformed-result', [], input, undefined, undefined, {
       tag: 'anonymous',
     });
 
@@ -1054,7 +1061,7 @@ describe('tool guest exports', () => {
       registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
     );
 
-    const result = await tool.invoke('permission-card-result', [], input, undefined, {
+    const result = await tool.invoke('permission-card-result', [], input, undefined, undefined, {
       tag: 'anonymous',
     });
 
@@ -1082,7 +1089,7 @@ describe('tool guest exports', () => {
     );
 
     await expect(
-      tool.invoke('permission-card-input', [], input, undefined, { tag: 'anonymous' }),
+      tool.invoke('permission-card-input', [], input, undefined, undefined, { tag: 'anonymous' }),
     ).resolves.toMatchObject({ result: undefined });
     expect(handler).toHaveBeenCalledOnce();
   });
@@ -1118,14 +1125,24 @@ describe('tool guest exports', () => {
     payload.fields[1] = v.string('wrong');
 
     await expect(
-      tool.invoke('permission-card-canonicality', [], typedSchemaValueToWit(encoded), undefined, {
-        tag: 'anonymous',
-      }),
+      tool.invoke(
+        'permission-card-canonicality',
+        [],
+        typedSchemaValueToWit(encoded),
+        undefined,
+        undefined,
+        { tag: 'anonymous' },
+      ),
     ).rejects.toMatchObject({ tag: 'invalid-input' });
     expect(handler).not.toHaveBeenCalled();
   });
 
   describe('Preview 3 tool streams', () => {
+    const stdoutWriter = () => ({
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    });
     const invocationInput = (name: string) => {
       const registered = ToolRegistry.get(name);
       const commandNode = registered?.extended.commandByPath([]);
@@ -1141,7 +1158,7 @@ describe('tool guest exports', () => {
         .implement({ 'required-stdin': async () => ok(undefined) });
 
       await expect(
-        tool.invoke('required-stdin', [], invocationInput('required-stdin'), undefined, {
+        tool.invoke('required-stdin', [], invocationInput('required-stdin'), undefined, undefined, {
           tag: 'anonymous',
         }),
       ).rejects.toEqual({
@@ -1154,11 +1171,11 @@ describe('tool guest exports', () => {
       const iteratorReturn = vi.fn().mockResolvedValue({ done: true, value: undefined });
       const stdin = {
         [Symbol.asyncIterator]() {
-          const bytes = [104, 105];
+          const chunks = [Uint8Array.of(104), Uint8Array.of(105)];
           return {
             next: vi.fn(async () =>
-              bytes.length
-                ? { done: false as const, value: bytes.shift()! }
+              chunks.length
+                ? { done: false as const, value: { tag: 'ok' as const, val: chunks.shift()! } }
                 : { done: true as const, value: undefined },
             ),
             return: iteratorReturn,
@@ -1181,13 +1198,15 @@ describe('tool guest exports', () => {
         });
 
       await expect(
-        tool.invoke('read-stdin', [], invocationInput('read-stdin'), stdin, { tag: 'anonymous' }),
-      ).resolves.toEqual({ result: undefined, stdout: undefined });
+        tool.invoke('read-stdin', [], invocationInput('read-stdin'), stdin, undefined, {
+          tag: 'anonymous',
+        }),
+      ).resolves.toEqual({ result: undefined });
       expect(received).toEqual([104, 105]);
       expect(iteratorReturn).toHaveBeenCalledOnce();
     });
 
-    it('returns handler stdout bytes as an async iterable', async () => {
+    it('writes handler stdout bytes through the supplied endpoint', async () => {
       toolDefinition('write-stdout')
         .body((body) => body.stdout({ required: true }).returns(z.void()))
         .implement({
@@ -1199,21 +1218,24 @@ describe('tool guest exports', () => {
           },
         });
 
+      const output = stdoutWriter();
       const result = await tool.invoke(
         'write-stdout',
         [],
         invocationInput('write-stdout'),
         undefined,
+        output,
         { tag: 'anonymous' },
       );
-      const bytes: number[] = [];
-      for await (const byte of result.stdout!) bytes.push(byte);
-      expect(bytes).toEqual([1, 2, 3]);
+      expect(result).toEqual({ result: undefined });
+      expect(output.write).toHaveBeenCalledWith(new Uint8Array([1, 2]));
+      expect(output.write).toHaveBeenCalledWith(new Uint8Array([3]));
+      expect(output.finish).toHaveBeenCalledOnce();
     });
 
-    it('errors when stdin yields a value outside the byte range', async () => {
+    it('errors when stdin yields an empty chunk', async () => {
       async function* invalidInput() {
-        yield 256;
+        yield { tag: 'ok' as const, val: new Uint8Array() };
       }
       toolDefinition('invalid-stdin')
         .body((body) => body.stdin({ required: true }).returns(z.void()))
@@ -1225,10 +1247,17 @@ describe('tool guest exports', () => {
         });
 
       await expect(
-        tool.invoke('invalid-stdin', [], invocationInput('invalid-stdin'), invalidInput(), {
-          tag: 'anonymous',
-        }),
-      ).rejects.toThrow('tool stdin yielded a value outside the byte range');
+        tool.invoke(
+          'invalid-stdin',
+          [],
+          invocationInput('invalid-stdin'),
+          invalidInput(),
+          undefined,
+          {
+            tag: 'anonymous',
+          },
+        ),
+      ).rejects.toThrow('tool stdin yielded an empty chunk');
     });
 
     it('rejects writes through a retained writer after invocation', async () => {
@@ -1243,13 +1272,18 @@ describe('tool guest exports', () => {
           },
         });
 
-      await tool.invoke('retained-writer', [], invocationInput('retained-writer'), undefined, {
-        tag: 'anonymous',
-      });
+      await tool.invoke(
+        'retained-writer',
+        [],
+        invocationInput('retained-writer'),
+        undefined,
+        stdoutWriter(),
+        { tag: 'anonymous' },
+      );
       await expect(writer!.write(new Uint8Array([2]))).rejects.toThrow('tool invocation completed');
     });
 
-    it('propagates the handler abort reason', async () => {
+    it('preserves an explicitly failed stdout alongside structured success', async () => {
       const reason = new Error('handler aborted stdout');
       toolDefinition('abort-stdout')
         .body((body) => body.stdout({ required: true }).returns(z.void()))
@@ -1260,11 +1294,47 @@ describe('tool guest exports', () => {
           },
         });
 
+      const output = stdoutWriter();
       await expect(
-        tool.invoke('abort-stdout', [], invocationInput('abort-stdout'), undefined, {
+        tool.invoke('abort-stdout', [], invocationInput('abort-stdout'), undefined, output, {
           tag: 'anonymous',
         }),
-      ).rejects.toBe(reason);
+      ).resolves.toEqual({ result: undefined });
+      expect(output.fail).toHaveBeenCalledOnce();
+      expect(output.fail).toHaveBeenCalledWith({ tag: 'failed', val: reason.message });
+      expect(output.finish).not.toHaveBeenCalled();
+    });
+
+    it('preserves an explicitly failed stdout alongside a declared tool error', async () => {
+      const reason = new Error('handler aborted stdout');
+      toolDefinition('abort-stdout-error')
+        .body((body) =>
+          body
+            .stdout({ required: true })
+            .returns(z.void())
+            .error('declared', { kind: 'runtime', exitCode: 1 }),
+        )
+        .implement({
+          'abort-stdout-error': async (_, context) => {
+            await context.stdout.getWriter().abort(reason);
+            return err('declared');
+          },
+        });
+
+      const output = stdoutWriter();
+      await expect(
+        tool.invoke(
+          'abort-stdout-error',
+          [],
+          invocationInput('abort-stdout-error'),
+          undefined,
+          output,
+          { tag: 'anonymous' },
+        ),
+      ).rejects.toMatchObject({ tag: 'custom-error' });
+      expect(output.fail).toHaveBeenCalledOnce();
+      expect(output.fail).toHaveBeenCalledWith({ tag: 'failed', val: reason.message });
+      expect(output.finish).not.toHaveBeenCalled();
     });
 
     it('closes supplied stdin when the command does not declare it', async () => {
@@ -1280,8 +1350,10 @@ describe('tool guest exports', () => {
         .implement({ 'no-streams': async () => ok(undefined) });
 
       await expect(
-        tool.invoke('no-streams', [], invocationInput('no-streams'), stdin, { tag: 'anonymous' }),
-      ).resolves.toEqual({ result: undefined, stdout: undefined });
+        tool.invoke('no-streams', [], invocationInput('no-streams'), stdin, undefined, {
+          tag: 'anonymous',
+        }),
+      ).resolves.toEqual({ result: undefined });
       expect(iteratorReturn).toHaveBeenCalledOnce();
     });
 
@@ -1308,7 +1380,9 @@ describe('tool guest exports', () => {
         });
 
         await expect(
-          tool.invoke('stdout-validate', [], invalidInput, undefined, { tag: 'anonymous' }),
+          tool.invoke('stdout-validate', [], invalidInput, undefined, undefined, {
+            tag: 'anonymous',
+          }),
         ).rejects.toMatchObject({ tag: 'invalid-input' });
         expect(handler).not.toHaveBeenCalled();
         expect(writableStreamConstructor).not.toHaveBeenCalled();
@@ -1334,9 +1408,9 @@ describe('tool guest exports', () => {
       registered.extended.canonicalInputModel(commandNode).encodeTyped({}),
     );
 
-    await expect(tool.invoke('traps', [], input, undefined, { tag: 'anonymous' })).rejects.toBe(
-      failure,
-    );
+    await expect(
+      tool.invoke('traps', [], input, undefined, undefined, { tag: 'anonymous' }),
+    ).rejects.toBe(failure);
   });
 
   it('resolves a missing grafted child before enforcing its required stdin', async () => {
@@ -1353,7 +1427,7 @@ describe('tool guest exports', () => {
     );
 
     await expect(
-      tool.invoke('git', ['remote'], input, undefined, { tag: 'anonymous' }),
+      tool.invoke('git', ['remote'], input, undefined, undefined, { tag: 'anonymous' }),
     ).rejects.toEqual({
       tag: 'invalid-tool-name',
       val: 'remote',
@@ -1379,7 +1453,7 @@ describe('tool guest exports', () => {
     };
 
     await expect(
-      tool.invoke('echo', ['missing'], malformedInput, undefined, { tag: 'anonymous' }),
+      tool.invoke('echo', ['missing'], malformedInput, undefined, undefined, { tag: 'anonymous' }),
     ).rejects.toEqual({
       tag: 'invalid-command-path',
       val: ['missing'],

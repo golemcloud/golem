@@ -369,13 +369,39 @@ impl RustToolBridgeGenerator {
             .map(|segment| quote! { #segment.to_string() })
             .collect();
         let error_type = self.error_type(command_index, body);
-        let return_type = self.return_type(body, &error_type)?;
-        let invoke = self.invoke_expr(command_index, body, &stdin_expr, &path_tokens)?;
-        let decode = self.result_decode(body)?;
+        let has_stdout = body.stdout.is_some();
+        let return_type = if has_stdout {
+            self.started_return_type(body, &error_type)?
+        } else {
+            self.return_type(body, &error_type)?
+        };
+        let invoke = if has_stdout {
+            self.start_expr(command_index, body, &stdin_expr, &path_tokens)?
+        } else {
+            self.invoke_expr(command_index, body, &stdin_expr, &path_tokens)?
+        };
+        let decode = if has_stdout {
+            quote! {}
+        } else {
+            self.result_decode(body)?
+        };
+        let asyncness = if has_stdout {
+            quote! {}
+        } else {
+            quote! { async }
+        };
+        let completion = if has_stdout {
+            quote! { #invoke }
+        } else {
+            quote! {
+                let __result = #invoke?;
+                #decode
+            }
+        };
 
         Ok(quote! {
             #(#doc)*
-            pub async fn #method_ident(&self, #(#param_defs),*) -> #return_type {
+            pub #asyncness fn #method_ident(&self, #(#param_defs),*) -> #return_type {
                 let __schema: golem_rust::SchemaGraph = #schema;
                 let mut __fields: Vec<crate::__golem_bridge_runtime::schema::SchemaValue> = self.inherited.clone();
                 #(#field_encodes)*
@@ -383,9 +409,47 @@ impl RustToolBridgeGenerator {
                     __schema,
                     crate::__golem_bridge_runtime::schema::SchemaValue::Record { fields: __fields },
                 );
-                let __result = #invoke?;
-                #decode
+                #completion
             }
+        })
+    }
+
+    fn start_expr(
+        &mut self,
+        command_index: usize,
+        body: &CommandBody,
+        stdin_expr: &TokenStream,
+        path_tokens: &[TokenStream],
+    ) -> anyhow::Result<TokenStream> {
+        let decode_result = self.started_result_decode(body)?;
+        let decode_error = if body.errors.is_empty() {
+            quote! {
+                |_| Result::Err("unexpected custom tool error".to_string())
+            }
+        } else {
+            let error_ident = ident(
+                self.error_names
+                    .get(&command_index)
+                    .context("missing error enum")?,
+            );
+            let decode_arms = self.error_decode_arms(&error_ident, body)?;
+            quote! {
+                |__value: golem_rust::TypedSchemaValue| -> Result<#error_ident, String> {
+                    let (_, __value) = __value.into_parts();
+                    #(#decode_arms)*
+                    Err("remote tool error payload did not match any declared error case".to_string())
+                }
+            }
+        };
+        Ok(quote! {
+            golem_rust::agentic::start_tool_invocation(
+                &self.rpc,
+                &[#(#path_tokens),*],
+                &__input,
+                #stdin_expr,
+                #decode_result,
+                #decode_error,
+            )
         })
     }
 
@@ -402,7 +466,8 @@ impl RustToolBridgeGenerator {
                     &self.rpc,
                     &[#(#path_tokens),*],
                     &__input,
-                    #stdin_expr,
+                    (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
+                    None,
                 ).await
             })
         } else {
@@ -417,7 +482,8 @@ impl RustToolBridgeGenerator {
                     &self.rpc,
                     &[#(#path_tokens),*],
                     &__input,
-                    #stdin_expr,
+                    (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
+                    None,
                     |__value: golem_rust::TypedSchemaValue| -> Result<#error_ident, String> {
                         let (_, __value) = __value.into_parts();
                         #(#decode_arms)*
@@ -455,38 +521,39 @@ impl RustToolBridgeGenerator {
         Ok(arms)
     }
 
-    fn result_decode(&mut self, body: &CommandBody) -> anyhow::Result<TokenStream> {
-        match (&body.result, &body.stdout) {
-            (Some(result), Some(_)) => {
+    fn started_result_decode(&mut self, body: &CommandBody) -> anyhow::Result<TokenStream> {
+        match &body.result {
+            Some(result) => {
                 let dec =
                     self.inner
                         .emit_decode_expr(quote! { __value }, &result.type_, false, 0)?;
                 Ok(quote! {
-                    let __stdout = golem_rust::agentic::expect_stdout(__result.stdout)?;
-                    let __value = golem_rust::agentic::expect_value(__result.result)?;
-                    let (_, __value) = __value.into_parts();
-                    let __decoded = (#dec).map_err(golem_rust::agentic::tool_protocol_error)?;
-                    Ok((__decoded, __stdout))
+                    |__result| {
+                        let __value = golem_rust::agentic::expect_value(__result.result)?;
+                        let (_, __value) = __value.into_parts();
+                        (#dec).map_err(golem_rust::agentic::tool_protocol_error)
+                    }
                 })
             }
-            (Some(result), None) => {
+            None => Ok(quote! {
+                |__result| golem_rust::agentic::expect_no_value(__result.result)
+            }),
+        }
+    }
+
+    fn result_decode(&mut self, body: &CommandBody) -> anyhow::Result<TokenStream> {
+        match &body.result {
+            Some(result) => {
                 let dec =
                     self.inner
                         .emit_decode_expr(quote! { __value }, &result.type_, false, 0)?;
                 Ok(quote! {
-                    golem_rust::agentic::expect_no_stdout(__result.stdout)?;
                     let __value = golem_rust::agentic::expect_value(__result.result)?;
                     let (_, __value) = __value.into_parts();
                     (#dec).map_err(golem_rust::agentic::tool_protocol_error)
                 })
             }
-            (None, Some(_)) => Ok(quote! {
-                let __stdout = golem_rust::agentic::expect_stdout(__result.stdout)?;
-                golem_rust::agentic::expect_no_value(__result.result)?;
-                Ok(__stdout)
-            }),
-            (None, None) => Ok(quote! {
-                golem_rust::agentic::expect_no_stdout(__result.stdout)?;
+            None => Ok(quote! {
                 golem_rust::agentic::expect_no_value(__result.result)
             }),
         }
@@ -508,6 +575,23 @@ impl RustToolBridgeGenerator {
             (None, None) => quote! { () },
         };
         Ok(quote! { Result<#ok, golem_rust::agentic::ToolError<#error_type>> })
+    }
+
+    fn started_return_type(
+        &mut self,
+        body: &CommandBody,
+        error_type: &TokenStream,
+    ) -> anyhow::Result<TokenStream> {
+        let result_type = match &body.result {
+            Some(result) => self.inner.type_reference(&result.type_, false)?,
+            None => quote! { () },
+        };
+        Ok(quote! {
+            Result<
+                golem_rust::agentic::ToolInvocation<#result_type, #error_type>,
+                golem_rust::agentic::ToolError<#error_type>
+            >
+        })
     }
 
     fn error_type(&self, command_index: usize, body: &CommandBody) -> TokenStream {
@@ -983,7 +1067,7 @@ mod tests {
         for shape in [
             "pub struct GrepClient",
             "pub async fn grep(",
-            "pub async fn replace(",
+            "pub fn replace(",
             "pub enum GrepError",
             "fn new()",
         ] {

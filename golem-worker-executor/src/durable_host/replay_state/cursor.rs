@@ -1,4 +1,4 @@
-use super::claims::{StartClaim, recorded_request_payload_matches};
+use super::claims::{RequestClaimIdentity, StartClaim, recorded_request_payload_matches};
 use super::*;
 
 impl ReplayCursor {
@@ -1266,7 +1266,7 @@ impl CursorTx<'_> {
     pub(super) async fn claim_start_matching_request(
         &mut self,
         matches_identity: impl Fn(&OplogEntry) -> bool,
-        expected_request: &HostRequest,
+        expected_request: &RequestClaimIdentity,
         expected: impl FnOnce() -> String,
     ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
         // Drain any awaited terminals at the head and detect a delivery marker before the
@@ -1345,6 +1345,73 @@ impl CursorTx<'_> {
         ))
     }
 
+    /// Checks whether a `Start` matching this claim belongs to a jump-deleted region. An incomplete
+    /// entity Store uses this to continue live locally while sibling Stores finish replaying the
+    /// surviving owner-oplog tail.
+    pub(super) async fn deleted_region_contains_start(
+        &self,
+        claim: &StartClaim,
+    ) -> Result<bool, WorkerExecutorError> {
+        let replay_target = self.cursor.replay_target();
+        let regions = self
+            .st
+            .skipped_regions
+            .regions()
+            .cloned()
+            .collect::<Vec<_>>();
+        for region in regions {
+            if region.start > replay_target {
+                break;
+            }
+            let end = region.end.min(replay_target);
+            let mut next = region.start;
+            while next <= end {
+                let available = u64::from(end) - u64::from(next) + 1;
+                let entries = self
+                    .cursor
+                    .oplog
+                    .read_exact(next, CHUNK_SIZE.min(available))
+                    .await;
+                let last_read = *entries.last_key_value().unwrap().0;
+                for (_, entry) in entries {
+                    if !claim.matches_start_identity(&entry) {
+                        continue;
+                    }
+                    let request_matches = match claim.matching_request() {
+                        Some(expected_request) => {
+                            let OplogEntry::Start {
+                                request: Some(recorded_request),
+                                ..
+                            } = entry
+                            else {
+                                unreachable!(
+                                    "request-matching claim only accepts Start entries with requests"
+                                );
+                            };
+                            recorded_request_payload_matches(
+                                self.cursor.oplog.as_ref(),
+                                &recorded_request,
+                                expected_request,
+                            )
+                            .await
+                            .map_err(|error| {
+                                WorkerExecutorError::runtime(format!(
+                                    "failed to load deleted durable call request payload: {error}"
+                                ))
+                            })?
+                        }
+                        None => true,
+                    };
+                    if request_matches {
+                        return Ok(true);
+                    }
+                }
+                next = last_read.next();
+            }
+        }
+        Ok(false)
+    }
+
     /// Claims the `Start` entry described by `claim`: builds the identity predicate from the
     /// typed descriptor and drives the shared claim core ([`Self::claim_start_matching`], or its
     /// request-matching counterpart [`Self::claim_start_matching_request`] when the descriptor
@@ -1354,26 +1421,7 @@ impl CursorTx<'_> {
         &mut self,
         claim: &StartClaim,
     ) -> Result<Option<(ReplayCallHandle, Box<OplogEntry>)>, WorkerExecutorError> {
-        let matches_identity = |entry: &OplogEntry| {
-            matches!(entry, OplogEntry::Start {
-                function_name,
-                invocation_id,
-                observational_owner,
-                request,
-                durable_function_type,
-                parent_start_index,
-                ..
-            } if claim
-                .expected_function_name()
-                .is_none_or(|expected| function_name == expected)
-                && claim
-                    .expected_function_type()
-                    .is_none_or(|expected| durable_function_type == expected)
-                && invocation_id.is_none()
-                && observational_owner.is_none()
-                && request.is_some() == claim.carries_request()
-                && *parent_start_index == claim.expected_parent_start_index())
-        };
+        let matches_identity = |entry: &OplogEntry| claim.matches_start_identity(entry);
         let expected = || claim.expected_description();
         let claimed = match claim.matching_request() {
             Some(expected_request) => {
@@ -1404,7 +1452,7 @@ impl CursorTx<'_> {
     /// Switches the cursor to live mode: records `ReplayFinished` if replay was still in progress,
     /// clamps the cursor head to the replay target, and wakes every still-suspended awaiter with
     /// `Incomplete` (any durable call whose `Start` was committed but whose terminal never was).
-    pub(super) fn switch_to_live(&mut self) {
+    pub(super) fn switch_to_live(&mut self) -> HashSet<OplogIndex> {
         if !self.cursor.is_live() {
             self.record_replay_event(ReplayEvent::ReplayFinished);
         }
@@ -1415,7 +1463,7 @@ impl CursorTx<'_> {
         // Replay is over: any durable call whose `Start` was committed but whose terminal never was
         // is incomplete. Wake every still-suspended awaiter so it returns `Incomplete` instead of
         // sleeping forever waiting for a cursor that will not advance again.
-        self.st.concurrent_resolver.fail_all_pending_incomplete();
+        let incomplete_calls = self.st.concurrent_resolver.fail_all_pending_incomplete();
         // Scan-ahead-claimed `Start`s the cursor never reached are moot now: their awaiters were
         // just failed with `Incomplete`, and the cursor will not read again.
         self.st.claimed_starts.clear();
@@ -1423,6 +1471,7 @@ impl CursorTx<'_> {
         self.st.custom_subtrees.clear();
         self.st.replay_buffer.clear();
         self.notify_progress = true;
+        incomplete_calls
     }
 
     /// Resets the cursor to the start of replay after dropping a manual-update override.
@@ -1709,13 +1758,13 @@ impl ReplayState {
             .await
     }
 
-    pub async fn switch_to_live(&self) {
+    pub async fn switch_to_live(&self) -> HashSet<OplogIndex> {
         let result = self
             .run_owned_cursor_op(|state| async move {
-                state
+                let incomplete_calls = state
                     .with_tx(async |tx| {
-                        tx.switch_to_live();
-                        Ok(())
+                        let incomplete_calls = tx.switch_to_live();
+                        Ok(incomplete_calls)
                     })
                     .await?;
                 // `CursorTx::switch_to_live` publishes the cursor position directly (not via
@@ -1725,11 +1774,15 @@ impl ReplayState {
                     .oplog
                     .on_replay_progress(state.cursor.last_replayed_index())
                     .await;
-                Ok(())
+                Ok(incomplete_calls)
             })
             .await;
-        if let Err(err) = result {
-            warn!("switch_to_live cursor operation did not complete: {err}");
+        match result {
+            Ok(incomplete_calls) => incomplete_calls,
+            Err(err) => {
+                warn!("switch_to_live cursor operation did not complete: {err}");
+                HashSet::new()
+            }
         }
     }
 
@@ -1750,9 +1803,57 @@ impl ReplayState {
     /// distinguishes reconstruction of a completed body from repair of an incomplete Start. The
     /// scan is read-only and respects fork/revert deleted regions.
     pub(crate) async fn has_visible_terminal(&self, start_index: OplogIndex) -> bool {
+        self.visible_terminal_entry(start_index).await.is_some()
+    }
+
+    /// Reports whether the replay-visible oplog contains any recorded work in the durable scope
+    /// rooted at `start_index`. An incomplete filesystem-capable tool with no such work can release
+    /// its historical body-reconstruction fence while it continues staging fresh input; a tool
+    /// whose prior body started must retain the fence and reconstruct those descendants first.
+    pub(crate) async fn has_visible_scope_descendant(&self, start_index: OplogIndex) -> bool {
         let replay_target = self.replay_target();
         if start_index >= replay_target {
             return false;
+        }
+        let skipped_regions = {
+            let state = self.cursor.state.lock().await;
+            state.skipped_regions.clone()
+        };
+        let mut projection = OplogScopeProjection::new(start_index);
+        let mut next = start_index.next();
+        while next <= replay_target {
+            let available = u64::from(replay_target) - u64::from(next) + 1;
+            let entries = self
+                .cursor
+                .oplog
+                .read_exact(next, CHUNK_SIZE.min(available))
+                .await;
+            let last_read = *entries.last_key_value().unwrap().0;
+            for (index, entry) in entries {
+                if index > replay_target {
+                    break;
+                }
+                if !skipped_regions.is_in_deleted_region(index)
+                    && projection.includes(index, &entry)
+                {
+                    return true;
+                }
+            }
+            next = last_read.next();
+        }
+        false
+    }
+
+    /// Returns the replay-visible terminal for `start_index` without advancing the positional
+    /// cursor. Tool replay uses the terminal's body-execution decision before allocating a
+    /// transient Store; the ordinary reconstruction path subsequently consumes the same terminal.
+    pub(crate) async fn visible_terminal_entry(
+        &self,
+        start_index: OplogIndex,
+    ) -> Option<OplogEntry> {
+        let replay_target = self.replay_target();
+        if start_index >= replay_target {
+            return None;
         }
         let skipped_regions = {
             let state = self.cursor.state.lock().await;
@@ -1767,16 +1868,16 @@ impl ReplayState {
                 .read_exact(next, CHUNK_SIZE.min(available))
                 .await;
             let last_read = *entries.last_key_value().unwrap().0;
-            if entries.into_iter().any(|(index, entry)| {
-                index <= replay_target
-                    && !skipped_regions.is_in_deleted_region(index)
-                    && terminal_start_index(&entry) == Some(start_index)
+            if let Some((_, entry)) = entries.into_iter().find(|(index, entry)| {
+                *index <= replay_target
+                    && !skipped_regions.is_in_deleted_region(*index)
+                    && terminal_start_index(entry) == Some(start_index)
             }) {
-                return true;
+                return Some(entry);
             }
             next = last_read.next();
         }
-        false
+        None
     }
 
     /// Waits until the replay cursor is blocked on a record in `root`'s call tree that no still
@@ -2037,17 +2138,6 @@ impl ReplayState {
                 } if card.card_id() == card_id => Some((card.clone(), *wallet_generation)),
                 _ => None,
             })
-    }
-
-    /// Whether some task currently holds an open cursor transaction ([`ReplayCursor::tx`]).
-    ///
-    /// The invocation event loop can exit while a store-spawned durable task is suspended
-    /// mid-transaction (a transaction awaits oplog reads); such a task is not polled again until
-    /// the next event loop runs, so the fair cursor lock it holds would block every cursor read
-    /// issued from outside the event loop. The invocation completion path polls the event loop
-    /// until this reports `false` before any such read.
-    pub fn has_open_cursor_transaction(&self) -> bool {
-        self.cursor.state.try_lock().is_err() || self.cursor.advance_gate.try_lock().is_err()
     }
 
     /// Reads the next oplog entry, and skips every hint entry following it.

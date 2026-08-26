@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use std::collections::HashSet;
 
 /// Replayable single-shot channel used to deliver a call's [`Resolution`] from the replay cursor
 /// to the awaiting [`DurableCallSession`].
@@ -100,7 +101,7 @@ pub enum CallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
 #[allow(clippy::large_enum_variant)]
 pub enum ReconstructionReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     Replayed(Pair::Resp),
-    Cancelled,
+    Cancelled(Pair::Resp),
     Incomplete(DurableCallSession<Pair, P>),
 }
 
@@ -227,11 +228,14 @@ impl ConcurrentReplayResolver {
     /// itself) is what lets a call that is *suspended* waiting for the cursor to advance — because a
     /// concurrently-replaying sibling call owns the cursor head — make progress once replay finishes
     /// instead of hanging forever.
-    pub fn fail_all_pending_incomplete(&mut self) {
-        for (_start_idx, tx) in self.pending.drain() {
+    pub fn fail_all_pending_incomplete(&mut self) -> HashSet<OplogIndex> {
+        let mut incomplete = HashSet::with_capacity(self.pending.len());
+        for (start_idx, tx) in self.pending.drain() {
+            incomplete.insert(start_idx);
             let _ = tx.send(ResolutionOutcome::Incomplete);
         }
         self.prefetched_terminals.clear();
+        incomplete
     }
 
     /// Removes a registered awaiter without resolving it. Used when a claimed call turns out to be

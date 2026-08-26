@@ -2,7 +2,7 @@
 // Licensed under the Golem Source License v1.1
 
 import { WasmRpc } from 'golem:agent/host@2.0.0';
-import { ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
+import { createStdin, ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
 import { bridge } from '../src';
 import { GuestSchemaValueStreamHandle, validateSchemaGraph } from '../src/internal/schema-model';
@@ -124,46 +124,146 @@ describe('public bridge runtime', () => {
       value: bridge.v.string('ok'),
     });
     vi.mocked(ToolRpc).mockImplementationOnce(
-      () => ({ invokeAndAwait: vi.fn(() => ({ result: wire })) }) as never,
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => Promise.resolve({ result: wire }),
+            cancel: vi.fn(),
+          })),
+        }) as never,
     );
-    const result = await runtime.invokeAndAwait(['status'], {
-      graph: { defs: new Map(), root: bridge.t.tuple([]) },
-      value: bridge.v.tuple([]),
-    });
+    const invocation = runtime.start(
+      ['status'],
+      {
+        graph: { defs: new Map(), root: bridge.t.tuple([]) },
+        value: bridge.v.tuple([]),
+      },
+      undefined,
+      false,
+    );
+    const result = await invocation.result;
     expect(result.result?.value).toEqual(bridge.v.string('ok'));
     expect(ToolRpc).toHaveBeenCalledWith('git');
   });
 
-  it('closes stdout exactly once when structured tool result decoding fails', async () => {
+  it('stops a blocked stdin source when the host closes consumption', async () => {
+    let closeConsumption!: () => void;
+    const consumptionClosed = new Promise<void>((resolve) => {
+      closeConsumption = resolve;
+    });
+    const writer = {
+      write: vi.fn().mockResolvedValue(undefined),
+      finish: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(createStdin).mockReturnValue([
+      writer,
+      {},
+      { wait: vi.fn(() => consumptionClosed) },
+    ] as never);
+    vi.mocked(ToolRpc).mockImplementationOnce(
+      () =>
+        ({
+          asyncInvokeAndAwait: vi.fn(() => ({
+            get: () => new Promise<never>(() => {}),
+            cancel: vi.fn(),
+          })),
+        }) as never,
+    );
+    const cancelSource = vi.fn();
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const source = new ReadableStream<Uint8Array>({
+      pull() {
+        markReadStarted();
+        return new Promise(() => undefined);
+      },
+      cancel: cancelSource,
+    });
+
+    bridge.createToolClientTransport('blocked-stdin').start([], {} as never, source, false);
+    await readStarted;
+    closeConsumption();
+
+    await vi.waitFor(() => expect(cancelSource).toHaveBeenCalledOnce(), { timeout: 100 });
+  });
+
+  it('forwards cancellation to a transport invocation whose cancel method uses its receiver', () => {
+    const rawInvocation = {
+      cancelled: false,
+      result: new Promise<never>(() => {}),
+      cancel() {
+        this.cancelled = true;
+      },
+    };
+    const runtime = bridge.createToolClientRuntime('receiver-bound-cancel', {
+      start: () => rawInvocation,
+    });
+
+    runtime
+      .start(
+        [],
+        {
+          graph: { defs: new Map(), root: bridge.t.tuple([]) },
+          value: bridge.v.tuple([]),
+        },
+        undefined,
+        false,
+      )
+      .cancel();
+
+    expect(rawInvocation.cancelled).toBe(true);
+  });
+
+  it('keeps stdout independently consumable when structured result decoding fails', async () => {
     const close = vi.fn().mockResolvedValue({ done: true, value: undefined });
-    const stdout: AsyncIterable<number> = {
+    const next = vi
+      .fn()
+      .mockResolvedValueOnce({
+        done: false,
+        value: { tag: 'ok', val: Uint8Array.of(1, 2) },
+      })
+      .mockResolvedValue({ done: true, value: undefined });
+    const stdout = {
       [Symbol.asyncIterator]: () => ({
-        next: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+        next,
         return: close,
       }),
     };
     const runtime = bridge.createToolClientRuntime('broken-result', {
-      invokeAndAwait: () => ({
-        result: {
-          graph: { typeNodes: [], defs: [], root: 0 },
-          value: { valueNodes: [], root: 0 },
-        },
+      start: () => ({
+        result: Promise.resolve({
+          result: {
+            graph: { typeNodes: [], defs: [], root: 0 },
+            value: { valueNodes: [], root: 0 },
+          },
+        }),
         stdout,
+        cancel: vi.fn(),
       }),
     });
 
-    await expect(
-      runtime.invokeAndAwait([], {
+    const invocation = runtime.start(
+      [],
+      {
         graph: { defs: new Map(), root: bridge.t.tuple([]) },
         value: bridge.v.tuple([]),
-      }),
-    ).rejects.toThrow();
-    expect(close).toHaveBeenCalledOnce();
+      },
+      undefined,
+      true,
+    );
+    await expect(invocation.result).rejects.toThrow();
+    const chunks = [];
+    for await (const item of invocation.stdout!) chunks.push(item);
+    expect(chunks).toEqual([{ tag: 'ok', val: Uint8Array.of(1, 2) }]);
+    expect(close).not.toHaveBeenCalled();
   });
 
   it('transfers stdout ownership when structured tool result decoding succeeds', async () => {
     const close = vi.fn().mockResolvedValue({ done: true, value: undefined });
-    const stdout: AsyncIterable<number> = {
+    const stdout = {
       [Symbol.asyncIterator]: () => ({
         next: vi.fn().mockResolvedValue({ done: true, value: undefined }),
         return: close,
@@ -174,15 +274,24 @@ describe('public bridge runtime', () => {
       value: bridge.v.string('ok'),
     };
     const runtime = bridge.createToolClientRuntime('valid-result', {
-      invokeAndAwait: () => ({ result: bridge.typedSchemaValueToWit(typed), stdout }),
+      start: () => ({
+        result: Promise.resolve({ result: bridge.typedSchemaValueToWit(typed) }),
+        stdout,
+        cancel: vi.fn(),
+      }),
     });
 
-    await expect(
-      runtime.invokeAndAwait([], {
+    const invocation = runtime.start(
+      [],
+      {
         graph: { defs: new Map(), root: bridge.t.tuple([]) },
         value: bridge.v.tuple([]),
-      }),
-    ).resolves.toEqual({ result: typed, stdout });
+      },
+      undefined,
+      true,
+    );
+    await expect(invocation.result).resolves.toEqual({ result: typed });
+    expect(invocation.stdout).toBe(stdout);
     expect(close).not.toHaveBeenCalled();
   });
 

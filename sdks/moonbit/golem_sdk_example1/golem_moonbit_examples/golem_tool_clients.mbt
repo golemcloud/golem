@@ -16,7 +16,7 @@ pub fn CanonicalGrepClient::drop(self : CanonicalGrepClient) -> Unit {
 }
 
 ///|
-pub async fn CanonicalGrepClient::canonical_grep(
+pub fn CanonicalGrepClient::canonical_grep(
   self : CanonicalGrepClient,
   case_sensitive : Bool,
   color : CanonicalGrepColorMode,
@@ -26,7 +26,7 @@ pub async fn CanonicalGrepClient::canonical_grep(
   files : Array[@schema.Path],
   stdin : @asyncCore.Stream[Byte],
 ) -> Result[
-  (Array[CanonicalGrepHit], @asyncCore.Stream[Byte]),
+  @tool.TypedToolInvocation[Array[CanonicalGrepHit], CanonicalGrepError],
   @tool.ToolError[CanonicalGrepError],
 ] {
   let __golem_def = __golem_tool_def_CanonicalGrep()
@@ -53,9 +53,12 @@ pub async fn CanonicalGrepClient::canonical_grep(
     __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
   }
   match
-    self.client.invoke_and_await_tool_error([], __golem_input, Some(stdin)) {
+    self.client.start([], __golem_input, Some(stdin), true, fn(__golem_value) {
+      CanonicalGrepError::from_error_payload_value(__golem_value)
+    }) {
     Err(__golem_error) => Err(__golem_error)
-    Ok(__golem_result) => @tool.decode_result_with_stdout(__golem_result)
+    Ok(__golem_invocation) =>
+      @tool.typed_invocation(__golem_invocation, @tool.decode_result_value)
   }
 }
 
@@ -529,5 +532,57 @@ pub async fn CanonicalBigBoundClient::canonical_big_bound(
   match self.client.invoke_and_await_tool_error([], __golem_input, None) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_result_empty(__golem_result)
+  }
+}
+
+///|
+pub(all) struct MoonbitStreamingClient {
+  client : @tool.ToolClient
+}
+
+///|
+pub fn MoonbitStreamingClient::new() -> MoonbitStreamingClient {
+  { client: @tool.ToolClient::new("moonbit-streaming") }
+}
+
+///|
+pub fn MoonbitStreamingClient::drop(self : MoonbitStreamingClient) -> Unit {
+  self.client.drop()
+}
+
+///|
+pub fn MoonbitStreamingClient::stream(
+  self : MoonbitStreamingClient,
+  mode : String,
+  stdin : @asyncCore.Stream[Byte],
+) -> Result[
+  @tool.TypedToolInvocation[UInt64, @tool.NoToolError],
+  @tool.ToolError[@tool.NoToolError],
+] {
+  let __golem_def = __golem_tool_def_MoonBitStreaming()
+  let __golem_index = match __golem_def.command_index_by_path(["stream"]) {
+    Some(__golem_index) => __golem_index
+    None =>
+      return Err(
+        @tool.tool_protocol_error(
+          "generated command path is missing from descriptor",
+        ),
+      )
+  }
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
+    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  }
+  let __golem_values = []
+  __golem_values.push(("mode", @schema.to_value_as(mode)))
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
+    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  }
+  match
+    self.client.start(["stream"], __golem_input, Some(stdin), true, fn(_) {
+      Err("remote custom tool error is not declared by this client")
+    }) {
+    Err(__golem_error) => Err(__golem_error)
+    Ok(__golem_invocation) =>
+      @tool.typed_invocation(__golem_invocation, @tool.decode_result_value)
   }
 }

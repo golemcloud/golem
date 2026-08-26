@@ -37,6 +37,8 @@ import scala.meta.parsers._
  */
 object AutoRegisterCodegen {
 
+  private val MaxRegistrationsPerMethod = 8
+
   final case class SourceInput(path: String, content: String)
 
   final case class Warning(path: Option[String], message: String)
@@ -173,6 +175,26 @@ object AutoRegisterCodegen {
       case Registration.Tool(ti)  => buildToolRegistrationCall(ti)
     }
 
+    val registrationMethods: List[Stat] =
+      registrationStats
+        .grouped(MaxRegistrationsPerMethod)
+        .zipWithIndex
+        .map { case (stats, index) =>
+          val methodName = Term.Name(s"__golemRegisterBatch$index")
+          q"""
+          private def $methodName(): Unit = {
+            ..$stats
+            ()
+          }
+        """
+        }
+        .toList
+
+    val registrationMethodCalls: List[Stat] = registrationMethods.indices.toList.map { index =>
+      val methodName = Term.Name(s"__golemRegisterBatch$index")
+      q"$methodName()"
+    }
+
     val imports: List[Stat] =
       List(
         if (registrations.exists(_.isInstanceOf[Registration.Agent]))
@@ -191,8 +213,10 @@ object AutoRegisterCodegen {
         private[golem] object $objName {
           private val __golemSurfaceVersion = ${Lit.String(surfaceFingerprint)}
 
+          ..$registrationMethods;
+
           def register(): Unit = {
-            ..$registrationStats
+            ..$registrationMethodCalls
             ()
           }
         }

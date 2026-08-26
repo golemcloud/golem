@@ -21,7 +21,95 @@ pub(all) suberror RpcError {
   NotFound(String)
   RemoteInternalError(String)
   RemoteToolError(@common.ToolError)
+  Cancelled
+  ResourceExhausted(String)
 } derive(Show, Eq)
+
+///|
+/// Recoverable attachment failures are stream values rather than Component
+/// Model stream errors. A producer emits one final failure item and then
+/// closes the underlying stream. Clean EOF is represented only by closure.
+pub(all) enum ByteStreamFailure {
+  Cancelled
+  Abandoned
+  ResourceExhausted
+  Failed(String)
+} derive(Show, Eq)
+
+///|
+pub(all) enum ByteStreamCloseCause {
+  Finished
+  Failed(ByteStreamFailure)
+  ConsumerCancelled
+} derive(Show, Eq)
+
+///|
+pub(all) suberror StreamWriteError {
+  Closed(ByteStreamCloseCause)
+  ConcurrentOperation
+} derive(Show, Eq)
+
+///|
+/// Producer endpoint for caller-provided stdin. Exactly one write, finish,
+/// or fail operation may be outstanding. The first terminal is immutable;
+/// dropping an open writer selects `abandoned`.
+pub(all) struct ToolStdinWriter(Int) derive(Show, Eq)
+
+///|
+/// Drops a resource handle.
+pub fn ToolStdinWriter::drop(self : ToolStdinWriter) -> Unit {
+  let ToolStdinWriter(resource) = self
+  wasmImportResourceDropToolStdinWriter(resource)
+}
+
+///|
+/// Single-use source capability consumed by one tool invocation. Dropping
+/// it unused selects consumer cancellation for the paired writer.
+pub(all) struct ToolStdin(Int) derive(Show, Eq)
+
+///|
+/// Drops a resource handle.
+pub fn ToolStdin::drop(self : ToolStdin) -> Unit {
+  let ToolStdin(resource) = self
+  wasmImportResourceDropToolStdin(resource)
+}
+
+///|
+/// Independent watcher used by an SDK pump to stop a blocked native source
+/// read when the tool no longer consumes stdin.
+pub(all) struct ToolStdinClosed(Int) derive(Show, Eq)
+
+///|
+/// Drops a resource handle.
+pub fn ToolStdinClosed::drop(self : ToolStdinClosed) -> Unit {
+  let ToolStdinClosed(resource) = self
+  wasmImportResourceDropToolStdinClosed(resource)
+}
+
+///|
+/// Single-use output target consumed by one result-bearing invocation.
+/// Dropping it unused fails the paired reader as abandoned.
+pub(all) struct ToolStdout(Int) derive(Show, Eq)
+
+///|
+/// Drops a resource handle.
+pub fn ToolStdout::drop(self : ToolStdout) -> Unit {
+  let ToolStdout(resource) = self
+  wasmImportResourceDropToolStdout(resource)
+}
+
+///|
+/// Host-owned writer supplied to the tool implementation. Exactly one
+/// write, finish, or fail operation may be outstanding. The first terminal
+/// is immutable; dropping an open writer selects `abandoned`.
+pub(all) struct ToolStdoutWriter(Int) derive(Show, Eq)
+
+///|
+/// Drops a resource handle.
+pub fn ToolStdoutWriter::drop(self : ToolStdoutWriter) -> Unit {
+  let ToolStdoutWriter(resource) = self
+  wasmImportResourceDropToolStdoutWriter(resource)
+}
 
 ///|
 pub(all) struct ToolRpc(Int) derive(Show, Eq)
@@ -14209,6 +14297,718 @@ pub fn get_tool(name : String) -> RegisteredTool? {
 }
 
 ///|
+pub async fn ToolStdinWriter::write(
+  self : ToolStdinWriter,
+  bytes : FixedArray[Byte],
+) -> Result[Unit, StreamWriteError] {
+  let ToolStdinWriter(handle) = self
+
+  let ptr = mbt_ffi_bytes2ptr(bytes)
+
+  let lower_arg = handle
+  let lower_arg0 = ptr
+  let lower_arg1 = bytes.length()
+  let result_ptr = mbt_ffi_malloc(24 * 1)
+  defer mbt_ffi_free(result_ptr)
+
+  let subtask_code = wasmImportMethodToolStdinWriterWrite(
+    lower_arg, lower_arg0, lower_arg1, result_ptr,
+  )
+  @async-core.suspend_for_subtask(
+    subtask_code,
+    fn(before_started) {
+      if before_started {
+        mbt_ffi_free(lower_arg0)
+      } else {
+        mbt_ffi_free(lower_arg0)
+      }
+    },
+    fn() {
+      match mbt_ffi_load8_u(result_ptr + 0) {
+        0 => ()
+        1 =>
+          match mbt_ffi_load8_u(result_ptr + 4) {
+            0 =>
+              match mbt_ffi_load8_u(result_ptr + 8) {
+                0 => ()
+                1 =>
+                  match mbt_ffi_load8_u(result_ptr + 12) {
+                    0 => ()
+                    1 => ()
+                    2 => ()
+                    3 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 16))
+                    _ => panic()
+                  }
+                2 => ()
+                _ => panic()
+              }
+            1 => ()
+            _ => panic()
+          }
+        _ => panic()
+      }
+    },
+  )
+
+  let lifted2 = match mbt_ffi_load8_u(result_ptr + 0) {
+    0 => Result::Ok(())
+    1 => {
+      let lifted1 = match mbt_ffi_load8_u(result_ptr + 4) {
+        0 => {
+          let lifted0 = match mbt_ffi_load8_u(result_ptr + 8) {
+            0 => ByteStreamCloseCause::Finished
+            1 => {
+              let lifted = match mbt_ffi_load8_u(result_ptr + 12) {
+                0 => ByteStreamFailure::Cancelled
+                1 => ByteStreamFailure::Abandoned
+                2 => ByteStreamFailure::ResourceExhausted
+                3 => {
+                  let result = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(result_ptr + 16),
+                    mbt_ffi_load32(result_ptr + 20),
+                  )
+
+                  ByteStreamFailure::Failed(result)
+                }
+                _ => panic()
+              }
+
+              ByteStreamCloseCause::Failed(lifted)
+            }
+            2 => ByteStreamCloseCause::ConsumerCancelled
+            _ => panic()
+          }
+
+          StreamWriteError::Closed(lifted0)
+        }
+        1 => StreamWriteError::ConcurrentOperation
+        _ => panic()
+      }
+
+      Result::Err(lifted1)
+    }
+    _ => panic()
+  }
+
+  lifted2
+}
+
+///|
+pub async fn ToolStdinWriter::finish(
+  self : ToolStdinWriter,
+) -> Result[Unit, StreamWriteError] {
+  let ToolStdinWriter(handle) = self
+
+  let lower_arg = handle
+  let result_ptr = mbt_ffi_malloc(24 * 1)
+  defer mbt_ffi_free(result_ptr)
+
+  let subtask_code = wasmImportMethodToolStdinWriterFinish(
+    lower_arg, result_ptr,
+  )
+  @async-core.suspend_for_subtask(
+    subtask_code,
+    fn(before_started) { if before_started { () } else { () } },
+    fn() {
+      match mbt_ffi_load8_u(result_ptr + 0) {
+        0 => ()
+        1 =>
+          match mbt_ffi_load8_u(result_ptr + 4) {
+            0 =>
+              match mbt_ffi_load8_u(result_ptr + 8) {
+                0 => ()
+                1 =>
+                  match mbt_ffi_load8_u(result_ptr + 12) {
+                    0 => ()
+                    1 => ()
+                    2 => ()
+                    3 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 16))
+                    _ => panic()
+                  }
+                2 => ()
+                _ => panic()
+              }
+            1 => ()
+            _ => panic()
+          }
+        _ => panic()
+      }
+    },
+  )
+
+  let lifted2 = match mbt_ffi_load8_u(result_ptr + 0) {
+    0 => Result::Ok(())
+    1 => {
+      let lifted1 = match mbt_ffi_load8_u(result_ptr + 4) {
+        0 => {
+          let lifted0 = match mbt_ffi_load8_u(result_ptr + 8) {
+            0 => ByteStreamCloseCause::Finished
+            1 => {
+              let lifted = match mbt_ffi_load8_u(result_ptr + 12) {
+                0 => ByteStreamFailure::Cancelled
+                1 => ByteStreamFailure::Abandoned
+                2 => ByteStreamFailure::ResourceExhausted
+                3 => {
+                  let result = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(result_ptr + 16),
+                    mbt_ffi_load32(result_ptr + 20),
+                  )
+
+                  ByteStreamFailure::Failed(result)
+                }
+                _ => panic()
+              }
+
+              ByteStreamCloseCause::Failed(lifted)
+            }
+            2 => ByteStreamCloseCause::ConsumerCancelled
+            _ => panic()
+          }
+
+          StreamWriteError::Closed(lifted0)
+        }
+        1 => StreamWriteError::ConcurrentOperation
+        _ => panic()
+      }
+
+      Result::Err(lifted1)
+    }
+    _ => panic()
+  }
+
+  lifted2
+}
+
+///|
+pub async fn ToolStdinWriter::fail(
+  self : ToolStdinWriter,
+  reason : ByteStreamFailure,
+) -> Result[Unit, StreamWriteError] {
+  let ToolStdinWriter(handle) = self
+
+  let (lowered, lowered3, lowered4) = match reason {
+    Cancelled => (0, 0, 0)
+    Abandoned => (1, 0, 0)
+    ResourceExhausted => (2, 0, 0)
+    Failed(payload2) => {
+      let ptr = mbt_ffi_str2ptr(payload2)
+
+      (3, ptr, payload2.length())
+    }
+  }
+
+  let lower_arg = handle
+  let lower_arg0 = lowered
+  let lower_arg1 = lowered3
+  let lower_arg2 = lowered4
+  let result_ptr = mbt_ffi_malloc(24 * 1)
+  defer mbt_ffi_free(result_ptr)
+
+  let subtask_code = wasmImportMethodToolStdinWriterFail(
+    lower_arg, lower_arg0, lower_arg1, lower_arg2, result_ptr,
+  )
+  @async-core.suspend_for_subtask(
+    subtask_code,
+    fn(before_started) {
+      if before_started {
+        match lower_arg0 {
+          0 => ()
+          1 => ()
+          2 => ()
+          3 => mbt_ffi_free(lower_arg1)
+          _ => panic()
+        }
+      } else {
+        match lower_arg0 {
+          0 => ()
+          1 => ()
+          2 => ()
+          3 => mbt_ffi_free(lower_arg1)
+          _ => panic()
+        }
+      }
+    },
+    fn() {
+      match mbt_ffi_load8_u(result_ptr + 0) {
+        0 => ()
+        1 =>
+          match mbt_ffi_load8_u(result_ptr + 4) {
+            0 =>
+              match mbt_ffi_load8_u(result_ptr + 8) {
+                0 => ()
+                1 =>
+                  match mbt_ffi_load8_u(result_ptr + 12) {
+                    0 => ()
+                    1 => ()
+                    2 => ()
+                    3 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 16))
+                    _ => panic()
+                  }
+                2 => ()
+                _ => panic()
+              }
+            1 => ()
+            _ => panic()
+          }
+        _ => panic()
+      }
+    },
+  )
+
+  let lifted2 = match mbt_ffi_load8_u(result_ptr + 0) {
+    0 => Result::Ok(())
+    1 => {
+      let lifted1 = match mbt_ffi_load8_u(result_ptr + 4) {
+        0 => {
+          let lifted0 = match mbt_ffi_load8_u(result_ptr + 8) {
+            0 => ByteStreamCloseCause::Finished
+            1 => {
+              let lifted = match mbt_ffi_load8_u(result_ptr + 12) {
+                0 => ByteStreamFailure::Cancelled
+                1 => ByteStreamFailure::Abandoned
+                2 => ByteStreamFailure::ResourceExhausted
+                3 => {
+                  let result = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(result_ptr + 16),
+                    mbt_ffi_load32(result_ptr + 20),
+                  )
+
+                  ByteStreamFailure::Failed(result)
+                }
+                _ => panic()
+              }
+
+              ByteStreamCloseCause::Failed(lifted)
+            }
+            2 => ByteStreamCloseCause::ConsumerCancelled
+            _ => panic()
+          }
+
+          StreamWriteError::Closed(lifted0)
+        }
+        1 => StreamWriteError::ConcurrentOperation
+        _ => panic()
+      }
+
+      Result::Err(lifted1)
+    }
+    _ => panic()
+  }
+
+  lifted2
+}
+
+///|
+pub async fn ToolStdinClosed::wait(
+  self : ToolStdinClosed,
+) -> ByteStreamCloseCause {
+  let ToolStdinClosed(handle) = self
+
+  let lower_arg = handle
+  let result_ptr = mbt_ffi_malloc(16 * 1)
+  defer mbt_ffi_free(result_ptr)
+
+  let subtask_code = wasmImportMethodToolStdinClosedWait(lower_arg, result_ptr)
+  @async-core.suspend_for_subtask(
+    subtask_code,
+    fn(before_started) { if before_started { () } else { () } },
+    fn() {
+      match mbt_ffi_load8_u(result_ptr + 0) {
+        0 => ()
+        1 =>
+          match mbt_ffi_load8_u(result_ptr + 4) {
+            0 => ()
+            1 => ()
+            2 => ()
+            3 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 8))
+            _ => panic()
+          }
+        2 => ()
+        _ => panic()
+      }
+    },
+  )
+
+  let lifted0 = match mbt_ffi_load8_u(result_ptr + 0) {
+    0 => ByteStreamCloseCause::Finished
+    1 => {
+      let lifted = match mbt_ffi_load8_u(result_ptr + 4) {
+        0 => ByteStreamFailure::Cancelled
+        1 => ByteStreamFailure::Abandoned
+        2 => ByteStreamFailure::ResourceExhausted
+        3 => {
+          let result = mbt_ffi_ptr2str(
+            mbt_ffi_load32(result_ptr + 8),
+            mbt_ffi_load32(result_ptr + 12),
+          )
+
+          ByteStreamFailure::Failed(result)
+        }
+        _ => panic()
+      }
+
+      ByteStreamCloseCause::Failed(lifted)
+    }
+    2 => ByteStreamCloseCause::ConsumerCancelled
+    _ => panic()
+  }
+
+  lifted0
+}
+
+///|
+/// Creates caller stdin endpoints. The writer and closure watcher remain
+/// with the caller; the source is moved into one invocation.
+pub fn create_stdin() -> (ToolStdinWriter, ToolStdin, ToolStdinClosed) {
+  let return_area = mbt_ffi_malloc(12)
+  wasmImportCreateStdin(return_area)
+  let ret = (
+    ToolStdinWriter::ToolStdinWriter(mbt_ffi_load32(return_area + 0)),
+    ToolStdin::ToolStdin(mbt_ffi_load32(return_area + 4)),
+    ToolStdinClosed::ToolStdinClosed(mbt_ffi_load32(return_area + 8)),
+  )
+  mbt_ffi_free(return_area)
+  return ret
+}
+
+///|
+/// Transfers an SDK-native input stream across the component boundary and
+/// pumps it into a directional stdin attachment. This is equivalent to
+/// `create-stdin` plus a caller-owned pump, but also supports non-numeric
+/// stream items that cannot rendezvous within one Component Model task.
+pub fn create_stdin_from_stream(
+  source : @async-core.Stream[Result[FixedArray[Byte], ByteStreamFailure]],
+) -> ToolStdin {
+  let lower_arg = wasmGolemToolHost010CreateStdinFromStreamStream0StreamLower(
+    source,
+  )
+  let result : Int = wasmImportCreateStdinFromStream(lower_arg)
+  wasmGolemToolHost010CreateStdinFromStreamStream0StreamCommit(lower_arg)
+  let ret = ToolStdin::ToolStdin(result)
+  return ret
+}
+
+///|
+/// Creates the output target and caller-readable stream before invocation.
+/// Dropping the reader cancels only this attachment's consumer role.
+pub fn create_stdout() -> (
+  ToolStdout,
+  @async-core.Stream[Result[FixedArray[Byte], ByteStreamFailure]],
+) {
+  let return_area = mbt_ffi_malloc(8)
+  let lower_arg = return_area
+  wasmImportCreateStdout(lower_arg)
+  let result = wasmGolemToolHost010CreateStdoutStream0StreamLift(
+    mbt_ffi_load32(return_area + 4),
+  )
+  let ret = (ToolStdout::ToolStdout(mbt_ffi_load32(return_area + 0)), result)
+  mbt_ffi_free(return_area)
+  return ret
+}
+
+///|
+pub async fn ToolStdoutWriter::write(
+  self : ToolStdoutWriter,
+  bytes : FixedArray[Byte],
+) -> Result[Unit, StreamWriteError] {
+  let ToolStdoutWriter(handle) = self
+
+  let ptr = mbt_ffi_bytes2ptr(bytes)
+
+  let lower_arg = handle
+  let lower_arg0 = ptr
+  let lower_arg1 = bytes.length()
+  let result_ptr = mbt_ffi_malloc(24 * 1)
+  defer mbt_ffi_free(result_ptr)
+
+  let subtask_code = wasmImportMethodToolStdoutWriterWrite(
+    lower_arg, lower_arg0, lower_arg1, result_ptr,
+  )
+  @async-core.suspend_for_subtask(
+    subtask_code,
+    fn(before_started) {
+      if before_started {
+        mbt_ffi_free(lower_arg0)
+      } else {
+        mbt_ffi_free(lower_arg0)
+      }
+    },
+    fn() {
+      match mbt_ffi_load8_u(result_ptr + 0) {
+        0 => ()
+        1 =>
+          match mbt_ffi_load8_u(result_ptr + 4) {
+            0 =>
+              match mbt_ffi_load8_u(result_ptr + 8) {
+                0 => ()
+                1 =>
+                  match mbt_ffi_load8_u(result_ptr + 12) {
+                    0 => ()
+                    1 => ()
+                    2 => ()
+                    3 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 16))
+                    _ => panic()
+                  }
+                2 => ()
+                _ => panic()
+              }
+            1 => ()
+            _ => panic()
+          }
+        _ => panic()
+      }
+    },
+  )
+
+  let lifted2 = match mbt_ffi_load8_u(result_ptr + 0) {
+    0 => Result::Ok(())
+    1 => {
+      let lifted1 = match mbt_ffi_load8_u(result_ptr + 4) {
+        0 => {
+          let lifted0 = match mbt_ffi_load8_u(result_ptr + 8) {
+            0 => ByteStreamCloseCause::Finished
+            1 => {
+              let lifted = match mbt_ffi_load8_u(result_ptr + 12) {
+                0 => ByteStreamFailure::Cancelled
+                1 => ByteStreamFailure::Abandoned
+                2 => ByteStreamFailure::ResourceExhausted
+                3 => {
+                  let result = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(result_ptr + 16),
+                    mbt_ffi_load32(result_ptr + 20),
+                  )
+
+                  ByteStreamFailure::Failed(result)
+                }
+                _ => panic()
+              }
+
+              ByteStreamCloseCause::Failed(lifted)
+            }
+            2 => ByteStreamCloseCause::ConsumerCancelled
+            _ => panic()
+          }
+
+          StreamWriteError::Closed(lifted0)
+        }
+        1 => StreamWriteError::ConcurrentOperation
+        _ => panic()
+      }
+
+      Result::Err(lifted1)
+    }
+    _ => panic()
+  }
+
+  lifted2
+}
+
+///|
+pub async fn ToolStdoutWriter::finish(
+  self : ToolStdoutWriter,
+) -> Result[Unit, StreamWriteError] {
+  let ToolStdoutWriter(handle) = self
+
+  let lower_arg = handle
+  let result_ptr = mbt_ffi_malloc(24 * 1)
+  defer mbt_ffi_free(result_ptr)
+
+  let subtask_code = wasmImportMethodToolStdoutWriterFinish(
+    lower_arg, result_ptr,
+  )
+  @async-core.suspend_for_subtask(
+    subtask_code,
+    fn(before_started) { if before_started { () } else { () } },
+    fn() {
+      match mbt_ffi_load8_u(result_ptr + 0) {
+        0 => ()
+        1 =>
+          match mbt_ffi_load8_u(result_ptr + 4) {
+            0 =>
+              match mbt_ffi_load8_u(result_ptr + 8) {
+                0 => ()
+                1 =>
+                  match mbt_ffi_load8_u(result_ptr + 12) {
+                    0 => ()
+                    1 => ()
+                    2 => ()
+                    3 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 16))
+                    _ => panic()
+                  }
+                2 => ()
+                _ => panic()
+              }
+            1 => ()
+            _ => panic()
+          }
+        _ => panic()
+      }
+    },
+  )
+
+  let lifted2 = match mbt_ffi_load8_u(result_ptr + 0) {
+    0 => Result::Ok(())
+    1 => {
+      let lifted1 = match mbt_ffi_load8_u(result_ptr + 4) {
+        0 => {
+          let lifted0 = match mbt_ffi_load8_u(result_ptr + 8) {
+            0 => ByteStreamCloseCause::Finished
+            1 => {
+              let lifted = match mbt_ffi_load8_u(result_ptr + 12) {
+                0 => ByteStreamFailure::Cancelled
+                1 => ByteStreamFailure::Abandoned
+                2 => ByteStreamFailure::ResourceExhausted
+                3 => {
+                  let result = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(result_ptr + 16),
+                    mbt_ffi_load32(result_ptr + 20),
+                  )
+
+                  ByteStreamFailure::Failed(result)
+                }
+                _ => panic()
+              }
+
+              ByteStreamCloseCause::Failed(lifted)
+            }
+            2 => ByteStreamCloseCause::ConsumerCancelled
+            _ => panic()
+          }
+
+          StreamWriteError::Closed(lifted0)
+        }
+        1 => StreamWriteError::ConcurrentOperation
+        _ => panic()
+      }
+
+      Result::Err(lifted1)
+    }
+    _ => panic()
+  }
+
+  lifted2
+}
+
+///|
+pub async fn ToolStdoutWriter::fail(
+  self : ToolStdoutWriter,
+  reason : ByteStreamFailure,
+) -> Result[Unit, StreamWriteError] {
+  let ToolStdoutWriter(handle) = self
+
+  let (lowered, lowered3, lowered4) = match reason {
+    Cancelled => (0, 0, 0)
+    Abandoned => (1, 0, 0)
+    ResourceExhausted => (2, 0, 0)
+    Failed(payload2) => {
+      let ptr = mbt_ffi_str2ptr(payload2)
+
+      (3, ptr, payload2.length())
+    }
+  }
+
+  let lower_arg = handle
+  let lower_arg0 = lowered
+  let lower_arg1 = lowered3
+  let lower_arg2 = lowered4
+  let result_ptr = mbt_ffi_malloc(24 * 1)
+  defer mbt_ffi_free(result_ptr)
+
+  let subtask_code = wasmImportMethodToolStdoutWriterFail(
+    lower_arg, lower_arg0, lower_arg1, lower_arg2, result_ptr,
+  )
+  @async-core.suspend_for_subtask(
+    subtask_code,
+    fn(before_started) {
+      if before_started {
+        match lower_arg0 {
+          0 => ()
+          1 => ()
+          2 => ()
+          3 => mbt_ffi_free(lower_arg1)
+          _ => panic()
+        }
+      } else {
+        match lower_arg0 {
+          0 => ()
+          1 => ()
+          2 => ()
+          3 => mbt_ffi_free(lower_arg1)
+          _ => panic()
+        }
+      }
+    },
+    fn() {
+      match mbt_ffi_load8_u(result_ptr + 0) {
+        0 => ()
+        1 =>
+          match mbt_ffi_load8_u(result_ptr + 4) {
+            0 =>
+              match mbt_ffi_load8_u(result_ptr + 8) {
+                0 => ()
+                1 =>
+                  match mbt_ffi_load8_u(result_ptr + 12) {
+                    0 => ()
+                    1 => ()
+                    2 => ()
+                    3 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 16))
+                    _ => panic()
+                  }
+                2 => ()
+                _ => panic()
+              }
+            1 => ()
+            _ => panic()
+          }
+        _ => panic()
+      }
+    },
+  )
+
+  let lifted2 = match mbt_ffi_load8_u(result_ptr + 0) {
+    0 => Result::Ok(())
+    1 => {
+      let lifted1 = match mbt_ffi_load8_u(result_ptr + 4) {
+        0 => {
+          let lifted0 = match mbt_ffi_load8_u(result_ptr + 8) {
+            0 => ByteStreamCloseCause::Finished
+            1 => {
+              let lifted = match mbt_ffi_load8_u(result_ptr + 12) {
+                0 => ByteStreamFailure::Cancelled
+                1 => ByteStreamFailure::Abandoned
+                2 => ByteStreamFailure::ResourceExhausted
+                3 => {
+                  let result = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(result_ptr + 16),
+                    mbt_ffi_load32(result_ptr + 20),
+                  )
+
+                  ByteStreamFailure::Failed(result)
+                }
+                _ => panic()
+              }
+
+              ByteStreamCloseCause::Failed(lifted)
+            }
+            2 => ByteStreamCloseCause::ConsumerCancelled
+            _ => panic()
+          }
+
+          StreamWriteError::Closed(lifted0)
+        }
+        1 => StreamWriteError::ConcurrentOperation
+        _ => panic()
+      }
+
+      Result::Err(lifted1)
+    }
+    _ => panic()
+  }
+
+  lifted2
+}
+
+///|
 pub fn ToolRpc::tool_rpc(tool_name : String) -> ToolRpc {
   let ptr = mbt_ffi_str2ptr(tool_name)
   let result : Int = wasmImportConstructorToolRpc(ptr, tool_name.length())
@@ -14218,13 +15018,16 @@ pub fn ToolRpc::tool_rpc(tool_name : String) -> ToolRpc {
 }
 
 ///|
+/// Waits for the structured terminal. Callers that supplied stdout must
+/// drive this wait and the already-created reader concurrently.
 pub async fn ToolRpc::invoke_and_await(
   self : ToolRpc,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @async-core.Stream[Byte]?,
+  stdin : ToolStdin?,
+  stdout : ToolStdout?,
 ) -> Result[@common.InvocationResult, RpcError] {
-  let lower_ptr : Int = mbt_ffi_malloc(52)
+  let lower_ptr : Int = mbt_ffi_malloc(60)
   defer mbt_ffi_free(lower_ptr)
 
   let ToolRpc(handle) = self
@@ -16994,12 +17797,25 @@ pub async fn ToolRpc::invoke_and_await(
     }
     Some(payload0) => {
       mbt_ffi_store8(lower_ptr + 44 + 0, 1)
-      mbt_ffi_store32(
-        lower_ptr + 44 + 4,
-        wasmGolemToolHost010MethodToolRpcInvokeAndAwaitStream0StreamLower(
-          payload0,
-        ),
-      )
+
+      let ToolStdin(handle) = payload0
+      mbt_ffi_store32(lower_ptr + 44 + 4, handle)
+
+      ()
+    }
+  }
+
+  match stdout {
+    None => {
+      mbt_ffi_store8(lower_ptr + 52 + 0, 0)
+
+      ()
+    }
+    Some(payload0) => {
+      mbt_ffi_store8(lower_ptr + 52 + 0, 1)
+
+      let ToolStdout(handle) = payload0
+      mbt_ffi_store32(lower_ptr + 52 + 4, handle)
 
       ()
     }
@@ -17597,12 +18413,13 @@ pub async fn ToolRpc::invoke_and_await(
 
         match mbt_ffi_load8_u(lower_ptr + 44) {
           0 => ()
-          1 => {
-            let result = wasmGolemToolHost010MethodToolRpcInvokeAndAwaitStream0StreamLift(
-              mbt_ffi_load32(lower_ptr + 48),
-            )
-            result.drop_sync()
-          }
+          1 => ToolStdin::ToolStdin(mbt_ffi_load32(lower_ptr + 48)).drop()
+          _ => panic()
+        }
+
+        match mbt_ffi_load8_u(lower_ptr + 52) {
+          0 => ()
+          1 => ToolStdout::ToolStdout(mbt_ffi_load32(lower_ptr + 56)).drop()
           _ => panic()
         }
       } else {
@@ -18181,10 +18998,13 @@ pub async fn ToolRpc::invoke_and_await(
 
         match mbt_ffi_load8_u(lower_ptr + 44) {
           0 => ()
-          1 =>
-            wasmGolemToolHost010MethodToolRpcInvokeAndAwaitStream0StreamCommit(
-              mbt_ffi_load32(lower_ptr + 48),
-            )
+          1 => ()
+          _ => panic()
+        }
+
+        match mbt_ffi_load8_u(lower_ptr + 52) {
+          0 => ()
+          1 => ()
           _ => panic()
         }
       }
@@ -19429,6 +20249,8 @@ pub async fn ToolRpc::invoke_and_await(
                 }
                 _ => panic()
               }
+            5 => ()
+            6 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 8))
             _ => panic()
           }
         _ => panic()
@@ -19436,7 +20258,7 @@ pub async fn ToolRpc::invoke_and_await(
     },
   )
 
-  let lifted480 = match mbt_ffi_load8_u(result_ptr + 0) {
+  let lifted481 = match mbt_ffi_load8_u(result_ptr + 0) {
     0 => {
       let lifted230 : @types.TypedSchemaValue? = match
         mbt_ffi_load8_u(result_ptr + 4) {
@@ -21558,7 +22380,7 @@ pub async fn ToolRpc::invoke_and_await(
         mbt_ffi_load8_u(result_ptr + 40) {
         0 => Option::None
         1 => {
-          let result231 = wasmGolemToolHost010MethodToolRpcInvokeAndAwaitStream1StreamLift(
+          let result231 = wasmGolemToolHost010MethodToolRpcInvokeAndAwaitStream0StreamLift(
             mbt_ffi_load32(result_ptr + 44),
           )
 
@@ -21573,7 +22395,7 @@ pub async fn ToolRpc::invoke_and_await(
       })
     }
     1 => {
-      let lifted479 = match mbt_ffi_load8_u(result_ptr + 4) {
+      let lifted480 = match mbt_ffi_load8_u(result_ptr + 4) {
         0 => {
           let result233 = mbt_ffi_ptr2str(
             mbt_ffi_load32(result_ptr + 8),
@@ -23851,29 +24673,38 @@ pub async fn ToolRpc::invoke_and_await(
 
           RpcError::RemoteToolError(lifted478)
         }
+        5 => RpcError::Cancelled
+        6 => {
+          let result479 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(result_ptr + 8),
+            mbt_ffi_load32(result_ptr + 12),
+          )
+
+          RpcError::ResourceExhausted(result479)
+        }
         _ => panic()
       }
 
-      Result::Err(lifted479)
+      Result::Err(lifted480)
     }
     _ => panic()
   }
 
-  lifted480
+  lifted481
 }
 
 ///|
-pub async fn ToolRpc::invoke(
+/// Durably admits fire-and-forget work. Declared output is discarded by
+/// the host so an absent caller reader cannot apply backpressure.
+pub fn ToolRpc::invoke(
   self : ToolRpc,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @async-core.Stream[Byte]?,
+  stdin : ToolStdin?,
 ) -> Result[Unit, RpcError] {
-  let lower_ptr : Int = mbt_ffi_malloc(52)
-  defer mbt_ffi_free(lower_ptr)
+  let cleanup_list : Array[Int] = []
 
   let ToolRpc(handle) = self
-  mbt_ffi_store32(lower_ptr + 0 + 0, handle)
 
   let address = mbt_ffi_malloc(command_path.length() * 8)
   for index = 0; index < command_path.length(); index = index + 1 {
@@ -23883,16 +24714,15 @@ pub async fn ToolRpc::invoke(
     let ptr = mbt_ffi_str2ptr(iter_elem)
     mbt_ffi_store32(iter_base + 4, iter_elem.length())
     mbt_ffi_store32(iter_base + 0, ptr)
+    cleanup_list.push(ptr)
   }
-  mbt_ffi_store32(lower_ptr + 4 + 4, command_path.length())
-  mbt_ffi_store32(lower_ptr + 4 + 0, address)
 
-  let address358 = mbt_ffi_malloc(input.graph.type_nodes.length() * 144)
-  for index359 = 0
-      index359 < input.graph.type_nodes.length()
-      index359 = index359 + 1 {
-    let iter_elem : @types.SchemaTypeNode = input.graph.type_nodes[index359]
-    let iter_base = address358 + index359 * 144
+  let address361 = mbt_ffi_malloc(input.graph.type_nodes.length() * 144)
+  for index362 = 0
+      index362 < input.graph.type_nodes.length()
+      index362 = index362 + 1 {
+    let iter_elem : @types.SchemaTypeNode = input.graph.type_nodes[index362]
+    let iter_base = address361 + index362 * 144
 
     match iter_elem.body {
       RefType(payload) => {
@@ -24007,9 +24837,10 @@ pub async fn ToolRpc::invoke(
               Some(payload15) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr = mbt_ffi_str2ptr(payload15)
+                let ptr16 = mbt_ffi_str2ptr(payload15)
                 mbt_ffi_store32(iter_base + 72, payload15.length())
-                mbt_ffi_store32(iter_base + 68, ptr)
+                mbt_ffi_store32(iter_base + 68, ptr16)
+                cleanup_list.push(ptr16)
 
                 ()
               }
@@ -24021,45 +24852,36 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      S16Type(payload16) => {
+      S16Type(payload17) => {
         mbt_ffi_store8(iter_base + 0, 3)
 
-        match payload16 {
+        match payload17 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload18) => {
+          Some(payload19) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload18.min {
+            match payload19.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload20) => {
+              Some(payload21) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload20 {
-                  Signed(payload21) => {
+                match payload21 {
+                  Signed(payload22) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload21)
+                    mbt_ffi_store64(iter_base + 32, payload22)
 
                     ()
                   }
-                  Unsigned(payload22) => {
+                  Unsigned(payload23) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload22.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload23) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload23.reinterpret_as_int64(),
@@ -24067,39 +24889,39 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload24) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload24.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload18.max {
+            match payload19.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload25) => {
+              Some(payload26) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload25 {
-                  Signed(payload26) => {
+                match payload26 {
+                  Signed(payload27) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload26)
+                    mbt_ffi_store64(iter_base + 56, payload27)
 
                     ()
                   }
-                  Unsigned(payload27) => {
+                  Unsigned(payload28) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload27.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload28) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload28.reinterpret_as_int64(),
@@ -24107,24 +24929,34 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload29) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload29.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload18.unit {
+            match payload19.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload30) => {
+              Some(payload31) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr31 = mbt_ffi_str2ptr(payload30)
-                mbt_ffi_store32(iter_base + 72, payload30.length())
-                mbt_ffi_store32(iter_base + 68, ptr31)
+                let ptr32 = mbt_ffi_str2ptr(payload31)
+                mbt_ffi_store32(iter_base + 72, payload31.length())
+                mbt_ffi_store32(iter_base + 68, ptr32)
+                cleanup_list.push(ptr32)
 
                 ()
               }
@@ -24136,45 +24968,36 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      S32Type(payload32) => {
+      S32Type(payload33) => {
         mbt_ffi_store8(iter_base + 0, 4)
 
-        match payload32 {
+        match payload33 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload34) => {
+          Some(payload35) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload34.min {
+            match payload35.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload36) => {
+              Some(payload37) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload36 {
-                  Signed(payload37) => {
+                match payload37 {
+                  Signed(payload38) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload37)
+                    mbt_ffi_store64(iter_base + 32, payload38)
 
                     ()
                   }
-                  Unsigned(payload38) => {
+                  Unsigned(payload39) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload38.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload39) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload39.reinterpret_as_int64(),
@@ -24182,39 +25005,39 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload40) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload40.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload34.max {
+            match payload35.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload41) => {
+              Some(payload42) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload41 {
-                  Signed(payload42) => {
+                match payload42 {
+                  Signed(payload43) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload42)
+                    mbt_ffi_store64(iter_base + 56, payload43)
 
                     ()
                   }
-                  Unsigned(payload43) => {
+                  Unsigned(payload44) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload43.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload44) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload44.reinterpret_as_int64(),
@@ -24222,24 +25045,34 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload45) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload45.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload34.unit {
+            match payload35.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload46) => {
+              Some(payload47) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr47 = mbt_ffi_str2ptr(payload46)
-                mbt_ffi_store32(iter_base + 72, payload46.length())
-                mbt_ffi_store32(iter_base + 68, ptr47)
+                let ptr48 = mbt_ffi_str2ptr(payload47)
+                mbt_ffi_store32(iter_base + 72, payload47.length())
+                mbt_ffi_store32(iter_base + 68, ptr48)
+                cleanup_list.push(ptr48)
 
                 ()
               }
@@ -24251,45 +25084,36 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      S64Type(payload48) => {
+      S64Type(payload49) => {
         mbt_ffi_store8(iter_base + 0, 5)
 
-        match payload48 {
+        match payload49 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload50) => {
+          Some(payload51) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload50.min {
+            match payload51.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload52) => {
+              Some(payload53) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload52 {
-                  Signed(payload53) => {
+                match payload53 {
+                  Signed(payload54) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload53)
+                    mbt_ffi_store64(iter_base + 32, payload54)
 
                     ()
                   }
-                  Unsigned(payload54) => {
+                  Unsigned(payload55) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload54.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload55) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload55.reinterpret_as_int64(),
@@ -24297,39 +25121,39 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload56) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload56.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload50.max {
+            match payload51.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload57) => {
+              Some(payload58) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload57 {
-                  Signed(payload58) => {
+                match payload58 {
+                  Signed(payload59) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload58)
+                    mbt_ffi_store64(iter_base + 56, payload59)
 
                     ()
                   }
-                  Unsigned(payload59) => {
+                  Unsigned(payload60) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload59.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload60) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload60.reinterpret_as_int64(),
@@ -24337,24 +25161,34 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload61) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload61.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload50.unit {
+            match payload51.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload62) => {
+              Some(payload63) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr63 = mbt_ffi_str2ptr(payload62)
-                mbt_ffi_store32(iter_base + 72, payload62.length())
-                mbt_ffi_store32(iter_base + 68, ptr63)
+                let ptr64 = mbt_ffi_str2ptr(payload63)
+                mbt_ffi_store32(iter_base + 72, payload63.length())
+                mbt_ffi_store32(iter_base + 68, ptr64)
+                cleanup_list.push(ptr64)
 
                 ()
               }
@@ -24366,45 +25200,36 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      U8Type(payload64) => {
+      U8Type(payload65) => {
         mbt_ffi_store8(iter_base + 0, 6)
 
-        match payload64 {
+        match payload65 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload66) => {
+          Some(payload67) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload66.min {
+            match payload67.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload68) => {
+              Some(payload69) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload68 {
-                  Signed(payload69) => {
+                match payload69 {
+                  Signed(payload70) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload69)
+                    mbt_ffi_store64(iter_base + 32, payload70)
 
                     ()
                   }
-                  Unsigned(payload70) => {
+                  Unsigned(payload71) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload70.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload71) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload71.reinterpret_as_int64(),
@@ -24412,39 +25237,39 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload72) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload72.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload66.max {
+            match payload67.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload73) => {
+              Some(payload74) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload73 {
-                  Signed(payload74) => {
+                match payload74 {
+                  Signed(payload75) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload74)
+                    mbt_ffi_store64(iter_base + 56, payload75)
 
                     ()
                   }
-                  Unsigned(payload75) => {
+                  Unsigned(payload76) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload75.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload76) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload76.reinterpret_as_int64(),
@@ -24452,24 +25277,34 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload77) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload77.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload66.unit {
+            match payload67.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload78) => {
+              Some(payload79) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr79 = mbt_ffi_str2ptr(payload78)
-                mbt_ffi_store32(iter_base + 72, payload78.length())
-                mbt_ffi_store32(iter_base + 68, ptr79)
+                let ptr80 = mbt_ffi_str2ptr(payload79)
+                mbt_ffi_store32(iter_base + 72, payload79.length())
+                mbt_ffi_store32(iter_base + 68, ptr80)
+                cleanup_list.push(ptr80)
 
                 ()
               }
@@ -24481,45 +25316,36 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      U16Type(payload80) => {
+      U16Type(payload81) => {
         mbt_ffi_store8(iter_base + 0, 7)
 
-        match payload80 {
+        match payload81 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload82) => {
+          Some(payload83) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload82.min {
+            match payload83.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload84) => {
+              Some(payload85) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload84 {
-                  Signed(payload85) => {
+                match payload85 {
+                  Signed(payload86) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload85)
+                    mbt_ffi_store64(iter_base + 32, payload86)
 
                     ()
                   }
-                  Unsigned(payload86) => {
+                  Unsigned(payload87) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload86.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload87) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload87.reinterpret_as_int64(),
@@ -24527,39 +25353,39 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload88) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload88.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload82.max {
+            match payload83.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload89) => {
+              Some(payload90) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload89 {
-                  Signed(payload90) => {
+                match payload90 {
+                  Signed(payload91) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload90)
+                    mbt_ffi_store64(iter_base + 56, payload91)
 
                     ()
                   }
-                  Unsigned(payload91) => {
+                  Unsigned(payload92) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload91.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload92) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload92.reinterpret_as_int64(),
@@ -24567,24 +25393,34 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload93) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload93.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload82.unit {
+            match payload83.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload94) => {
+              Some(payload95) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr95 = mbt_ffi_str2ptr(payload94)
-                mbt_ffi_store32(iter_base + 72, payload94.length())
-                mbt_ffi_store32(iter_base + 68, ptr95)
+                let ptr96 = mbt_ffi_str2ptr(payload95)
+                mbt_ffi_store32(iter_base + 72, payload95.length())
+                mbt_ffi_store32(iter_base + 68, ptr96)
+                cleanup_list.push(ptr96)
 
                 ()
               }
@@ -24596,45 +25432,36 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      U32Type(payload96) => {
+      U32Type(payload97) => {
         mbt_ffi_store8(iter_base + 0, 8)
 
-        match payload96 {
+        match payload97 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload98) => {
+          Some(payload99) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload98.min {
+            match payload99.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload100) => {
+              Some(payload101) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload100 {
-                  Signed(payload101) => {
+                match payload101 {
+                  Signed(payload102) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload101)
+                    mbt_ffi_store64(iter_base + 32, payload102)
 
                     ()
                   }
-                  Unsigned(payload102) => {
+                  Unsigned(payload103) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload102.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload103) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload103.reinterpret_as_int64(),
@@ -24642,39 +25469,39 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload104) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload104.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload98.max {
+            match payload99.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload105) => {
+              Some(payload106) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload105 {
-                  Signed(payload106) => {
+                match payload106 {
+                  Signed(payload107) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload106)
+                    mbt_ffi_store64(iter_base + 56, payload107)
 
                     ()
                   }
-                  Unsigned(payload107) => {
+                  Unsigned(payload108) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload107.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload108) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload108.reinterpret_as_int64(),
@@ -24682,24 +25509,34 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload109) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload109.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload98.unit {
+            match payload99.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload110) => {
+              Some(payload111) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr111 = mbt_ffi_str2ptr(payload110)
-                mbt_ffi_store32(iter_base + 72, payload110.length())
-                mbt_ffi_store32(iter_base + 68, ptr111)
+                let ptr112 = mbt_ffi_str2ptr(payload111)
+                mbt_ffi_store32(iter_base + 72, payload111.length())
+                mbt_ffi_store32(iter_base + 68, ptr112)
+                cleanup_list.push(ptr112)
 
                 ()
               }
@@ -24711,45 +25548,36 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      U64Type(payload112) => {
+      U64Type(payload113) => {
         mbt_ffi_store8(iter_base + 0, 9)
 
-        match payload112 {
+        match payload113 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload114) => {
+          Some(payload115) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload114.min {
+            match payload115.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload116) => {
+              Some(payload117) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload116 {
-                  Signed(payload117) => {
+                match payload117 {
+                  Signed(payload118) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload117)
+                    mbt_ffi_store64(iter_base + 32, payload118)
 
                     ()
                   }
-                  Unsigned(payload118) => {
+                  Unsigned(payload119) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload118.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload119) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload119.reinterpret_as_int64(),
@@ -24757,39 +25585,39 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload120) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload120.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload114.max {
+            match payload115.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload121) => {
+              Some(payload122) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload121 {
-                  Signed(payload122) => {
+                match payload122 {
+                  Signed(payload123) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload122)
+                    mbt_ffi_store64(iter_base + 56, payload123)
 
                     ()
                   }
-                  Unsigned(payload123) => {
+                  Unsigned(payload124) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload123.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload124) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload124.reinterpret_as_int64(),
@@ -24797,24 +25625,34 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload125) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload125.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload114.unit {
+            match payload115.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload126) => {
+              Some(payload127) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr127 = mbt_ffi_str2ptr(payload126)
-                mbt_ffi_store32(iter_base + 72, payload126.length())
-                mbt_ffi_store32(iter_base + 68, ptr127)
+                let ptr128 = mbt_ffi_str2ptr(payload127)
+                mbt_ffi_store32(iter_base + 72, payload127.length())
+                mbt_ffi_store32(iter_base + 68, ptr128)
+                cleanup_list.push(ptr128)
 
                 ()
               }
@@ -24826,45 +25664,36 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      F32Type(payload128) => {
+      F32Type(payload129) => {
         mbt_ffi_store8(iter_base + 0, 10)
 
-        match payload128 {
+        match payload129 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload130) => {
+          Some(payload131) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload130.min {
+            match payload131.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload132) => {
+              Some(payload133) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload132 {
-                  Signed(payload133) => {
+                match payload133 {
+                  Signed(payload134) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload133)
+                    mbt_ffi_store64(iter_base + 32, payload134)
 
                     ()
                   }
-                  Unsigned(payload134) => {
+                  Unsigned(payload135) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload134.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload135) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload135.reinterpret_as_int64(),
@@ -24872,39 +25701,39 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload136) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload136.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload130.max {
+            match payload131.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload137) => {
+              Some(payload138) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload137 {
-                  Signed(payload138) => {
+                match payload138 {
+                  Signed(payload139) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload138)
+                    mbt_ffi_store64(iter_base + 56, payload139)
 
                     ()
                   }
-                  Unsigned(payload139) => {
+                  Unsigned(payload140) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload139.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload140) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload140.reinterpret_as_int64(),
@@ -24912,24 +25741,34 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload141) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload141.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload130.unit {
+            match payload131.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload142) => {
+              Some(payload143) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr143 = mbt_ffi_str2ptr(payload142)
-                mbt_ffi_store32(iter_base + 72, payload142.length())
-                mbt_ffi_store32(iter_base + 68, ptr143)
+                let ptr144 = mbt_ffi_str2ptr(payload143)
+                mbt_ffi_store32(iter_base + 72, payload143.length())
+                mbt_ffi_store32(iter_base + 68, ptr144)
+                cleanup_list.push(ptr144)
 
                 ()
               }
@@ -24941,45 +25780,36 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      F64Type(payload144) => {
+      F64Type(payload145) => {
         mbt_ffi_store8(iter_base + 0, 11)
 
-        match payload144 {
+        match payload145 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload146) => {
+          Some(payload147) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload146.min {
+            match payload147.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload148) => {
+              Some(payload149) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload148 {
-                  Signed(payload149) => {
+                match payload149 {
+                  Signed(payload150) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload149)
+                    mbt_ffi_store64(iter_base + 32, payload150)
 
                     ()
                   }
-                  Unsigned(payload150) => {
+                  Unsigned(payload151) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload150.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload151) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload151.reinterpret_as_int64(),
@@ -24987,39 +25817,39 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload152) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload152.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload146.max {
+            match payload147.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload153) => {
+              Some(payload154) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload153 {
-                  Signed(payload154) => {
+                match payload154 {
+                  Signed(payload155) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload154)
+                    mbt_ffi_store64(iter_base + 56, payload155)
 
                     ()
                   }
-                  Unsigned(payload155) => {
+                  Unsigned(payload156) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload155.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload156) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload156.reinterpret_as_int64(),
@@ -25027,24 +25857,34 @@ pub async fn ToolRpc::invoke(
 
                     ()
                   }
+                  FloatBits(payload157) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload157.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload146.unit {
+            match payload147.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload158) => {
+              Some(payload159) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr159 = mbt_ffi_str2ptr(payload158)
-                mbt_ffi_store32(iter_base + 72, payload158.length())
-                mbt_ffi_store32(iter_base + 68, ptr159)
+                let ptr160 = mbt_ffi_str2ptr(payload159)
+                mbt_ffi_store32(iter_base + 72, payload159.length())
+                mbt_ffi_store32(iter_base + 68, ptr160)
+                cleanup_list.push(ptr160)
 
                 ()
               }
@@ -25066,19 +25906,19 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      RecordType(payload162) => {
+      RecordType(payload163) => {
         mbt_ffi_store8(iter_base + 0, 14)
 
-        let address181 = mbt_ffi_malloc(payload162.length() * 68)
-        for index182 = 0
-            index182 < payload162.length()
-            index182 = index182 + 1 {
-          let iter_elem : @types.NamedFieldType = payload162[index182]
-          let iter_base = address181 + index182 * 68
+        let address184 = mbt_ffi_malloc(payload163.length() * 68)
+        for index185 = 0
+            index185 < payload163.length()
+            index185 = index185 + 1 {
+          let iter_elem : @types.NamedFieldType = payload163[index185]
+          let iter_base = address184 + index185 * 68
 
-          let ptr163 = mbt_ffi_str2ptr(iter_elem.name)
+          let ptr164 = mbt_ffi_str2ptr(iter_elem.name)
           mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-          mbt_ffi_store32(iter_base + 0, ptr163)
+          mbt_ffi_store32(iter_base + 0, ptr164)
           mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
           match iter_elem.metadata.doc {
@@ -25087,46 +25927,51 @@ pub async fn ToolRpc::invoke(
 
               ()
             }
-            Some(payload165) => {
+            Some(payload166) => {
               mbt_ffi_store8(iter_base + 12, 1)
 
-              let ptr166 = mbt_ffi_str2ptr(payload165)
-              mbt_ffi_store32(iter_base + 20, payload165.length())
-              mbt_ffi_store32(iter_base + 16, ptr166)
+              let ptr167 = mbt_ffi_str2ptr(payload166)
+              mbt_ffi_store32(iter_base + 20, payload166.length())
+              mbt_ffi_store32(iter_base + 16, ptr167)
+              cleanup_list.push(ptr167)
 
               ()
             }
           }
 
-          let address = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
-          for index = 0
-              index < iter_elem.metadata.aliases.length()
-              index = index + 1 {
-            let iter_elem : String = iter_elem.metadata.aliases[index]
-            let iter_base = address + index * 8
-
-            let ptr167 = mbt_ffi_str2ptr(iter_elem)
-            mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr167)
-          }
-          mbt_ffi_store32(iter_base + 28, iter_elem.metadata.aliases.length())
-          mbt_ffi_store32(iter_base + 24, address)
-
           let address169 = mbt_ffi_malloc(
-            iter_elem.metadata.examples.length() * 8,
+            iter_elem.metadata.aliases.length() * 8,
           )
           for index170 = 0
-              index170 < iter_elem.metadata.examples.length()
+              index170 < iter_elem.metadata.aliases.length()
               index170 = index170 + 1 {
-            let iter_elem : String = iter_elem.metadata.examples[index170]
+            let iter_elem : String = iter_elem.metadata.aliases[index170]
             let iter_base = address169 + index170 * 8
 
             let ptr168 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
             mbt_ffi_store32(iter_base + 0, ptr168)
+            cleanup_list.push(ptr168)
+          }
+          mbt_ffi_store32(iter_base + 28, iter_elem.metadata.aliases.length())
+          mbt_ffi_store32(iter_base + 24, address169)
+
+          let address172 = mbt_ffi_malloc(
+            iter_elem.metadata.examples.length() * 8,
+          )
+          for index173 = 0
+              index173 < iter_elem.metadata.examples.length()
+              index173 = index173 + 1 {
+            let iter_elem : String = iter_elem.metadata.examples[index173]
+            let iter_base = address172 + index173 * 8
+
+            let ptr171 = mbt_ffi_str2ptr(iter_elem)
+            mbt_ffi_store32(iter_base + 4, iter_elem.length())
+            mbt_ffi_store32(iter_base + 0, ptr171)
+            cleanup_list.push(ptr171)
           }
           mbt_ffi_store32(iter_base + 36, iter_elem.metadata.examples.length())
-          mbt_ffi_store32(iter_base + 32, address169)
+          mbt_ffi_store32(iter_base + 32, address172)
 
           match iter_elem.metadata.deprecated {
             None => {
@@ -25134,12 +25979,13 @@ pub async fn ToolRpc::invoke(
 
               ()
             }
-            Some(payload172) => {
+            Some(payload175) => {
               mbt_ffi_store8(iter_base + 40, 1)
 
-              let ptr173 = mbt_ffi_str2ptr(payload172)
-              mbt_ffi_store32(iter_base + 48, payload172.length())
-              mbt_ffi_store32(iter_base + 44, ptr173)
+              let ptr176 = mbt_ffi_str2ptr(payload175)
+              mbt_ffi_store32(iter_base + 48, payload175.length())
+              mbt_ffi_store32(iter_base + 44, ptr176)
+              cleanup_list.push(ptr176)
 
               ()
             }
@@ -25151,10 +25997,10 @@ pub async fn ToolRpc::invoke(
 
               ()
             }
-            Some(payload175) => {
+            Some(payload178) => {
               mbt_ffi_store8(iter_base + 52, 1)
 
-              match payload175 {
+              match payload178 {
                 Multimodal => {
                   mbt_ffi_store8(iter_base + 56, 0)
 
@@ -25170,12 +26016,13 @@ pub async fn ToolRpc::invoke(
 
                   ()
                 }
-                Other(payload179) => {
+                Other(payload182) => {
                   mbt_ffi_store8(iter_base + 56, 3)
 
-                  let ptr180 = mbt_ffi_str2ptr(payload179)
-                  mbt_ffi_store32(iter_base + 64, payload179.length())
-                  mbt_ffi_store32(iter_base + 60, ptr180)
+                  let ptr183 = mbt_ffi_str2ptr(payload182)
+                  mbt_ffi_store32(iter_base + 64, payload182.length())
+                  mbt_ffi_store32(iter_base + 60, ptr183)
+                  cleanup_list.push(ptr183)
 
                   ()
                 }
@@ -25184,25 +26031,29 @@ pub async fn ToolRpc::invoke(
               ()
             }
           }
+          cleanup_list.push(ptr164)
+          cleanup_list.push(address169)
+          cleanup_list.push(address172)
         }
-        mbt_ffi_store32(iter_base + 12, payload162.length())
-        mbt_ffi_store32(iter_base + 8, address181)
+        mbt_ffi_store32(iter_base + 12, payload163.length())
+        mbt_ffi_store32(iter_base + 8, address184)
+        cleanup_list.push(address184)
 
         ()
       }
-      VariantType(payload183) => {
+      VariantType(payload186) => {
         mbt_ffi_store8(iter_base + 0, 15)
 
-        let address206 = mbt_ffi_malloc(payload183.length() * 72)
-        for index207 = 0
-            index207 < payload183.length()
-            index207 = index207 + 1 {
-          let iter_elem : @types.VariantCaseType = payload183[index207]
-          let iter_base = address206 + index207 * 72
+        let address209 = mbt_ffi_malloc(payload186.length() * 72)
+        for index210 = 0
+            index210 < payload186.length()
+            index210 = index210 + 1 {
+          let iter_elem : @types.VariantCaseType = payload186[index210]
+          let iter_base = address209 + index210 * 72
 
-          let ptr184 = mbt_ffi_str2ptr(iter_elem.name)
+          let ptr187 = mbt_ffi_str2ptr(iter_elem.name)
           mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-          mbt_ffi_store32(iter_base + 0, ptr184)
+          mbt_ffi_store32(iter_base + 0, ptr187)
 
           match iter_elem.payload {
             None => {
@@ -25210,9 +26061,9 @@ pub async fn ToolRpc::invoke(
 
               ()
             }
-            Some(payload186) => {
+            Some(payload189) => {
               mbt_ffi_store8(iter_base + 8, 1)
-              mbt_ffi_store32(iter_base + 12, payload186)
+              mbt_ffi_store32(iter_base + 12, payload189)
 
               ()
             }
@@ -25224,48 +26075,51 @@ pub async fn ToolRpc::invoke(
 
               ()
             }
-            Some(payload188) => {
+            Some(payload191) => {
               mbt_ffi_store8(iter_base + 16, 1)
 
-              let ptr189 = mbt_ffi_str2ptr(payload188)
-              mbt_ffi_store32(iter_base + 24, payload188.length())
-              mbt_ffi_store32(iter_base + 20, ptr189)
+              let ptr192 = mbt_ffi_str2ptr(payload191)
+              mbt_ffi_store32(iter_base + 24, payload191.length())
+              mbt_ffi_store32(iter_base + 20, ptr192)
+              cleanup_list.push(ptr192)
 
               ()
             }
           }
 
-          let address191 = mbt_ffi_malloc(
+          let address194 = mbt_ffi_malloc(
             iter_elem.metadata.aliases.length() * 8,
           )
-          for index192 = 0
-              index192 < iter_elem.metadata.aliases.length()
-              index192 = index192 + 1 {
-            let iter_elem : String = iter_elem.metadata.aliases[index192]
-            let iter_base = address191 + index192 * 8
-
-            let ptr190 = mbt_ffi_str2ptr(iter_elem)
-            mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr190)
-          }
-          mbt_ffi_store32(iter_base + 32, iter_elem.metadata.aliases.length())
-          mbt_ffi_store32(iter_base + 28, address191)
-
-          let address194 = mbt_ffi_malloc(
-            iter_elem.metadata.examples.length() * 8,
-          )
           for index195 = 0
-              index195 < iter_elem.metadata.examples.length()
+              index195 < iter_elem.metadata.aliases.length()
               index195 = index195 + 1 {
-            let iter_elem : String = iter_elem.metadata.examples[index195]
+            let iter_elem : String = iter_elem.metadata.aliases[index195]
             let iter_base = address194 + index195 * 8
 
             let ptr193 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
             mbt_ffi_store32(iter_base + 0, ptr193)
+            cleanup_list.push(ptr193)
+          }
+          mbt_ffi_store32(iter_base + 32, iter_elem.metadata.aliases.length())
+          mbt_ffi_store32(iter_base + 28, address194)
+
+          let address197 = mbt_ffi_malloc(
+            iter_elem.metadata.examples.length() * 8,
+          )
+          for index198 = 0
+              index198 < iter_elem.metadata.examples.length()
+              index198 = index198 + 1 {
+            let iter_elem : String = iter_elem.metadata.examples[index198]
+            let iter_base = address197 + index198 * 8
+
+            let ptr196 = mbt_ffi_str2ptr(iter_elem)
+            mbt_ffi_store32(iter_base + 4, iter_elem.length())
+            mbt_ffi_store32(iter_base + 0, ptr196)
+            cleanup_list.push(ptr196)
           }
           mbt_ffi_store32(iter_base + 40, iter_elem.metadata.examples.length())
-          mbt_ffi_store32(iter_base + 36, address194)
+          mbt_ffi_store32(iter_base + 36, address197)
 
           match iter_elem.metadata.deprecated {
             None => {
@@ -25273,12 +26127,13 @@ pub async fn ToolRpc::invoke(
 
               ()
             }
-            Some(payload197) => {
+            Some(payload200) => {
               mbt_ffi_store8(iter_base + 44, 1)
 
-              let ptr198 = mbt_ffi_str2ptr(payload197)
-              mbt_ffi_store32(iter_base + 52, payload197.length())
-              mbt_ffi_store32(iter_base + 48, ptr198)
+              let ptr201 = mbt_ffi_str2ptr(payload200)
+              mbt_ffi_store32(iter_base + 52, payload200.length())
+              mbt_ffi_store32(iter_base + 48, ptr201)
+              cleanup_list.push(ptr201)
 
               ()
             }
@@ -25290,10 +26145,10 @@ pub async fn ToolRpc::invoke(
 
               ()
             }
-            Some(payload200) => {
+            Some(payload203) => {
               mbt_ffi_store8(iter_base + 56, 1)
 
-              match payload200 {
+              match payload203 {
                 Multimodal => {
                   mbt_ffi_store8(iter_base + 60, 0)
 
@@ -25309,12 +26164,13 @@ pub async fn ToolRpc::invoke(
 
                   ()
                 }
-                Other(payload204) => {
+                Other(payload207) => {
                   mbt_ffi_store8(iter_base + 60, 3)
 
-                  let ptr205 = mbt_ffi_str2ptr(payload204)
-                  mbt_ffi_store32(iter_base + 68, payload204.length())
-                  mbt_ffi_store32(iter_base + 64, ptr205)
+                  let ptr208 = mbt_ffi_str2ptr(payload207)
+                  mbt_ffi_store32(iter_base + 68, payload207.length())
+                  mbt_ffi_store32(iter_base + 64, ptr208)
+                  cleanup_list.push(ptr208)
 
                   ()
                 }
@@ -25323,118 +26179,127 @@ pub async fn ToolRpc::invoke(
               ()
             }
           }
+          cleanup_list.push(ptr187)
+          cleanup_list.push(address194)
+          cleanup_list.push(address197)
         }
-        mbt_ffi_store32(iter_base + 12, payload183.length())
-        mbt_ffi_store32(iter_base + 8, address206)
+        mbt_ffi_store32(iter_base + 12, payload186.length())
+        mbt_ffi_store32(iter_base + 8, address209)
+        cleanup_list.push(address209)
 
         ()
       }
-      EnumType(payload208) => {
+      EnumType(payload211) => {
         mbt_ffi_store8(iter_base + 0, 16)
 
-        let address210 = mbt_ffi_malloc(payload208.length() * 8)
-        for index211 = 0
-            index211 < payload208.length()
-            index211 = index211 + 1 {
-          let iter_elem : String = payload208[index211]
-          let iter_base = address210 + index211 * 8
+        let address213 = mbt_ffi_malloc(payload211.length() * 8)
+        for index214 = 0
+            index214 < payload211.length()
+            index214 = index214 + 1 {
+          let iter_elem : String = payload211[index214]
+          let iter_base = address213 + index214 * 8
 
-          let ptr209 = mbt_ffi_str2ptr(iter_elem)
+          let ptr212 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
-          mbt_ffi_store32(iter_base + 0, ptr209)
+          mbt_ffi_store32(iter_base + 0, ptr212)
+          cleanup_list.push(ptr212)
         }
-        mbt_ffi_store32(iter_base + 12, payload208.length())
-        mbt_ffi_store32(iter_base + 8, address210)
+        mbt_ffi_store32(iter_base + 12, payload211.length())
+        mbt_ffi_store32(iter_base + 8, address213)
+        cleanup_list.push(address213)
 
         ()
       }
-      FlagsType(payload212) => {
+      FlagsType(payload215) => {
         mbt_ffi_store8(iter_base + 0, 17)
 
-        let address214 = mbt_ffi_malloc(payload212.length() * 8)
-        for index215 = 0
-            index215 < payload212.length()
-            index215 = index215 + 1 {
-          let iter_elem : String = payload212[index215]
-          let iter_base = address214 + index215 * 8
+        let address217 = mbt_ffi_malloc(payload215.length() * 8)
+        for index218 = 0
+            index218 < payload215.length()
+            index218 = index218 + 1 {
+          let iter_elem : String = payload215[index218]
+          let iter_base = address217 + index218 * 8
 
-          let ptr213 = mbt_ffi_str2ptr(iter_elem)
+          let ptr216 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
-          mbt_ffi_store32(iter_base + 0, ptr213)
+          mbt_ffi_store32(iter_base + 0, ptr216)
+          cleanup_list.push(ptr216)
         }
-        mbt_ffi_store32(iter_base + 12, payload212.length())
-        mbt_ffi_store32(iter_base + 8, address214)
+        mbt_ffi_store32(iter_base + 12, payload215.length())
+        mbt_ffi_store32(iter_base + 8, address217)
+        cleanup_list.push(address217)
 
         ()
       }
-      TupleType(payload216) => {
+      TupleType(payload219) => {
         mbt_ffi_store8(iter_base + 0, 18)
 
-        let address217 = mbt_ffi_malloc(payload216.length() * 4)
-        for index218 = 0
-            index218 < payload216.length()
-            index218 = index218 + 1 {
-          let iter_elem : Int = payload216[index218]
-          let iter_base = address217 + index218 * 4
+        let address220 = mbt_ffi_malloc(payload219.length() * 4)
+        for index221 = 0
+            index221 < payload219.length()
+            index221 = index221 + 1 {
+          let iter_elem : Int = payload219[index221]
+          let iter_base = address220 + index221 * 4
           mbt_ffi_store32(iter_base + 0, iter_elem)
         }
-        mbt_ffi_store32(iter_base + 12, payload216.length())
-        mbt_ffi_store32(iter_base + 8, address217)
+        mbt_ffi_store32(iter_base + 12, payload219.length())
+        mbt_ffi_store32(iter_base + 8, address220)
+        cleanup_list.push(address220)
 
         ()
       }
-      ListType(payload219) => {
+      ListType(payload222) => {
         mbt_ffi_store8(iter_base + 0, 19)
-        mbt_ffi_store32(iter_base + 8, payload219)
-
-        ()
-      }
-      FixedListType(payload220) => {
-        mbt_ffi_store8(iter_base + 0, 20)
-        mbt_ffi_store32(iter_base + 8, payload220.element)
-        mbt_ffi_store32(iter_base + 12, payload220.length.reinterpret_as_int())
-
-        ()
-      }
-      MapType(payload221) => {
-        mbt_ffi_store8(iter_base + 0, 21)
-        mbt_ffi_store32(iter_base + 8, payload221.key)
-        mbt_ffi_store32(iter_base + 12, payload221.value)
-
-        ()
-      }
-      OptionType(payload222) => {
-        mbt_ffi_store8(iter_base + 0, 22)
         mbt_ffi_store32(iter_base + 8, payload222)
 
         ()
       }
-      ResultType(payload223) => {
+      FixedListType(payload223) => {
+        mbt_ffi_store8(iter_base + 0, 20)
+        mbt_ffi_store32(iter_base + 8, payload223.element)
+        mbt_ffi_store32(iter_base + 12, payload223.length.reinterpret_as_int())
+
+        ()
+      }
+      MapType(payload224) => {
+        mbt_ffi_store8(iter_base + 0, 21)
+        mbt_ffi_store32(iter_base + 8, payload224.key)
+        mbt_ffi_store32(iter_base + 12, payload224.value)
+
+        ()
+      }
+      OptionType(payload225) => {
+        mbt_ffi_store8(iter_base + 0, 22)
+        mbt_ffi_store32(iter_base + 8, payload225)
+
+        ()
+      }
+      ResultType(payload226) => {
         mbt_ffi_store8(iter_base + 0, 23)
 
-        match payload223.ok {
+        match payload226.ok {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload225) => {
+          Some(payload228) => {
             mbt_ffi_store8(iter_base + 8, 1)
-            mbt_ffi_store32(iter_base + 12, payload225)
+            mbt_ffi_store32(iter_base + 12, payload228)
 
             ()
           }
         }
 
-        match payload223.err {
+        match payload226.err {
           None => {
             mbt_ffi_store8(iter_base + 16, 0)
 
             ()
           }
-          Some(payload227) => {
+          Some(payload230) => {
             mbt_ffi_store8(iter_base + 16, 1)
-            mbt_ffi_store32(iter_base + 20, payload227)
+            mbt_ffi_store32(iter_base + 20, payload230)
 
             ()
           }
@@ -25442,76 +26307,79 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      TextType(payload228) => {
+      TextType(payload231) => {
         mbt_ffi_store8(iter_base + 0, 24)
 
-        match payload228.languages {
+        match payload231.languages {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload230) => {
+          Some(payload233) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let address232 = mbt_ffi_malloc(payload230.length() * 8)
-            for index233 = 0
-                index233 < payload230.length()
-                index233 = index233 + 1 {
-              let iter_elem : String = payload230[index233]
-              let iter_base = address232 + index233 * 8
+            let address235 = mbt_ffi_malloc(payload233.length() * 8)
+            for index236 = 0
+                index236 < payload233.length()
+                index236 = index236 + 1 {
+              let iter_elem : String = payload233[index236]
+              let iter_base = address235 + index236 * 8
 
-              let ptr231 = mbt_ffi_str2ptr(iter_elem)
+              let ptr234 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr231)
+              mbt_ffi_store32(iter_base + 0, ptr234)
+              cleanup_list.push(ptr234)
             }
-            mbt_ffi_store32(iter_base + 16, payload230.length())
-            mbt_ffi_store32(iter_base + 12, address232)
+            mbt_ffi_store32(iter_base + 16, payload233.length())
+            mbt_ffi_store32(iter_base + 12, address235)
+            cleanup_list.push(address235)
 
             ()
           }
         }
 
-        match payload228.min_length {
+        match payload231.min_length {
           None => {
             mbt_ffi_store8(iter_base + 20, 0)
 
             ()
           }
-          Some(payload235) => {
+          Some(payload238) => {
             mbt_ffi_store8(iter_base + 20, 1)
-            mbt_ffi_store32(iter_base + 24, payload235.reinterpret_as_int())
+            mbt_ffi_store32(iter_base + 24, payload238.reinterpret_as_int())
 
             ()
           }
         }
 
-        match payload228.max_length {
+        match payload231.max_length {
           None => {
             mbt_ffi_store8(iter_base + 28, 0)
 
             ()
           }
-          Some(payload237) => {
+          Some(payload240) => {
             mbt_ffi_store8(iter_base + 28, 1)
-            mbt_ffi_store32(iter_base + 32, payload237.reinterpret_as_int())
+            mbt_ffi_store32(iter_base + 32, payload240.reinterpret_as_int())
 
             ()
           }
         }
 
-        match payload228.regex {
+        match payload231.regex {
           None => {
             mbt_ffi_store8(iter_base + 36, 0)
 
             ()
           }
-          Some(payload239) => {
+          Some(payload242) => {
             mbt_ffi_store8(iter_base + 36, 1)
 
-            let ptr240 = mbt_ffi_str2ptr(payload239)
-            mbt_ffi_store32(iter_base + 44, payload239.length())
-            mbt_ffi_store32(iter_base + 40, ptr240)
+            let ptr243 = mbt_ffi_str2ptr(payload242)
+            mbt_ffi_store32(iter_base + 44, payload242.length())
+            mbt_ffi_store32(iter_base + 40, ptr243)
+            cleanup_list.push(ptr243)
 
             ()
           }
@@ -25519,59 +26387,61 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      BinaryType(payload241) => {
+      BinaryType(payload244) => {
         mbt_ffi_store8(iter_base + 0, 25)
 
-        match payload241.mime_types {
+        match payload244.mime_types {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload243) => {
+          Some(payload246) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let address245 = mbt_ffi_malloc(payload243.length() * 8)
-            for index246 = 0
-                index246 < payload243.length()
-                index246 = index246 + 1 {
-              let iter_elem : String = payload243[index246]
-              let iter_base = address245 + index246 * 8
+            let address248 = mbt_ffi_malloc(payload246.length() * 8)
+            for index249 = 0
+                index249 < payload246.length()
+                index249 = index249 + 1 {
+              let iter_elem : String = payload246[index249]
+              let iter_base = address248 + index249 * 8
 
-              let ptr244 = mbt_ffi_str2ptr(iter_elem)
+              let ptr247 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr244)
+              mbt_ffi_store32(iter_base + 0, ptr247)
+              cleanup_list.push(ptr247)
             }
-            mbt_ffi_store32(iter_base + 16, payload243.length())
-            mbt_ffi_store32(iter_base + 12, address245)
+            mbt_ffi_store32(iter_base + 16, payload246.length())
+            mbt_ffi_store32(iter_base + 12, address248)
+            cleanup_list.push(address248)
 
             ()
           }
         }
 
-        match payload241.min_bytes {
+        match payload244.min_bytes {
           None => {
             mbt_ffi_store8(iter_base + 20, 0)
 
             ()
           }
-          Some(payload248) => {
+          Some(payload251) => {
             mbt_ffi_store8(iter_base + 20, 1)
-            mbt_ffi_store32(iter_base + 24, payload248.reinterpret_as_int())
+            mbt_ffi_store32(iter_base + 24, payload251.reinterpret_as_int())
 
             ()
           }
         }
 
-        match payload241.max_bytes {
+        match payload244.max_bytes {
           None => {
             mbt_ffi_store8(iter_base + 28, 0)
 
             ()
           }
-          Some(payload250) => {
+          Some(payload253) => {
             mbt_ffi_store8(iter_base + 28, 1)
-            mbt_ffi_store32(iter_base + 32, payload250.reinterpret_as_int())
+            mbt_ffi_store32(iter_base + 32, payload253.reinterpret_as_int())
 
             ()
           }
@@ -25579,60 +26449,64 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      PathType(payload251) => {
+      PathType(payload254) => {
         mbt_ffi_store8(iter_base + 0, 26)
-        mbt_ffi_store8(iter_base + 8, payload251.direction.ordinal())
-        mbt_ffi_store8(iter_base + 9, payload251.kind.ordinal())
+        mbt_ffi_store8(iter_base + 8, payload254.direction.ordinal())
+        mbt_ffi_store8(iter_base + 9, payload254.kind.ordinal())
 
-        match payload251.allowed_mime_types {
+        match payload254.allowed_mime_types {
           None => {
             mbt_ffi_store8(iter_base + 12, 0)
 
             ()
           }
-          Some(payload253) => {
+          Some(payload256) => {
             mbt_ffi_store8(iter_base + 12, 1)
 
-            let address255 = mbt_ffi_malloc(payload253.length() * 8)
-            for index256 = 0
-                index256 < payload253.length()
-                index256 = index256 + 1 {
-              let iter_elem : String = payload253[index256]
-              let iter_base = address255 + index256 * 8
+            let address258 = mbt_ffi_malloc(payload256.length() * 8)
+            for index259 = 0
+                index259 < payload256.length()
+                index259 = index259 + 1 {
+              let iter_elem : String = payload256[index259]
+              let iter_base = address258 + index259 * 8
 
-              let ptr254 = mbt_ffi_str2ptr(iter_elem)
+              let ptr257 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr254)
+              mbt_ffi_store32(iter_base + 0, ptr257)
+              cleanup_list.push(ptr257)
             }
-            mbt_ffi_store32(iter_base + 20, payload253.length())
-            mbt_ffi_store32(iter_base + 16, address255)
+            mbt_ffi_store32(iter_base + 20, payload256.length())
+            mbt_ffi_store32(iter_base + 16, address258)
+            cleanup_list.push(address258)
 
             ()
           }
         }
 
-        match payload251.allowed_extensions {
+        match payload254.allowed_extensions {
           None => {
             mbt_ffi_store8(iter_base + 24, 0)
 
             ()
           }
-          Some(payload258) => {
+          Some(payload261) => {
             mbt_ffi_store8(iter_base + 24, 1)
 
-            let address260 = mbt_ffi_malloc(payload258.length() * 8)
-            for index261 = 0
-                index261 < payload258.length()
-                index261 = index261 + 1 {
-              let iter_elem : String = payload258[index261]
-              let iter_base = address260 + index261 * 8
+            let address263 = mbt_ffi_malloc(payload261.length() * 8)
+            for index264 = 0
+                index264 < payload261.length()
+                index264 = index264 + 1 {
+              let iter_elem : String = payload261[index264]
+              let iter_base = address263 + index264 * 8
 
-              let ptr259 = mbt_ffi_str2ptr(iter_elem)
+              let ptr262 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr259)
+              mbt_ffi_store32(iter_base + 0, ptr262)
+              cleanup_list.push(ptr262)
             }
-            mbt_ffi_store32(iter_base + 32, payload258.length())
-            mbt_ffi_store32(iter_base + 28, address260)
+            mbt_ffi_store32(iter_base + 32, payload261.length())
+            mbt_ffi_store32(iter_base + 28, address263)
+            cleanup_list.push(address263)
 
             ()
           }
@@ -25640,58 +26514,62 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      UrlType(payload262) => {
+      UrlType(payload265) => {
         mbt_ffi_store8(iter_base + 0, 27)
 
-        match payload262.allowed_schemes {
+        match payload265.allowed_schemes {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload264) => {
+          Some(payload267) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let address266 = mbt_ffi_malloc(payload264.length() * 8)
-            for index267 = 0
-                index267 < payload264.length()
-                index267 = index267 + 1 {
-              let iter_elem : String = payload264[index267]
-              let iter_base = address266 + index267 * 8
+            let address269 = mbt_ffi_malloc(payload267.length() * 8)
+            for index270 = 0
+                index270 < payload267.length()
+                index270 = index270 + 1 {
+              let iter_elem : String = payload267[index270]
+              let iter_base = address269 + index270 * 8
 
-              let ptr265 = mbt_ffi_str2ptr(iter_elem)
+              let ptr268 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr265)
+              mbt_ffi_store32(iter_base + 0, ptr268)
+              cleanup_list.push(ptr268)
             }
-            mbt_ffi_store32(iter_base + 16, payload264.length())
-            mbt_ffi_store32(iter_base + 12, address266)
+            mbt_ffi_store32(iter_base + 16, payload267.length())
+            mbt_ffi_store32(iter_base + 12, address269)
+            cleanup_list.push(address269)
 
             ()
           }
         }
 
-        match payload262.allowed_hosts {
+        match payload265.allowed_hosts {
           None => {
             mbt_ffi_store8(iter_base + 20, 0)
 
             ()
           }
-          Some(payload269) => {
+          Some(payload272) => {
             mbt_ffi_store8(iter_base + 20, 1)
 
-            let address271 = mbt_ffi_malloc(payload269.length() * 8)
-            for index272 = 0
-                index272 < payload269.length()
-                index272 = index272 + 1 {
-              let iter_elem : String = payload269[index272]
-              let iter_base = address271 + index272 * 8
+            let address274 = mbt_ffi_malloc(payload272.length() * 8)
+            for index275 = 0
+                index275 < payload272.length()
+                index275 = index275 + 1 {
+              let iter_elem : String = payload272[index275]
+              let iter_base = address274 + index275 * 8
 
-              let ptr270 = mbt_ffi_str2ptr(iter_elem)
+              let ptr273 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr270)
+              mbt_ffi_store32(iter_base + 0, ptr273)
+              cleanup_list.push(ptr273)
             }
-            mbt_ffi_store32(iter_base + 28, payload269.length())
-            mbt_ffi_store32(iter_base + 24, address271)
+            mbt_ffi_store32(iter_base + 28, payload272.length())
+            mbt_ffi_store32(iter_base + 24, address274)
+            cleanup_list.push(address274)
 
             ()
           }
@@ -25709,153 +26587,165 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      QuantityType(payload275) => {
+      QuantityType(payload278) => {
         mbt_ffi_store8(iter_base + 0, 30)
 
-        let ptr276 = mbt_ffi_str2ptr(payload275.base_unit)
-        mbt_ffi_store32(iter_base + 12, payload275.base_unit.length())
-        mbt_ffi_store32(iter_base + 8, ptr276)
+        let ptr279 = mbt_ffi_str2ptr(payload278.base_unit)
+        mbt_ffi_store32(iter_base + 12, payload278.base_unit.length())
+        mbt_ffi_store32(iter_base + 8, ptr279)
 
-        let address278 = mbt_ffi_malloc(
-          payload275.allowed_suffixes.length() * 8,
+        let address281 = mbt_ffi_malloc(
+          payload278.allowed_suffixes.length() * 8,
         )
-        for index279 = 0
-            index279 < payload275.allowed_suffixes.length()
-            index279 = index279 + 1 {
-          let iter_elem : String = payload275.allowed_suffixes[index279]
-          let iter_base = address278 + index279 * 8
+        for index282 = 0
+            index282 < payload278.allowed_suffixes.length()
+            index282 = index282 + 1 {
+          let iter_elem : String = payload278.allowed_suffixes[index282]
+          let iter_base = address281 + index282 * 8
 
-          let ptr277 = mbt_ffi_str2ptr(iter_elem)
+          let ptr280 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
-          mbt_ffi_store32(iter_base + 0, ptr277)
+          mbt_ffi_store32(iter_base + 0, ptr280)
+          cleanup_list.push(ptr280)
         }
-        mbt_ffi_store32(iter_base + 20, payload275.allowed_suffixes.length())
-        mbt_ffi_store32(iter_base + 16, address278)
+        mbt_ffi_store32(iter_base + 20, payload278.allowed_suffixes.length())
+        mbt_ffi_store32(iter_base + 16, address281)
 
-        match payload275.min {
+        match payload278.min {
           None => {
             mbt_ffi_store8(iter_base + 24, 0)
 
             ()
           }
-          Some(payload281) => {
+          Some(payload284) => {
             mbt_ffi_store8(iter_base + 24, 1)
-            mbt_ffi_store64(iter_base + 32, payload281.mantissa)
-            mbt_ffi_store32(iter_base + 40, payload281.scale)
+            mbt_ffi_store64(iter_base + 32, payload284.mantissa)
+            mbt_ffi_store32(iter_base + 40, payload284.scale)
 
-            let ptr282 = mbt_ffi_str2ptr(payload281.unit)
-            mbt_ffi_store32(iter_base + 48, payload281.unit.length())
-            mbt_ffi_store32(iter_base + 44, ptr282)
+            let ptr285 = mbt_ffi_str2ptr(payload284.unit)
+            mbt_ffi_store32(iter_base + 48, payload284.unit.length())
+            mbt_ffi_store32(iter_base + 44, ptr285)
+            cleanup_list.push(ptr285)
 
             ()
           }
         }
 
-        match payload275.max {
+        match payload278.max {
           None => {
             mbt_ffi_store8(iter_base + 56, 0)
 
             ()
           }
-          Some(payload284) => {
+          Some(payload287) => {
             mbt_ffi_store8(iter_base + 56, 1)
-            mbt_ffi_store64(iter_base + 64, payload284.mantissa)
-            mbt_ffi_store32(iter_base + 72, payload284.scale)
+            mbt_ffi_store64(iter_base + 64, payload287.mantissa)
+            mbt_ffi_store32(iter_base + 72, payload287.scale)
 
-            let ptr285 = mbt_ffi_str2ptr(payload284.unit)
-            mbt_ffi_store32(iter_base + 80, payload284.unit.length())
-            mbt_ffi_store32(iter_base + 76, ptr285)
+            let ptr288 = mbt_ffi_str2ptr(payload287.unit)
+            mbt_ffi_store32(iter_base + 80, payload287.unit.length())
+            mbt_ffi_store32(iter_base + 76, ptr288)
+            cleanup_list.push(ptr288)
 
             ()
           }
         }
+        cleanup_list.push(ptr279)
+        cleanup_list.push(address281)
 
         ()
       }
-      UnionType(payload286) => {
+      UnionType(payload289) => {
         mbt_ffi_store8(iter_base + 0, 31)
 
-        let address322 = mbt_ffi_malloc(payload286.branches.length() * 92)
-        for index323 = 0
-            index323 < payload286.branches.length()
-            index323 = index323 + 1 {
-          let iter_elem : @types.UnionBranch = payload286.branches[index323]
-          let iter_base = address322 + index323 * 92
+        let address325 = mbt_ffi_malloc(payload289.branches.length() * 92)
+        for index326 = 0
+            index326 < payload289.branches.length()
+            index326 = index326 + 1 {
+          let iter_elem : @types.UnionBranch = payload289.branches[index326]
+          let iter_base = address325 + index326 * 92
 
-          let ptr287 = mbt_ffi_str2ptr(iter_elem.tag)
+          let ptr290 = mbt_ffi_str2ptr(iter_elem.tag)
           mbt_ffi_store32(iter_base + 4, iter_elem.tag.length())
-          mbt_ffi_store32(iter_base + 0, ptr287)
+          mbt_ffi_store32(iter_base + 0, ptr290)
           mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
           match iter_elem.discriminator {
-            Prefix(payload288) => {
+            Prefix(payload291) => {
               mbt_ffi_store8(iter_base + 12, 0)
 
-              let ptr289 = mbt_ffi_str2ptr(payload288)
-              mbt_ffi_store32(iter_base + 20, payload288.length())
-              mbt_ffi_store32(iter_base + 16, ptr289)
+              let ptr292 = mbt_ffi_str2ptr(payload291)
+              mbt_ffi_store32(iter_base + 20, payload291.length())
+              mbt_ffi_store32(iter_base + 16, ptr292)
+              cleanup_list.push(ptr292)
 
               ()
             }
-            Suffix(payload290) => {
+            Suffix(payload293) => {
               mbt_ffi_store8(iter_base + 12, 1)
 
-              let ptr291 = mbt_ffi_str2ptr(payload290)
-              mbt_ffi_store32(iter_base + 20, payload290.length())
-              mbt_ffi_store32(iter_base + 16, ptr291)
+              let ptr294 = mbt_ffi_str2ptr(payload293)
+              mbt_ffi_store32(iter_base + 20, payload293.length())
+              mbt_ffi_store32(iter_base + 16, ptr294)
+              cleanup_list.push(ptr294)
 
               ()
             }
-            Contains(payload292) => {
+            Contains(payload295) => {
               mbt_ffi_store8(iter_base + 12, 2)
 
-              let ptr293 = mbt_ffi_str2ptr(payload292)
-              mbt_ffi_store32(iter_base + 20, payload292.length())
-              mbt_ffi_store32(iter_base + 16, ptr293)
+              let ptr296 = mbt_ffi_str2ptr(payload295)
+              mbt_ffi_store32(iter_base + 20, payload295.length())
+              mbt_ffi_store32(iter_base + 16, ptr296)
+              cleanup_list.push(ptr296)
 
               ()
             }
-            Regex(payload294) => {
+            Regex(payload297) => {
               mbt_ffi_store8(iter_base + 12, 3)
 
-              let ptr295 = mbt_ffi_str2ptr(payload294)
-              mbt_ffi_store32(iter_base + 20, payload294.length())
-              mbt_ffi_store32(iter_base + 16, ptr295)
+              let ptr298 = mbt_ffi_str2ptr(payload297)
+              mbt_ffi_store32(iter_base + 20, payload297.length())
+              mbt_ffi_store32(iter_base + 16, ptr298)
+              cleanup_list.push(ptr298)
 
               ()
             }
-            FieldEquals(payload296) => {
+            FieldEquals(payload299) => {
               mbt_ffi_store8(iter_base + 12, 4)
 
-              let ptr297 = mbt_ffi_str2ptr(payload296.field_name)
-              mbt_ffi_store32(iter_base + 20, payload296.field_name.length())
-              mbt_ffi_store32(iter_base + 16, ptr297)
+              let ptr300 = mbt_ffi_str2ptr(payload299.field_name)
+              mbt_ffi_store32(iter_base + 20, payload299.field_name.length())
+              mbt_ffi_store32(iter_base + 16, ptr300)
 
-              match payload296.literal {
+              match payload299.literal {
                 None => {
                   mbt_ffi_store8(iter_base + 24, 0)
 
                   ()
                 }
-                Some(payload299) => {
+                Some(payload302) => {
                   mbt_ffi_store8(iter_base + 24, 1)
 
-                  let ptr300 = mbt_ffi_str2ptr(payload299)
-                  mbt_ffi_store32(iter_base + 32, payload299.length())
-                  mbt_ffi_store32(iter_base + 28, ptr300)
+                  let ptr303 = mbt_ffi_str2ptr(payload302)
+                  mbt_ffi_store32(iter_base + 32, payload302.length())
+                  mbt_ffi_store32(iter_base + 28, ptr303)
+                  cleanup_list.push(ptr303)
 
                   ()
                 }
               }
+              cleanup_list.push(ptr300)
 
               ()
             }
-            FieldAbsent(payload301) => {
+            FieldAbsent(payload304) => {
               mbt_ffi_store8(iter_base + 12, 5)
 
-              let ptr302 = mbt_ffi_str2ptr(payload301)
-              mbt_ffi_store32(iter_base + 20, payload301.length())
-              mbt_ffi_store32(iter_base + 16, ptr302)
+              let ptr305 = mbt_ffi_str2ptr(payload304)
+              mbt_ffi_store32(iter_base + 20, payload304.length())
+              mbt_ffi_store32(iter_base + 16, ptr305)
+              cleanup_list.push(ptr305)
 
               ()
             }
@@ -25867,48 +26757,51 @@ pub async fn ToolRpc::invoke(
 
               ()
             }
-            Some(payload304) => {
+            Some(payload307) => {
               mbt_ffi_store8(iter_base + 36, 1)
 
-              let ptr305 = mbt_ffi_str2ptr(payload304)
-              mbt_ffi_store32(iter_base + 44, payload304.length())
-              mbt_ffi_store32(iter_base + 40, ptr305)
+              let ptr308 = mbt_ffi_str2ptr(payload307)
+              mbt_ffi_store32(iter_base + 44, payload307.length())
+              mbt_ffi_store32(iter_base + 40, ptr308)
+              cleanup_list.push(ptr308)
 
               ()
             }
           }
 
-          let address307 = mbt_ffi_malloc(
+          let address310 = mbt_ffi_malloc(
             iter_elem.metadata.aliases.length() * 8,
           )
-          for index308 = 0
-              index308 < iter_elem.metadata.aliases.length()
-              index308 = index308 + 1 {
-            let iter_elem : String = iter_elem.metadata.aliases[index308]
-            let iter_base = address307 + index308 * 8
-
-            let ptr306 = mbt_ffi_str2ptr(iter_elem)
-            mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr306)
-          }
-          mbt_ffi_store32(iter_base + 52, iter_elem.metadata.aliases.length())
-          mbt_ffi_store32(iter_base + 48, address307)
-
-          let address310 = mbt_ffi_malloc(
-            iter_elem.metadata.examples.length() * 8,
-          )
           for index311 = 0
-              index311 < iter_elem.metadata.examples.length()
+              index311 < iter_elem.metadata.aliases.length()
               index311 = index311 + 1 {
-            let iter_elem : String = iter_elem.metadata.examples[index311]
+            let iter_elem : String = iter_elem.metadata.aliases[index311]
             let iter_base = address310 + index311 * 8
 
             let ptr309 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
             mbt_ffi_store32(iter_base + 0, ptr309)
+            cleanup_list.push(ptr309)
+          }
+          mbt_ffi_store32(iter_base + 52, iter_elem.metadata.aliases.length())
+          mbt_ffi_store32(iter_base + 48, address310)
+
+          let address313 = mbt_ffi_malloc(
+            iter_elem.metadata.examples.length() * 8,
+          )
+          for index314 = 0
+              index314 < iter_elem.metadata.examples.length()
+              index314 = index314 + 1 {
+            let iter_elem : String = iter_elem.metadata.examples[index314]
+            let iter_base = address313 + index314 * 8
+
+            let ptr312 = mbt_ffi_str2ptr(iter_elem)
+            mbt_ffi_store32(iter_base + 4, iter_elem.length())
+            mbt_ffi_store32(iter_base + 0, ptr312)
+            cleanup_list.push(ptr312)
           }
           mbt_ffi_store32(iter_base + 60, iter_elem.metadata.examples.length())
-          mbt_ffi_store32(iter_base + 56, address310)
+          mbt_ffi_store32(iter_base + 56, address313)
 
           match iter_elem.metadata.deprecated {
             None => {
@@ -25916,12 +26809,13 @@ pub async fn ToolRpc::invoke(
 
               ()
             }
-            Some(payload313) => {
+            Some(payload316) => {
               mbt_ffi_store8(iter_base + 64, 1)
 
-              let ptr314 = mbt_ffi_str2ptr(payload313)
-              mbt_ffi_store32(iter_base + 72, payload313.length())
-              mbt_ffi_store32(iter_base + 68, ptr314)
+              let ptr317 = mbt_ffi_str2ptr(payload316)
+              mbt_ffi_store32(iter_base + 72, payload316.length())
+              mbt_ffi_store32(iter_base + 68, ptr317)
+              cleanup_list.push(ptr317)
 
               ()
             }
@@ -25933,10 +26827,10 @@ pub async fn ToolRpc::invoke(
 
               ()
             }
-            Some(payload316) => {
+            Some(payload319) => {
               mbt_ffi_store8(iter_base + 76, 1)
 
-              match payload316 {
+              match payload319 {
                 Multimodal => {
                   mbt_ffi_store8(iter_base + 80, 0)
 
@@ -25952,12 +26846,13 @@ pub async fn ToolRpc::invoke(
 
                   ()
                 }
-                Other(payload320) => {
+                Other(payload323) => {
                   mbt_ffi_store8(iter_base + 80, 3)
 
-                  let ptr321 = mbt_ffi_str2ptr(payload320)
-                  mbt_ffi_store32(iter_base + 88, payload320.length())
-                  mbt_ffi_store32(iter_base + 84, ptr321)
+                  let ptr324 = mbt_ffi_str2ptr(payload323)
+                  mbt_ffi_store32(iter_base + 88, payload323.length())
+                  mbt_ffi_store32(iter_base + 84, ptr324)
+                  cleanup_list.push(ptr324)
 
                   ()
                 }
@@ -25966,28 +26861,33 @@ pub async fn ToolRpc::invoke(
               ()
             }
           }
+          cleanup_list.push(ptr290)
+          cleanup_list.push(address310)
+          cleanup_list.push(address313)
         }
-        mbt_ffi_store32(iter_base + 12, payload286.branches.length())
-        mbt_ffi_store32(iter_base + 8, address322)
+        mbt_ffi_store32(iter_base + 12, payload289.branches.length())
+        mbt_ffi_store32(iter_base + 8, address325)
+        cleanup_list.push(address325)
 
         ()
       }
-      SecretType(payload324) => {
+      SecretType(payload327) => {
         mbt_ffi_store8(iter_base + 0, 32)
-        mbt_ffi_store32(iter_base + 8, payload324.inner)
+        mbt_ffi_store32(iter_base + 8, payload327.inner)
 
-        match payload324.category {
+        match payload327.category {
           None => {
             mbt_ffi_store8(iter_base + 12, 0)
 
             ()
           }
-          Some(payload326) => {
+          Some(payload329) => {
             mbt_ffi_store8(iter_base + 12, 1)
 
-            let ptr327 = mbt_ffi_str2ptr(payload326)
-            mbt_ffi_store32(iter_base + 20, payload326.length())
-            mbt_ffi_store32(iter_base + 16, ptr327)
+            let ptr330 = mbt_ffi_str2ptr(payload329)
+            mbt_ffi_store32(iter_base + 20, payload329.length())
+            mbt_ffi_store32(iter_base + 16, ptr330)
+            cleanup_list.push(ptr330)
 
             ()
           }
@@ -25995,21 +26895,22 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      QuotaTokenType(payload328) => {
+      QuotaTokenType(payload331) => {
         mbt_ffi_store8(iter_base + 0, 33)
 
-        match payload328.resource_name {
+        match payload331.resource_name {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload330) => {
+          Some(payload333) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let ptr331 = mbt_ffi_str2ptr(payload330)
-            mbt_ffi_store32(iter_base + 16, payload330.length())
-            mbt_ffi_store32(iter_base + 12, ptr331)
+            let ptr334 = mbt_ffi_str2ptr(payload333)
+            mbt_ffi_store32(iter_base + 16, payload333.length())
+            mbt_ffi_store32(iter_base + 12, ptr334)
+            cleanup_list.push(ptr334)
 
             ()
           }
@@ -26017,11 +26918,11 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      PermissionCardType(payload332) => {
+      PermissionCardType(payload335) => {
         mbt_ffi_store8(iter_base + 0, 34)
         mbt_ffi_store8(
           iter_base + 8,
-          if payload332.polymorphic {
+          if payload335.polymorphic {
             1
           } else {
             0
@@ -26030,27 +26931,8 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      FutureType(payload333) => {
+      FutureType(payload336) => {
         mbt_ffi_store8(iter_base + 0, 35)
-
-        match payload333 {
-          None => {
-            mbt_ffi_store8(iter_base + 8, 0)
-
-            ()
-          }
-          Some(payload335) => {
-            mbt_ffi_store8(iter_base + 8, 1)
-            mbt_ffi_store32(iter_base + 12, payload335)
-
-            ()
-          }
-        }
-
-        ()
-      }
-      StreamType(payload336) => {
-        mbt_ffi_store8(iter_base + 0, 36)
 
         match payload336 {
           None => {
@@ -26068,6 +26950,25 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
+      StreamType(payload339) => {
+        mbt_ffi_store8(iter_base + 0, 36)
+
+        match payload339 {
+          None => {
+            mbt_ffi_store8(iter_base + 8, 0)
+
+            ()
+          }
+          Some(payload341) => {
+            mbt_ffi_store8(iter_base + 8, 1)
+            mbt_ffi_store32(iter_base + 12, payload341)
+
+            ()
+          }
+        }
+
+        ()
+      }
     }
 
     match iter_elem.metadata.doc {
@@ -26076,44 +26977,47 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      Some(payload340) => {
+      Some(payload343) => {
         mbt_ffi_store8(iter_base + 88, 1)
 
-        let ptr341 = mbt_ffi_str2ptr(payload340)
-        mbt_ffi_store32(iter_base + 96, payload340.length())
-        mbt_ffi_store32(iter_base + 92, ptr341)
+        let ptr344 = mbt_ffi_str2ptr(payload343)
+        mbt_ffi_store32(iter_base + 96, payload343.length())
+        mbt_ffi_store32(iter_base + 92, ptr344)
+        cleanup_list.push(ptr344)
 
         ()
       }
     }
 
-    let address343 = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
-    for index344 = 0
-        index344 < iter_elem.metadata.aliases.length()
-        index344 = index344 + 1 {
-      let iter_elem : String = iter_elem.metadata.aliases[index344]
-      let iter_base = address343 + index344 * 8
-
-      let ptr342 = mbt_ffi_str2ptr(iter_elem)
-      mbt_ffi_store32(iter_base + 4, iter_elem.length())
-      mbt_ffi_store32(iter_base + 0, ptr342)
-    }
-    mbt_ffi_store32(iter_base + 104, iter_elem.metadata.aliases.length())
-    mbt_ffi_store32(iter_base + 100, address343)
-
-    let address346 = mbt_ffi_malloc(iter_elem.metadata.examples.length() * 8)
+    let address346 = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
     for index347 = 0
-        index347 < iter_elem.metadata.examples.length()
+        index347 < iter_elem.metadata.aliases.length()
         index347 = index347 + 1 {
-      let iter_elem : String = iter_elem.metadata.examples[index347]
+      let iter_elem : String = iter_elem.metadata.aliases[index347]
       let iter_base = address346 + index347 * 8
 
       let ptr345 = mbt_ffi_str2ptr(iter_elem)
       mbt_ffi_store32(iter_base + 4, iter_elem.length())
       mbt_ffi_store32(iter_base + 0, ptr345)
+      cleanup_list.push(ptr345)
+    }
+    mbt_ffi_store32(iter_base + 104, iter_elem.metadata.aliases.length())
+    mbt_ffi_store32(iter_base + 100, address346)
+
+    let address349 = mbt_ffi_malloc(iter_elem.metadata.examples.length() * 8)
+    for index350 = 0
+        index350 < iter_elem.metadata.examples.length()
+        index350 = index350 + 1 {
+      let iter_elem : String = iter_elem.metadata.examples[index350]
+      let iter_base = address349 + index350 * 8
+
+      let ptr348 = mbt_ffi_str2ptr(iter_elem)
+      mbt_ffi_store32(iter_base + 4, iter_elem.length())
+      mbt_ffi_store32(iter_base + 0, ptr348)
+      cleanup_list.push(ptr348)
     }
     mbt_ffi_store32(iter_base + 112, iter_elem.metadata.examples.length())
-    mbt_ffi_store32(iter_base + 108, address346)
+    mbt_ffi_store32(iter_base + 108, address349)
 
     match iter_elem.metadata.deprecated {
       None => {
@@ -26121,12 +27025,13 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      Some(payload349) => {
+      Some(payload352) => {
         mbt_ffi_store8(iter_base + 116, 1)
 
-        let ptr350 = mbt_ffi_str2ptr(payload349)
-        mbt_ffi_store32(iter_base + 124, payload349.length())
-        mbt_ffi_store32(iter_base + 120, ptr350)
+        let ptr353 = mbt_ffi_str2ptr(payload352)
+        mbt_ffi_store32(iter_base + 124, payload352.length())
+        mbt_ffi_store32(iter_base + 120, ptr353)
+        cleanup_list.push(ptr353)
 
         ()
       }
@@ -26138,10 +27043,10 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      Some(payload352) => {
+      Some(payload355) => {
         mbt_ffi_store8(iter_base + 128, 1)
 
-        match payload352 {
+        match payload355 {
           Multimodal => {
             mbt_ffi_store8(iter_base + 132, 0)
 
@@ -26157,12 +27062,13 @@ pub async fn ToolRpc::invoke(
 
             ()
           }
-          Other(payload356) => {
+          Other(payload359) => {
             mbt_ffi_store8(iter_base + 132, 3)
 
-            let ptr357 = mbt_ffi_str2ptr(payload356)
-            mbt_ffi_store32(iter_base + 140, payload356.length())
-            mbt_ffi_store32(iter_base + 136, ptr357)
+            let ptr360 = mbt_ffi_str2ptr(payload359)
+            mbt_ffi_store32(iter_base + 140, payload359.length())
+            mbt_ffi_store32(iter_base + 136, ptr360)
+            cleanup_list.push(ptr360)
 
             ()
           }
@@ -26171,20 +27077,20 @@ pub async fn ToolRpc::invoke(
         ()
       }
     }
+    cleanup_list.push(address346)
+    cleanup_list.push(address349)
   }
-  mbt_ffi_store32(lower_ptr + 12 + 4, input.graph.type_nodes.length())
-  mbt_ffi_store32(lower_ptr + 12 + 0, address358)
 
-  let address364 = mbt_ffi_malloc(input.graph.defs.length() * 24)
-  for index365 = 0
-      index365 < input.graph.defs.length()
-      index365 = index365 + 1 {
-    let iter_elem : @types.SchemaTypeDef = input.graph.defs[index365]
-    let iter_base = address364 + index365 * 24
+  let address367 = mbt_ffi_malloc(input.graph.defs.length() * 24)
+  for index368 = 0
+      index368 < input.graph.defs.length()
+      index368 = index368 + 1 {
+    let iter_elem : @types.SchemaTypeDef = input.graph.defs[index368]
+    let iter_base = address367 + index368 * 24
 
-    let ptr360 = mbt_ffi_str2ptr(iter_elem.id)
+    let ptr363 = mbt_ffi_str2ptr(iter_elem.id)
     mbt_ffi_store32(iter_base + 4, iter_elem.id.length())
-    mbt_ffi_store32(iter_base + 0, ptr360)
+    mbt_ffi_store32(iter_base + 0, ptr363)
 
     match iter_elem.name {
       None => {
@@ -26192,140 +27098,141 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      Some(payload362) => {
+      Some(payload365) => {
         mbt_ffi_store8(iter_base + 8, 1)
 
-        let ptr363 = mbt_ffi_str2ptr(payload362)
-        mbt_ffi_store32(iter_base + 16, payload362.length())
-        mbt_ffi_store32(iter_base + 12, ptr363)
+        let ptr366 = mbt_ffi_str2ptr(payload365)
+        mbt_ffi_store32(iter_base + 16, payload365.length())
+        mbt_ffi_store32(iter_base + 12, ptr366)
+        cleanup_list.push(ptr366)
 
         ()
       }
     }
     mbt_ffi_store32(iter_base + 20, iter_elem.body)
+    cleanup_list.push(ptr363)
   }
-  mbt_ffi_store32(lower_ptr + 12 + 12, input.graph.defs.length())
-  mbt_ffi_store32(lower_ptr + 12 + 8, address364)
-  mbt_ffi_store32(lower_ptr + 12 + 16, input.graph.root)
 
-  let address439 = mbt_ffi_malloc(input.value.value_nodes.length() * 32)
-  for index440 = 0
-      index440 < input.value.value_nodes.length()
-      index440 = index440 + 1 {
-    let iter_elem : @types.SchemaValueNode = input.value.value_nodes[index440]
-    let iter_base = address439 + index440 * 32
+  let address443 = mbt_ffi_malloc(input.value.value_nodes.length() * 32)
+  for index444 = 0
+      index444 < input.value.value_nodes.length()
+      index444 = index444 + 1 {
+    let iter_elem : @types.SchemaValueNode = input.value.value_nodes[index444]
+    let iter_base = address443 + index444 * 32
 
     match iter_elem {
-      BoolValue(payload366) => {
+      BoolValue(payload369) => {
         mbt_ffi_store8(iter_base + 0, 0)
-        mbt_ffi_store8(iter_base + 8, if payload366 { 1 } else { 0 })
+        mbt_ffi_store8(iter_base + 8, if payload369 { 1 } else { 0 })
 
         ()
       }
-      S8Value(payload367) => {
+      S8Value(payload370) => {
         mbt_ffi_store8(iter_base + 0, 1)
-        mbt_ffi_store8(iter_base + 8, mbt_ffi_extend8(payload367))
+        mbt_ffi_store8(iter_base + 8, mbt_ffi_extend8(payload370))
 
         ()
       }
-      S16Value(payload368) => {
+      S16Value(payload371) => {
         mbt_ffi_store8(iter_base + 0, 2)
-        mbt_ffi_store16(iter_base + 8, mbt_ffi_extend16(payload368))
+        mbt_ffi_store16(iter_base + 8, mbt_ffi_extend16(payload371))
 
         ()
       }
-      S32Value(payload369) => {
+      S32Value(payload372) => {
         mbt_ffi_store8(iter_base + 0, 3)
-        mbt_ffi_store32(iter_base + 8, payload369)
+        mbt_ffi_store32(iter_base + 8, payload372)
 
         ()
       }
-      S64Value(payload370) => {
+      S64Value(payload373) => {
         mbt_ffi_store8(iter_base + 0, 4)
-        mbt_ffi_store64(iter_base + 8, payload370)
+        mbt_ffi_store64(iter_base + 8, payload373)
 
         ()
       }
-      U8Value(payload371) => {
+      U8Value(payload374) => {
         mbt_ffi_store8(iter_base + 0, 5)
-        mbt_ffi_store8(iter_base + 8, payload371.to_int())
+        mbt_ffi_store8(iter_base + 8, payload374.to_int())
 
         ()
       }
-      U16Value(payload372) => {
+      U16Value(payload375) => {
         mbt_ffi_store8(iter_base + 0, 6)
-        mbt_ffi_store16(iter_base + 8, payload372.reinterpret_as_int())
+        mbt_ffi_store16(iter_base + 8, payload375.reinterpret_as_int())
 
         ()
       }
-      U32Value(payload373) => {
+      U32Value(payload376) => {
         mbt_ffi_store8(iter_base + 0, 7)
-        mbt_ffi_store32(iter_base + 8, payload373.reinterpret_as_int())
+        mbt_ffi_store32(iter_base + 8, payload376.reinterpret_as_int())
 
         ()
       }
-      U64Value(payload374) => {
+      U64Value(payload377) => {
         mbt_ffi_store8(iter_base + 0, 8)
-        mbt_ffi_store64(iter_base + 8, payload374.reinterpret_as_int64())
+        mbt_ffi_store64(iter_base + 8, payload377.reinterpret_as_int64())
 
         ()
       }
-      F32Value(payload375) => {
+      F32Value(payload378) => {
         mbt_ffi_store8(iter_base + 0, 9)
-        mbt_ffi_storef32(iter_base + 8, payload375)
+        mbt_ffi_storef32(iter_base + 8, payload378)
 
         ()
       }
-      F64Value(payload376) => {
+      F64Value(payload379) => {
         mbt_ffi_store8(iter_base + 0, 10)
-        mbt_ffi_storef64(iter_base + 8, payload376)
+        mbt_ffi_storef64(iter_base + 8, payload379)
 
         ()
       }
-      CharValue(payload377) => {
+      CharValue(payload380) => {
         mbt_ffi_store8(iter_base + 0, 11)
-        mbt_ffi_store32(iter_base + 8, payload377.to_int())
+        mbt_ffi_store32(iter_base + 8, payload380.to_int())
 
         ()
       }
-      StringValue(payload378) => {
+      StringValue(payload381) => {
         mbt_ffi_store8(iter_base + 0, 12)
 
-        let ptr379 = mbt_ffi_str2ptr(payload378)
-        mbt_ffi_store32(iter_base + 12, payload378.length())
-        mbt_ffi_store32(iter_base + 8, ptr379)
+        let ptr382 = mbt_ffi_str2ptr(payload381)
+        mbt_ffi_store32(iter_base + 12, payload381.length())
+        mbt_ffi_store32(iter_base + 8, ptr382)
+        cleanup_list.push(ptr382)
 
         ()
       }
-      RecordValue(payload380) => {
+      RecordValue(payload383) => {
         mbt_ffi_store8(iter_base + 0, 13)
 
-        let address381 = mbt_ffi_malloc(payload380.length() * 4)
-        for index382 = 0
-            index382 < payload380.length()
-            index382 = index382 + 1 {
-          let iter_elem : Int = payload380[index382]
-          let iter_base = address381 + index382 * 4
+        let address384 = mbt_ffi_malloc(payload383.length() * 4)
+        for index385 = 0
+            index385 < payload383.length()
+            index385 = index385 + 1 {
+          let iter_elem : Int = payload383[index385]
+          let iter_base = address384 + index385 * 4
           mbt_ffi_store32(iter_base + 0, iter_elem)
         }
-        mbt_ffi_store32(iter_base + 12, payload380.length())
-        mbt_ffi_store32(iter_base + 8, address381)
+        mbt_ffi_store32(iter_base + 12, payload383.length())
+        mbt_ffi_store32(iter_base + 8, address384)
+        cleanup_list.push(address384)
 
         ()
       }
-      VariantValue(payload383) => {
+      VariantValue(payload386) => {
         mbt_ffi_store8(iter_base + 0, 14)
-        mbt_ffi_store32(iter_base + 8, payload383.case.reinterpret_as_int())
+        mbt_ffi_store32(iter_base + 8, payload386.case.reinterpret_as_int())
 
-        match payload383.payload {
+        match payload386.payload {
           None => {
             mbt_ffi_store8(iter_base + 12, 0)
 
             ()
           }
-          Some(payload385) => {
+          Some(payload388) => {
             mbt_ffi_store8(iter_base + 12, 1)
-            mbt_ffi_store32(iter_base + 16, payload385)
+            mbt_ffi_store32(iter_base + 16, payload388)
 
             ()
           }
@@ -26333,46 +27240,31 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      EnumValue(payload386) => {
+      EnumValue(payload389) => {
         mbt_ffi_store8(iter_base + 0, 15)
-        mbt_ffi_store32(iter_base + 8, payload386.reinterpret_as_int())
+        mbt_ffi_store32(iter_base + 8, payload389.reinterpret_as_int())
 
         ()
       }
-      FlagsValue(payload387) => {
+      FlagsValue(payload390) => {
         mbt_ffi_store8(iter_base + 0, 16)
 
-        let address388 = mbt_ffi_malloc(payload387.length() * 1)
-        for index389 = 0
-            index389 < payload387.length()
-            index389 = index389 + 1 {
-          let iter_elem : Bool = payload387[index389]
-          let iter_base = address388 + index389 * 1
-          mbt_ffi_store8(iter_base + 0, if iter_elem { 1 } else { 0 })
-        }
-        mbt_ffi_store32(iter_base + 12, payload387.length())
-        mbt_ffi_store32(iter_base + 8, address388)
-
-        ()
-      }
-      TupleValue(payload390) => {
-        mbt_ffi_store8(iter_base + 0, 17)
-
-        let address391 = mbt_ffi_malloc(payload390.length() * 4)
+        let address391 = mbt_ffi_malloc(payload390.length() * 1)
         for index392 = 0
             index392 < payload390.length()
             index392 = index392 + 1 {
-          let iter_elem : Int = payload390[index392]
-          let iter_base = address391 + index392 * 4
-          mbt_ffi_store32(iter_base + 0, iter_elem)
+          let iter_elem : Bool = payload390[index392]
+          let iter_base = address391 + index392 * 1
+          mbt_ffi_store8(iter_base + 0, if iter_elem { 1 } else { 0 })
         }
         mbt_ffi_store32(iter_base + 12, payload390.length())
         mbt_ffi_store32(iter_base + 8, address391)
+        cleanup_list.push(address391)
 
         ()
       }
-      ListValue(payload393) => {
-        mbt_ffi_store8(iter_base + 0, 18)
+      TupleValue(payload393) => {
+        mbt_ffi_store8(iter_base + 0, 17)
 
         let address394 = mbt_ffi_malloc(payload393.length() * 4)
         for index395 = 0
@@ -26384,11 +27276,12 @@ pub async fn ToolRpc::invoke(
         }
         mbt_ffi_store32(iter_base + 12, payload393.length())
         mbt_ffi_store32(iter_base + 8, address394)
+        cleanup_list.push(address394)
 
         ()
       }
-      FixedListValue(payload396) => {
-        mbt_ffi_store8(iter_base + 0, 19)
+      ListValue(payload396) => {
+        mbt_ffi_store8(iter_base + 0, 18)
 
         let address397 = mbt_ffi_malloc(payload396.length() * 4)
         for index398 = 0
@@ -26400,38 +27293,57 @@ pub async fn ToolRpc::invoke(
         }
         mbt_ffi_store32(iter_base + 12, payload396.length())
         mbt_ffi_store32(iter_base + 8, address397)
+        cleanup_list.push(address397)
 
         ()
       }
-      MapValue(payload399) => {
-        mbt_ffi_store8(iter_base + 0, 20)
+      FixedListValue(payload399) => {
+        mbt_ffi_store8(iter_base + 0, 19)
 
-        let address400 = mbt_ffi_malloc(payload399.length() * 8)
+        let address400 = mbt_ffi_malloc(payload399.length() * 4)
         for index401 = 0
             index401 < payload399.length()
             index401 = index401 + 1 {
-          let iter_elem : @types.MapEntry = payload399[index401]
-          let iter_base = address400 + index401 * 8
-          mbt_ffi_store32(iter_base + 0, iter_elem.key)
-          mbt_ffi_store32(iter_base + 4, iter_elem.value)
+          let iter_elem : Int = payload399[index401]
+          let iter_base = address400 + index401 * 4
+          mbt_ffi_store32(iter_base + 0, iter_elem)
         }
         mbt_ffi_store32(iter_base + 12, payload399.length())
         mbt_ffi_store32(iter_base + 8, address400)
+        cleanup_list.push(address400)
 
         ()
       }
-      OptionValue(payload402) => {
+      MapValue(payload402) => {
+        mbt_ffi_store8(iter_base + 0, 20)
+
+        let address403 = mbt_ffi_malloc(payload402.length() * 8)
+        for index404 = 0
+            index404 < payload402.length()
+            index404 = index404 + 1 {
+          let iter_elem : @types.MapEntry = payload402[index404]
+          let iter_base = address403 + index404 * 8
+          mbt_ffi_store32(iter_base + 0, iter_elem.key)
+          mbt_ffi_store32(iter_base + 4, iter_elem.value)
+        }
+        mbt_ffi_store32(iter_base + 12, payload402.length())
+        mbt_ffi_store32(iter_base + 8, address403)
+        cleanup_list.push(address403)
+
+        ()
+      }
+      OptionValue(payload405) => {
         mbt_ffi_store8(iter_base + 0, 21)
 
-        match payload402 {
+        match payload405 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload404) => {
+          Some(payload407) => {
             mbt_ffi_store8(iter_base + 8, 1)
-            mbt_ffi_store32(iter_base + 12, payload404)
+            mbt_ffi_store32(iter_base + 12, payload407)
 
             ()
           }
@@ -26439,31 +27351,12 @@ pub async fn ToolRpc::invoke(
 
         ()
       }
-      ResultValue(payload405) => {
+      ResultValue(payload408) => {
         mbt_ffi_store8(iter_base + 0, 22)
 
-        match payload405 {
-          OkValue(payload406) => {
+        match payload408 {
+          OkValue(payload409) => {
             mbt_ffi_store8(iter_base + 8, 0)
-
-            match payload406 {
-              None => {
-                mbt_ffi_store8(iter_base + 12, 0)
-
-                ()
-              }
-              Some(payload408) => {
-                mbt_ffi_store8(iter_base + 12, 1)
-                mbt_ffi_store32(iter_base + 16, payload408)
-
-                ()
-              }
-            }
-
-            ()
-          }
-          ErrValue(payload409) => {
-            mbt_ffi_store8(iter_base + 8, 1)
 
             match payload409 {
               None => {
@@ -26481,2100 +27374,314 @@ pub async fn ToolRpc::invoke(
 
             ()
           }
+          ErrValue(payload412) => {
+            mbt_ffi_store8(iter_base + 8, 1)
+
+            match payload412 {
+              None => {
+                mbt_ffi_store8(iter_base + 12, 0)
+
+                ()
+              }
+              Some(payload414) => {
+                mbt_ffi_store8(iter_base + 12, 1)
+                mbt_ffi_store32(iter_base + 16, payload414)
+
+                ()
+              }
+            }
+
+            ()
+          }
         }
 
         ()
       }
-      TextValue(payload412) => {
+      TextValue(payload415) => {
         mbt_ffi_store8(iter_base + 0, 23)
 
-        let ptr413 = mbt_ffi_str2ptr(payload412.text)
-        mbt_ffi_store32(iter_base + 12, payload412.text.length())
-        mbt_ffi_store32(iter_base + 8, ptr413)
+        let ptr416 = mbt_ffi_str2ptr(payload415.text)
+        mbt_ffi_store32(iter_base + 12, payload415.text.length())
+        mbt_ffi_store32(iter_base + 8, ptr416)
 
-        match payload412.language {
+        match payload415.language {
           None => {
             mbt_ffi_store8(iter_base + 16, 0)
 
             ()
           }
-          Some(payload415) => {
+          Some(payload418) => {
             mbt_ffi_store8(iter_base + 16, 1)
 
-            let ptr416 = mbt_ffi_str2ptr(payload415)
-            mbt_ffi_store32(iter_base + 24, payload415.length())
-            mbt_ffi_store32(iter_base + 20, ptr416)
+            let ptr419 = mbt_ffi_str2ptr(payload418)
+            mbt_ffi_store32(iter_base + 24, payload418.length())
+            mbt_ffi_store32(iter_base + 20, ptr419)
+            cleanup_list.push(ptr419)
 
             ()
           }
         }
+        cleanup_list.push(ptr416)
 
         ()
       }
-      BinaryValue(payload417) => {
+      BinaryValue(payload420) => {
         mbt_ffi_store8(iter_base + 0, 24)
 
-        let ptr418 = mbt_ffi_bytes2ptr(payload417.bytes)
+        let ptr421 = mbt_ffi_bytes2ptr(payload420.bytes)
 
-        mbt_ffi_store32(iter_base + 12, payload417.bytes.length())
-        mbt_ffi_store32(iter_base + 8, ptr418)
+        mbt_ffi_store32(iter_base + 12, payload420.bytes.length())
+        mbt_ffi_store32(iter_base + 8, ptr421)
 
-        match payload417.mime_type {
+        match payload420.mime_type {
           None => {
             mbt_ffi_store8(iter_base + 16, 0)
 
             ()
           }
-          Some(payload420) => {
+          Some(payload423) => {
             mbt_ffi_store8(iter_base + 16, 1)
 
-            let ptr421 = mbt_ffi_str2ptr(payload420)
-            mbt_ffi_store32(iter_base + 24, payload420.length())
-            mbt_ffi_store32(iter_base + 20, ptr421)
+            let ptr424 = mbt_ffi_str2ptr(payload423)
+            mbt_ffi_store32(iter_base + 24, payload423.length())
+            mbt_ffi_store32(iter_base + 20, ptr424)
+            cleanup_list.push(ptr424)
 
             ()
           }
         }
+        cleanup_list.push(ptr421)
 
         ()
       }
-      PathValue(payload422) => {
+      PathValue(payload425) => {
         mbt_ffi_store8(iter_base + 0, 25)
 
-        let ptr423 = mbt_ffi_str2ptr(payload422)
-        mbt_ffi_store32(iter_base + 12, payload422.length())
-        mbt_ffi_store32(iter_base + 8, ptr423)
+        let ptr426 = mbt_ffi_str2ptr(payload425)
+        mbt_ffi_store32(iter_base + 12, payload425.length())
+        mbt_ffi_store32(iter_base + 8, ptr426)
+        cleanup_list.push(ptr426)
 
         ()
       }
-      UrlValue(payload424) => {
+      UrlValue(payload427) => {
         mbt_ffi_store8(iter_base + 0, 26)
 
-        let ptr425 = mbt_ffi_str2ptr(payload424)
-        mbt_ffi_store32(iter_base + 12, payload424.length())
-        mbt_ffi_store32(iter_base + 8, ptr425)
+        let ptr428 = mbt_ffi_str2ptr(payload427)
+        mbt_ffi_store32(iter_base + 12, payload427.length())
+        mbt_ffi_store32(iter_base + 8, ptr428)
+        cleanup_list.push(ptr428)
 
         ()
       }
-      DatetimeValue(payload426) => {
+      DatetimeValue(payload429) => {
         mbt_ffi_store8(iter_base + 0, 27)
-        mbt_ffi_store64(iter_base + 8, payload426.seconds)
+        mbt_ffi_store64(iter_base + 8, payload429.seconds)
         mbt_ffi_store32(
           iter_base + 16,
-          payload426.nanoseconds.reinterpret_as_int(),
+          payload429.nanoseconds.reinterpret_as_int(),
         )
 
         ()
       }
-      DurationValue(payload427) => {
+      DurationValue(payload430) => {
         mbt_ffi_store8(iter_base + 0, 28)
-        mbt_ffi_store64(iter_base + 8, payload427.nanoseconds)
+        mbt_ffi_store64(iter_base + 8, payload430.nanoseconds)
 
         ()
       }
-      QuantityValueNode(payload428) => {
+      QuantityValueNode(payload431) => {
         mbt_ffi_store8(iter_base + 0, 29)
-        mbt_ffi_store64(iter_base + 8, payload428.mantissa)
-        mbt_ffi_store32(iter_base + 16, payload428.scale)
+        mbt_ffi_store64(iter_base + 8, payload431.mantissa)
+        mbt_ffi_store32(iter_base + 16, payload431.scale)
 
-        let ptr429 = mbt_ffi_str2ptr(payload428.unit)
-        mbt_ffi_store32(iter_base + 24, payload428.unit.length())
-        mbt_ffi_store32(iter_base + 20, ptr429)
+        let ptr432 = mbt_ffi_str2ptr(payload431.unit)
+        mbt_ffi_store32(iter_base + 24, payload431.unit.length())
+        mbt_ffi_store32(iter_base + 20, ptr432)
+        cleanup_list.push(ptr432)
 
         ()
       }
-      UnionValue(payload430) => {
+      UnionValue(payload433) => {
         mbt_ffi_store8(iter_base + 0, 30)
 
-        let ptr431 = mbt_ffi_str2ptr(payload430.tag)
-        mbt_ffi_store32(iter_base + 12, payload430.tag.length())
-        mbt_ffi_store32(iter_base + 8, ptr431)
-        mbt_ffi_store32(iter_base + 16, payload430.body)
+        let ptr434 = mbt_ffi_str2ptr(payload433.tag)
+        mbt_ffi_store32(iter_base + 12, payload433.tag.length())
+        mbt_ffi_store32(iter_base + 8, ptr434)
+        mbt_ffi_store32(iter_base + 16, payload433.body)
+        cleanup_list.push(ptr434)
 
         ()
       }
-      SecretValue(payload432) => {
+      SecretValue(payload435) => {
         mbt_ffi_store8(iter_base + 0, 31)
 
-        let @types.Secret(handle) = payload432
-        mbt_ffi_store32(iter_base + 8, handle)
-
-        ()
-      }
-      QuotaTokenHandle(payload433) => {
-        mbt_ffi_store8(iter_base + 0, 32)
-
-        let @types.QuotaToken(handle434) = payload433
-        mbt_ffi_store32(iter_base + 8, handle434)
-
-        ()
-      }
-      PermissionCardHandle(payload435) => {
-        mbt_ffi_store8(iter_base + 0, 33)
-
-        let @types.PermissionCard(handle436) = payload435
+        let @types.Secret(handle436) = payload435
         mbt_ffi_store32(iter_base + 8, handle436)
 
         ()
       }
-      StreamValue(payload437) => {
+      QuotaTokenHandle(payload437) => {
+        mbt_ffi_store8(iter_base + 0, 32)
+
+        let @types.QuotaToken(handle438) = payload437
+        mbt_ffi_store32(iter_base + 8, handle438)
+
+        ()
+      }
+      PermissionCardHandle(payload439) => {
+        mbt_ffi_store8(iter_base + 0, 33)
+
+        let @types.PermissionCard(handle440) = payload439
+        mbt_ffi_store32(iter_base + 8, handle440)
+
+        ()
+      }
+      StreamValue(payload441) => {
         mbt_ffi_store8(iter_base + 0, 34)
 
-        let @types.SchemaValueStream(handle438) = payload437
-        mbt_ffi_store32(iter_base + 8, handle438)
+        let @types.SchemaValueStream(handle442) = payload441
+        mbt_ffi_store32(iter_base + 8, handle442)
 
         ()
       }
     }
   }
-  mbt_ffi_store32(lower_ptr + 12 + 24, input.value.value_nodes.length())
-  mbt_ffi_store32(lower_ptr + 12 + 20, address439)
-  mbt_ffi_store32(lower_ptr + 12 + 28, input.value.root)
 
-  match stdin {
-    None => {
-      mbt_ffi_store8(lower_ptr + 44 + 0, 0)
+  let (lowered, lowered448) = match stdin {
+    None => (0, 0)
+    Some(payload446) => {
+      let ToolStdin(handle447) = payload446
 
-      ()
-    }
-    Some(payload0) => {
-      mbt_ffi_store8(lower_ptr + 44 + 0, 1)
-      mbt_ffi_store32(
-        lower_ptr + 44 + 4,
-        wasmGolemToolHost010MethodToolRpcInvokeStream0StreamLower(payload0),
-      )
-
-      ()
+      (1, handle447)
     }
   }
-
-  let result_ptr = mbt_ffi_malloc(44 * 1)
-  defer mbt_ffi_free(result_ptr)
-
-  let subtask_code = wasmImportMethodToolRpcInvoke(lower_ptr, result_ptr)
-  @async-core.suspend_for_subtask(
-    subtask_code,
-    fn(before_started) {
-      if before_started {
-        for index = 0; index < mbt_ffi_load32(lower_ptr + 8); index = index + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 4) + index * 8
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 4))
-
-        for index20 = 0
-            index20 < mbt_ffi_load32(lower_ptr + 16)
-            index20 = index20 + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 12) + index20 * 144
-
-          match mbt_ffi_load8_u(iter_base + 0) {
-            0 => ()
-            1 => ()
-            2 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            3 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            4 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            5 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            6 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            7 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            8 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            9 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            10 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            11 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            12 => ()
-            13 => ()
-            14 => {
-              for index2 = 0
-                  index2 < mbt_ffi_load32(iter_base + 12)
-                  index2 = index2 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index2 * 68
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                match mbt_ffi_load8_u(iter_base + 12) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  _ => panic()
-                }
-
-                for index0 = 0
-                    index0 < mbt_ffi_load32(iter_base + 28)
-                    index0 = index0 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 24) + index0 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-
-                for index1 = 0
-                    index1 < mbt_ffi_load32(iter_base + 36)
-                    index1 = index1 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index1 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
-
-                match mbt_ffi_load8_u(iter_base + 40) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 52) {
-                  0 => ()
-                  1 =>
-                    match mbt_ffi_load8_u(iter_base + 56) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
-                      _ => panic()
-                    }
-                  _ => panic()
-                }
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            15 => {
-              for index5 = 0
-                  index5 < mbt_ffi_load32(iter_base + 12)
-                  index5 = index5 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index5 * 72
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                match mbt_ffi_load8_u(iter_base + 16) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                  _ => panic()
-                }
-
-                for index3 = 0
-                    index3 < mbt_ffi_load32(iter_base + 32)
-                    index3 = index3 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 28) + index3 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-
-                for index4 = 0
-                    index4 < mbt_ffi_load32(iter_base + 40)
-                    index4 = index4 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 36) + index4 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
-
-                match mbt_ffi_load8_u(iter_base + 44) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 56) {
-                  0 => ()
-                  1 =>
-                    match mbt_ffi_load8_u(iter_base + 60) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
-                      _ => panic()
-                    }
-                  _ => panic()
-                }
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            16 => {
-              for index6 = 0
-                  index6 < mbt_ffi_load32(iter_base + 12)
-                  index6 = index6 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index6 * 8
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            17 => {
-              for index7 = 0
-                  index7 < mbt_ffi_load32(iter_base + 12)
-                  index7 = index7 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index7 * 8
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            19 => ()
-            20 => ()
-            21 => ()
-            22 => ()
-            23 => ()
-            24 => {
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => {
-                  for index8 = 0
-                      index8 < mbt_ffi_load32(iter_base + 16)
-                      index8 = index8 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index8 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                }
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 36) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
-                _ => panic()
-              }
-            }
-            25 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => {
-                  for index9 = 0
-                      index9 < mbt_ffi_load32(iter_base + 16)
-                      index9 = index9 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index9 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                }
-                _ => panic()
-              }
-            26 => {
-              match mbt_ffi_load8_u(iter_base + 12) {
-                0 => ()
-                1 => {
-                  for index10 = 0
-                      index10 < mbt_ffi_load32(iter_base + 20)
-                      index10 = index10 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 16) + index10 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                }
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 24) {
-                0 => ()
-                1 => {
-                  for index11 = 0
-                      index11 < mbt_ffi_load32(iter_base + 32)
-                      index11 = index11 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 28) + index11 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-                }
-                _ => panic()
-              }
-            }
-            27 => {
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => {
-                  for index12 = 0
-                      index12 < mbt_ffi_load32(iter_base + 16)
-                      index12 = index12 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index12 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                }
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 20) {
-                0 => ()
-                1 => {
-                  for index13 = 0
-                      index13 < mbt_ffi_load32(iter_base + 28)
-                      index13 = index13 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 24) + index13 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-                }
-                _ => panic()
-              }
-            }
-            28 => ()
-            29 => ()
-            30 => {
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-              for index14 = 0
-                  index14 < mbt_ffi_load32(iter_base + 20)
-                  index14 = index14 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 16) + index14 * 8
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-
-              match mbt_ffi_load8_u(iter_base + 24) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 56) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 76))
-                _ => panic()
-              }
-            }
-            31 => {
-              for index17 = 0
-                  index17 < mbt_ffi_load32(iter_base + 12)
-                  index17 = index17 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index17 * 92
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                match mbt_ffi_load8_u(iter_base + 12) {
-                  0 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  2 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  4 => {
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-
-                    match mbt_ffi_load8_u(iter_base + 24) {
-                      0 => ()
-                      1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-                      _ => panic()
-                    }
-                  }
-                  5 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 36) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
-                  _ => panic()
-                }
-
-                for index15 = 0
-                    index15 < mbt_ffi_load32(iter_base + 52)
-                    index15 = index15 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 48) + index15 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
-
-                for index16 = 0
-                    index16 < mbt_ffi_load32(iter_base + 60)
-                    index16 = index16 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 56) + index16 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
-
-                match mbt_ffi_load8_u(iter_base + 64) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 76) {
-                  0 => ()
-                  1 =>
-                    match mbt_ffi_load8_u(iter_base + 80) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
-                      _ => panic()
-                    }
-                  _ => panic()
-                }
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            32 =>
-              match mbt_ffi_load8_u(iter_base + 12) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                _ => panic()
-              }
-            33 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                _ => panic()
-              }
-            34 => ()
-            35 => ()
-            36 => ()
-            _ => panic()
-          }
-
-          match mbt_ffi_load8_u(iter_base + 88) {
-            0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 92))
-            _ => panic()
-          }
-
-          for index18 = 0
-              index18 < mbt_ffi_load32(iter_base + 104)
-              index18 = index18 + 1 {
-            let iter_base = mbt_ffi_load32(iter_base + 100) + index18 * 8
-            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-          }
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
-
-          for index19 = 0
-              index19 < mbt_ffi_load32(iter_base + 112)
-              index19 = index19 + 1 {
-            let iter_base = mbt_ffi_load32(iter_base + 108) + index19 * 8
-            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-          }
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
-
-          match mbt_ffi_load8_u(iter_base + 116) {
-            0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 120))
-            _ => panic()
-          }
-
-          match mbt_ffi_load8_u(iter_base + 128) {
-            0 => ()
-            1 =>
-              match mbt_ffi_load8_u(iter_base + 132) {
-                0 => ()
-                1 => ()
-                2 => ()
-                3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
-                _ => panic()
-              }
-            _ => panic()
-          }
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 12))
-
-        for index21 = 0
-            index21 < mbt_ffi_load32(lower_ptr + 24)
-            index21 = index21 + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 20) + index21 * 24
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-          match mbt_ffi_load8_u(iter_base + 8) {
-            0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-            _ => panic()
-          }
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 20))
-
-        for index22 = 0
-            index22 < mbt_ffi_load32(lower_ptr + 36)
-            index22 = index22 + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 32) + index22 * 32
-
-          match mbt_ffi_load8_u(iter_base + 0) {
-            0 => ()
-            1 => ()
-            2 => ()
-            3 => ()
-            4 => ()
-            5 => ()
-            6 => ()
-            7 => ()
-            8 => ()
-            9 => ()
-            10 => ()
-            11 => ()
-            12 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            13 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            14 => ()
-            15 => ()
-            16 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            17 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            19 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            20 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            21 => ()
-            22 => ()
-            23 => {
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-              match mbt_ffi_load8_u(iter_base + 16) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                _ => panic()
-              }
-            }
-            24 => {
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-              match mbt_ffi_load8_u(iter_base + 16) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                _ => panic()
-              }
-            }
-            25 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            27 => ()
-            28 => ()
-            29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            31 => @types.Secret::Secret(mbt_ffi_load32(iter_base + 8)).drop()
-            32 =>
-              @types.QuotaToken::QuotaToken(mbt_ffi_load32(iter_base + 8)).drop()
-            33 =>
-              @types.PermissionCard::PermissionCard(
-                mbt_ffi_load32(iter_base + 8),
-              ).drop()
-            34 =>
-              @types.SchemaValueStream::SchemaValueStream(
-                mbt_ffi_load32(iter_base + 8),
-              ).drop()
-            _ => panic()
-          }
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 32))
-
-        match mbt_ffi_load8_u(lower_ptr + 44) {
-          0 => ()
-          1 => {
-            let result = wasmGolemToolHost010MethodToolRpcInvokeStream0StreamLift(
-              mbt_ffi_load32(lower_ptr + 48),
-            )
-            result.drop_sync()
-          }
-          _ => panic()
-        }
-      } else {
-        for index = 0; index < mbt_ffi_load32(lower_ptr + 8); index = index + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 4) + index * 8
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 4))
-
-        for index20 = 0
-            index20 < mbt_ffi_load32(lower_ptr + 16)
-            index20 = index20 + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 12) + index20 * 144
-
-          match mbt_ffi_load8_u(iter_base + 0) {
-            0 => ()
-            1 => ()
-            2 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            3 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            4 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            5 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            6 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            7 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            8 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            9 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            10 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            11 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            12 => ()
-            13 => ()
-            14 => {
-              for index2 = 0
-                  index2 < mbt_ffi_load32(iter_base + 12)
-                  index2 = index2 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index2 * 68
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                match mbt_ffi_load8_u(iter_base + 12) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  _ => panic()
-                }
-
-                for index0 = 0
-                    index0 < mbt_ffi_load32(iter_base + 28)
-                    index0 = index0 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 24) + index0 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-
-                for index1 = 0
-                    index1 < mbt_ffi_load32(iter_base + 36)
-                    index1 = index1 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index1 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
-
-                match mbt_ffi_load8_u(iter_base + 40) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 52) {
-                  0 => ()
-                  1 =>
-                    match mbt_ffi_load8_u(iter_base + 56) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
-                      _ => panic()
-                    }
-                  _ => panic()
-                }
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            15 => {
-              for index5 = 0
-                  index5 < mbt_ffi_load32(iter_base + 12)
-                  index5 = index5 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index5 * 72
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                match mbt_ffi_load8_u(iter_base + 16) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                  _ => panic()
-                }
-
-                for index3 = 0
-                    index3 < mbt_ffi_load32(iter_base + 32)
-                    index3 = index3 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 28) + index3 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-
-                for index4 = 0
-                    index4 < mbt_ffi_load32(iter_base + 40)
-                    index4 = index4 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 36) + index4 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
-
-                match mbt_ffi_load8_u(iter_base + 44) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 56) {
-                  0 => ()
-                  1 =>
-                    match mbt_ffi_load8_u(iter_base + 60) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
-                      _ => panic()
-                    }
-                  _ => panic()
-                }
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            16 => {
-              for index6 = 0
-                  index6 < mbt_ffi_load32(iter_base + 12)
-                  index6 = index6 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index6 * 8
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            17 => {
-              for index7 = 0
-                  index7 < mbt_ffi_load32(iter_base + 12)
-                  index7 = index7 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index7 * 8
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            19 => ()
-            20 => ()
-            21 => ()
-            22 => ()
-            23 => ()
-            24 => {
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => {
-                  for index8 = 0
-                      index8 < mbt_ffi_load32(iter_base + 16)
-                      index8 = index8 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index8 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                }
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 36) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
-                _ => panic()
-              }
-            }
-            25 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => {
-                  for index9 = 0
-                      index9 < mbt_ffi_load32(iter_base + 16)
-                      index9 = index9 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index9 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                }
-                _ => panic()
-              }
-            26 => {
-              match mbt_ffi_load8_u(iter_base + 12) {
-                0 => ()
-                1 => {
-                  for index10 = 0
-                      index10 < mbt_ffi_load32(iter_base + 20)
-                      index10 = index10 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 16) + index10 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                }
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 24) {
-                0 => ()
-                1 => {
-                  for index11 = 0
-                      index11 < mbt_ffi_load32(iter_base + 32)
-                      index11 = index11 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 28) + index11 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-                }
-                _ => panic()
-              }
-            }
-            27 => {
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => {
-                  for index12 = 0
-                      index12 < mbt_ffi_load32(iter_base + 16)
-                      index12 = index12 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index12 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                }
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 20) {
-                0 => ()
-                1 => {
-                  for index13 = 0
-                      index13 < mbt_ffi_load32(iter_base + 28)
-                      index13 = index13 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 24) + index13 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-                }
-                _ => panic()
-              }
-            }
-            28 => ()
-            29 => ()
-            30 => {
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-              for index14 = 0
-                  index14 < mbt_ffi_load32(iter_base + 20)
-                  index14 = index14 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 16) + index14 * 8
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-
-              match mbt_ffi_load8_u(iter_base + 24) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 56) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 76))
-                _ => panic()
-              }
-            }
-            31 => {
-              for index17 = 0
-                  index17 < mbt_ffi_load32(iter_base + 12)
-                  index17 = index17 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index17 * 92
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                match mbt_ffi_load8_u(iter_base + 12) {
-                  0 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  2 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  4 => {
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-
-                    match mbt_ffi_load8_u(iter_base + 24) {
-                      0 => ()
-                      1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-                      _ => panic()
-                    }
-                  }
-                  5 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 36) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
-                  _ => panic()
-                }
-
-                for index15 = 0
-                    index15 < mbt_ffi_load32(iter_base + 52)
-                    index15 = index15 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 48) + index15 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
-
-                for index16 = 0
-                    index16 < mbt_ffi_load32(iter_base + 60)
-                    index16 = index16 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 56) + index16 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
-
-                match mbt_ffi_load8_u(iter_base + 64) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 76) {
-                  0 => ()
-                  1 =>
-                    match mbt_ffi_load8_u(iter_base + 80) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
-                      _ => panic()
-                    }
-                  _ => panic()
-                }
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            32 =>
-              match mbt_ffi_load8_u(iter_base + 12) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                _ => panic()
-              }
-            33 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                _ => panic()
-              }
-            34 => ()
-            35 => ()
-            36 => ()
-            _ => panic()
-          }
-
-          match mbt_ffi_load8_u(iter_base + 88) {
-            0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 92))
-            _ => panic()
-          }
-
-          for index18 = 0
-              index18 < mbt_ffi_load32(iter_base + 104)
-              index18 = index18 + 1 {
-            let iter_base = mbt_ffi_load32(iter_base + 100) + index18 * 8
-            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-          }
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
-
-          for index19 = 0
-              index19 < mbt_ffi_load32(iter_base + 112)
-              index19 = index19 + 1 {
-            let iter_base = mbt_ffi_load32(iter_base + 108) + index19 * 8
-            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-          }
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
-
-          match mbt_ffi_load8_u(iter_base + 116) {
-            0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 120))
-            _ => panic()
-          }
-
-          match mbt_ffi_load8_u(iter_base + 128) {
-            0 => ()
-            1 =>
-              match mbt_ffi_load8_u(iter_base + 132) {
-                0 => ()
-                1 => ()
-                2 => ()
-                3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
-                _ => panic()
-              }
-            _ => panic()
-          }
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 12))
-
-        for index21 = 0
-            index21 < mbt_ffi_load32(lower_ptr + 24)
-            index21 = index21 + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 20) + index21 * 24
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-          match mbt_ffi_load8_u(iter_base + 8) {
-            0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-            _ => panic()
-          }
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 20))
-
-        for index22 = 0
-            index22 < mbt_ffi_load32(lower_ptr + 36)
-            index22 = index22 + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 32) + index22 * 32
-
-          match mbt_ffi_load8_u(iter_base + 0) {
-            0 => ()
-            1 => ()
-            2 => ()
-            3 => ()
-            4 => ()
-            5 => ()
-            6 => ()
-            7 => ()
-            8 => ()
-            9 => ()
-            10 => ()
-            11 => ()
-            12 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            13 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            14 => ()
-            15 => ()
-            16 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            17 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            19 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            20 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            21 => ()
-            22 => ()
-            23 => {
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-              match mbt_ffi_load8_u(iter_base + 16) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                _ => panic()
-              }
-            }
-            24 => {
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-              match mbt_ffi_load8_u(iter_base + 16) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                _ => panic()
-              }
-            }
-            25 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            27 => ()
-            28 => ()
-            29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            31 => ()
-            32 => ()
-            33 => ()
-            34 => ()
-            _ => panic()
-          }
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 32))
-
-        match mbt_ffi_load8_u(lower_ptr + 44) {
-          0 => ()
-          1 =>
-            wasmGolemToolHost010MethodToolRpcInvokeStream0StreamCommit(
-              mbt_ffi_load32(lower_ptr + 48),
-            )
-          _ => panic()
-        }
-      }
-    },
-    fn() {
-      match mbt_ffi_load8_u(result_ptr + 0) {
-        0 => ()
-        1 =>
-          match mbt_ffi_load8_u(result_ptr + 4) {
-            0 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 8))
-            1 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 8))
-            2 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 8))
-            3 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 8))
-            4 =>
-              match mbt_ffi_load8_u(result_ptr + 8) {
-                0 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 12))
-                1 => {
-                  for index = 0
-                      index < mbt_ffi_load32(result_ptr + 16)
-                      index = index + 1 {
-                    let iter_base = mbt_ffi_load32(result_ptr + 12) + index * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(result_ptr + 12))
-                }
-                2 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 12))
-                3 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 12))
-                4 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 12))
-                5 => {
-                  for index20 = 0
-                      index20 < mbt_ffi_load32(result_ptr + 16)
-                      index20 = index20 + 1 {
-                    let iter_base = mbt_ffi_load32(result_ptr + 12) +
-                      index20 * 144
-
-                    match mbt_ffi_load8_u(iter_base + 0) {
-                      0 => ()
-                      1 => ()
-                      2 =>
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 =>
-                            match mbt_ffi_load8_u(iter_base + 64) {
-                              0 => ()
-                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                              _ => panic()
-                            }
-                          _ => panic()
-                        }
-                      3 =>
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 =>
-                            match mbt_ffi_load8_u(iter_base + 64) {
-                              0 => ()
-                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                              _ => panic()
-                            }
-                          _ => panic()
-                        }
-                      4 =>
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 =>
-                            match mbt_ffi_load8_u(iter_base + 64) {
-                              0 => ()
-                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                              _ => panic()
-                            }
-                          _ => panic()
-                        }
-                      5 =>
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 =>
-                            match mbt_ffi_load8_u(iter_base + 64) {
-                              0 => ()
-                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                              _ => panic()
-                            }
-                          _ => panic()
-                        }
-                      6 =>
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 =>
-                            match mbt_ffi_load8_u(iter_base + 64) {
-                              0 => ()
-                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                              _ => panic()
-                            }
-                          _ => panic()
-                        }
-                      7 =>
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 =>
-                            match mbt_ffi_load8_u(iter_base + 64) {
-                              0 => ()
-                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                              _ => panic()
-                            }
-                          _ => panic()
-                        }
-                      8 =>
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 =>
-                            match mbt_ffi_load8_u(iter_base + 64) {
-                              0 => ()
-                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                              _ => panic()
-                            }
-                          _ => panic()
-                        }
-                      9 =>
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 =>
-                            match mbt_ffi_load8_u(iter_base + 64) {
-                              0 => ()
-                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                              _ => panic()
-                            }
-                          _ => panic()
-                        }
-                      10 =>
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 =>
-                            match mbt_ffi_load8_u(iter_base + 64) {
-                              0 => ()
-                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                              _ => panic()
-                            }
-                          _ => panic()
-                        }
-                      11 =>
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 =>
-                            match mbt_ffi_load8_u(iter_base + 64) {
-                              0 => ()
-                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                              _ => panic()
-                            }
-                          _ => panic()
-                        }
-                      12 => ()
-                      13 => ()
-                      14 => {
-                        for index2 = 0
-                            index2 < mbt_ffi_load32(iter_base + 12)
-                            index2 = index2 + 1 {
-                          let iter_base = mbt_ffi_load32(iter_base + 8) +
-                            index2 * 68
-                          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                          match mbt_ffi_load8_u(iter_base + 12) {
-                            0 => ()
-                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                            _ => panic()
-                          }
-
-                          for index0 = 0
-                              index0 < mbt_ffi_load32(iter_base + 28)
-                              index0 = index0 + 1 {
-                            let iter_base = mbt_ffi_load32(iter_base + 24) +
-                              index0 * 8
-                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                          }
-                          mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-
-                          for index1 = 0
-                              index1 < mbt_ffi_load32(iter_base + 36)
-                              index1 = index1 + 1 {
-                            let iter_base = mbt_ffi_load32(iter_base + 32) +
-                              index1 * 8
-                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                          }
-                          mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
-
-                          match mbt_ffi_load8_u(iter_base + 40) {
-                            0 => ()
-                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
-                            _ => panic()
-                          }
-
-                          match mbt_ffi_load8_u(iter_base + 52) {
-                            0 => ()
-                            1 =>
-                              match mbt_ffi_load8_u(iter_base + 56) {
-                                0 => ()
-                                1 => ()
-                                2 => ()
-                                3 =>
-                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
-                                _ => panic()
-                              }
-                            _ => panic()
-                          }
-                        }
-                        mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      }
-                      15 => {
-                        for index5 = 0
-                            index5 < mbt_ffi_load32(iter_base + 12)
-                            index5 = index5 + 1 {
-                          let iter_base = mbt_ffi_load32(iter_base + 8) +
-                            index5 * 72
-                          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                          match mbt_ffi_load8_u(iter_base + 16) {
-                            0 => ()
-                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                            _ => panic()
-                          }
-
-                          for index3 = 0
-                              index3 < mbt_ffi_load32(iter_base + 32)
-                              index3 = index3 + 1 {
-                            let iter_base = mbt_ffi_load32(iter_base + 28) +
-                              index3 * 8
-                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                          }
-                          mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-
-                          for index4 = 0
-                              index4 < mbt_ffi_load32(iter_base + 40)
-                              index4 = index4 + 1 {
-                            let iter_base = mbt_ffi_load32(iter_base + 36) +
-                              index4 * 8
-                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                          }
-                          mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
-
-                          match mbt_ffi_load8_u(iter_base + 44) {
-                            0 => ()
-                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
-                            _ => panic()
-                          }
-
-                          match mbt_ffi_load8_u(iter_base + 56) {
-                            0 => ()
-                            1 =>
-                              match mbt_ffi_load8_u(iter_base + 60) {
-                                0 => ()
-                                1 => ()
-                                2 => ()
-                                3 =>
-                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
-                                _ => panic()
-                              }
-                            _ => panic()
-                          }
-                        }
-                        mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      }
-                      16 => {
-                        for index6 = 0
-                            index6 < mbt_ffi_load32(iter_base + 12)
-                            index6 = index6 + 1 {
-                          let iter_base = mbt_ffi_load32(iter_base + 8) +
-                            index6 * 8
-                          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                        }
-                        mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      }
-                      17 => {
-                        for index7 = 0
-                            index7 < mbt_ffi_load32(iter_base + 12)
-                            index7 = index7 + 1 {
-                          let iter_base = mbt_ffi_load32(iter_base + 8) +
-                            index7 * 8
-                          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                        }
-                        mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      }
-                      18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      19 => ()
-                      20 => ()
-                      21 => ()
-                      22 => ()
-                      23 => ()
-                      24 => {
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 => {
-                            for index8 = 0
-                                index8 < mbt_ffi_load32(iter_base + 16)
-                                index8 = index8 + 1 {
-                              let iter_base = mbt_ffi_load32(iter_base + 12) +
-                                index8 * 8
-                              mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                            }
-                            mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                          }
-                          _ => panic()
-                        }
-
-                        match mbt_ffi_load8_u(iter_base + 36) {
-                          0 => ()
-                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
-                          _ => panic()
-                        }
-                      }
-                      25 =>
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 => {
-                            for index9 = 0
-                                index9 < mbt_ffi_load32(iter_base + 16)
-                                index9 = index9 + 1 {
-                              let iter_base = mbt_ffi_load32(iter_base + 12) +
-                                index9 * 8
-                              mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                            }
-                            mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                          }
-                          _ => panic()
-                        }
-                      26 => {
-                        match mbt_ffi_load8_u(iter_base + 12) {
-                          0 => ()
-                          1 => {
-                            for index10 = 0
-                                index10 < mbt_ffi_load32(iter_base + 20)
-                                index10 = index10 + 1 {
-                              let iter_base = mbt_ffi_load32(iter_base + 16) +
-                                index10 * 8
-                              mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                            }
-                            mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                          }
-                          _ => panic()
-                        }
-
-                        match mbt_ffi_load8_u(iter_base + 24) {
-                          0 => ()
-                          1 => {
-                            for index11 = 0
-                                index11 < mbt_ffi_load32(iter_base + 32)
-                                index11 = index11 + 1 {
-                              let iter_base = mbt_ffi_load32(iter_base + 28) +
-                                index11 * 8
-                              mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                            }
-                            mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-                          }
-                          _ => panic()
-                        }
-                      }
-                      27 => {
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 => {
-                            for index12 = 0
-                                index12 < mbt_ffi_load32(iter_base + 16)
-                                index12 = index12 + 1 {
-                              let iter_base = mbt_ffi_load32(iter_base + 12) +
-                                index12 * 8
-                              mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                            }
-                            mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                          }
-                          _ => panic()
-                        }
-
-                        match mbt_ffi_load8_u(iter_base + 20) {
-                          0 => ()
-                          1 => {
-                            for index13 = 0
-                                index13 < mbt_ffi_load32(iter_base + 28)
-                                index13 = index13 + 1 {
-                              let iter_base = mbt_ffi_load32(iter_base + 24) +
-                                index13 * 8
-                              mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                            }
-                            mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-                          }
-                          _ => panic()
-                        }
-                      }
-                      28 => ()
-                      29 => ()
-                      30 => {
-                        mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                        for index14 = 0
-                            index14 < mbt_ffi_load32(iter_base + 20)
-                            index14 = index14 + 1 {
-                          let iter_base = mbt_ffi_load32(iter_base + 16) +
-                            index14 * 8
-                          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                        }
-                        mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-
-                        match mbt_ffi_load8_u(iter_base + 24) {
-                          0 => ()
-                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
-                          _ => panic()
-                        }
-
-                        match mbt_ffi_load8_u(iter_base + 56) {
-                          0 => ()
-                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 76))
-                          _ => panic()
-                        }
-                      }
-                      31 => {
-                        for index17 = 0
-                            index17 < mbt_ffi_load32(iter_base + 12)
-                            index17 = index17 + 1 {
-                          let iter_base = mbt_ffi_load32(iter_base + 8) +
-                            index17 * 92
-                          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                          match mbt_ffi_load8_u(iter_base + 12) {
-                            0 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                            2 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                            3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                            4 => {
-                              mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-
-                              match mbt_ffi_load8_u(iter_base + 24) {
-                                0 => ()
-                                1 =>
-                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-                                _ => panic()
-                              }
-                            }
-                            5 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                            _ => panic()
-                          }
-
-                          match mbt_ffi_load8_u(iter_base + 36) {
-                            0 => ()
-                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
-                            _ => panic()
-                          }
-
-                          for index15 = 0
-                              index15 < mbt_ffi_load32(iter_base + 52)
-                              index15 = index15 + 1 {
-                            let iter_base = mbt_ffi_load32(iter_base + 48) +
-                              index15 * 8
-                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                          }
-                          mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
-
-                          for index16 = 0
-                              index16 < mbt_ffi_load32(iter_base + 60)
-                              index16 = index16 + 1 {
-                            let iter_base = mbt_ffi_load32(iter_base + 56) +
-                              index16 * 8
-                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                          }
-                          mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
-
-                          match mbt_ffi_load8_u(iter_base + 64) {
-                            0 => ()
-                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                            _ => panic()
-                          }
-
-                          match mbt_ffi_load8_u(iter_base + 76) {
-                            0 => ()
-                            1 =>
-                              match mbt_ffi_load8_u(iter_base + 80) {
-                                0 => ()
-                                1 => ()
-                                2 => ()
-                                3 =>
-                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
-                                _ => panic()
-                              }
-                            _ => panic()
-                          }
-                        }
-                        mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      }
-                      32 =>
-                        match mbt_ffi_load8_u(iter_base + 12) {
-                          0 => ()
-                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                          _ => panic()
-                        }
-                      33 =>
-                        match mbt_ffi_load8_u(iter_base + 8) {
-                          0 => ()
-                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                          _ => panic()
-                        }
-                      34 => ()
-                      35 => ()
-                      36 => ()
-                      _ => panic()
-                    }
-
-                    match mbt_ffi_load8_u(iter_base + 88) {
-                      0 => ()
-                      1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 92))
-                      _ => panic()
-                    }
-
-                    for index18 = 0
-                        index18 < mbt_ffi_load32(iter_base + 104)
-                        index18 = index18 + 1 {
-                      let iter_base = mbt_ffi_load32(iter_base + 100) +
-                        index18 * 8
-                      mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                    }
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
-
-                    for index19 = 0
-                        index19 < mbt_ffi_load32(iter_base + 112)
-                        index19 = index19 + 1 {
-                      let iter_base = mbt_ffi_load32(iter_base + 108) +
-                        index19 * 8
-                      mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                    }
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
-
-                    match mbt_ffi_load8_u(iter_base + 116) {
-                      0 => ()
-                      1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 120))
-                      _ => panic()
-                    }
-
-                    match mbt_ffi_load8_u(iter_base + 128) {
-                      0 => ()
-                      1 =>
-                        match mbt_ffi_load8_u(iter_base + 132) {
-                          0 => ()
-                          1 => ()
-                          2 => ()
-                          3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
-                          _ => panic()
-                        }
-                      _ => panic()
-                    }
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(result_ptr + 12))
-
-                  for index21 = 0
-                      index21 < mbt_ffi_load32(result_ptr + 24)
-                      index21 = index21 + 1 {
-                    let iter_base = mbt_ffi_load32(result_ptr + 20) +
-                      index21 * 24
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                    match mbt_ffi_load8_u(iter_base + 8) {
-                      0 => ()
-                      1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                      _ => panic()
-                    }
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(result_ptr + 20))
-
-                  for index22 = 0
-                      index22 < mbt_ffi_load32(result_ptr + 36)
-                      index22 = index22 + 1 {
-                    let iter_base = mbt_ffi_load32(result_ptr + 32) +
-                      index22 * 32
-
-                    match mbt_ffi_load8_u(iter_base + 0) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => ()
-                      4 => ()
-                      5 => ()
-                      6 => ()
-                      7 => ()
-                      8 => ()
-                      9 => ()
-                      10 => ()
-                      11 => ()
-                      12 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      13 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      14 => ()
-                      15 => ()
-                      16 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      17 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      19 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      20 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      21 => ()
-                      22 => ()
-                      23 => {
-                        mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                        match mbt_ffi_load8_u(iter_base + 16) {
-                          0 => ()
-                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                          _ => panic()
-                        }
-                      }
-                      24 => {
-                        mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-                        match mbt_ffi_load8_u(iter_base + 16) {
-                          0 => ()
-                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                          _ => panic()
-                        }
-                      }
-                      25 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      27 => ()
-                      28 => ()
-                      29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                      30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-                      31 =>
-                        @types.Secret::Secret(mbt_ffi_load32(iter_base + 8)).drop()
-                      32 =>
-                        @types.QuotaToken::QuotaToken(
-                          mbt_ffi_load32(iter_base + 8),
-                        ).drop()
-                      33 =>
-                        @types.PermissionCard::PermissionCard(
-                          mbt_ffi_load32(iter_base + 8),
-                        ).drop()
-                      34 =>
-                        @types.SchemaValueStream::SchemaValueStream(
-                          mbt_ffi_load32(iter_base + 8),
-                        ).drop()
-                      _ => panic()
-                    }
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(result_ptr + 32))
-                }
-                _ => panic()
-              }
-            _ => panic()
-          }
-        _ => panic()
-      }
-    },
+  let return_area = mbt_ffi_malloc(44)
+  wasmImportMethodToolRpcInvoke(
+    handle,
+    address,
+    command_path.length(),
+    address361,
+    input.graph.type_nodes.length(),
+    address367,
+    input.graph.defs.length(),
+    input.graph.root,
+    address443,
+    input.value.value_nodes.length(),
+    input.value.root,
+    lowered,
+    lowered448,
+    return_area,
   )
 
-  let lifted243 = match mbt_ffi_load8_u(result_ptr + 0) {
+  let lifted694 = match mbt_ffi_load8_u(return_area + 0) {
     0 => Result::Ok(())
     1 => {
-      let lifted242 = match mbt_ffi_load8_u(result_ptr + 4) {
+      let lifted693 = match mbt_ffi_load8_u(return_area + 4) {
         0 => {
           let result = mbt_ffi_ptr2str(
-            mbt_ffi_load32(result_ptr + 8),
-            mbt_ffi_load32(result_ptr + 12),
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
           )
 
           RpcError::ProtocolError(result)
         }
         1 => {
-          let result0 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(result_ptr + 8),
-            mbt_ffi_load32(result_ptr + 12),
+          let result449 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
           )
 
-          RpcError::Denied(result0)
+          RpcError::Denied(result449)
         }
         2 => {
-          let result1 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(result_ptr + 8),
-            mbt_ffi_load32(result_ptr + 12),
+          let result450 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
           )
 
-          RpcError::NotFound(result1)
+          RpcError::NotFound(result450)
         }
         3 => {
-          let result2 = mbt_ffi_ptr2str(
-            mbt_ffi_load32(result_ptr + 8),
-            mbt_ffi_load32(result_ptr + 12),
+          let result451 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
           )
 
-          RpcError::RemoteInternalError(result2)
+          RpcError::RemoteInternalError(result451)
         }
         4 => {
-          let lifted241 = match mbt_ffi_load8_u(result_ptr + 8) {
+          let lifted691 = match mbt_ffi_load8_u(return_area + 8) {
             0 => {
-              let result3 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(result_ptr + 12),
-                mbt_ffi_load32(result_ptr + 16),
+              let result452 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(return_area + 12),
+                mbt_ffi_load32(return_area + 16),
               )
 
-              @common.ToolError::InvalidToolName(result3)
+              @common.ToolError::InvalidToolName(result452)
             }
             1 => {
               let array : Array[String] = []
-              for index = 0
-                  index < mbt_ffi_load32(result_ptr + 16)
-                  index = index + 1 {
-                let iter_base = mbt_ffi_load32(result_ptr + 12) + index * 8
+              for index454 = 0
+                  index454 < mbt_ffi_load32(return_area + 16)
+                  index454 = index454 + 1 {
+                let iter_base = mbt_ffi_load32(return_area + 12) + index454 * 8
 
-                let result4 = mbt_ffi_ptr2str(
+                let result453 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 0),
                   mbt_ffi_load32(iter_base + 4),
                 )
 
-                array.push(result4)
+                array.push(result453)
               }
-              mbt_ffi_free(mbt_ffi_load32(result_ptr + 12))
+              mbt_ffi_free(mbt_ffi_load32(return_area + 12))
 
               @common.ToolError::InvalidCommandPath(array)
             }
             2 => {
-              let result5 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(result_ptr + 12),
-                mbt_ffi_load32(result_ptr + 16),
+              let result455 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(return_area + 12),
+                mbt_ffi_load32(return_area + 16),
               )
 
-              @common.ToolError::InvalidInput(result5)
+              @common.ToolError::InvalidInput(result455)
             }
             3 => {
-              let result6 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(result_ptr + 12),
-                mbt_ffi_load32(result_ptr + 16),
+              let result456 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(return_area + 12),
+                mbt_ffi_load32(return_area + 16),
               )
 
-              @common.ToolError::ConstraintViolation(result6)
+              @common.ToolError::ConstraintViolation(result456)
             }
             4 => {
-              let result7 = mbt_ffi_ptr2str(
-                mbt_ffi_load32(result_ptr + 12),
-                mbt_ffi_load32(result_ptr + 16),
+              let result457 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(return_area + 12),
+                mbt_ffi_load32(return_area + 16),
               )
 
-              @common.ToolError::InvalidResult(result7)
+              @common.ToolError::InvalidResult(result457)
             }
             5 => {
-              let array203 : Array[@types.SchemaTypeNode] = []
-              for index204 = 0
-                  index204 < mbt_ffi_load32(result_ptr + 16)
-                  index204 = index204 + 1 {
-                let iter_base = mbt_ffi_load32(result_ptr + 12) + index204 * 144
+              let array653 : Array[@types.SchemaTypeNode] = []
+              for index654 = 0
+                  index654 < mbt_ffi_load32(return_area + 16)
+                  index654 = index654 + 1 {
+                let iter_base = mbt_ffi_load32(return_area + 12) +
+                  index654 * 144
 
-                let lifted189 = match mbt_ffi_load8_u(iter_base + 0) {
+                let lifted639 = match mbt_ffi_load8_u(iter_base + 0) {
                   0 =>
                     @types.SchemaTypeBody::RefType(
                       mbt_ffi_load32(iter_base + 8),
                     )
                   1 => @types.SchemaTypeBody::BoolType
                   2 => {
-                    let lifted13 : @types.NumericRestrictions? = match
+                    let lifted463 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted8 : @types.NumericBound? = match
+                        let lifted458 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
@@ -28599,11 +27706,11 @@ pub async fn ToolRpc::invoke(
                           _ => panic()
                         }
 
-                        let lifted10 : @types.NumericBound? = match
+                        let lifted460 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted9 = match
+                            let lifted459 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -28620,46 +27727,46 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted9)
+                            Option::Some(lifted459)
                           }
                           _ => panic()
                         }
 
-                        let lifted12 : String? = match
+                        let lifted462 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result11 = mbt_ffi_ptr2str(
+                            let result461 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result11)
+                            Option::Some(result461)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted8,
-                          max: lifted10,
-                          unit: lifted12,
+                          min: lifted458,
+                          max: lifted460,
+                          unit: lifted462,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::S8Type(lifted13)
+                    @types.SchemaTypeBody::S8Type(lifted463)
                   }
                   3 => {
-                    let lifted20 : @types.NumericRestrictions? = match
+                    let lifted470 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted15 : @types.NumericBound? = match
+                        let lifted465 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted14 = match
+                            let lifted464 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -28676,16 +27783,16 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted14)
+                            Option::Some(lifted464)
                           }
                           _ => panic()
                         }
 
-                        let lifted17 : @types.NumericBound? = match
+                        let lifted467 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted16 = match
+                            let lifted466 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -28702,46 +27809,46 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted16)
+                            Option::Some(lifted466)
                           }
                           _ => panic()
                         }
 
-                        let lifted19 : String? = match
+                        let lifted469 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result18 = mbt_ffi_ptr2str(
+                            let result468 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result18)
+                            Option::Some(result468)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted15,
-                          max: lifted17,
-                          unit: lifted19,
+                          min: lifted465,
+                          max: lifted467,
+                          unit: lifted469,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::S16Type(lifted20)
+                    @types.SchemaTypeBody::S16Type(lifted470)
                   }
                   4 => {
-                    let lifted27 : @types.NumericRestrictions? = match
+                    let lifted477 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted22 : @types.NumericBound? = match
+                        let lifted472 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted21 = match
+                            let lifted471 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -28758,16 +27865,16 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted21)
+                            Option::Some(lifted471)
                           }
                           _ => panic()
                         }
 
-                        let lifted24 : @types.NumericBound? = match
+                        let lifted474 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted23 = match
+                            let lifted473 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -28784,46 +27891,46 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted23)
+                            Option::Some(lifted473)
                           }
                           _ => panic()
                         }
 
-                        let lifted26 : String? = match
+                        let lifted476 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result25 = mbt_ffi_ptr2str(
+                            let result475 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result25)
+                            Option::Some(result475)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted22,
-                          max: lifted24,
-                          unit: lifted26,
+                          min: lifted472,
+                          max: lifted474,
+                          unit: lifted476,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::S32Type(lifted27)
+                    @types.SchemaTypeBody::S32Type(lifted477)
                   }
                   5 => {
-                    let lifted34 : @types.NumericRestrictions? = match
+                    let lifted484 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted29 : @types.NumericBound? = match
+                        let lifted479 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted28 = match
+                            let lifted478 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -28840,16 +27947,16 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted28)
+                            Option::Some(lifted478)
                           }
                           _ => panic()
                         }
 
-                        let lifted31 : @types.NumericBound? = match
+                        let lifted481 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted30 = match
+                            let lifted480 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -28866,46 +27973,46 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted30)
+                            Option::Some(lifted480)
                           }
                           _ => panic()
                         }
 
-                        let lifted33 : String? = match
+                        let lifted483 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result32 = mbt_ffi_ptr2str(
+                            let result482 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result32)
+                            Option::Some(result482)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted29,
-                          max: lifted31,
-                          unit: lifted33,
+                          min: lifted479,
+                          max: lifted481,
+                          unit: lifted483,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::S64Type(lifted34)
+                    @types.SchemaTypeBody::S64Type(lifted484)
                   }
                   6 => {
-                    let lifted41 : @types.NumericRestrictions? = match
+                    let lifted491 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted36 : @types.NumericBound? = match
+                        let lifted486 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted35 = match
+                            let lifted485 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -28922,16 +28029,16 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted35)
+                            Option::Some(lifted485)
                           }
                           _ => panic()
                         }
 
-                        let lifted38 : @types.NumericBound? = match
+                        let lifted488 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted37 = match
+                            let lifted487 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -28948,46 +28055,46 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted37)
+                            Option::Some(lifted487)
                           }
                           _ => panic()
                         }
 
-                        let lifted40 : String? = match
+                        let lifted490 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result39 = mbt_ffi_ptr2str(
+                            let result489 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result39)
+                            Option::Some(result489)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted36,
-                          max: lifted38,
-                          unit: lifted40,
+                          min: lifted486,
+                          max: lifted488,
+                          unit: lifted490,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::U8Type(lifted41)
+                    @types.SchemaTypeBody::U8Type(lifted491)
                   }
                   7 => {
-                    let lifted48 : @types.NumericRestrictions? = match
+                    let lifted498 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted43 : @types.NumericBound? = match
+                        let lifted493 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted42 = match
+                            let lifted492 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29004,16 +28111,16 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted42)
+                            Option::Some(lifted492)
                           }
                           _ => panic()
                         }
 
-                        let lifted45 : @types.NumericBound? = match
+                        let lifted495 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted44 = match
+                            let lifted494 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29030,46 +28137,46 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted44)
+                            Option::Some(lifted494)
                           }
                           _ => panic()
                         }
 
-                        let lifted47 : String? = match
+                        let lifted497 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result46 = mbt_ffi_ptr2str(
+                            let result496 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result46)
+                            Option::Some(result496)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted43,
-                          max: lifted45,
-                          unit: lifted47,
+                          min: lifted493,
+                          max: lifted495,
+                          unit: lifted497,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::U16Type(lifted48)
+                    @types.SchemaTypeBody::U16Type(lifted498)
                   }
                   8 => {
-                    let lifted55 : @types.NumericRestrictions? = match
+                    let lifted505 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted50 : @types.NumericBound? = match
+                        let lifted500 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted49 = match
+                            let lifted499 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29086,16 +28193,16 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted49)
+                            Option::Some(lifted499)
                           }
                           _ => panic()
                         }
 
-                        let lifted52 : @types.NumericBound? = match
+                        let lifted502 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted51 = match
+                            let lifted501 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29112,46 +28219,46 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted51)
+                            Option::Some(lifted501)
                           }
                           _ => panic()
                         }
 
-                        let lifted54 : String? = match
+                        let lifted504 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result53 = mbt_ffi_ptr2str(
+                            let result503 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result53)
+                            Option::Some(result503)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted50,
-                          max: lifted52,
-                          unit: lifted54,
+                          min: lifted500,
+                          max: lifted502,
+                          unit: lifted504,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::U32Type(lifted55)
+                    @types.SchemaTypeBody::U32Type(lifted505)
                   }
                   9 => {
-                    let lifted62 : @types.NumericRestrictions? = match
+                    let lifted512 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted57 : @types.NumericBound? = match
+                        let lifted507 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted56 = match
+                            let lifted506 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29168,16 +28275,16 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted56)
+                            Option::Some(lifted506)
                           }
                           _ => panic()
                         }
 
-                        let lifted59 : @types.NumericBound? = match
+                        let lifted509 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted58 = match
+                            let lifted508 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29194,46 +28301,46 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted58)
+                            Option::Some(lifted508)
                           }
                           _ => panic()
                         }
 
-                        let lifted61 : String? = match
+                        let lifted511 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result60 = mbt_ffi_ptr2str(
+                            let result510 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result60)
+                            Option::Some(result510)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted57,
-                          max: lifted59,
-                          unit: lifted61,
+                          min: lifted507,
+                          max: lifted509,
+                          unit: lifted511,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::U64Type(lifted62)
+                    @types.SchemaTypeBody::U64Type(lifted512)
                   }
                   10 => {
-                    let lifted69 : @types.NumericRestrictions? = match
+                    let lifted519 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted64 : @types.NumericBound? = match
+                        let lifted514 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted63 = match
+                            let lifted513 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29250,16 +28357,16 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted63)
+                            Option::Some(lifted513)
                           }
                           _ => panic()
                         }
 
-                        let lifted66 : @types.NumericBound? = match
+                        let lifted516 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted65 = match
+                            let lifted515 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29276,46 +28383,46 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted65)
+                            Option::Some(lifted515)
                           }
                           _ => panic()
                         }
 
-                        let lifted68 : String? = match
+                        let lifted518 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result67 = mbt_ffi_ptr2str(
+                            let result517 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result67)
+                            Option::Some(result517)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted64,
-                          max: lifted66,
-                          unit: lifted68,
+                          min: lifted514,
+                          max: lifted516,
+                          unit: lifted518,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::F32Type(lifted69)
+                    @types.SchemaTypeBody::F32Type(lifted519)
                   }
                   11 => {
-                    let lifted76 : @types.NumericRestrictions? = match
+                    let lifted526 : @types.NumericRestrictions? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let lifted71 : @types.NumericBound? = match
+                        let lifted521 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 16) {
                           0 => Option::None
                           1 => {
-                            let lifted70 = match
+                            let lifted520 = match
                               mbt_ffi_load8_u(iter_base + 24) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29332,16 +28439,16 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted70)
+                            Option::Some(lifted520)
                           }
                           _ => panic()
                         }
 
-                        let lifted73 : @types.NumericBound? = match
+                        let lifted523 : @types.NumericBound? = match
                           mbt_ffi_load8_u(iter_base + 40) {
                           0 => Option::None
                           1 => {
-                            let lifted72 = match
+                            let lifted522 = match
                               mbt_ffi_load8_u(iter_base + 48) {
                               0 =>
                                 @types.NumericBound::Signed(
@@ -29358,323 +28465,324 @@ pub async fn ToolRpc::invoke(
                               _ => panic()
                             }
 
-                            Option::Some(lifted72)
+                            Option::Some(lifted522)
                           }
                           _ => panic()
                         }
 
-                        let lifted75 : String? = match
+                        let lifted525 : String? = match
                           mbt_ffi_load8_u(iter_base + 64) {
                           0 => Option::None
                           1 => {
-                            let result74 = mbt_ffi_ptr2str(
+                            let result524 = mbt_ffi_ptr2str(
                               mbt_ffi_load32(iter_base + 68),
                               mbt_ffi_load32(iter_base + 72),
                             )
 
-                            Option::Some(result74)
+                            Option::Some(result524)
                           }
                           _ => panic()
                         }
 
                         Option::Some(@types.NumericRestrictions::{
-                          min: lifted71,
-                          max: lifted73,
-                          unit: lifted75,
+                          min: lifted521,
+                          max: lifted523,
+                          unit: lifted525,
                         })
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::F64Type(lifted76)
+                    @types.SchemaTypeBody::F64Type(lifted526)
                   }
                   12 => @types.SchemaTypeBody::CharType
                   13 => @types.SchemaTypeBody::StringType
                   14 => {
-                    let array91 : Array[@types.NamedFieldType] = []
-                    for index92 = 0
-                        index92 < mbt_ffi_load32(iter_base + 12)
-                        index92 = index92 + 1 {
+                    let array541 : Array[@types.NamedFieldType] = []
+                    for index542 = 0
+                        index542 < mbt_ffi_load32(iter_base + 12)
+                        index542 = index542 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index92 * 68
+                        index542 * 68
 
-                      let result77 = mbt_ffi_ptr2str(
+                      let result527 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted79 : String? = match
+                      let lifted529 : String? = match
                         mbt_ffi_load8_u(iter_base + 12) {
                         0 => Option::None
                         1 => {
-                          let result78 = mbt_ffi_ptr2str(
+                          let result528 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          Option::Some(result78)
+                          Option::Some(result528)
                         }
                         _ => panic()
                       }
 
-                      let array81 : Array[String] = []
-                      for index82 = 0
-                          index82 < mbt_ffi_load32(iter_base + 28)
-                          index82 = index82 + 1 {
+                      let array531 : Array[String] = []
+                      for index532 = 0
+                          index532 < mbt_ffi_load32(iter_base + 28)
+                          index532 = index532 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 24) +
-                          index82 * 8
+                          index532 * 8
 
-                        let result80 = mbt_ffi_ptr2str(
+                        let result530 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array81.push(result80)
+                        array531.push(result530)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-                      let array84 : Array[String] = []
-                      for index85 = 0
-                          index85 < mbt_ffi_load32(iter_base + 36)
-                          index85 = index85 + 1 {
+                      let array534 : Array[String] = []
+                      for index535 = 0
+                          index535 < mbt_ffi_load32(iter_base + 36)
+                          index535 = index535 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 32) +
-                          index85 * 8
+                          index535 * 8
 
-                        let result83 = mbt_ffi_ptr2str(
+                        let result533 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array84.push(result83)
+                        array534.push(result533)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
 
-                      let lifted87 : String? = match
+                      let lifted537 : String? = match
                         mbt_ffi_load8_u(iter_base + 40) {
                         0 => Option::None
                         1 => {
-                          let result86 = mbt_ffi_ptr2str(
+                          let result536 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 44),
                             mbt_ffi_load32(iter_base + 48),
                           )
 
-                          Option::Some(result86)
+                          Option::Some(result536)
                         }
                         _ => panic()
                       }
 
-                      let lifted90 : @types.Role? = match
+                      let lifted540 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 52) {
                         0 => Option::None
                         1 => {
-                          let lifted89 = match mbt_ffi_load8_u(iter_base + 56) {
+                          let lifted539 = match
+                            mbt_ffi_load8_u(iter_base + 56) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result88 = mbt_ffi_ptr2str(
+                              let result538 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 60),
                                 mbt_ffi_load32(iter_base + 64),
                               )
 
-                              @types.Role::Other(result88)
+                              @types.Role::Other(result538)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted89)
+                          Option::Some(lifted539)
                         }
                         _ => panic()
                       }
 
-                      array91.push(@types.NamedFieldType::{
-                        name: result77,
+                      array541.push(@types.NamedFieldType::{
+                        name: result527,
                         body: mbt_ffi_load32(iter_base + 8),
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted79,
-                          aliases: array81,
-                          examples: array84,
-                          deprecated: lifted87,
-                          role: lifted90,
+                          doc: lifted529,
+                          aliases: array531,
+                          examples: array534,
+                          deprecated: lifted537,
+                          role: lifted540,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::RecordType(array91)
+                    @types.SchemaTypeBody::RecordType(array541)
                   }
                   15 => {
-                    let array108 : Array[@types.VariantCaseType] = []
-                    for index109 = 0
-                        index109 < mbt_ffi_load32(iter_base + 12)
-                        index109 = index109 + 1 {
+                    let array558 : Array[@types.VariantCaseType] = []
+                    for index559 = 0
+                        index559 < mbt_ffi_load32(iter_base + 12)
+                        index559 = index559 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index109 * 72
+                        index559 * 72
 
-                      let result93 = mbt_ffi_ptr2str(
+                      let result543 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted94 : Int? = match
+                      let lifted544 : Int? = match
                         mbt_ffi_load8_u(iter_base + 8) {
                         0 => Option::None
                         1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                         _ => panic()
                       }
 
-                      let lifted96 : String? = match
+                      let lifted546 : String? = match
                         mbt_ffi_load8_u(iter_base + 16) {
                         0 => Option::None
                         1 => {
-                          let result95 = mbt_ffi_ptr2str(
+                          let result545 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 20),
                             mbt_ffi_load32(iter_base + 24),
                           )
 
-                          Option::Some(result95)
+                          Option::Some(result545)
                         }
                         _ => panic()
                       }
 
-                      let array98 : Array[String] = []
-                      for index99 = 0
-                          index99 < mbt_ffi_load32(iter_base + 32)
-                          index99 = index99 + 1 {
+                      let array548 : Array[String] = []
+                      for index549 = 0
+                          index549 < mbt_ffi_load32(iter_base + 32)
+                          index549 = index549 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 28) +
-                          index99 * 8
+                          index549 * 8
 
-                        let result97 = mbt_ffi_ptr2str(
+                        let result547 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array98.push(result97)
+                        array548.push(result547)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                      let array101 : Array[String] = []
-                      for index102 = 0
-                          index102 < mbt_ffi_load32(iter_base + 40)
-                          index102 = index102 + 1 {
+                      let array551 : Array[String] = []
+                      for index552 = 0
+                          index552 < mbt_ffi_load32(iter_base + 40)
+                          index552 = index552 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 36) +
-                          index102 * 8
+                          index552 * 8
 
-                        let result100 = mbt_ffi_ptr2str(
+                        let result550 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array101.push(result100)
+                        array551.push(result550)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
 
-                      let lifted104 : String? = match
+                      let lifted554 : String? = match
                         mbt_ffi_load8_u(iter_base + 44) {
                         0 => Option::None
                         1 => {
-                          let result103 = mbt_ffi_ptr2str(
+                          let result553 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 48),
                             mbt_ffi_load32(iter_base + 52),
                           )
 
-                          Option::Some(result103)
+                          Option::Some(result553)
                         }
                         _ => panic()
                       }
 
-                      let lifted107 : @types.Role? = match
+                      let lifted557 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 56) {
                         0 => Option::None
                         1 => {
-                          let lifted106 = match
+                          let lifted556 = match
                             mbt_ffi_load8_u(iter_base + 60) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result105 = mbt_ffi_ptr2str(
+                              let result555 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 64),
                                 mbt_ffi_load32(iter_base + 68),
                               )
 
-                              @types.Role::Other(result105)
+                              @types.Role::Other(result555)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted106)
+                          Option::Some(lifted556)
                         }
                         _ => panic()
                       }
 
-                      array108.push(@types.VariantCaseType::{
-                        name: result93,
-                        payload: lifted94,
+                      array558.push(@types.VariantCaseType::{
+                        name: result543,
+                        payload: lifted544,
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted96,
-                          aliases: array98,
-                          examples: array101,
-                          deprecated: lifted104,
-                          role: lifted107,
+                          doc: lifted546,
+                          aliases: array548,
+                          examples: array551,
+                          deprecated: lifted554,
+                          role: lifted557,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::VariantType(array108)
+                    @types.SchemaTypeBody::VariantType(array558)
                   }
                   16 => {
-                    let array111 : Array[String] = []
-                    for index112 = 0
-                        index112 < mbt_ffi_load32(iter_base + 12)
-                        index112 = index112 + 1 {
+                    let array561 : Array[String] = []
+                    for index562 = 0
+                        index562 < mbt_ffi_load32(iter_base + 12)
+                        index562 = index562 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index112 * 8
+                        index562 * 8
 
-                      let result110 = mbt_ffi_ptr2str(
+                      let result560 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array111.push(result110)
+                      array561.push(result560)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::EnumType(array111)
+                    @types.SchemaTypeBody::EnumType(array561)
                   }
                   17 => {
-                    let array114 : Array[String] = []
-                    for index115 = 0
-                        index115 < mbt_ffi_load32(iter_base + 12)
-                        index115 = index115 + 1 {
+                    let array564 : Array[String] = []
+                    for index565 = 0
+                        index565 < mbt_ffi_load32(iter_base + 12)
+                        index565 = index565 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index115 * 8
+                        index565 * 8
 
-                      let result113 = mbt_ffi_ptr2str(
+                      let result563 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array114.push(result113)
+                      array564.push(result563)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::FlagsType(array114)
+                    @types.SchemaTypeBody::FlagsType(array564)
                   }
                   18 => {
-                    let array116 : Array[Int] = []
-                    for index117 = 0
-                        index117 < mbt_ffi_load32(iter_base + 12)
-                        index117 = index117 + 1 {
+                    let array566 : Array[Int] = []
+                    for index567 = 0
+                        index567 < mbt_ffi_load32(iter_base + 12)
+                        index567 = index567 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index117 * 4
+                        index567 * 4
 
-                      array116.push(mbt_ffi_load32(iter_base + 0))
+                      array566.push(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaTypeBody::TupleType(array116)
+                    @types.SchemaTypeBody::TupleType(array566)
                   }
                   19 =>
                     @types.SchemaTypeBody::ListType(
@@ -29695,14 +28803,14 @@ pub async fn ToolRpc::invoke(
                       mbt_ffi_load32(iter_base + 8),
                     )
                   23 => {
-                    let lifted118 : Int? = match
+                    let lifted568 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    let lifted119 : Int? = match
+                    let lifted569 : Int? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 20))
@@ -29710,37 +28818,37 @@ pub async fn ToolRpc::invoke(
                     }
 
                     @types.SchemaTypeBody::ResultType(@types.ResultSpec::{
-                      ok: lifted118,
-                      err: lifted119,
+                      ok: lifted568,
+                      err: lifted569,
                     })
                   }
                   24 => {
-                    let lifted123 : Array[String]? = match
+                    let lifted573 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array121 : Array[String] = []
-                        for index122 = 0
-                            index122 < mbt_ffi_load32(iter_base + 16)
-                            index122 = index122 + 1 {
+                        let array571 : Array[String] = []
+                        for index572 = 0
+                            index572 < mbt_ffi_load32(iter_base + 16)
+                            index572 = index572 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index122 * 8
+                            index572 * 8
 
-                          let result120 = mbt_ffi_ptr2str(
+                          let result570 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array121.push(result120)
+                          array571.push(result570)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array121)
+                        Option::Some(array571)
                       }
                       _ => panic()
                     }
 
-                    let lifted124 : UInt? = match
+                    let lifted574 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 =>
@@ -29750,7 +28858,7 @@ pub async fn ToolRpc::invoke(
                       _ => panic()
                     }
 
-                    let lifted125 : UInt? = match
+                    let lifted575 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 28) {
                       0 => Option::None
                       1 =>
@@ -29760,54 +28868,54 @@ pub async fn ToolRpc::invoke(
                       _ => panic()
                     }
 
-                    let lifted127 : String? = match
+                    let lifted577 : String? = match
                       mbt_ffi_load8_u(iter_base + 36) {
                       0 => Option::None
                       1 => {
-                        let result126 = mbt_ffi_ptr2str(
+                        let result576 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 40),
                           mbt_ffi_load32(iter_base + 44),
                         )
 
-                        Option::Some(result126)
+                        Option::Some(result576)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::TextType(@types.TextRestrictions::{
-                      languages: lifted123,
-                      min_length: lifted124,
-                      max_length: lifted125,
-                      regex: lifted127,
+                      languages: lifted573,
+                      min_length: lifted574,
+                      max_length: lifted575,
+                      regex: lifted577,
                     })
                   }
                   25 => {
-                    let lifted131 : Array[String]? = match
+                    let lifted581 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array129 : Array[String] = []
-                        for index130 = 0
-                            index130 < mbt_ffi_load32(iter_base + 16)
-                            index130 = index130 + 1 {
+                        let array579 : Array[String] = []
+                        for index580 = 0
+                            index580 < mbt_ffi_load32(iter_base + 16)
+                            index580 = index580 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index130 * 8
+                            index580 * 8
 
-                          let result128 = mbt_ffi_ptr2str(
+                          let result578 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array129.push(result128)
+                          array579.push(result578)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array129)
+                        Option::Some(array579)
                       }
                       _ => panic()
                     }
 
-                    let lifted132 : UInt? = match
+                    let lifted582 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 =>
@@ -29817,7 +28925,7 @@ pub async fn ToolRpc::invoke(
                       _ => panic()
                     }
 
-                    let lifted133 : UInt? = match
+                    let lifted583 : UInt? = match
                       mbt_ffi_load8_u(iter_base + 28) {
                       0 => Option::None
                       1 =>
@@ -29828,58 +28936,58 @@ pub async fn ToolRpc::invoke(
                     }
 
                     @types.SchemaTypeBody::BinaryType(@types.BinaryRestrictions::{
-                      mime_types: lifted131,
-                      min_bytes: lifted132,
-                      max_bytes: lifted133,
+                      mime_types: lifted581,
+                      min_bytes: lifted582,
+                      max_bytes: lifted583,
                     })
                   }
                   26 => {
-                    let lifted137 : Array[String]? = match
+                    let lifted587 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => {
-                        let array135 : Array[String] = []
-                        for index136 = 0
-                            index136 < mbt_ffi_load32(iter_base + 20)
-                            index136 = index136 + 1 {
+                        let array585 : Array[String] = []
+                        for index586 = 0
+                            index586 < mbt_ffi_load32(iter_base + 20)
+                            index586 = index586 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 16) +
-                            index136 * 8
+                            index586 * 8
 
-                          let result134 = mbt_ffi_ptr2str(
+                          let result584 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array135.push(result134)
+                          array585.push(result584)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                        Option::Some(array135)
+                        Option::Some(array585)
                       }
                       _ => panic()
                     }
 
-                    let lifted141 : Array[String]? = match
+                    let lifted591 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 24) {
                       0 => Option::None
                       1 => {
-                        let array139 : Array[String] = []
-                        for index140 = 0
-                            index140 < mbt_ffi_load32(iter_base + 32)
-                            index140 = index140 + 1 {
+                        let array589 : Array[String] = []
+                        for index590 = 0
+                            index590 < mbt_ffi_load32(iter_base + 32)
+                            index590 = index590 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 28) +
-                            index140 * 8
+                            index590 * 8
 
-                          let result138 = mbt_ffi_ptr2str(
+                          let result588 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array139.push(result138)
+                          array589.push(result588)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
 
-                        Option::Some(array139)
+                        Option::Some(array589)
                       }
                       _ => panic()
                     }
@@ -29891,95 +28999,95 @@ pub async fn ToolRpc::invoke(
                       kind: @types.PathKind::from(
                         mbt_ffi_load8_u(iter_base + 9),
                       ),
-                      allowed_mime_types: lifted137,
-                      allowed_extensions: lifted141,
+                      allowed_mime_types: lifted587,
+                      allowed_extensions: lifted591,
                     })
                   }
                   27 => {
-                    let lifted145 : Array[String]? = match
+                    let lifted595 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let array143 : Array[String] = []
-                        for index144 = 0
-                            index144 < mbt_ffi_load32(iter_base + 16)
-                            index144 = index144 + 1 {
+                        let array593 : Array[String] = []
+                        for index594 = 0
+                            index594 < mbt_ffi_load32(iter_base + 16)
+                            index594 = index594 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 12) +
-                            index144 * 8
+                            index594 * 8
 
-                          let result142 = mbt_ffi_ptr2str(
+                          let result592 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array143.push(result142)
+                          array593.push(result592)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
 
-                        Option::Some(array143)
+                        Option::Some(array593)
                       }
                       _ => panic()
                     }
 
-                    let lifted149 : Array[String]? = match
+                    let lifted599 : Array[String]? = match
                       mbt_ffi_load8_u(iter_base + 20) {
                       0 => Option::None
                       1 => {
-                        let array147 : Array[String] = []
-                        for index148 = 0
-                            index148 < mbt_ffi_load32(iter_base + 28)
-                            index148 = index148 + 1 {
+                        let array597 : Array[String] = []
+                        for index598 = 0
+                            index598 < mbt_ffi_load32(iter_base + 28)
+                            index598 = index598 + 1 {
                           let iter_base = mbt_ffi_load32(iter_base + 24) +
-                            index148 * 8
+                            index598 * 8
 
-                          let result146 = mbt_ffi_ptr2str(
+                          let result596 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 0),
                             mbt_ffi_load32(iter_base + 4),
                           )
 
-                          array147.push(result146)
+                          array597.push(result596)
                         }
                         mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
 
-                        Option::Some(array147)
+                        Option::Some(array597)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::UrlType(@types.UrlRestrictions::{
-                      allowed_schemes: lifted145,
-                      allowed_hosts: lifted149,
+                      allowed_schemes: lifted595,
+                      allowed_hosts: lifted599,
                     })
                   }
                   28 => @types.SchemaTypeBody::DatetimeType
                   29 => @types.SchemaTypeBody::DurationType
                   30 => {
-                    let result150 = mbt_ffi_ptr2str(
+                    let result600 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let array152 : Array[String] = []
-                    for index153 = 0
-                        index153 < mbt_ffi_load32(iter_base + 20)
-                        index153 = index153 + 1 {
+                    let array602 : Array[String] = []
+                    for index603 = 0
+                        index603 < mbt_ffi_load32(iter_base + 20)
+                        index603 = index603 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 16) +
-                        index153 * 8
+                        index603 * 8
 
-                      let result151 = mbt_ffi_ptr2str(
+                      let result601 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      array152.push(result151)
+                      array602.push(result601)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
 
-                    let lifted155 : @types.QuantityValue? = match
+                    let lifted605 : @types.QuantityValue? = match
                       mbt_ffi_load8_u(iter_base + 24) {
                       0 => Option::None
                       1 => {
-                        let result154 = mbt_ffi_ptr2str(
+                        let result604 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 44),
                           mbt_ffi_load32(iter_base + 48),
                         )
@@ -29987,17 +29095,17 @@ pub async fn ToolRpc::invoke(
                         Option::Some(@types.QuantityValue::{
                           mantissa: mbt_ffi_load64(iter_base + 32),
                           scale: mbt_ffi_load32(iter_base + 40),
-                          unit: result154,
+                          unit: result604,
                         })
                       }
                       _ => panic()
                     }
 
-                    let lifted157 : @types.QuantityValue? = match
+                    let lifted607 : @types.QuantityValue? = match
                       mbt_ffi_load8_u(iter_base + 56) {
                       0 => Option::None
                       1 => {
-                        let result156 = mbt_ffi_ptr2str(
+                        let result606 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 76),
                           mbt_ffi_load32(iter_base + 80),
                         )
@@ -30005,242 +29113,242 @@ pub async fn ToolRpc::invoke(
                         Option::Some(@types.QuantityValue::{
                           mantissa: mbt_ffi_load64(iter_base + 64),
                           scale: mbt_ffi_load32(iter_base + 72),
-                          unit: result156,
+                          unit: result606,
                         })
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::QuantityType(@types.QuantitySpec::{
-                      base_unit: result150,
-                      allowed_suffixes: array152,
-                      min: lifted155,
-                      max: lifted157,
+                      base_unit: result600,
+                      allowed_suffixes: array602,
+                      min: lifted605,
+                      max: lifted607,
                     })
                   }
                   31 => {
-                    let array181 : Array[@types.UnionBranch] = []
-                    for index182 = 0
-                        index182 < mbt_ffi_load32(iter_base + 12)
-                        index182 = index182 + 1 {
+                    let array631 : Array[@types.UnionBranch] = []
+                    for index632 = 0
+                        index632 < mbt_ffi_load32(iter_base + 12)
+                        index632 = index632 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index182 * 92
+                        index632 * 92
 
-                      let result158 = mbt_ffi_ptr2str(
+                      let result608 = mbt_ffi_ptr2str(
                         mbt_ffi_load32(iter_base + 0),
                         mbt_ffi_load32(iter_base + 4),
                       )
 
-                      let lifted167 = match mbt_ffi_load8_u(iter_base + 12) {
+                      let lifted617 = match mbt_ffi_load8_u(iter_base + 12) {
                         0 => {
-                          let result159 = mbt_ffi_ptr2str(
+                          let result609 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::Prefix(result159)
+                          @types.DiscriminatorRule::Prefix(result609)
                         }
                         1 => {
-                          let result160 = mbt_ffi_ptr2str(
+                          let result610 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::Suffix(result160)
+                          @types.DiscriminatorRule::Suffix(result610)
                         }
                         2 => {
-                          let result161 = mbt_ffi_ptr2str(
+                          let result611 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::Contains(result161)
+                          @types.DiscriminatorRule::Contains(result611)
                         }
                         3 => {
-                          let result162 = mbt_ffi_ptr2str(
+                          let result612 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::Regex(result162)
+                          @types.DiscriminatorRule::Regex(result612)
                         }
                         4 => {
-                          let result163 = mbt_ffi_ptr2str(
+                          let result613 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          let lifted165 : String? = match
+                          let lifted615 : String? = match
                             mbt_ffi_load8_u(iter_base + 24) {
                             0 => Option::None
                             1 => {
-                              let result164 = mbt_ffi_ptr2str(
+                              let result614 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 28),
                                 mbt_ffi_load32(iter_base + 32),
                               )
 
-                              Option::Some(result164)
+                              Option::Some(result614)
                             }
                             _ => panic()
                           }
 
                           @types.DiscriminatorRule::FieldEquals(@types.FieldDiscriminator::{
-                            field_name: result163,
-                            literal: lifted165,
+                            field_name: result613,
+                            literal: lifted615,
                           })
                         }
                         5 => {
-                          let result166 = mbt_ffi_ptr2str(
+                          let result616 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 16),
                             mbt_ffi_load32(iter_base + 20),
                           )
 
-                          @types.DiscriminatorRule::FieldAbsent(result166)
+                          @types.DiscriminatorRule::FieldAbsent(result616)
                         }
                         _ => panic()
                       }
 
-                      let lifted169 : String? = match
+                      let lifted619 : String? = match
                         mbt_ffi_load8_u(iter_base + 36) {
                         0 => Option::None
                         1 => {
-                          let result168 = mbt_ffi_ptr2str(
+                          let result618 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 40),
                             mbt_ffi_load32(iter_base + 44),
                           )
 
-                          Option::Some(result168)
+                          Option::Some(result618)
                         }
                         _ => panic()
                       }
 
-                      let array171 : Array[String] = []
-                      for index172 = 0
-                          index172 < mbt_ffi_load32(iter_base + 52)
-                          index172 = index172 + 1 {
+                      let array621 : Array[String] = []
+                      for index622 = 0
+                          index622 < mbt_ffi_load32(iter_base + 52)
+                          index622 = index622 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 48) +
-                          index172 * 8
+                          index622 * 8
 
-                        let result170 = mbt_ffi_ptr2str(
+                        let result620 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array171.push(result170)
+                        array621.push(result620)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
 
-                      let array174 : Array[String] = []
-                      for index175 = 0
-                          index175 < mbt_ffi_load32(iter_base + 60)
-                          index175 = index175 + 1 {
+                      let array624 : Array[String] = []
+                      for index625 = 0
+                          index625 < mbt_ffi_load32(iter_base + 60)
+                          index625 = index625 + 1 {
                         let iter_base = mbt_ffi_load32(iter_base + 56) +
-                          index175 * 8
+                          index625 * 8
 
-                        let result173 = mbt_ffi_ptr2str(
+                        let result623 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 0),
                           mbt_ffi_load32(iter_base + 4),
                         )
 
-                        array174.push(result173)
+                        array624.push(result623)
                       }
                       mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
 
-                      let lifted177 : String? = match
+                      let lifted627 : String? = match
                         mbt_ffi_load8_u(iter_base + 64) {
                         0 => Option::None
                         1 => {
-                          let result176 = mbt_ffi_ptr2str(
+                          let result626 = mbt_ffi_ptr2str(
                             mbt_ffi_load32(iter_base + 68),
                             mbt_ffi_load32(iter_base + 72),
                           )
 
-                          Option::Some(result176)
+                          Option::Some(result626)
                         }
                         _ => panic()
                       }
 
-                      let lifted180 : @types.Role? = match
+                      let lifted630 : @types.Role? = match
                         mbt_ffi_load8_u(iter_base + 76) {
                         0 => Option::None
                         1 => {
-                          let lifted179 = match
+                          let lifted629 = match
                             mbt_ffi_load8_u(iter_base + 80) {
                             0 => @types.Role::Multimodal
                             1 => @types.Role::UnstructuredText
                             2 => @types.Role::UnstructuredBinary
                             3 => {
-                              let result178 = mbt_ffi_ptr2str(
+                              let result628 = mbt_ffi_ptr2str(
                                 mbt_ffi_load32(iter_base + 84),
                                 mbt_ffi_load32(iter_base + 88),
                               )
 
-                              @types.Role::Other(result178)
+                              @types.Role::Other(result628)
                             }
                             _ => panic()
                           }
 
-                          Option::Some(lifted179)
+                          Option::Some(lifted629)
                         }
                         _ => panic()
                       }
 
-                      array181.push(@types.UnionBranch::{
-                        tag: result158,
+                      array631.push(@types.UnionBranch::{
+                        tag: result608,
                         body: mbt_ffi_load32(iter_base + 8),
-                        discriminator: lifted167,
+                        discriminator: lifted617,
                         metadata: @types.MetadataEnvelope::{
-                          doc: lifted169,
-                          aliases: array171,
-                          examples: array174,
-                          deprecated: lifted177,
-                          role: lifted180,
+                          doc: lifted619,
+                          aliases: array621,
+                          examples: array624,
+                          deprecated: lifted627,
+                          role: lifted630,
                         },
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
                     @types.SchemaTypeBody::UnionType(@types.UnionSpec::{
-                      branches: array181,
+                      branches: array631,
                     })
                   }
                   32 => {
-                    let lifted184 : String? = match
+                    let lifted634 : String? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => {
-                        let result183 = mbt_ffi_ptr2str(
+                        let result633 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 16),
                           mbt_ffi_load32(iter_base + 20),
                         )
 
-                        Option::Some(result183)
+                        Option::Some(result633)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
                       inner: mbt_ffi_load32(iter_base + 8),
-                      category: lifted184,
+                      category: lifted634,
                     })
                   }
                   33 => {
-                    let lifted186 : String? = match
+                    let lifted636 : String? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => {
-                        let result185 = mbt_ffi_ptr2str(
+                        let result635 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 12),
                           mbt_ffi_load32(iter_base + 16),
                         )
 
-                        Option::Some(result185)
+                        Option::Some(result635)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaTypeBody::QuotaTokenType(@types.QuotaTokenSpec::{
-                      resource_name: lifted186,
+                      resource_name: lifted636,
                     })
                   }
                   34 =>
@@ -30248,162 +29356,162 @@ pub async fn ToolRpc::invoke(
                       polymorphic: mbt_ffi_load8_u(iter_base + 8) != 0,
                     })
                   35 => {
-                    let lifted187 : Int? = match
+                    let lifted637 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::FutureType(lifted187)
+                    @types.SchemaTypeBody::FutureType(lifted637)
                   }
                   36 => {
-                    let lifted188 : Int? = match
+                    let lifted638 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaTypeBody::StreamType(lifted188)
+                    @types.SchemaTypeBody::StreamType(lifted638)
                   }
                   _ => panic()
                 }
 
-                let lifted191 : String? = match
+                let lifted641 : String? = match
                   mbt_ffi_load8_u(iter_base + 88) {
                   0 => Option::None
                   1 => {
-                    let result190 = mbt_ffi_ptr2str(
+                    let result640 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 92),
                       mbt_ffi_load32(iter_base + 96),
                     )
 
-                    Option::Some(result190)
+                    Option::Some(result640)
                   }
                   _ => panic()
                 }
 
-                let array193 : Array[String] = []
-                for index194 = 0
-                    index194 < mbt_ffi_load32(iter_base + 104)
-                    index194 = index194 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 100) + index194 * 8
+                let array643 : Array[String] = []
+                for index644 = 0
+                    index644 < mbt_ffi_load32(iter_base + 104)
+                    index644 = index644 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 100) + index644 * 8
 
-                  let result192 = mbt_ffi_ptr2str(
+                  let result642 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array193.push(result192)
+                  array643.push(result642)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
 
-                let array196 : Array[String] = []
-                for index197 = 0
-                    index197 < mbt_ffi_load32(iter_base + 112)
-                    index197 = index197 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 108) + index197 * 8
+                let array646 : Array[String] = []
+                for index647 = 0
+                    index647 < mbt_ffi_load32(iter_base + 112)
+                    index647 = index647 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 108) + index647 * 8
 
-                  let result195 = mbt_ffi_ptr2str(
+                  let result645 = mbt_ffi_ptr2str(
                     mbt_ffi_load32(iter_base + 0),
                     mbt_ffi_load32(iter_base + 4),
                   )
 
-                  array196.push(result195)
+                  array646.push(result645)
                 }
                 mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
 
-                let lifted199 : String? = match
+                let lifted649 : String? = match
                   mbt_ffi_load8_u(iter_base + 116) {
                   0 => Option::None
                   1 => {
-                    let result198 = mbt_ffi_ptr2str(
+                    let result648 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 120),
                       mbt_ffi_load32(iter_base + 124),
                     )
 
-                    Option::Some(result198)
+                    Option::Some(result648)
                   }
                   _ => panic()
                 }
 
-                let lifted202 : @types.Role? = match
+                let lifted652 : @types.Role? = match
                   mbt_ffi_load8_u(iter_base + 128) {
                   0 => Option::None
                   1 => {
-                    let lifted201 = match mbt_ffi_load8_u(iter_base + 132) {
+                    let lifted651 = match mbt_ffi_load8_u(iter_base + 132) {
                       0 => @types.Role::Multimodal
                       1 => @types.Role::UnstructuredText
                       2 => @types.Role::UnstructuredBinary
                       3 => {
-                        let result200 = mbt_ffi_ptr2str(
+                        let result650 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 136),
                           mbt_ffi_load32(iter_base + 140),
                         )
 
-                        @types.Role::Other(result200)
+                        @types.Role::Other(result650)
                       }
                       _ => panic()
                     }
 
-                    Option::Some(lifted201)
+                    Option::Some(lifted651)
                   }
                   _ => panic()
                 }
 
-                array203.push(@types.SchemaTypeNode::{
-                  body: lifted189,
+                array653.push(@types.SchemaTypeNode::{
+                  body: lifted639,
                   metadata: @types.MetadataEnvelope::{
-                    doc: lifted191,
-                    aliases: array193,
-                    examples: array196,
-                    deprecated: lifted199,
-                    role: lifted202,
+                    doc: lifted641,
+                    aliases: array643,
+                    examples: array646,
+                    deprecated: lifted649,
+                    role: lifted652,
                   },
                 })
               }
-              mbt_ffi_free(mbt_ffi_load32(result_ptr + 12))
+              mbt_ffi_free(mbt_ffi_load32(return_area + 12))
 
-              let array208 : Array[@types.SchemaTypeDef] = []
-              for index209 = 0
-                  index209 < mbt_ffi_load32(result_ptr + 24)
-                  index209 = index209 + 1 {
-                let iter_base = mbt_ffi_load32(result_ptr + 20) + index209 * 24
+              let array658 : Array[@types.SchemaTypeDef] = []
+              for index659 = 0
+                  index659 < mbt_ffi_load32(return_area + 24)
+                  index659 = index659 + 1 {
+                let iter_base = mbt_ffi_load32(return_area + 20) + index659 * 24
 
-                let result205 = mbt_ffi_ptr2str(
+                let result655 = mbt_ffi_ptr2str(
                   mbt_ffi_load32(iter_base + 0),
                   mbt_ffi_load32(iter_base + 4),
                 )
 
-                let lifted207 : String? = match mbt_ffi_load8_u(iter_base + 8) {
+                let lifted657 : String? = match mbt_ffi_load8_u(iter_base + 8) {
                   0 => Option::None
                   1 => {
-                    let result206 = mbt_ffi_ptr2str(
+                    let result656 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 12),
                       mbt_ffi_load32(iter_base + 16),
                     )
 
-                    Option::Some(result206)
+                    Option::Some(result656)
                   }
                   _ => panic()
                 }
 
-                array208.push(@types.SchemaTypeDef::{
-                  id: result205,
-                  name: lifted207,
+                array658.push(@types.SchemaTypeDef::{
+                  id: result655,
+                  name: lifted657,
                   body: mbt_ffi_load32(iter_base + 20),
                 })
               }
-              mbt_ffi_free(mbt_ffi_load32(result_ptr + 20))
+              mbt_ffi_free(mbt_ffi_load32(return_area + 20))
 
-              let array239 : Array[@types.SchemaValueNode] = []
-              for index240 = 0
-                  index240 < mbt_ffi_load32(result_ptr + 36)
-                  index240 = index240 + 1 {
-                let iter_base = mbt_ffi_load32(result_ptr + 32) + index240 * 32
+              let array689 : Array[@types.SchemaValueNode] = []
+              for index690 = 0
+                  index690 < mbt_ffi_load32(return_area + 36)
+                  index690 = index690 + 1 {
+                let iter_base = mbt_ffi_load32(return_area + 32) + index690 * 32
 
-                let lifted238 = match mbt_ffi_load8_u(iter_base + 0) {
+                let lifted688 = match mbt_ffi_load8_u(iter_base + 0) {
                   0 =>
                     @types.SchemaValueNode::BoolValue(
                       mbt_ffi_load8_u(iter_base + 8) != 0,
@@ -30455,29 +29563,29 @@ pub async fn ToolRpc::invoke(
                       Int::unsafe_to_char(mbt_ffi_load32(iter_base + 8)),
                     )
                   12 => {
-                    let result210 = mbt_ffi_ptr2str(
+                    let result660 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::StringValue(result210)
+                    @types.SchemaValueNode::StringValue(result660)
                   }
                   13 => {
-                    let array211 : Array[Int] = []
-                    for index212 = 0
-                        index212 < mbt_ffi_load32(iter_base + 12)
-                        index212 = index212 + 1 {
+                    let array661 : Array[Int] = []
+                    for index662 = 0
+                        index662 < mbt_ffi_load32(iter_base + 12)
+                        index662 = index662 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index212 * 4
+                        index662 * 4
 
-                      array211.push(mbt_ffi_load32(iter_base + 0))
+                      array661.push(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::RecordValue(array211)
+                    @types.SchemaValueNode::RecordValue(array661)
                   }
                   14 => {
-                    let lifted213 : Int? = match
+                    let lifted663 : Int? = match
                       mbt_ffi_load8_u(iter_base + 12) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 16))
@@ -30486,7 +29594,7 @@ pub async fn ToolRpc::invoke(
 
                     @types.SchemaValueNode::VariantValue(@types.VariantValuePayload::{
                       case: mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
-                      payload: lifted213,
+                      payload: lifted663,
                     })
                   }
                   15 =>
@@ -30494,180 +29602,180 @@ pub async fn ToolRpc::invoke(
                       mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
                     )
                   16 => {
-                    let array214 : Array[Bool] = []
-                    for index215 = 0
-                        index215 < mbt_ffi_load32(iter_base + 12)
-                        index215 = index215 + 1 {
+                    let array664 : Array[Bool] = []
+                    for index665 = 0
+                        index665 < mbt_ffi_load32(iter_base + 12)
+                        index665 = index665 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index215 * 1
+                        index665 * 1
 
-                      array214.push(mbt_ffi_load8_u(iter_base + 0) != 0)
+                      array664.push(mbt_ffi_load8_u(iter_base + 0) != 0)
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::FlagsValue(array214)
+                    @types.SchemaValueNode::FlagsValue(array664)
                   }
                   17 => {
-                    let array216 : Array[Int] = []
-                    for index217 = 0
-                        index217 < mbt_ffi_load32(iter_base + 12)
-                        index217 = index217 + 1 {
+                    let array666 : Array[Int] = []
+                    for index667 = 0
+                        index667 < mbt_ffi_load32(iter_base + 12)
+                        index667 = index667 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index217 * 4
+                        index667 * 4
 
-                      array216.push(mbt_ffi_load32(iter_base + 0))
+                      array666.push(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::TupleValue(array216)
+                    @types.SchemaValueNode::TupleValue(array666)
                   }
                   18 => {
-                    let array218 : Array[Int] = []
-                    for index219 = 0
-                        index219 < mbt_ffi_load32(iter_base + 12)
-                        index219 = index219 + 1 {
+                    let array668 : Array[Int] = []
+                    for index669 = 0
+                        index669 < mbt_ffi_load32(iter_base + 12)
+                        index669 = index669 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index219 * 4
+                        index669 * 4
 
-                      array218.push(mbt_ffi_load32(iter_base + 0))
+                      array668.push(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::ListValue(array218)
+                    @types.SchemaValueNode::ListValue(array668)
                   }
                   19 => {
-                    let array220 : Array[Int] = []
-                    for index221 = 0
-                        index221 < mbt_ffi_load32(iter_base + 12)
-                        index221 = index221 + 1 {
+                    let array670 : Array[Int] = []
+                    for index671 = 0
+                        index671 < mbt_ffi_load32(iter_base + 12)
+                        index671 = index671 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index221 * 4
+                        index671 * 4
 
-                      array220.push(mbt_ffi_load32(iter_base + 0))
+                      array670.push(mbt_ffi_load32(iter_base + 0))
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::FixedListValue(array220)
+                    @types.SchemaValueNode::FixedListValue(array670)
                   }
                   20 => {
-                    let array222 : Array[@types.MapEntry] = []
-                    for index223 = 0
-                        index223 < mbt_ffi_load32(iter_base + 12)
-                        index223 = index223 + 1 {
+                    let array672 : Array[@types.MapEntry] = []
+                    for index673 = 0
+                        index673 < mbt_ffi_load32(iter_base + 12)
+                        index673 = index673 + 1 {
                       let iter_base = mbt_ffi_load32(iter_base + 8) +
-                        index223 * 8
+                        index673 * 8
 
-                      array222.push(@types.MapEntry::{
+                      array672.push(@types.MapEntry::{
                         key: mbt_ffi_load32(iter_base + 0),
                         value: mbt_ffi_load32(iter_base + 4),
                       })
                     }
                     mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
 
-                    @types.SchemaValueNode::MapValue(array222)
+                    @types.SchemaValueNode::MapValue(array672)
                   }
                   21 => {
-                    let lifted224 : Int? = match
+                    let lifted674 : Int? = match
                       mbt_ffi_load8_u(iter_base + 8) {
                       0 => Option::None
                       1 => Option::Some(mbt_ffi_load32(iter_base + 12))
                       _ => panic()
                     }
 
-                    @types.SchemaValueNode::OptionValue(lifted224)
+                    @types.SchemaValueNode::OptionValue(lifted674)
                   }
                   22 => {
-                    let lifted227 = match mbt_ffi_load8_u(iter_base + 8) {
+                    let lifted677 = match mbt_ffi_load8_u(iter_base + 8) {
                       0 => {
-                        let lifted225 : Int? = match
+                        let lifted675 : Int? = match
                           mbt_ffi_load8_u(iter_base + 12) {
                           0 => Option::None
                           1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                           _ => panic()
                         }
 
-                        @types.ResultValuePayload::OkValue(lifted225)
+                        @types.ResultValuePayload::OkValue(lifted675)
                       }
                       1 => {
-                        let lifted226 : Int? = match
+                        let lifted676 : Int? = match
                           mbt_ffi_load8_u(iter_base + 12) {
                           0 => Option::None
                           1 => Option::Some(mbt_ffi_load32(iter_base + 16))
                           _ => panic()
                         }
 
-                        @types.ResultValuePayload::ErrValue(lifted226)
+                        @types.ResultValuePayload::ErrValue(lifted676)
                       }
                       _ => panic()
                     }
 
-                    @types.SchemaValueNode::ResultValue(lifted227)
+                    @types.SchemaValueNode::ResultValue(lifted677)
                   }
                   23 => {
-                    let result228 = mbt_ffi_ptr2str(
+                    let result678 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let lifted230 : String? = match
+                    let lifted680 : String? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => {
-                        let result229 = mbt_ffi_ptr2str(
+                        let result679 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 20),
                           mbt_ffi_load32(iter_base + 24),
                         )
 
-                        Option::Some(result229)
+                        Option::Some(result679)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaValueNode::TextValue(@types.TextValuePayload::{
-                      text: result228,
-                      language: lifted230,
+                      text: result678,
+                      language: lifted680,
                     })
                   }
                   24 => {
-                    let result231 = mbt_ffi_ptr2bytes(
+                    let result681 = mbt_ffi_ptr2bytes(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    let lifted233 : String? = match
+                    let lifted683 : String? = match
                       mbt_ffi_load8_u(iter_base + 16) {
                       0 => Option::None
                       1 => {
-                        let result232 = mbt_ffi_ptr2str(
+                        let result682 = mbt_ffi_ptr2str(
                           mbt_ffi_load32(iter_base + 20),
                           mbt_ffi_load32(iter_base + 24),
                         )
 
-                        Option::Some(result232)
+                        Option::Some(result682)
                       }
                       _ => panic()
                     }
 
                     @types.SchemaValueNode::BinaryValue(@types.BinaryValuePayload::{
-                      bytes: result231,
-                      mime_type: lifted233,
+                      bytes: result681,
+                      mime_type: lifted683,
                     })
                   }
                   25 => {
-                    let result234 = mbt_ffi_ptr2str(
+                    let result684 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::PathValue(result234)
+                    @types.SchemaValueNode::PathValue(result684)
                   }
                   26 => {
-                    let result235 = mbt_ffi_ptr2str(
+                    let result685 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
-                    @types.SchemaValueNode::UrlValue(result235)
+                    @types.SchemaValueNode::UrlValue(result685)
                   }
                   27 =>
                     @types.SchemaValueNode::DatetimeValue(@types.Datetime::{
@@ -30679,7 +29787,7 @@ pub async fn ToolRpc::invoke(
                       nanoseconds: mbt_ffi_load64(iter_base + 8),
                     })
                   29 => {
-                    let result236 = mbt_ffi_ptr2str(
+                    let result686 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 20),
                       mbt_ffi_load32(iter_base + 24),
                     )
@@ -30687,17 +29795,17 @@ pub async fn ToolRpc::invoke(
                     @types.SchemaValueNode::QuantityValueNode(@types.QuantityValue::{
                       mantissa: mbt_ffi_load64(iter_base + 8),
                       scale: mbt_ffi_load32(iter_base + 16),
-                      unit: result236,
+                      unit: result686,
                     })
                   }
                   30 => {
-                    let result237 = mbt_ffi_ptr2str(
+                    let result687 = mbt_ffi_ptr2str(
                       mbt_ffi_load32(iter_base + 8),
                       mbt_ffi_load32(iter_base + 12),
                     )
 
                     @types.SchemaValueNode::UnionValue(@types.UnionValuePayload::{
-                      tag: result237,
+                      tag: result687,
                       body: mbt_ffi_load32(iter_base + 16),
                     })
                   }
@@ -30726,50 +29834,68 @@ pub async fn ToolRpc::invoke(
                   _ => panic()
                 }
 
-                array239.push(lifted238)
+                array689.push(lifted688)
               }
-              mbt_ffi_free(mbt_ffi_load32(result_ptr + 32))
+              mbt_ffi_free(mbt_ffi_load32(return_area + 32))
 
               @common.ToolError::CustomError(@types.TypedSchemaValue::{
                 graph: @types.SchemaGraph::{
-                  type_nodes: array203,
-                  defs: array208,
-                  root: mbt_ffi_load32(result_ptr + 28),
+                  type_nodes: array653,
+                  defs: array658,
+                  root: mbt_ffi_load32(return_area + 28),
                 },
                 value: @types.SchemaValueTree::{
-                  value_nodes: array239,
-                  root: mbt_ffi_load32(result_ptr + 40),
+                  value_nodes: array689,
+                  root: mbt_ffi_load32(return_area + 40),
                 },
               })
             }
             _ => panic()
           }
 
-          RpcError::RemoteToolError(lifted241)
+          RpcError::RemoteToolError(lifted691)
+        }
+        5 => RpcError::Cancelled
+        6 => {
+          let result692 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(return_area + 8),
+            mbt_ffi_load32(return_area + 12),
+          )
+
+          RpcError::ResourceExhausted(result692)
         }
         _ => panic()
       }
 
-      Result::Err(lifted242)
+      Result::Err(lifted693)
     }
     _ => panic()
   }
+  let ret = lifted694
+  mbt_ffi_free(address)
+  mbt_ffi_free(address361)
+  mbt_ffi_free(address367)
+  mbt_ffi_free(address443)
+  mbt_ffi_free(return_area)
 
-  lifted243
+  cleanup_list.each(mbt_ffi_free)
+  return ret
 }
 
 ///|
-pub async fn ToolRpc::async_invoke_and_await(
+/// Durably admits work and returns an independently owned structured
+/// result observer. Stdout, when declared, was created by the caller and
+/// is observed independently from this future.
+pub fn ToolRpc::async_invoke_and_await(
   self : ToolRpc,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @async-core.Stream[Byte]?,
+  stdin : ToolStdin?,
+  stdout : ToolStdout?,
 ) -> FutureInvokeResult {
-  let lower_ptr : Int = mbt_ffi_malloc(52)
-  defer mbt_ffi_free(lower_ptr)
+  let cleanup_list : Array[Int] = []
 
   let ToolRpc(handle) = self
-  mbt_ffi_store32(lower_ptr + 0 + 0, handle)
 
   let address = mbt_ffi_malloc(command_path.length() * 8)
   for index = 0; index < command_path.length(); index = index + 1 {
@@ -30779,16 +29905,15 @@ pub async fn ToolRpc::async_invoke_and_await(
     let ptr = mbt_ffi_str2ptr(iter_elem)
     mbt_ffi_store32(iter_base + 4, iter_elem.length())
     mbt_ffi_store32(iter_base + 0, ptr)
+    cleanup_list.push(ptr)
   }
-  mbt_ffi_store32(lower_ptr + 4 + 4, command_path.length())
-  mbt_ffi_store32(lower_ptr + 4 + 0, address)
 
-  let address358 = mbt_ffi_malloc(input.graph.type_nodes.length() * 144)
-  for index359 = 0
-      index359 < input.graph.type_nodes.length()
-      index359 = index359 + 1 {
-    let iter_elem : @types.SchemaTypeNode = input.graph.type_nodes[index359]
-    let iter_base = address358 + index359 * 144
+  let address361 = mbt_ffi_malloc(input.graph.type_nodes.length() * 144)
+  for index362 = 0
+      index362 < input.graph.type_nodes.length()
+      index362 = index362 + 1 {
+    let iter_elem : @types.SchemaTypeNode = input.graph.type_nodes[index362]
+    let iter_base = address361 + index362 * 144
 
     match iter_elem.body {
       RefType(payload) => {
@@ -30903,9 +30028,10 @@ pub async fn ToolRpc::async_invoke_and_await(
               Some(payload15) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr = mbt_ffi_str2ptr(payload15)
+                let ptr16 = mbt_ffi_str2ptr(payload15)
                 mbt_ffi_store32(iter_base + 72, payload15.length())
-                mbt_ffi_store32(iter_base + 68, ptr)
+                mbt_ffi_store32(iter_base + 68, ptr16)
+                cleanup_list.push(ptr16)
 
                 ()
               }
@@ -30917,45 +30043,36 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      S16Type(payload16) => {
+      S16Type(payload17) => {
         mbt_ffi_store8(iter_base + 0, 3)
 
-        match payload16 {
+        match payload17 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload18) => {
+          Some(payload19) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload18.min {
+            match payload19.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload20) => {
+              Some(payload21) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload20 {
-                  Signed(payload21) => {
+                match payload21 {
+                  Signed(payload22) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload21)
+                    mbt_ffi_store64(iter_base + 32, payload22)
 
                     ()
                   }
-                  Unsigned(payload22) => {
+                  Unsigned(payload23) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload22.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload23) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload23.reinterpret_as_int64(),
@@ -30963,39 +30080,39 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload24) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload24.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload18.max {
+            match payload19.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload25) => {
+              Some(payload26) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload25 {
-                  Signed(payload26) => {
+                match payload26 {
+                  Signed(payload27) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload26)
+                    mbt_ffi_store64(iter_base + 56, payload27)
 
                     ()
                   }
-                  Unsigned(payload27) => {
+                  Unsigned(payload28) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload27.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload28) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload28.reinterpret_as_int64(),
@@ -31003,24 +30120,34 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload29) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload29.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload18.unit {
+            match payload19.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload30) => {
+              Some(payload31) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr31 = mbt_ffi_str2ptr(payload30)
-                mbt_ffi_store32(iter_base + 72, payload30.length())
-                mbt_ffi_store32(iter_base + 68, ptr31)
+                let ptr32 = mbt_ffi_str2ptr(payload31)
+                mbt_ffi_store32(iter_base + 72, payload31.length())
+                mbt_ffi_store32(iter_base + 68, ptr32)
+                cleanup_list.push(ptr32)
 
                 ()
               }
@@ -31032,45 +30159,36 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      S32Type(payload32) => {
+      S32Type(payload33) => {
         mbt_ffi_store8(iter_base + 0, 4)
 
-        match payload32 {
+        match payload33 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload34) => {
+          Some(payload35) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload34.min {
+            match payload35.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload36) => {
+              Some(payload37) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload36 {
-                  Signed(payload37) => {
+                match payload37 {
+                  Signed(payload38) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload37)
+                    mbt_ffi_store64(iter_base + 32, payload38)
 
                     ()
                   }
-                  Unsigned(payload38) => {
+                  Unsigned(payload39) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload38.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload39) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload39.reinterpret_as_int64(),
@@ -31078,39 +30196,39 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload40) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload40.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload34.max {
+            match payload35.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload41) => {
+              Some(payload42) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload41 {
-                  Signed(payload42) => {
+                match payload42 {
+                  Signed(payload43) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload42)
+                    mbt_ffi_store64(iter_base + 56, payload43)
 
                     ()
                   }
-                  Unsigned(payload43) => {
+                  Unsigned(payload44) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload43.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload44) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload44.reinterpret_as_int64(),
@@ -31118,24 +30236,34 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload45) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload45.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload34.unit {
+            match payload35.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload46) => {
+              Some(payload47) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr47 = mbt_ffi_str2ptr(payload46)
-                mbt_ffi_store32(iter_base + 72, payload46.length())
-                mbt_ffi_store32(iter_base + 68, ptr47)
+                let ptr48 = mbt_ffi_str2ptr(payload47)
+                mbt_ffi_store32(iter_base + 72, payload47.length())
+                mbt_ffi_store32(iter_base + 68, ptr48)
+                cleanup_list.push(ptr48)
 
                 ()
               }
@@ -31147,45 +30275,36 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      S64Type(payload48) => {
+      S64Type(payload49) => {
         mbt_ffi_store8(iter_base + 0, 5)
 
-        match payload48 {
+        match payload49 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload50) => {
+          Some(payload51) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload50.min {
+            match payload51.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload52) => {
+              Some(payload53) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload52 {
-                  Signed(payload53) => {
+                match payload53 {
+                  Signed(payload54) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload53)
+                    mbt_ffi_store64(iter_base + 32, payload54)
 
                     ()
                   }
-                  Unsigned(payload54) => {
+                  Unsigned(payload55) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload54.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload55) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload55.reinterpret_as_int64(),
@@ -31193,39 +30312,39 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload56) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload56.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload50.max {
+            match payload51.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload57) => {
+              Some(payload58) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload57 {
-                  Signed(payload58) => {
+                match payload58 {
+                  Signed(payload59) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload58)
+                    mbt_ffi_store64(iter_base + 56, payload59)
 
                     ()
                   }
-                  Unsigned(payload59) => {
+                  Unsigned(payload60) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload59.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload60) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload60.reinterpret_as_int64(),
@@ -31233,24 +30352,34 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload61) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload61.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload50.unit {
+            match payload51.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload62) => {
+              Some(payload63) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr63 = mbt_ffi_str2ptr(payload62)
-                mbt_ffi_store32(iter_base + 72, payload62.length())
-                mbt_ffi_store32(iter_base + 68, ptr63)
+                let ptr64 = mbt_ffi_str2ptr(payload63)
+                mbt_ffi_store32(iter_base + 72, payload63.length())
+                mbt_ffi_store32(iter_base + 68, ptr64)
+                cleanup_list.push(ptr64)
 
                 ()
               }
@@ -31262,45 +30391,36 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      U8Type(payload64) => {
+      U8Type(payload65) => {
         mbt_ffi_store8(iter_base + 0, 6)
 
-        match payload64 {
+        match payload65 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload66) => {
+          Some(payload67) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload66.min {
+            match payload67.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload68) => {
+              Some(payload69) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload68 {
-                  Signed(payload69) => {
+                match payload69 {
+                  Signed(payload70) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload69)
+                    mbt_ffi_store64(iter_base + 32, payload70)
 
                     ()
                   }
-                  Unsigned(payload70) => {
+                  Unsigned(payload71) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload70.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload71) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload71.reinterpret_as_int64(),
@@ -31308,39 +30428,39 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload72) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload72.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload66.max {
+            match payload67.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload73) => {
+              Some(payload74) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload73 {
-                  Signed(payload74) => {
+                match payload74 {
+                  Signed(payload75) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload74)
+                    mbt_ffi_store64(iter_base + 56, payload75)
 
                     ()
                   }
-                  Unsigned(payload75) => {
+                  Unsigned(payload76) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload75.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload76) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload76.reinterpret_as_int64(),
@@ -31348,24 +30468,34 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload77) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload77.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload66.unit {
+            match payload67.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload78) => {
+              Some(payload79) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr79 = mbt_ffi_str2ptr(payload78)
-                mbt_ffi_store32(iter_base + 72, payload78.length())
-                mbt_ffi_store32(iter_base + 68, ptr79)
+                let ptr80 = mbt_ffi_str2ptr(payload79)
+                mbt_ffi_store32(iter_base + 72, payload79.length())
+                mbt_ffi_store32(iter_base + 68, ptr80)
+                cleanup_list.push(ptr80)
 
                 ()
               }
@@ -31377,45 +30507,36 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      U16Type(payload80) => {
+      U16Type(payload81) => {
         mbt_ffi_store8(iter_base + 0, 7)
 
-        match payload80 {
+        match payload81 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload82) => {
+          Some(payload83) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload82.min {
+            match payload83.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload84) => {
+              Some(payload85) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload84 {
-                  Signed(payload85) => {
+                match payload85 {
+                  Signed(payload86) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload85)
+                    mbt_ffi_store64(iter_base + 32, payload86)
 
                     ()
                   }
-                  Unsigned(payload86) => {
+                  Unsigned(payload87) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload86.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload87) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload87.reinterpret_as_int64(),
@@ -31423,39 +30544,39 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload88) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload88.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload82.max {
+            match payload83.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload89) => {
+              Some(payload90) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload89 {
-                  Signed(payload90) => {
+                match payload90 {
+                  Signed(payload91) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload90)
+                    mbt_ffi_store64(iter_base + 56, payload91)
 
                     ()
                   }
-                  Unsigned(payload91) => {
+                  Unsigned(payload92) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload91.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload92) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload92.reinterpret_as_int64(),
@@ -31463,24 +30584,34 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload93) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload93.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload82.unit {
+            match payload83.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload94) => {
+              Some(payload95) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr95 = mbt_ffi_str2ptr(payload94)
-                mbt_ffi_store32(iter_base + 72, payload94.length())
-                mbt_ffi_store32(iter_base + 68, ptr95)
+                let ptr96 = mbt_ffi_str2ptr(payload95)
+                mbt_ffi_store32(iter_base + 72, payload95.length())
+                mbt_ffi_store32(iter_base + 68, ptr96)
+                cleanup_list.push(ptr96)
 
                 ()
               }
@@ -31492,45 +30623,36 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      U32Type(payload96) => {
+      U32Type(payload97) => {
         mbt_ffi_store8(iter_base + 0, 8)
 
-        match payload96 {
+        match payload97 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload98) => {
+          Some(payload99) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload98.min {
+            match payload99.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload100) => {
+              Some(payload101) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload100 {
-                  Signed(payload101) => {
+                match payload101 {
+                  Signed(payload102) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload101)
+                    mbt_ffi_store64(iter_base + 32, payload102)
 
                     ()
                   }
-                  Unsigned(payload102) => {
+                  Unsigned(payload103) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload102.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload103) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload103.reinterpret_as_int64(),
@@ -31538,39 +30660,39 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload104) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload104.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload98.max {
+            match payload99.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload105) => {
+              Some(payload106) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload105 {
-                  Signed(payload106) => {
+                match payload106 {
+                  Signed(payload107) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload106)
+                    mbt_ffi_store64(iter_base + 56, payload107)
 
                     ()
                   }
-                  Unsigned(payload107) => {
+                  Unsigned(payload108) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload107.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload108) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload108.reinterpret_as_int64(),
@@ -31578,24 +30700,34 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload109) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload109.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload98.unit {
+            match payload99.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload110) => {
+              Some(payload111) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr111 = mbt_ffi_str2ptr(payload110)
-                mbt_ffi_store32(iter_base + 72, payload110.length())
-                mbt_ffi_store32(iter_base + 68, ptr111)
+                let ptr112 = mbt_ffi_str2ptr(payload111)
+                mbt_ffi_store32(iter_base + 72, payload111.length())
+                mbt_ffi_store32(iter_base + 68, ptr112)
+                cleanup_list.push(ptr112)
 
                 ()
               }
@@ -31607,45 +30739,36 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      U64Type(payload112) => {
+      U64Type(payload113) => {
         mbt_ffi_store8(iter_base + 0, 9)
 
-        match payload112 {
+        match payload113 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload114) => {
+          Some(payload115) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload114.min {
+            match payload115.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload116) => {
+              Some(payload117) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload116 {
-                  Signed(payload117) => {
+                match payload117 {
+                  Signed(payload118) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload117)
+                    mbt_ffi_store64(iter_base + 32, payload118)
 
                     ()
                   }
-                  Unsigned(payload118) => {
+                  Unsigned(payload119) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload118.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload119) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload119.reinterpret_as_int64(),
@@ -31653,39 +30776,39 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload120) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload120.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload114.max {
+            match payload115.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload121) => {
+              Some(payload122) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload121 {
-                  Signed(payload122) => {
+                match payload122 {
+                  Signed(payload123) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload122)
+                    mbt_ffi_store64(iter_base + 56, payload123)
 
                     ()
                   }
-                  Unsigned(payload123) => {
+                  Unsigned(payload124) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload123.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload124) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload124.reinterpret_as_int64(),
@@ -31693,24 +30816,34 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload125) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload125.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload114.unit {
+            match payload115.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload126) => {
+              Some(payload127) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr127 = mbt_ffi_str2ptr(payload126)
-                mbt_ffi_store32(iter_base + 72, payload126.length())
-                mbt_ffi_store32(iter_base + 68, ptr127)
+                let ptr128 = mbt_ffi_str2ptr(payload127)
+                mbt_ffi_store32(iter_base + 72, payload127.length())
+                mbt_ffi_store32(iter_base + 68, ptr128)
+                cleanup_list.push(ptr128)
 
                 ()
               }
@@ -31722,45 +30855,36 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      F32Type(payload128) => {
+      F32Type(payload129) => {
         mbt_ffi_store8(iter_base + 0, 10)
 
-        match payload128 {
+        match payload129 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload130) => {
+          Some(payload131) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload130.min {
+            match payload131.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload132) => {
+              Some(payload133) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload132 {
-                  Signed(payload133) => {
+                match payload133 {
+                  Signed(payload134) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload133)
+                    mbt_ffi_store64(iter_base + 32, payload134)
 
                     ()
                   }
-                  Unsigned(payload134) => {
+                  Unsigned(payload135) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload134.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload135) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload135.reinterpret_as_int64(),
@@ -31768,39 +30892,39 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload136) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload136.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload130.max {
+            match payload131.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload137) => {
+              Some(payload138) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload137 {
-                  Signed(payload138) => {
+                match payload138 {
+                  Signed(payload139) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload138)
+                    mbt_ffi_store64(iter_base + 56, payload139)
 
                     ()
                   }
-                  Unsigned(payload139) => {
+                  Unsigned(payload140) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload139.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload140) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload140.reinterpret_as_int64(),
@@ -31808,24 +30932,34 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload141) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload141.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload130.unit {
+            match payload131.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload142) => {
+              Some(payload143) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr143 = mbt_ffi_str2ptr(payload142)
-                mbt_ffi_store32(iter_base + 72, payload142.length())
-                mbt_ffi_store32(iter_base + 68, ptr143)
+                let ptr144 = mbt_ffi_str2ptr(payload143)
+                mbt_ffi_store32(iter_base + 72, payload143.length())
+                mbt_ffi_store32(iter_base + 68, ptr144)
+                cleanup_list.push(ptr144)
 
                 ()
               }
@@ -31837,45 +30971,36 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      F64Type(payload144) => {
+      F64Type(payload145) => {
         mbt_ffi_store8(iter_base + 0, 11)
 
-        match payload144 {
+        match payload145 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload146) => {
+          Some(payload147) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            match payload146.min {
+            match payload147.min {
               None => {
                 mbt_ffi_store8(iter_base + 16, 0)
 
                 ()
               }
-              Some(payload148) => {
+              Some(payload149) => {
                 mbt_ffi_store8(iter_base + 16, 1)
 
-                match payload148 {
-                  Signed(payload149) => {
+                match payload149 {
+                  Signed(payload150) => {
                     mbt_ffi_store8(iter_base + 24, 0)
-                    mbt_ffi_store64(iter_base + 32, payload149)
+                    mbt_ffi_store64(iter_base + 32, payload150)
 
                     ()
                   }
-                  Unsigned(payload150) => {
+                  Unsigned(payload151) => {
                     mbt_ffi_store8(iter_base + 24, 1)
-                    mbt_ffi_store64(
-                      iter_base + 32,
-                      payload150.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload151) => {
-                    mbt_ffi_store8(iter_base + 24, 2)
                     mbt_ffi_store64(
                       iter_base + 32,
                       payload151.reinterpret_as_int64(),
@@ -31883,39 +31008,39 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload152) => {
+                    mbt_ffi_store8(iter_base + 24, 2)
+                    mbt_ffi_store64(
+                      iter_base + 32,
+                      payload152.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload146.max {
+            match payload147.max {
               None => {
                 mbt_ffi_store8(iter_base + 40, 0)
 
                 ()
               }
-              Some(payload153) => {
+              Some(payload154) => {
                 mbt_ffi_store8(iter_base + 40, 1)
 
-                match payload153 {
-                  Signed(payload154) => {
+                match payload154 {
+                  Signed(payload155) => {
                     mbt_ffi_store8(iter_base + 48, 0)
-                    mbt_ffi_store64(iter_base + 56, payload154)
+                    mbt_ffi_store64(iter_base + 56, payload155)
 
                     ()
                   }
-                  Unsigned(payload155) => {
+                  Unsigned(payload156) => {
                     mbt_ffi_store8(iter_base + 48, 1)
-                    mbt_ffi_store64(
-                      iter_base + 56,
-                      payload155.reinterpret_as_int64(),
-                    )
-
-                    ()
-                  }
-                  FloatBits(payload156) => {
-                    mbt_ffi_store8(iter_base + 48, 2)
                     mbt_ffi_store64(
                       iter_base + 56,
                       payload156.reinterpret_as_int64(),
@@ -31923,24 +31048,34 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                     ()
                   }
+                  FloatBits(payload157) => {
+                    mbt_ffi_store8(iter_base + 48, 2)
+                    mbt_ffi_store64(
+                      iter_base + 56,
+                      payload157.reinterpret_as_int64(),
+                    )
+
+                    ()
+                  }
                 }
 
                 ()
               }
             }
 
-            match payload146.unit {
+            match payload147.unit {
               None => {
                 mbt_ffi_store8(iter_base + 64, 0)
 
                 ()
               }
-              Some(payload158) => {
+              Some(payload159) => {
                 mbt_ffi_store8(iter_base + 64, 1)
 
-                let ptr159 = mbt_ffi_str2ptr(payload158)
-                mbt_ffi_store32(iter_base + 72, payload158.length())
-                mbt_ffi_store32(iter_base + 68, ptr159)
+                let ptr160 = mbt_ffi_str2ptr(payload159)
+                mbt_ffi_store32(iter_base + 72, payload159.length())
+                mbt_ffi_store32(iter_base + 68, ptr160)
+                cleanup_list.push(ptr160)
 
                 ()
               }
@@ -31962,19 +31097,19 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      RecordType(payload162) => {
+      RecordType(payload163) => {
         mbt_ffi_store8(iter_base + 0, 14)
 
-        let address181 = mbt_ffi_malloc(payload162.length() * 68)
-        for index182 = 0
-            index182 < payload162.length()
-            index182 = index182 + 1 {
-          let iter_elem : @types.NamedFieldType = payload162[index182]
-          let iter_base = address181 + index182 * 68
+        let address184 = mbt_ffi_malloc(payload163.length() * 68)
+        for index185 = 0
+            index185 < payload163.length()
+            index185 = index185 + 1 {
+          let iter_elem : @types.NamedFieldType = payload163[index185]
+          let iter_base = address184 + index185 * 68
 
-          let ptr163 = mbt_ffi_str2ptr(iter_elem.name)
+          let ptr164 = mbt_ffi_str2ptr(iter_elem.name)
           mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-          mbt_ffi_store32(iter_base + 0, ptr163)
+          mbt_ffi_store32(iter_base + 0, ptr164)
           mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
           match iter_elem.metadata.doc {
@@ -31983,46 +31118,51 @@ pub async fn ToolRpc::async_invoke_and_await(
 
               ()
             }
-            Some(payload165) => {
+            Some(payload166) => {
               mbt_ffi_store8(iter_base + 12, 1)
 
-              let ptr166 = mbt_ffi_str2ptr(payload165)
-              mbt_ffi_store32(iter_base + 20, payload165.length())
-              mbt_ffi_store32(iter_base + 16, ptr166)
+              let ptr167 = mbt_ffi_str2ptr(payload166)
+              mbt_ffi_store32(iter_base + 20, payload166.length())
+              mbt_ffi_store32(iter_base + 16, ptr167)
+              cleanup_list.push(ptr167)
 
               ()
             }
           }
 
-          let address = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
-          for index = 0
-              index < iter_elem.metadata.aliases.length()
-              index = index + 1 {
-            let iter_elem : String = iter_elem.metadata.aliases[index]
-            let iter_base = address + index * 8
-
-            let ptr167 = mbt_ffi_str2ptr(iter_elem)
-            mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr167)
-          }
-          mbt_ffi_store32(iter_base + 28, iter_elem.metadata.aliases.length())
-          mbt_ffi_store32(iter_base + 24, address)
-
           let address169 = mbt_ffi_malloc(
-            iter_elem.metadata.examples.length() * 8,
+            iter_elem.metadata.aliases.length() * 8,
           )
           for index170 = 0
-              index170 < iter_elem.metadata.examples.length()
+              index170 < iter_elem.metadata.aliases.length()
               index170 = index170 + 1 {
-            let iter_elem : String = iter_elem.metadata.examples[index170]
+            let iter_elem : String = iter_elem.metadata.aliases[index170]
             let iter_base = address169 + index170 * 8
 
             let ptr168 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
             mbt_ffi_store32(iter_base + 0, ptr168)
+            cleanup_list.push(ptr168)
+          }
+          mbt_ffi_store32(iter_base + 28, iter_elem.metadata.aliases.length())
+          mbt_ffi_store32(iter_base + 24, address169)
+
+          let address172 = mbt_ffi_malloc(
+            iter_elem.metadata.examples.length() * 8,
+          )
+          for index173 = 0
+              index173 < iter_elem.metadata.examples.length()
+              index173 = index173 + 1 {
+            let iter_elem : String = iter_elem.metadata.examples[index173]
+            let iter_base = address172 + index173 * 8
+
+            let ptr171 = mbt_ffi_str2ptr(iter_elem)
+            mbt_ffi_store32(iter_base + 4, iter_elem.length())
+            mbt_ffi_store32(iter_base + 0, ptr171)
+            cleanup_list.push(ptr171)
           }
           mbt_ffi_store32(iter_base + 36, iter_elem.metadata.examples.length())
-          mbt_ffi_store32(iter_base + 32, address169)
+          mbt_ffi_store32(iter_base + 32, address172)
 
           match iter_elem.metadata.deprecated {
             None => {
@@ -32030,12 +31170,13 @@ pub async fn ToolRpc::async_invoke_and_await(
 
               ()
             }
-            Some(payload172) => {
+            Some(payload175) => {
               mbt_ffi_store8(iter_base + 40, 1)
 
-              let ptr173 = mbt_ffi_str2ptr(payload172)
-              mbt_ffi_store32(iter_base + 48, payload172.length())
-              mbt_ffi_store32(iter_base + 44, ptr173)
+              let ptr176 = mbt_ffi_str2ptr(payload175)
+              mbt_ffi_store32(iter_base + 48, payload175.length())
+              mbt_ffi_store32(iter_base + 44, ptr176)
+              cleanup_list.push(ptr176)
 
               ()
             }
@@ -32047,10 +31188,10 @@ pub async fn ToolRpc::async_invoke_and_await(
 
               ()
             }
-            Some(payload175) => {
+            Some(payload178) => {
               mbt_ffi_store8(iter_base + 52, 1)
 
-              match payload175 {
+              match payload178 {
                 Multimodal => {
                   mbt_ffi_store8(iter_base + 56, 0)
 
@@ -32066,12 +31207,13 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                   ()
                 }
-                Other(payload179) => {
+                Other(payload182) => {
                   mbt_ffi_store8(iter_base + 56, 3)
 
-                  let ptr180 = mbt_ffi_str2ptr(payload179)
-                  mbt_ffi_store32(iter_base + 64, payload179.length())
-                  mbt_ffi_store32(iter_base + 60, ptr180)
+                  let ptr183 = mbt_ffi_str2ptr(payload182)
+                  mbt_ffi_store32(iter_base + 64, payload182.length())
+                  mbt_ffi_store32(iter_base + 60, ptr183)
+                  cleanup_list.push(ptr183)
 
                   ()
                 }
@@ -32080,25 +31222,29 @@ pub async fn ToolRpc::async_invoke_and_await(
               ()
             }
           }
+          cleanup_list.push(ptr164)
+          cleanup_list.push(address169)
+          cleanup_list.push(address172)
         }
-        mbt_ffi_store32(iter_base + 12, payload162.length())
-        mbt_ffi_store32(iter_base + 8, address181)
+        mbt_ffi_store32(iter_base + 12, payload163.length())
+        mbt_ffi_store32(iter_base + 8, address184)
+        cleanup_list.push(address184)
 
         ()
       }
-      VariantType(payload183) => {
+      VariantType(payload186) => {
         mbt_ffi_store8(iter_base + 0, 15)
 
-        let address206 = mbt_ffi_malloc(payload183.length() * 72)
-        for index207 = 0
-            index207 < payload183.length()
-            index207 = index207 + 1 {
-          let iter_elem : @types.VariantCaseType = payload183[index207]
-          let iter_base = address206 + index207 * 72
+        let address209 = mbt_ffi_malloc(payload186.length() * 72)
+        for index210 = 0
+            index210 < payload186.length()
+            index210 = index210 + 1 {
+          let iter_elem : @types.VariantCaseType = payload186[index210]
+          let iter_base = address209 + index210 * 72
 
-          let ptr184 = mbt_ffi_str2ptr(iter_elem.name)
+          let ptr187 = mbt_ffi_str2ptr(iter_elem.name)
           mbt_ffi_store32(iter_base + 4, iter_elem.name.length())
-          mbt_ffi_store32(iter_base + 0, ptr184)
+          mbt_ffi_store32(iter_base + 0, ptr187)
 
           match iter_elem.payload {
             None => {
@@ -32106,9 +31252,9 @@ pub async fn ToolRpc::async_invoke_and_await(
 
               ()
             }
-            Some(payload186) => {
+            Some(payload189) => {
               mbt_ffi_store8(iter_base + 8, 1)
-              mbt_ffi_store32(iter_base + 12, payload186)
+              mbt_ffi_store32(iter_base + 12, payload189)
 
               ()
             }
@@ -32120,48 +31266,51 @@ pub async fn ToolRpc::async_invoke_and_await(
 
               ()
             }
-            Some(payload188) => {
+            Some(payload191) => {
               mbt_ffi_store8(iter_base + 16, 1)
 
-              let ptr189 = mbt_ffi_str2ptr(payload188)
-              mbt_ffi_store32(iter_base + 24, payload188.length())
-              mbt_ffi_store32(iter_base + 20, ptr189)
+              let ptr192 = mbt_ffi_str2ptr(payload191)
+              mbt_ffi_store32(iter_base + 24, payload191.length())
+              mbt_ffi_store32(iter_base + 20, ptr192)
+              cleanup_list.push(ptr192)
 
               ()
             }
           }
 
-          let address191 = mbt_ffi_malloc(
+          let address194 = mbt_ffi_malloc(
             iter_elem.metadata.aliases.length() * 8,
           )
-          for index192 = 0
-              index192 < iter_elem.metadata.aliases.length()
-              index192 = index192 + 1 {
-            let iter_elem : String = iter_elem.metadata.aliases[index192]
-            let iter_base = address191 + index192 * 8
-
-            let ptr190 = mbt_ffi_str2ptr(iter_elem)
-            mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr190)
-          }
-          mbt_ffi_store32(iter_base + 32, iter_elem.metadata.aliases.length())
-          mbt_ffi_store32(iter_base + 28, address191)
-
-          let address194 = mbt_ffi_malloc(
-            iter_elem.metadata.examples.length() * 8,
-          )
           for index195 = 0
-              index195 < iter_elem.metadata.examples.length()
+              index195 < iter_elem.metadata.aliases.length()
               index195 = index195 + 1 {
-            let iter_elem : String = iter_elem.metadata.examples[index195]
+            let iter_elem : String = iter_elem.metadata.aliases[index195]
             let iter_base = address194 + index195 * 8
 
             let ptr193 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
             mbt_ffi_store32(iter_base + 0, ptr193)
+            cleanup_list.push(ptr193)
+          }
+          mbt_ffi_store32(iter_base + 32, iter_elem.metadata.aliases.length())
+          mbt_ffi_store32(iter_base + 28, address194)
+
+          let address197 = mbt_ffi_malloc(
+            iter_elem.metadata.examples.length() * 8,
+          )
+          for index198 = 0
+              index198 < iter_elem.metadata.examples.length()
+              index198 = index198 + 1 {
+            let iter_elem : String = iter_elem.metadata.examples[index198]
+            let iter_base = address197 + index198 * 8
+
+            let ptr196 = mbt_ffi_str2ptr(iter_elem)
+            mbt_ffi_store32(iter_base + 4, iter_elem.length())
+            mbt_ffi_store32(iter_base + 0, ptr196)
+            cleanup_list.push(ptr196)
           }
           mbt_ffi_store32(iter_base + 40, iter_elem.metadata.examples.length())
-          mbt_ffi_store32(iter_base + 36, address194)
+          mbt_ffi_store32(iter_base + 36, address197)
 
           match iter_elem.metadata.deprecated {
             None => {
@@ -32169,12 +31318,13 @@ pub async fn ToolRpc::async_invoke_and_await(
 
               ()
             }
-            Some(payload197) => {
+            Some(payload200) => {
               mbt_ffi_store8(iter_base + 44, 1)
 
-              let ptr198 = mbt_ffi_str2ptr(payload197)
-              mbt_ffi_store32(iter_base + 52, payload197.length())
-              mbt_ffi_store32(iter_base + 48, ptr198)
+              let ptr201 = mbt_ffi_str2ptr(payload200)
+              mbt_ffi_store32(iter_base + 52, payload200.length())
+              mbt_ffi_store32(iter_base + 48, ptr201)
+              cleanup_list.push(ptr201)
 
               ()
             }
@@ -32186,10 +31336,10 @@ pub async fn ToolRpc::async_invoke_and_await(
 
               ()
             }
-            Some(payload200) => {
+            Some(payload203) => {
               mbt_ffi_store8(iter_base + 56, 1)
 
-              match payload200 {
+              match payload203 {
                 Multimodal => {
                   mbt_ffi_store8(iter_base + 60, 0)
 
@@ -32205,12 +31355,13 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                   ()
                 }
-                Other(payload204) => {
+                Other(payload207) => {
                   mbt_ffi_store8(iter_base + 60, 3)
 
-                  let ptr205 = mbt_ffi_str2ptr(payload204)
-                  mbt_ffi_store32(iter_base + 68, payload204.length())
-                  mbt_ffi_store32(iter_base + 64, ptr205)
+                  let ptr208 = mbt_ffi_str2ptr(payload207)
+                  mbt_ffi_store32(iter_base + 68, payload207.length())
+                  mbt_ffi_store32(iter_base + 64, ptr208)
+                  cleanup_list.push(ptr208)
 
                   ()
                 }
@@ -32219,118 +31370,127 @@ pub async fn ToolRpc::async_invoke_and_await(
               ()
             }
           }
+          cleanup_list.push(ptr187)
+          cleanup_list.push(address194)
+          cleanup_list.push(address197)
         }
-        mbt_ffi_store32(iter_base + 12, payload183.length())
-        mbt_ffi_store32(iter_base + 8, address206)
+        mbt_ffi_store32(iter_base + 12, payload186.length())
+        mbt_ffi_store32(iter_base + 8, address209)
+        cleanup_list.push(address209)
 
         ()
       }
-      EnumType(payload208) => {
+      EnumType(payload211) => {
         mbt_ffi_store8(iter_base + 0, 16)
 
-        let address210 = mbt_ffi_malloc(payload208.length() * 8)
-        for index211 = 0
-            index211 < payload208.length()
-            index211 = index211 + 1 {
-          let iter_elem : String = payload208[index211]
-          let iter_base = address210 + index211 * 8
+        let address213 = mbt_ffi_malloc(payload211.length() * 8)
+        for index214 = 0
+            index214 < payload211.length()
+            index214 = index214 + 1 {
+          let iter_elem : String = payload211[index214]
+          let iter_base = address213 + index214 * 8
 
-          let ptr209 = mbt_ffi_str2ptr(iter_elem)
+          let ptr212 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
-          mbt_ffi_store32(iter_base + 0, ptr209)
+          mbt_ffi_store32(iter_base + 0, ptr212)
+          cleanup_list.push(ptr212)
         }
-        mbt_ffi_store32(iter_base + 12, payload208.length())
-        mbt_ffi_store32(iter_base + 8, address210)
+        mbt_ffi_store32(iter_base + 12, payload211.length())
+        mbt_ffi_store32(iter_base + 8, address213)
+        cleanup_list.push(address213)
 
         ()
       }
-      FlagsType(payload212) => {
+      FlagsType(payload215) => {
         mbt_ffi_store8(iter_base + 0, 17)
 
-        let address214 = mbt_ffi_malloc(payload212.length() * 8)
-        for index215 = 0
-            index215 < payload212.length()
-            index215 = index215 + 1 {
-          let iter_elem : String = payload212[index215]
-          let iter_base = address214 + index215 * 8
+        let address217 = mbt_ffi_malloc(payload215.length() * 8)
+        for index218 = 0
+            index218 < payload215.length()
+            index218 = index218 + 1 {
+          let iter_elem : String = payload215[index218]
+          let iter_base = address217 + index218 * 8
 
-          let ptr213 = mbt_ffi_str2ptr(iter_elem)
+          let ptr216 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
-          mbt_ffi_store32(iter_base + 0, ptr213)
+          mbt_ffi_store32(iter_base + 0, ptr216)
+          cleanup_list.push(ptr216)
         }
-        mbt_ffi_store32(iter_base + 12, payload212.length())
-        mbt_ffi_store32(iter_base + 8, address214)
+        mbt_ffi_store32(iter_base + 12, payload215.length())
+        mbt_ffi_store32(iter_base + 8, address217)
+        cleanup_list.push(address217)
 
         ()
       }
-      TupleType(payload216) => {
+      TupleType(payload219) => {
         mbt_ffi_store8(iter_base + 0, 18)
 
-        let address217 = mbt_ffi_malloc(payload216.length() * 4)
-        for index218 = 0
-            index218 < payload216.length()
-            index218 = index218 + 1 {
-          let iter_elem : Int = payload216[index218]
-          let iter_base = address217 + index218 * 4
+        let address220 = mbt_ffi_malloc(payload219.length() * 4)
+        for index221 = 0
+            index221 < payload219.length()
+            index221 = index221 + 1 {
+          let iter_elem : Int = payload219[index221]
+          let iter_base = address220 + index221 * 4
           mbt_ffi_store32(iter_base + 0, iter_elem)
         }
-        mbt_ffi_store32(iter_base + 12, payload216.length())
-        mbt_ffi_store32(iter_base + 8, address217)
+        mbt_ffi_store32(iter_base + 12, payload219.length())
+        mbt_ffi_store32(iter_base + 8, address220)
+        cleanup_list.push(address220)
 
         ()
       }
-      ListType(payload219) => {
+      ListType(payload222) => {
         mbt_ffi_store8(iter_base + 0, 19)
-        mbt_ffi_store32(iter_base + 8, payload219)
-
-        ()
-      }
-      FixedListType(payload220) => {
-        mbt_ffi_store8(iter_base + 0, 20)
-        mbt_ffi_store32(iter_base + 8, payload220.element)
-        mbt_ffi_store32(iter_base + 12, payload220.length.reinterpret_as_int())
-
-        ()
-      }
-      MapType(payload221) => {
-        mbt_ffi_store8(iter_base + 0, 21)
-        mbt_ffi_store32(iter_base + 8, payload221.key)
-        mbt_ffi_store32(iter_base + 12, payload221.value)
-
-        ()
-      }
-      OptionType(payload222) => {
-        mbt_ffi_store8(iter_base + 0, 22)
         mbt_ffi_store32(iter_base + 8, payload222)
 
         ()
       }
-      ResultType(payload223) => {
+      FixedListType(payload223) => {
+        mbt_ffi_store8(iter_base + 0, 20)
+        mbt_ffi_store32(iter_base + 8, payload223.element)
+        mbt_ffi_store32(iter_base + 12, payload223.length.reinterpret_as_int())
+
+        ()
+      }
+      MapType(payload224) => {
+        mbt_ffi_store8(iter_base + 0, 21)
+        mbt_ffi_store32(iter_base + 8, payload224.key)
+        mbt_ffi_store32(iter_base + 12, payload224.value)
+
+        ()
+      }
+      OptionType(payload225) => {
+        mbt_ffi_store8(iter_base + 0, 22)
+        mbt_ffi_store32(iter_base + 8, payload225)
+
+        ()
+      }
+      ResultType(payload226) => {
         mbt_ffi_store8(iter_base + 0, 23)
 
-        match payload223.ok {
+        match payload226.ok {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload225) => {
+          Some(payload228) => {
             mbt_ffi_store8(iter_base + 8, 1)
-            mbt_ffi_store32(iter_base + 12, payload225)
+            mbt_ffi_store32(iter_base + 12, payload228)
 
             ()
           }
         }
 
-        match payload223.err {
+        match payload226.err {
           None => {
             mbt_ffi_store8(iter_base + 16, 0)
 
             ()
           }
-          Some(payload227) => {
+          Some(payload230) => {
             mbt_ffi_store8(iter_base + 16, 1)
-            mbt_ffi_store32(iter_base + 20, payload227)
+            mbt_ffi_store32(iter_base + 20, payload230)
 
             ()
           }
@@ -32338,76 +31498,79 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      TextType(payload228) => {
+      TextType(payload231) => {
         mbt_ffi_store8(iter_base + 0, 24)
 
-        match payload228.languages {
+        match payload231.languages {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload230) => {
+          Some(payload233) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let address232 = mbt_ffi_malloc(payload230.length() * 8)
-            for index233 = 0
-                index233 < payload230.length()
-                index233 = index233 + 1 {
-              let iter_elem : String = payload230[index233]
-              let iter_base = address232 + index233 * 8
+            let address235 = mbt_ffi_malloc(payload233.length() * 8)
+            for index236 = 0
+                index236 < payload233.length()
+                index236 = index236 + 1 {
+              let iter_elem : String = payload233[index236]
+              let iter_base = address235 + index236 * 8
 
-              let ptr231 = mbt_ffi_str2ptr(iter_elem)
+              let ptr234 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr231)
+              mbt_ffi_store32(iter_base + 0, ptr234)
+              cleanup_list.push(ptr234)
             }
-            mbt_ffi_store32(iter_base + 16, payload230.length())
-            mbt_ffi_store32(iter_base + 12, address232)
+            mbt_ffi_store32(iter_base + 16, payload233.length())
+            mbt_ffi_store32(iter_base + 12, address235)
+            cleanup_list.push(address235)
 
             ()
           }
         }
 
-        match payload228.min_length {
+        match payload231.min_length {
           None => {
             mbt_ffi_store8(iter_base + 20, 0)
 
             ()
           }
-          Some(payload235) => {
+          Some(payload238) => {
             mbt_ffi_store8(iter_base + 20, 1)
-            mbt_ffi_store32(iter_base + 24, payload235.reinterpret_as_int())
+            mbt_ffi_store32(iter_base + 24, payload238.reinterpret_as_int())
 
             ()
           }
         }
 
-        match payload228.max_length {
+        match payload231.max_length {
           None => {
             mbt_ffi_store8(iter_base + 28, 0)
 
             ()
           }
-          Some(payload237) => {
+          Some(payload240) => {
             mbt_ffi_store8(iter_base + 28, 1)
-            mbt_ffi_store32(iter_base + 32, payload237.reinterpret_as_int())
+            mbt_ffi_store32(iter_base + 32, payload240.reinterpret_as_int())
 
             ()
           }
         }
 
-        match payload228.regex {
+        match payload231.regex {
           None => {
             mbt_ffi_store8(iter_base + 36, 0)
 
             ()
           }
-          Some(payload239) => {
+          Some(payload242) => {
             mbt_ffi_store8(iter_base + 36, 1)
 
-            let ptr240 = mbt_ffi_str2ptr(payload239)
-            mbt_ffi_store32(iter_base + 44, payload239.length())
-            mbt_ffi_store32(iter_base + 40, ptr240)
+            let ptr243 = mbt_ffi_str2ptr(payload242)
+            mbt_ffi_store32(iter_base + 44, payload242.length())
+            mbt_ffi_store32(iter_base + 40, ptr243)
+            cleanup_list.push(ptr243)
 
             ()
           }
@@ -32415,59 +31578,61 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      BinaryType(payload241) => {
+      BinaryType(payload244) => {
         mbt_ffi_store8(iter_base + 0, 25)
 
-        match payload241.mime_types {
+        match payload244.mime_types {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload243) => {
+          Some(payload246) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let address245 = mbt_ffi_malloc(payload243.length() * 8)
-            for index246 = 0
-                index246 < payload243.length()
-                index246 = index246 + 1 {
-              let iter_elem : String = payload243[index246]
-              let iter_base = address245 + index246 * 8
+            let address248 = mbt_ffi_malloc(payload246.length() * 8)
+            for index249 = 0
+                index249 < payload246.length()
+                index249 = index249 + 1 {
+              let iter_elem : String = payload246[index249]
+              let iter_base = address248 + index249 * 8
 
-              let ptr244 = mbt_ffi_str2ptr(iter_elem)
+              let ptr247 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr244)
+              mbt_ffi_store32(iter_base + 0, ptr247)
+              cleanup_list.push(ptr247)
             }
-            mbt_ffi_store32(iter_base + 16, payload243.length())
-            mbt_ffi_store32(iter_base + 12, address245)
+            mbt_ffi_store32(iter_base + 16, payload246.length())
+            mbt_ffi_store32(iter_base + 12, address248)
+            cleanup_list.push(address248)
 
             ()
           }
         }
 
-        match payload241.min_bytes {
+        match payload244.min_bytes {
           None => {
             mbt_ffi_store8(iter_base + 20, 0)
 
             ()
           }
-          Some(payload248) => {
+          Some(payload251) => {
             mbt_ffi_store8(iter_base + 20, 1)
-            mbt_ffi_store32(iter_base + 24, payload248.reinterpret_as_int())
+            mbt_ffi_store32(iter_base + 24, payload251.reinterpret_as_int())
 
             ()
           }
         }
 
-        match payload241.max_bytes {
+        match payload244.max_bytes {
           None => {
             mbt_ffi_store8(iter_base + 28, 0)
 
             ()
           }
-          Some(payload250) => {
+          Some(payload253) => {
             mbt_ffi_store8(iter_base + 28, 1)
-            mbt_ffi_store32(iter_base + 32, payload250.reinterpret_as_int())
+            mbt_ffi_store32(iter_base + 32, payload253.reinterpret_as_int())
 
             ()
           }
@@ -32475,60 +31640,64 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      PathType(payload251) => {
+      PathType(payload254) => {
         mbt_ffi_store8(iter_base + 0, 26)
-        mbt_ffi_store8(iter_base + 8, payload251.direction.ordinal())
-        mbt_ffi_store8(iter_base + 9, payload251.kind.ordinal())
+        mbt_ffi_store8(iter_base + 8, payload254.direction.ordinal())
+        mbt_ffi_store8(iter_base + 9, payload254.kind.ordinal())
 
-        match payload251.allowed_mime_types {
+        match payload254.allowed_mime_types {
           None => {
             mbt_ffi_store8(iter_base + 12, 0)
 
             ()
           }
-          Some(payload253) => {
+          Some(payload256) => {
             mbt_ffi_store8(iter_base + 12, 1)
 
-            let address255 = mbt_ffi_malloc(payload253.length() * 8)
-            for index256 = 0
-                index256 < payload253.length()
-                index256 = index256 + 1 {
-              let iter_elem : String = payload253[index256]
-              let iter_base = address255 + index256 * 8
+            let address258 = mbt_ffi_malloc(payload256.length() * 8)
+            for index259 = 0
+                index259 < payload256.length()
+                index259 = index259 + 1 {
+              let iter_elem : String = payload256[index259]
+              let iter_base = address258 + index259 * 8
 
-              let ptr254 = mbt_ffi_str2ptr(iter_elem)
+              let ptr257 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr254)
+              mbt_ffi_store32(iter_base + 0, ptr257)
+              cleanup_list.push(ptr257)
             }
-            mbt_ffi_store32(iter_base + 20, payload253.length())
-            mbt_ffi_store32(iter_base + 16, address255)
+            mbt_ffi_store32(iter_base + 20, payload256.length())
+            mbt_ffi_store32(iter_base + 16, address258)
+            cleanup_list.push(address258)
 
             ()
           }
         }
 
-        match payload251.allowed_extensions {
+        match payload254.allowed_extensions {
           None => {
             mbt_ffi_store8(iter_base + 24, 0)
 
             ()
           }
-          Some(payload258) => {
+          Some(payload261) => {
             mbt_ffi_store8(iter_base + 24, 1)
 
-            let address260 = mbt_ffi_malloc(payload258.length() * 8)
-            for index261 = 0
-                index261 < payload258.length()
-                index261 = index261 + 1 {
-              let iter_elem : String = payload258[index261]
-              let iter_base = address260 + index261 * 8
+            let address263 = mbt_ffi_malloc(payload261.length() * 8)
+            for index264 = 0
+                index264 < payload261.length()
+                index264 = index264 + 1 {
+              let iter_elem : String = payload261[index264]
+              let iter_base = address263 + index264 * 8
 
-              let ptr259 = mbt_ffi_str2ptr(iter_elem)
+              let ptr262 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr259)
+              mbt_ffi_store32(iter_base + 0, ptr262)
+              cleanup_list.push(ptr262)
             }
-            mbt_ffi_store32(iter_base + 32, payload258.length())
-            mbt_ffi_store32(iter_base + 28, address260)
+            mbt_ffi_store32(iter_base + 32, payload261.length())
+            mbt_ffi_store32(iter_base + 28, address263)
+            cleanup_list.push(address263)
 
             ()
           }
@@ -32536,58 +31705,62 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      UrlType(payload262) => {
+      UrlType(payload265) => {
         mbt_ffi_store8(iter_base + 0, 27)
 
-        match payload262.allowed_schemes {
+        match payload265.allowed_schemes {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload264) => {
+          Some(payload267) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let address266 = mbt_ffi_malloc(payload264.length() * 8)
-            for index267 = 0
-                index267 < payload264.length()
-                index267 = index267 + 1 {
-              let iter_elem : String = payload264[index267]
-              let iter_base = address266 + index267 * 8
+            let address269 = mbt_ffi_malloc(payload267.length() * 8)
+            for index270 = 0
+                index270 < payload267.length()
+                index270 = index270 + 1 {
+              let iter_elem : String = payload267[index270]
+              let iter_base = address269 + index270 * 8
 
-              let ptr265 = mbt_ffi_str2ptr(iter_elem)
+              let ptr268 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr265)
+              mbt_ffi_store32(iter_base + 0, ptr268)
+              cleanup_list.push(ptr268)
             }
-            mbt_ffi_store32(iter_base + 16, payload264.length())
-            mbt_ffi_store32(iter_base + 12, address266)
+            mbt_ffi_store32(iter_base + 16, payload267.length())
+            mbt_ffi_store32(iter_base + 12, address269)
+            cleanup_list.push(address269)
 
             ()
           }
         }
 
-        match payload262.allowed_hosts {
+        match payload265.allowed_hosts {
           None => {
             mbt_ffi_store8(iter_base + 20, 0)
 
             ()
           }
-          Some(payload269) => {
+          Some(payload272) => {
             mbt_ffi_store8(iter_base + 20, 1)
 
-            let address271 = mbt_ffi_malloc(payload269.length() * 8)
-            for index272 = 0
-                index272 < payload269.length()
-                index272 = index272 + 1 {
-              let iter_elem : String = payload269[index272]
-              let iter_base = address271 + index272 * 8
+            let address274 = mbt_ffi_malloc(payload272.length() * 8)
+            for index275 = 0
+                index275 < payload272.length()
+                index275 = index275 + 1 {
+              let iter_elem : String = payload272[index275]
+              let iter_base = address274 + index275 * 8
 
-              let ptr270 = mbt_ffi_str2ptr(iter_elem)
+              let ptr273 = mbt_ffi_str2ptr(iter_elem)
               mbt_ffi_store32(iter_base + 4, iter_elem.length())
-              mbt_ffi_store32(iter_base + 0, ptr270)
+              mbt_ffi_store32(iter_base + 0, ptr273)
+              cleanup_list.push(ptr273)
             }
-            mbt_ffi_store32(iter_base + 28, payload269.length())
-            mbt_ffi_store32(iter_base + 24, address271)
+            mbt_ffi_store32(iter_base + 28, payload272.length())
+            mbt_ffi_store32(iter_base + 24, address274)
+            cleanup_list.push(address274)
 
             ()
           }
@@ -32605,153 +31778,165 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      QuantityType(payload275) => {
+      QuantityType(payload278) => {
         mbt_ffi_store8(iter_base + 0, 30)
 
-        let ptr276 = mbt_ffi_str2ptr(payload275.base_unit)
-        mbt_ffi_store32(iter_base + 12, payload275.base_unit.length())
-        mbt_ffi_store32(iter_base + 8, ptr276)
+        let ptr279 = mbt_ffi_str2ptr(payload278.base_unit)
+        mbt_ffi_store32(iter_base + 12, payload278.base_unit.length())
+        mbt_ffi_store32(iter_base + 8, ptr279)
 
-        let address278 = mbt_ffi_malloc(
-          payload275.allowed_suffixes.length() * 8,
+        let address281 = mbt_ffi_malloc(
+          payload278.allowed_suffixes.length() * 8,
         )
-        for index279 = 0
-            index279 < payload275.allowed_suffixes.length()
-            index279 = index279 + 1 {
-          let iter_elem : String = payload275.allowed_suffixes[index279]
-          let iter_base = address278 + index279 * 8
+        for index282 = 0
+            index282 < payload278.allowed_suffixes.length()
+            index282 = index282 + 1 {
+          let iter_elem : String = payload278.allowed_suffixes[index282]
+          let iter_base = address281 + index282 * 8
 
-          let ptr277 = mbt_ffi_str2ptr(iter_elem)
+          let ptr280 = mbt_ffi_str2ptr(iter_elem)
           mbt_ffi_store32(iter_base + 4, iter_elem.length())
-          mbt_ffi_store32(iter_base + 0, ptr277)
+          mbt_ffi_store32(iter_base + 0, ptr280)
+          cleanup_list.push(ptr280)
         }
-        mbt_ffi_store32(iter_base + 20, payload275.allowed_suffixes.length())
-        mbt_ffi_store32(iter_base + 16, address278)
+        mbt_ffi_store32(iter_base + 20, payload278.allowed_suffixes.length())
+        mbt_ffi_store32(iter_base + 16, address281)
 
-        match payload275.min {
+        match payload278.min {
           None => {
             mbt_ffi_store8(iter_base + 24, 0)
 
             ()
           }
-          Some(payload281) => {
+          Some(payload284) => {
             mbt_ffi_store8(iter_base + 24, 1)
-            mbt_ffi_store64(iter_base + 32, payload281.mantissa)
-            mbt_ffi_store32(iter_base + 40, payload281.scale)
+            mbt_ffi_store64(iter_base + 32, payload284.mantissa)
+            mbt_ffi_store32(iter_base + 40, payload284.scale)
 
-            let ptr282 = mbt_ffi_str2ptr(payload281.unit)
-            mbt_ffi_store32(iter_base + 48, payload281.unit.length())
-            mbt_ffi_store32(iter_base + 44, ptr282)
+            let ptr285 = mbt_ffi_str2ptr(payload284.unit)
+            mbt_ffi_store32(iter_base + 48, payload284.unit.length())
+            mbt_ffi_store32(iter_base + 44, ptr285)
+            cleanup_list.push(ptr285)
 
             ()
           }
         }
 
-        match payload275.max {
+        match payload278.max {
           None => {
             mbt_ffi_store8(iter_base + 56, 0)
 
             ()
           }
-          Some(payload284) => {
+          Some(payload287) => {
             mbt_ffi_store8(iter_base + 56, 1)
-            mbt_ffi_store64(iter_base + 64, payload284.mantissa)
-            mbt_ffi_store32(iter_base + 72, payload284.scale)
+            mbt_ffi_store64(iter_base + 64, payload287.mantissa)
+            mbt_ffi_store32(iter_base + 72, payload287.scale)
 
-            let ptr285 = mbt_ffi_str2ptr(payload284.unit)
-            mbt_ffi_store32(iter_base + 80, payload284.unit.length())
-            mbt_ffi_store32(iter_base + 76, ptr285)
+            let ptr288 = mbt_ffi_str2ptr(payload287.unit)
+            mbt_ffi_store32(iter_base + 80, payload287.unit.length())
+            mbt_ffi_store32(iter_base + 76, ptr288)
+            cleanup_list.push(ptr288)
 
             ()
           }
         }
+        cleanup_list.push(ptr279)
+        cleanup_list.push(address281)
 
         ()
       }
-      UnionType(payload286) => {
+      UnionType(payload289) => {
         mbt_ffi_store8(iter_base + 0, 31)
 
-        let address322 = mbt_ffi_malloc(payload286.branches.length() * 92)
-        for index323 = 0
-            index323 < payload286.branches.length()
-            index323 = index323 + 1 {
-          let iter_elem : @types.UnionBranch = payload286.branches[index323]
-          let iter_base = address322 + index323 * 92
+        let address325 = mbt_ffi_malloc(payload289.branches.length() * 92)
+        for index326 = 0
+            index326 < payload289.branches.length()
+            index326 = index326 + 1 {
+          let iter_elem : @types.UnionBranch = payload289.branches[index326]
+          let iter_base = address325 + index326 * 92
 
-          let ptr287 = mbt_ffi_str2ptr(iter_elem.tag)
+          let ptr290 = mbt_ffi_str2ptr(iter_elem.tag)
           mbt_ffi_store32(iter_base + 4, iter_elem.tag.length())
-          mbt_ffi_store32(iter_base + 0, ptr287)
+          mbt_ffi_store32(iter_base + 0, ptr290)
           mbt_ffi_store32(iter_base + 8, iter_elem.body)
 
           match iter_elem.discriminator {
-            Prefix(payload288) => {
+            Prefix(payload291) => {
               mbt_ffi_store8(iter_base + 12, 0)
 
-              let ptr289 = mbt_ffi_str2ptr(payload288)
-              mbt_ffi_store32(iter_base + 20, payload288.length())
-              mbt_ffi_store32(iter_base + 16, ptr289)
+              let ptr292 = mbt_ffi_str2ptr(payload291)
+              mbt_ffi_store32(iter_base + 20, payload291.length())
+              mbt_ffi_store32(iter_base + 16, ptr292)
+              cleanup_list.push(ptr292)
 
               ()
             }
-            Suffix(payload290) => {
+            Suffix(payload293) => {
               mbt_ffi_store8(iter_base + 12, 1)
 
-              let ptr291 = mbt_ffi_str2ptr(payload290)
-              mbt_ffi_store32(iter_base + 20, payload290.length())
-              mbt_ffi_store32(iter_base + 16, ptr291)
+              let ptr294 = mbt_ffi_str2ptr(payload293)
+              mbt_ffi_store32(iter_base + 20, payload293.length())
+              mbt_ffi_store32(iter_base + 16, ptr294)
+              cleanup_list.push(ptr294)
 
               ()
             }
-            Contains(payload292) => {
+            Contains(payload295) => {
               mbt_ffi_store8(iter_base + 12, 2)
 
-              let ptr293 = mbt_ffi_str2ptr(payload292)
-              mbt_ffi_store32(iter_base + 20, payload292.length())
-              mbt_ffi_store32(iter_base + 16, ptr293)
+              let ptr296 = mbt_ffi_str2ptr(payload295)
+              mbt_ffi_store32(iter_base + 20, payload295.length())
+              mbt_ffi_store32(iter_base + 16, ptr296)
+              cleanup_list.push(ptr296)
 
               ()
             }
-            Regex(payload294) => {
+            Regex(payload297) => {
               mbt_ffi_store8(iter_base + 12, 3)
 
-              let ptr295 = mbt_ffi_str2ptr(payload294)
-              mbt_ffi_store32(iter_base + 20, payload294.length())
-              mbt_ffi_store32(iter_base + 16, ptr295)
+              let ptr298 = mbt_ffi_str2ptr(payload297)
+              mbt_ffi_store32(iter_base + 20, payload297.length())
+              mbt_ffi_store32(iter_base + 16, ptr298)
+              cleanup_list.push(ptr298)
 
               ()
             }
-            FieldEquals(payload296) => {
+            FieldEquals(payload299) => {
               mbt_ffi_store8(iter_base + 12, 4)
 
-              let ptr297 = mbt_ffi_str2ptr(payload296.field_name)
-              mbt_ffi_store32(iter_base + 20, payload296.field_name.length())
-              mbt_ffi_store32(iter_base + 16, ptr297)
+              let ptr300 = mbt_ffi_str2ptr(payload299.field_name)
+              mbt_ffi_store32(iter_base + 20, payload299.field_name.length())
+              mbt_ffi_store32(iter_base + 16, ptr300)
 
-              match payload296.literal {
+              match payload299.literal {
                 None => {
                   mbt_ffi_store8(iter_base + 24, 0)
 
                   ()
                 }
-                Some(payload299) => {
+                Some(payload302) => {
                   mbt_ffi_store8(iter_base + 24, 1)
 
-                  let ptr300 = mbt_ffi_str2ptr(payload299)
-                  mbt_ffi_store32(iter_base + 32, payload299.length())
-                  mbt_ffi_store32(iter_base + 28, ptr300)
+                  let ptr303 = mbt_ffi_str2ptr(payload302)
+                  mbt_ffi_store32(iter_base + 32, payload302.length())
+                  mbt_ffi_store32(iter_base + 28, ptr303)
+                  cleanup_list.push(ptr303)
 
                   ()
                 }
               }
+              cleanup_list.push(ptr300)
 
               ()
             }
-            FieldAbsent(payload301) => {
+            FieldAbsent(payload304) => {
               mbt_ffi_store8(iter_base + 12, 5)
 
-              let ptr302 = mbt_ffi_str2ptr(payload301)
-              mbt_ffi_store32(iter_base + 20, payload301.length())
-              mbt_ffi_store32(iter_base + 16, ptr302)
+              let ptr305 = mbt_ffi_str2ptr(payload304)
+              mbt_ffi_store32(iter_base + 20, payload304.length())
+              mbt_ffi_store32(iter_base + 16, ptr305)
+              cleanup_list.push(ptr305)
 
               ()
             }
@@ -32763,48 +31948,51 @@ pub async fn ToolRpc::async_invoke_and_await(
 
               ()
             }
-            Some(payload304) => {
+            Some(payload307) => {
               mbt_ffi_store8(iter_base + 36, 1)
 
-              let ptr305 = mbt_ffi_str2ptr(payload304)
-              mbt_ffi_store32(iter_base + 44, payload304.length())
-              mbt_ffi_store32(iter_base + 40, ptr305)
+              let ptr308 = mbt_ffi_str2ptr(payload307)
+              mbt_ffi_store32(iter_base + 44, payload307.length())
+              mbt_ffi_store32(iter_base + 40, ptr308)
+              cleanup_list.push(ptr308)
 
               ()
             }
           }
 
-          let address307 = mbt_ffi_malloc(
+          let address310 = mbt_ffi_malloc(
             iter_elem.metadata.aliases.length() * 8,
           )
-          for index308 = 0
-              index308 < iter_elem.metadata.aliases.length()
-              index308 = index308 + 1 {
-            let iter_elem : String = iter_elem.metadata.aliases[index308]
-            let iter_base = address307 + index308 * 8
-
-            let ptr306 = mbt_ffi_str2ptr(iter_elem)
-            mbt_ffi_store32(iter_base + 4, iter_elem.length())
-            mbt_ffi_store32(iter_base + 0, ptr306)
-          }
-          mbt_ffi_store32(iter_base + 52, iter_elem.metadata.aliases.length())
-          mbt_ffi_store32(iter_base + 48, address307)
-
-          let address310 = mbt_ffi_malloc(
-            iter_elem.metadata.examples.length() * 8,
-          )
           for index311 = 0
-              index311 < iter_elem.metadata.examples.length()
+              index311 < iter_elem.metadata.aliases.length()
               index311 = index311 + 1 {
-            let iter_elem : String = iter_elem.metadata.examples[index311]
+            let iter_elem : String = iter_elem.metadata.aliases[index311]
             let iter_base = address310 + index311 * 8
 
             let ptr309 = mbt_ffi_str2ptr(iter_elem)
             mbt_ffi_store32(iter_base + 4, iter_elem.length())
             mbt_ffi_store32(iter_base + 0, ptr309)
+            cleanup_list.push(ptr309)
+          }
+          mbt_ffi_store32(iter_base + 52, iter_elem.metadata.aliases.length())
+          mbt_ffi_store32(iter_base + 48, address310)
+
+          let address313 = mbt_ffi_malloc(
+            iter_elem.metadata.examples.length() * 8,
+          )
+          for index314 = 0
+              index314 < iter_elem.metadata.examples.length()
+              index314 = index314 + 1 {
+            let iter_elem : String = iter_elem.metadata.examples[index314]
+            let iter_base = address313 + index314 * 8
+
+            let ptr312 = mbt_ffi_str2ptr(iter_elem)
+            mbt_ffi_store32(iter_base + 4, iter_elem.length())
+            mbt_ffi_store32(iter_base + 0, ptr312)
+            cleanup_list.push(ptr312)
           }
           mbt_ffi_store32(iter_base + 60, iter_elem.metadata.examples.length())
-          mbt_ffi_store32(iter_base + 56, address310)
+          mbt_ffi_store32(iter_base + 56, address313)
 
           match iter_elem.metadata.deprecated {
             None => {
@@ -32812,12 +32000,13 @@ pub async fn ToolRpc::async_invoke_and_await(
 
               ()
             }
-            Some(payload313) => {
+            Some(payload316) => {
               mbt_ffi_store8(iter_base + 64, 1)
 
-              let ptr314 = mbt_ffi_str2ptr(payload313)
-              mbt_ffi_store32(iter_base + 72, payload313.length())
-              mbt_ffi_store32(iter_base + 68, ptr314)
+              let ptr317 = mbt_ffi_str2ptr(payload316)
+              mbt_ffi_store32(iter_base + 72, payload316.length())
+              mbt_ffi_store32(iter_base + 68, ptr317)
+              cleanup_list.push(ptr317)
 
               ()
             }
@@ -32829,10 +32018,10 @@ pub async fn ToolRpc::async_invoke_and_await(
 
               ()
             }
-            Some(payload316) => {
+            Some(payload319) => {
               mbt_ffi_store8(iter_base + 76, 1)
 
-              match payload316 {
+              match payload319 {
                 Multimodal => {
                   mbt_ffi_store8(iter_base + 80, 0)
 
@@ -32848,12 +32037,13 @@ pub async fn ToolRpc::async_invoke_and_await(
 
                   ()
                 }
-                Other(payload320) => {
+                Other(payload323) => {
                   mbt_ffi_store8(iter_base + 80, 3)
 
-                  let ptr321 = mbt_ffi_str2ptr(payload320)
-                  mbt_ffi_store32(iter_base + 88, payload320.length())
-                  mbt_ffi_store32(iter_base + 84, ptr321)
+                  let ptr324 = mbt_ffi_str2ptr(payload323)
+                  mbt_ffi_store32(iter_base + 88, payload323.length())
+                  mbt_ffi_store32(iter_base + 84, ptr324)
+                  cleanup_list.push(ptr324)
 
                   ()
                 }
@@ -32862,28 +32052,33 @@ pub async fn ToolRpc::async_invoke_and_await(
               ()
             }
           }
+          cleanup_list.push(ptr290)
+          cleanup_list.push(address310)
+          cleanup_list.push(address313)
         }
-        mbt_ffi_store32(iter_base + 12, payload286.branches.length())
-        mbt_ffi_store32(iter_base + 8, address322)
+        mbt_ffi_store32(iter_base + 12, payload289.branches.length())
+        mbt_ffi_store32(iter_base + 8, address325)
+        cleanup_list.push(address325)
 
         ()
       }
-      SecretType(payload324) => {
+      SecretType(payload327) => {
         mbt_ffi_store8(iter_base + 0, 32)
-        mbt_ffi_store32(iter_base + 8, payload324.inner)
+        mbt_ffi_store32(iter_base + 8, payload327.inner)
 
-        match payload324.category {
+        match payload327.category {
           None => {
             mbt_ffi_store8(iter_base + 12, 0)
 
             ()
           }
-          Some(payload326) => {
+          Some(payload329) => {
             mbt_ffi_store8(iter_base + 12, 1)
 
-            let ptr327 = mbt_ffi_str2ptr(payload326)
-            mbt_ffi_store32(iter_base + 20, payload326.length())
-            mbt_ffi_store32(iter_base + 16, ptr327)
+            let ptr330 = mbt_ffi_str2ptr(payload329)
+            mbt_ffi_store32(iter_base + 20, payload329.length())
+            mbt_ffi_store32(iter_base + 16, ptr330)
+            cleanup_list.push(ptr330)
 
             ()
           }
@@ -32891,21 +32086,22 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      QuotaTokenType(payload328) => {
+      QuotaTokenType(payload331) => {
         mbt_ffi_store8(iter_base + 0, 33)
 
-        match payload328.resource_name {
+        match payload331.resource_name {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload330) => {
+          Some(payload333) => {
             mbt_ffi_store8(iter_base + 8, 1)
 
-            let ptr331 = mbt_ffi_str2ptr(payload330)
-            mbt_ffi_store32(iter_base + 16, payload330.length())
-            mbt_ffi_store32(iter_base + 12, ptr331)
+            let ptr334 = mbt_ffi_str2ptr(payload333)
+            mbt_ffi_store32(iter_base + 16, payload333.length())
+            mbt_ffi_store32(iter_base + 12, ptr334)
+            cleanup_list.push(ptr334)
 
             ()
           }
@@ -32913,11 +32109,11 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      PermissionCardType(payload332) => {
+      PermissionCardType(payload335) => {
         mbt_ffi_store8(iter_base + 0, 34)
         mbt_ffi_store8(
           iter_base + 8,
-          if payload332.polymorphic {
+          if payload335.polymorphic {
             1
           } else {
             0
@@ -32926,27 +32122,8 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      FutureType(payload333) => {
+      FutureType(payload336) => {
         mbt_ffi_store8(iter_base + 0, 35)
-
-        match payload333 {
-          None => {
-            mbt_ffi_store8(iter_base + 8, 0)
-
-            ()
-          }
-          Some(payload335) => {
-            mbt_ffi_store8(iter_base + 8, 1)
-            mbt_ffi_store32(iter_base + 12, payload335)
-
-            ()
-          }
-        }
-
-        ()
-      }
-      StreamType(payload336) => {
-        mbt_ffi_store8(iter_base + 0, 36)
 
         match payload336 {
           None => {
@@ -32964,6 +32141,25 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
+      StreamType(payload339) => {
+        mbt_ffi_store8(iter_base + 0, 36)
+
+        match payload339 {
+          None => {
+            mbt_ffi_store8(iter_base + 8, 0)
+
+            ()
+          }
+          Some(payload341) => {
+            mbt_ffi_store8(iter_base + 8, 1)
+            mbt_ffi_store32(iter_base + 12, payload341)
+
+            ()
+          }
+        }
+
+        ()
+      }
     }
 
     match iter_elem.metadata.doc {
@@ -32972,44 +32168,47 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      Some(payload340) => {
+      Some(payload343) => {
         mbt_ffi_store8(iter_base + 88, 1)
 
-        let ptr341 = mbt_ffi_str2ptr(payload340)
-        mbt_ffi_store32(iter_base + 96, payload340.length())
-        mbt_ffi_store32(iter_base + 92, ptr341)
+        let ptr344 = mbt_ffi_str2ptr(payload343)
+        mbt_ffi_store32(iter_base + 96, payload343.length())
+        mbt_ffi_store32(iter_base + 92, ptr344)
+        cleanup_list.push(ptr344)
 
         ()
       }
     }
 
-    let address343 = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
-    for index344 = 0
-        index344 < iter_elem.metadata.aliases.length()
-        index344 = index344 + 1 {
-      let iter_elem : String = iter_elem.metadata.aliases[index344]
-      let iter_base = address343 + index344 * 8
-
-      let ptr342 = mbt_ffi_str2ptr(iter_elem)
-      mbt_ffi_store32(iter_base + 4, iter_elem.length())
-      mbt_ffi_store32(iter_base + 0, ptr342)
-    }
-    mbt_ffi_store32(iter_base + 104, iter_elem.metadata.aliases.length())
-    mbt_ffi_store32(iter_base + 100, address343)
-
-    let address346 = mbt_ffi_malloc(iter_elem.metadata.examples.length() * 8)
+    let address346 = mbt_ffi_malloc(iter_elem.metadata.aliases.length() * 8)
     for index347 = 0
-        index347 < iter_elem.metadata.examples.length()
+        index347 < iter_elem.metadata.aliases.length()
         index347 = index347 + 1 {
-      let iter_elem : String = iter_elem.metadata.examples[index347]
+      let iter_elem : String = iter_elem.metadata.aliases[index347]
       let iter_base = address346 + index347 * 8
 
       let ptr345 = mbt_ffi_str2ptr(iter_elem)
       mbt_ffi_store32(iter_base + 4, iter_elem.length())
       mbt_ffi_store32(iter_base + 0, ptr345)
+      cleanup_list.push(ptr345)
+    }
+    mbt_ffi_store32(iter_base + 104, iter_elem.metadata.aliases.length())
+    mbt_ffi_store32(iter_base + 100, address346)
+
+    let address349 = mbt_ffi_malloc(iter_elem.metadata.examples.length() * 8)
+    for index350 = 0
+        index350 < iter_elem.metadata.examples.length()
+        index350 = index350 + 1 {
+      let iter_elem : String = iter_elem.metadata.examples[index350]
+      let iter_base = address349 + index350 * 8
+
+      let ptr348 = mbt_ffi_str2ptr(iter_elem)
+      mbt_ffi_store32(iter_base + 4, iter_elem.length())
+      mbt_ffi_store32(iter_base + 0, ptr348)
+      cleanup_list.push(ptr348)
     }
     mbt_ffi_store32(iter_base + 112, iter_elem.metadata.examples.length())
-    mbt_ffi_store32(iter_base + 108, address346)
+    mbt_ffi_store32(iter_base + 108, address349)
 
     match iter_elem.metadata.deprecated {
       None => {
@@ -33017,12 +32216,13 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      Some(payload349) => {
+      Some(payload352) => {
         mbt_ffi_store8(iter_base + 116, 1)
 
-        let ptr350 = mbt_ffi_str2ptr(payload349)
-        mbt_ffi_store32(iter_base + 124, payload349.length())
-        mbt_ffi_store32(iter_base + 120, ptr350)
+        let ptr353 = mbt_ffi_str2ptr(payload352)
+        mbt_ffi_store32(iter_base + 124, payload352.length())
+        mbt_ffi_store32(iter_base + 120, ptr353)
+        cleanup_list.push(ptr353)
 
         ()
       }
@@ -33034,10 +32234,10 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      Some(payload352) => {
+      Some(payload355) => {
         mbt_ffi_store8(iter_base + 128, 1)
 
-        match payload352 {
+        match payload355 {
           Multimodal => {
             mbt_ffi_store8(iter_base + 132, 0)
 
@@ -33053,12 +32253,13 @@ pub async fn ToolRpc::async_invoke_and_await(
 
             ()
           }
-          Other(payload356) => {
+          Other(payload359) => {
             mbt_ffi_store8(iter_base + 132, 3)
 
-            let ptr357 = mbt_ffi_str2ptr(payload356)
-            mbt_ffi_store32(iter_base + 140, payload356.length())
-            mbt_ffi_store32(iter_base + 136, ptr357)
+            let ptr360 = mbt_ffi_str2ptr(payload359)
+            mbt_ffi_store32(iter_base + 140, payload359.length())
+            mbt_ffi_store32(iter_base + 136, ptr360)
+            cleanup_list.push(ptr360)
 
             ()
           }
@@ -33067,20 +32268,20 @@ pub async fn ToolRpc::async_invoke_and_await(
         ()
       }
     }
+    cleanup_list.push(address346)
+    cleanup_list.push(address349)
   }
-  mbt_ffi_store32(lower_ptr + 12 + 4, input.graph.type_nodes.length())
-  mbt_ffi_store32(lower_ptr + 12 + 0, address358)
 
-  let address364 = mbt_ffi_malloc(input.graph.defs.length() * 24)
-  for index365 = 0
-      index365 < input.graph.defs.length()
-      index365 = index365 + 1 {
-    let iter_elem : @types.SchemaTypeDef = input.graph.defs[index365]
-    let iter_base = address364 + index365 * 24
+  let address367 = mbt_ffi_malloc(input.graph.defs.length() * 24)
+  for index368 = 0
+      index368 < input.graph.defs.length()
+      index368 = index368 + 1 {
+    let iter_elem : @types.SchemaTypeDef = input.graph.defs[index368]
+    let iter_base = address367 + index368 * 24
 
-    let ptr360 = mbt_ffi_str2ptr(iter_elem.id)
+    let ptr363 = mbt_ffi_str2ptr(iter_elem.id)
     mbt_ffi_store32(iter_base + 4, iter_elem.id.length())
-    mbt_ffi_store32(iter_base + 0, ptr360)
+    mbt_ffi_store32(iter_base + 0, ptr363)
 
     match iter_elem.name {
       None => {
@@ -33088,140 +32289,141 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      Some(payload362) => {
+      Some(payload365) => {
         mbt_ffi_store8(iter_base + 8, 1)
 
-        let ptr363 = mbt_ffi_str2ptr(payload362)
-        mbt_ffi_store32(iter_base + 16, payload362.length())
-        mbt_ffi_store32(iter_base + 12, ptr363)
+        let ptr366 = mbt_ffi_str2ptr(payload365)
+        mbt_ffi_store32(iter_base + 16, payload365.length())
+        mbt_ffi_store32(iter_base + 12, ptr366)
+        cleanup_list.push(ptr366)
 
         ()
       }
     }
     mbt_ffi_store32(iter_base + 20, iter_elem.body)
+    cleanup_list.push(ptr363)
   }
-  mbt_ffi_store32(lower_ptr + 12 + 12, input.graph.defs.length())
-  mbt_ffi_store32(lower_ptr + 12 + 8, address364)
-  mbt_ffi_store32(lower_ptr + 12 + 16, input.graph.root)
 
-  let address439 = mbt_ffi_malloc(input.value.value_nodes.length() * 32)
-  for index440 = 0
-      index440 < input.value.value_nodes.length()
-      index440 = index440 + 1 {
-    let iter_elem : @types.SchemaValueNode = input.value.value_nodes[index440]
-    let iter_base = address439 + index440 * 32
+  let address443 = mbt_ffi_malloc(input.value.value_nodes.length() * 32)
+  for index444 = 0
+      index444 < input.value.value_nodes.length()
+      index444 = index444 + 1 {
+    let iter_elem : @types.SchemaValueNode = input.value.value_nodes[index444]
+    let iter_base = address443 + index444 * 32
 
     match iter_elem {
-      BoolValue(payload366) => {
+      BoolValue(payload369) => {
         mbt_ffi_store8(iter_base + 0, 0)
-        mbt_ffi_store8(iter_base + 8, if payload366 { 1 } else { 0 })
+        mbt_ffi_store8(iter_base + 8, if payload369 { 1 } else { 0 })
 
         ()
       }
-      S8Value(payload367) => {
+      S8Value(payload370) => {
         mbt_ffi_store8(iter_base + 0, 1)
-        mbt_ffi_store8(iter_base + 8, mbt_ffi_extend8(payload367))
+        mbt_ffi_store8(iter_base + 8, mbt_ffi_extend8(payload370))
 
         ()
       }
-      S16Value(payload368) => {
+      S16Value(payload371) => {
         mbt_ffi_store8(iter_base + 0, 2)
-        mbt_ffi_store16(iter_base + 8, mbt_ffi_extend16(payload368))
+        mbt_ffi_store16(iter_base + 8, mbt_ffi_extend16(payload371))
 
         ()
       }
-      S32Value(payload369) => {
+      S32Value(payload372) => {
         mbt_ffi_store8(iter_base + 0, 3)
-        mbt_ffi_store32(iter_base + 8, payload369)
+        mbt_ffi_store32(iter_base + 8, payload372)
 
         ()
       }
-      S64Value(payload370) => {
+      S64Value(payload373) => {
         mbt_ffi_store8(iter_base + 0, 4)
-        mbt_ffi_store64(iter_base + 8, payload370)
+        mbt_ffi_store64(iter_base + 8, payload373)
 
         ()
       }
-      U8Value(payload371) => {
+      U8Value(payload374) => {
         mbt_ffi_store8(iter_base + 0, 5)
-        mbt_ffi_store8(iter_base + 8, payload371.to_int())
+        mbt_ffi_store8(iter_base + 8, payload374.to_int())
 
         ()
       }
-      U16Value(payload372) => {
+      U16Value(payload375) => {
         mbt_ffi_store8(iter_base + 0, 6)
-        mbt_ffi_store16(iter_base + 8, payload372.reinterpret_as_int())
+        mbt_ffi_store16(iter_base + 8, payload375.reinterpret_as_int())
 
         ()
       }
-      U32Value(payload373) => {
+      U32Value(payload376) => {
         mbt_ffi_store8(iter_base + 0, 7)
-        mbt_ffi_store32(iter_base + 8, payload373.reinterpret_as_int())
+        mbt_ffi_store32(iter_base + 8, payload376.reinterpret_as_int())
 
         ()
       }
-      U64Value(payload374) => {
+      U64Value(payload377) => {
         mbt_ffi_store8(iter_base + 0, 8)
-        mbt_ffi_store64(iter_base + 8, payload374.reinterpret_as_int64())
+        mbt_ffi_store64(iter_base + 8, payload377.reinterpret_as_int64())
 
         ()
       }
-      F32Value(payload375) => {
+      F32Value(payload378) => {
         mbt_ffi_store8(iter_base + 0, 9)
-        mbt_ffi_storef32(iter_base + 8, payload375)
+        mbt_ffi_storef32(iter_base + 8, payload378)
 
         ()
       }
-      F64Value(payload376) => {
+      F64Value(payload379) => {
         mbt_ffi_store8(iter_base + 0, 10)
-        mbt_ffi_storef64(iter_base + 8, payload376)
+        mbt_ffi_storef64(iter_base + 8, payload379)
 
         ()
       }
-      CharValue(payload377) => {
+      CharValue(payload380) => {
         mbt_ffi_store8(iter_base + 0, 11)
-        mbt_ffi_store32(iter_base + 8, payload377.to_int())
+        mbt_ffi_store32(iter_base + 8, payload380.to_int())
 
         ()
       }
-      StringValue(payload378) => {
+      StringValue(payload381) => {
         mbt_ffi_store8(iter_base + 0, 12)
 
-        let ptr379 = mbt_ffi_str2ptr(payload378)
-        mbt_ffi_store32(iter_base + 12, payload378.length())
-        mbt_ffi_store32(iter_base + 8, ptr379)
+        let ptr382 = mbt_ffi_str2ptr(payload381)
+        mbt_ffi_store32(iter_base + 12, payload381.length())
+        mbt_ffi_store32(iter_base + 8, ptr382)
+        cleanup_list.push(ptr382)
 
         ()
       }
-      RecordValue(payload380) => {
+      RecordValue(payload383) => {
         mbt_ffi_store8(iter_base + 0, 13)
 
-        let address381 = mbt_ffi_malloc(payload380.length() * 4)
-        for index382 = 0
-            index382 < payload380.length()
-            index382 = index382 + 1 {
-          let iter_elem : Int = payload380[index382]
-          let iter_base = address381 + index382 * 4
+        let address384 = mbt_ffi_malloc(payload383.length() * 4)
+        for index385 = 0
+            index385 < payload383.length()
+            index385 = index385 + 1 {
+          let iter_elem : Int = payload383[index385]
+          let iter_base = address384 + index385 * 4
           mbt_ffi_store32(iter_base + 0, iter_elem)
         }
-        mbt_ffi_store32(iter_base + 12, payload380.length())
-        mbt_ffi_store32(iter_base + 8, address381)
+        mbt_ffi_store32(iter_base + 12, payload383.length())
+        mbt_ffi_store32(iter_base + 8, address384)
+        cleanup_list.push(address384)
 
         ()
       }
-      VariantValue(payload383) => {
+      VariantValue(payload386) => {
         mbt_ffi_store8(iter_base + 0, 14)
-        mbt_ffi_store32(iter_base + 8, payload383.case.reinterpret_as_int())
+        mbt_ffi_store32(iter_base + 8, payload386.case.reinterpret_as_int())
 
-        match payload383.payload {
+        match payload386.payload {
           None => {
             mbt_ffi_store8(iter_base + 12, 0)
 
             ()
           }
-          Some(payload385) => {
+          Some(payload388) => {
             mbt_ffi_store8(iter_base + 12, 1)
-            mbt_ffi_store32(iter_base + 16, payload385)
+            mbt_ffi_store32(iter_base + 16, payload388)
 
             ()
           }
@@ -33229,46 +32431,31 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      EnumValue(payload386) => {
+      EnumValue(payload389) => {
         mbt_ffi_store8(iter_base + 0, 15)
-        mbt_ffi_store32(iter_base + 8, payload386.reinterpret_as_int())
+        mbt_ffi_store32(iter_base + 8, payload389.reinterpret_as_int())
 
         ()
       }
-      FlagsValue(payload387) => {
+      FlagsValue(payload390) => {
         mbt_ffi_store8(iter_base + 0, 16)
 
-        let address388 = mbt_ffi_malloc(payload387.length() * 1)
-        for index389 = 0
-            index389 < payload387.length()
-            index389 = index389 + 1 {
-          let iter_elem : Bool = payload387[index389]
-          let iter_base = address388 + index389 * 1
-          mbt_ffi_store8(iter_base + 0, if iter_elem { 1 } else { 0 })
-        }
-        mbt_ffi_store32(iter_base + 12, payload387.length())
-        mbt_ffi_store32(iter_base + 8, address388)
-
-        ()
-      }
-      TupleValue(payload390) => {
-        mbt_ffi_store8(iter_base + 0, 17)
-
-        let address391 = mbt_ffi_malloc(payload390.length() * 4)
+        let address391 = mbt_ffi_malloc(payload390.length() * 1)
         for index392 = 0
             index392 < payload390.length()
             index392 = index392 + 1 {
-          let iter_elem : Int = payload390[index392]
-          let iter_base = address391 + index392 * 4
-          mbt_ffi_store32(iter_base + 0, iter_elem)
+          let iter_elem : Bool = payload390[index392]
+          let iter_base = address391 + index392 * 1
+          mbt_ffi_store8(iter_base + 0, if iter_elem { 1 } else { 0 })
         }
         mbt_ffi_store32(iter_base + 12, payload390.length())
         mbt_ffi_store32(iter_base + 8, address391)
+        cleanup_list.push(address391)
 
         ()
       }
-      ListValue(payload393) => {
-        mbt_ffi_store8(iter_base + 0, 18)
+      TupleValue(payload393) => {
+        mbt_ffi_store8(iter_base + 0, 17)
 
         let address394 = mbt_ffi_malloc(payload393.length() * 4)
         for index395 = 0
@@ -33280,11 +32467,12 @@ pub async fn ToolRpc::async_invoke_and_await(
         }
         mbt_ffi_store32(iter_base + 12, payload393.length())
         mbt_ffi_store32(iter_base + 8, address394)
+        cleanup_list.push(address394)
 
         ()
       }
-      FixedListValue(payload396) => {
-        mbt_ffi_store8(iter_base + 0, 19)
+      ListValue(payload396) => {
+        mbt_ffi_store8(iter_base + 0, 18)
 
         let address397 = mbt_ffi_malloc(payload396.length() * 4)
         for index398 = 0
@@ -33296,38 +32484,57 @@ pub async fn ToolRpc::async_invoke_and_await(
         }
         mbt_ffi_store32(iter_base + 12, payload396.length())
         mbt_ffi_store32(iter_base + 8, address397)
+        cleanup_list.push(address397)
 
         ()
       }
-      MapValue(payload399) => {
-        mbt_ffi_store8(iter_base + 0, 20)
+      FixedListValue(payload399) => {
+        mbt_ffi_store8(iter_base + 0, 19)
 
-        let address400 = mbt_ffi_malloc(payload399.length() * 8)
+        let address400 = mbt_ffi_malloc(payload399.length() * 4)
         for index401 = 0
             index401 < payload399.length()
             index401 = index401 + 1 {
-          let iter_elem : @types.MapEntry = payload399[index401]
-          let iter_base = address400 + index401 * 8
-          mbt_ffi_store32(iter_base + 0, iter_elem.key)
-          mbt_ffi_store32(iter_base + 4, iter_elem.value)
+          let iter_elem : Int = payload399[index401]
+          let iter_base = address400 + index401 * 4
+          mbt_ffi_store32(iter_base + 0, iter_elem)
         }
         mbt_ffi_store32(iter_base + 12, payload399.length())
         mbt_ffi_store32(iter_base + 8, address400)
+        cleanup_list.push(address400)
 
         ()
       }
-      OptionValue(payload402) => {
+      MapValue(payload402) => {
+        mbt_ffi_store8(iter_base + 0, 20)
+
+        let address403 = mbt_ffi_malloc(payload402.length() * 8)
+        for index404 = 0
+            index404 < payload402.length()
+            index404 = index404 + 1 {
+          let iter_elem : @types.MapEntry = payload402[index404]
+          let iter_base = address403 + index404 * 8
+          mbt_ffi_store32(iter_base + 0, iter_elem.key)
+          mbt_ffi_store32(iter_base + 4, iter_elem.value)
+        }
+        mbt_ffi_store32(iter_base + 12, payload402.length())
+        mbt_ffi_store32(iter_base + 8, address403)
+        cleanup_list.push(address403)
+
+        ()
+      }
+      OptionValue(payload405) => {
         mbt_ffi_store8(iter_base + 0, 21)
 
-        match payload402 {
+        match payload405 {
           None => {
             mbt_ffi_store8(iter_base + 8, 0)
 
             ()
           }
-          Some(payload404) => {
+          Some(payload407) => {
             mbt_ffi_store8(iter_base + 8, 1)
-            mbt_ffi_store32(iter_base + 12, payload404)
+            mbt_ffi_store32(iter_base + 12, payload407)
 
             ()
           }
@@ -33335,31 +32542,12 @@ pub async fn ToolRpc::async_invoke_and_await(
 
         ()
       }
-      ResultValue(payload405) => {
+      ResultValue(payload408) => {
         mbt_ffi_store8(iter_base + 0, 22)
 
-        match payload405 {
-          OkValue(payload406) => {
+        match payload408 {
+          OkValue(payload409) => {
             mbt_ffi_store8(iter_base + 8, 0)
-
-            match payload406 {
-              None => {
-                mbt_ffi_store8(iter_base + 12, 0)
-
-                ()
-              }
-              Some(payload408) => {
-                mbt_ffi_store8(iter_base + 12, 1)
-                mbt_ffi_store32(iter_base + 16, payload408)
-
-                ()
-              }
-            }
-
-            ()
-          }
-          ErrValue(payload409) => {
-            mbt_ffi_store8(iter_base + 8, 1)
 
             match payload409 {
               None => {
@@ -33377,1368 +32565,227 @@ pub async fn ToolRpc::async_invoke_and_await(
 
             ()
           }
+          ErrValue(payload412) => {
+            mbt_ffi_store8(iter_base + 8, 1)
+
+            match payload412 {
+              None => {
+                mbt_ffi_store8(iter_base + 12, 0)
+
+                ()
+              }
+              Some(payload414) => {
+                mbt_ffi_store8(iter_base + 12, 1)
+                mbt_ffi_store32(iter_base + 16, payload414)
+
+                ()
+              }
+            }
+
+            ()
+          }
         }
 
         ()
       }
-      TextValue(payload412) => {
+      TextValue(payload415) => {
         mbt_ffi_store8(iter_base + 0, 23)
 
-        let ptr413 = mbt_ffi_str2ptr(payload412.text)
-        mbt_ffi_store32(iter_base + 12, payload412.text.length())
-        mbt_ffi_store32(iter_base + 8, ptr413)
+        let ptr416 = mbt_ffi_str2ptr(payload415.text)
+        mbt_ffi_store32(iter_base + 12, payload415.text.length())
+        mbt_ffi_store32(iter_base + 8, ptr416)
 
-        match payload412.language {
+        match payload415.language {
           None => {
             mbt_ffi_store8(iter_base + 16, 0)
 
             ()
           }
-          Some(payload415) => {
+          Some(payload418) => {
             mbt_ffi_store8(iter_base + 16, 1)
 
-            let ptr416 = mbt_ffi_str2ptr(payload415)
-            mbt_ffi_store32(iter_base + 24, payload415.length())
-            mbt_ffi_store32(iter_base + 20, ptr416)
+            let ptr419 = mbt_ffi_str2ptr(payload418)
+            mbt_ffi_store32(iter_base + 24, payload418.length())
+            mbt_ffi_store32(iter_base + 20, ptr419)
+            cleanup_list.push(ptr419)
 
             ()
           }
         }
+        cleanup_list.push(ptr416)
 
         ()
       }
-      BinaryValue(payload417) => {
+      BinaryValue(payload420) => {
         mbt_ffi_store8(iter_base + 0, 24)
 
-        let ptr418 = mbt_ffi_bytes2ptr(payload417.bytes)
+        let ptr421 = mbt_ffi_bytes2ptr(payload420.bytes)
 
-        mbt_ffi_store32(iter_base + 12, payload417.bytes.length())
-        mbt_ffi_store32(iter_base + 8, ptr418)
+        mbt_ffi_store32(iter_base + 12, payload420.bytes.length())
+        mbt_ffi_store32(iter_base + 8, ptr421)
 
-        match payload417.mime_type {
+        match payload420.mime_type {
           None => {
             mbt_ffi_store8(iter_base + 16, 0)
 
             ()
           }
-          Some(payload420) => {
+          Some(payload423) => {
             mbt_ffi_store8(iter_base + 16, 1)
 
-            let ptr421 = mbt_ffi_str2ptr(payload420)
-            mbt_ffi_store32(iter_base + 24, payload420.length())
-            mbt_ffi_store32(iter_base + 20, ptr421)
+            let ptr424 = mbt_ffi_str2ptr(payload423)
+            mbt_ffi_store32(iter_base + 24, payload423.length())
+            mbt_ffi_store32(iter_base + 20, ptr424)
+            cleanup_list.push(ptr424)
 
             ()
           }
         }
+        cleanup_list.push(ptr421)
 
         ()
       }
-      PathValue(payload422) => {
+      PathValue(payload425) => {
         mbt_ffi_store8(iter_base + 0, 25)
 
-        let ptr423 = mbt_ffi_str2ptr(payload422)
-        mbt_ffi_store32(iter_base + 12, payload422.length())
-        mbt_ffi_store32(iter_base + 8, ptr423)
+        let ptr426 = mbt_ffi_str2ptr(payload425)
+        mbt_ffi_store32(iter_base + 12, payload425.length())
+        mbt_ffi_store32(iter_base + 8, ptr426)
+        cleanup_list.push(ptr426)
 
         ()
       }
-      UrlValue(payload424) => {
+      UrlValue(payload427) => {
         mbt_ffi_store8(iter_base + 0, 26)
 
-        let ptr425 = mbt_ffi_str2ptr(payload424)
-        mbt_ffi_store32(iter_base + 12, payload424.length())
-        mbt_ffi_store32(iter_base + 8, ptr425)
+        let ptr428 = mbt_ffi_str2ptr(payload427)
+        mbt_ffi_store32(iter_base + 12, payload427.length())
+        mbt_ffi_store32(iter_base + 8, ptr428)
+        cleanup_list.push(ptr428)
 
         ()
       }
-      DatetimeValue(payload426) => {
+      DatetimeValue(payload429) => {
         mbt_ffi_store8(iter_base + 0, 27)
-        mbt_ffi_store64(iter_base + 8, payload426.seconds)
+        mbt_ffi_store64(iter_base + 8, payload429.seconds)
         mbt_ffi_store32(
           iter_base + 16,
-          payload426.nanoseconds.reinterpret_as_int(),
+          payload429.nanoseconds.reinterpret_as_int(),
         )
 
         ()
       }
-      DurationValue(payload427) => {
+      DurationValue(payload430) => {
         mbt_ffi_store8(iter_base + 0, 28)
-        mbt_ffi_store64(iter_base + 8, payload427.nanoseconds)
+        mbt_ffi_store64(iter_base + 8, payload430.nanoseconds)
 
         ()
       }
-      QuantityValueNode(payload428) => {
+      QuantityValueNode(payload431) => {
         mbt_ffi_store8(iter_base + 0, 29)
-        mbt_ffi_store64(iter_base + 8, payload428.mantissa)
-        mbt_ffi_store32(iter_base + 16, payload428.scale)
+        mbt_ffi_store64(iter_base + 8, payload431.mantissa)
+        mbt_ffi_store32(iter_base + 16, payload431.scale)
 
-        let ptr429 = mbt_ffi_str2ptr(payload428.unit)
-        mbt_ffi_store32(iter_base + 24, payload428.unit.length())
-        mbt_ffi_store32(iter_base + 20, ptr429)
+        let ptr432 = mbt_ffi_str2ptr(payload431.unit)
+        mbt_ffi_store32(iter_base + 24, payload431.unit.length())
+        mbt_ffi_store32(iter_base + 20, ptr432)
+        cleanup_list.push(ptr432)
 
         ()
       }
-      UnionValue(payload430) => {
+      UnionValue(payload433) => {
         mbt_ffi_store8(iter_base + 0, 30)
 
-        let ptr431 = mbt_ffi_str2ptr(payload430.tag)
-        mbt_ffi_store32(iter_base + 12, payload430.tag.length())
-        mbt_ffi_store32(iter_base + 8, ptr431)
-        mbt_ffi_store32(iter_base + 16, payload430.body)
+        let ptr434 = mbt_ffi_str2ptr(payload433.tag)
+        mbt_ffi_store32(iter_base + 12, payload433.tag.length())
+        mbt_ffi_store32(iter_base + 8, ptr434)
+        mbt_ffi_store32(iter_base + 16, payload433.body)
+        cleanup_list.push(ptr434)
 
         ()
       }
-      SecretValue(payload432) => {
+      SecretValue(payload435) => {
         mbt_ffi_store8(iter_base + 0, 31)
 
-        let @types.Secret(handle) = payload432
-        mbt_ffi_store32(iter_base + 8, handle)
-
-        ()
-      }
-      QuotaTokenHandle(payload433) => {
-        mbt_ffi_store8(iter_base + 0, 32)
-
-        let @types.QuotaToken(handle434) = payload433
-        mbt_ffi_store32(iter_base + 8, handle434)
-
-        ()
-      }
-      PermissionCardHandle(payload435) => {
-        mbt_ffi_store8(iter_base + 0, 33)
-
-        let @types.PermissionCard(handle436) = payload435
+        let @types.Secret(handle436) = payload435
         mbt_ffi_store32(iter_base + 8, handle436)
 
         ()
       }
-      StreamValue(payload437) => {
+      QuotaTokenHandle(payload437) => {
+        mbt_ffi_store8(iter_base + 0, 32)
+
+        let @types.QuotaToken(handle438) = payload437
+        mbt_ffi_store32(iter_base + 8, handle438)
+
+        ()
+      }
+      PermissionCardHandle(payload439) => {
+        mbt_ffi_store8(iter_base + 0, 33)
+
+        let @types.PermissionCard(handle440) = payload439
+        mbt_ffi_store32(iter_base + 8, handle440)
+
+        ()
+      }
+      StreamValue(payload441) => {
         mbt_ffi_store8(iter_base + 0, 34)
 
-        let @types.SchemaValueStream(handle438) = payload437
-        mbt_ffi_store32(iter_base + 8, handle438)
+        let @types.SchemaValueStream(handle442) = payload441
+        mbt_ffi_store32(iter_base + 8, handle442)
 
         ()
       }
     }
   }
-  mbt_ffi_store32(lower_ptr + 12 + 24, input.value.value_nodes.length())
-  mbt_ffi_store32(lower_ptr + 12 + 20, address439)
-  mbt_ffi_store32(lower_ptr + 12 + 28, input.value.root)
 
-  match stdin {
-    None => {
-      mbt_ffi_store8(lower_ptr + 44 + 0, 0)
+  let (lowered, lowered448) = match stdin {
+    None => (0, 0)
+    Some(payload446) => {
+      let ToolStdin(handle447) = payload446
 
-      ()
-    }
-    Some(payload0) => {
-      mbt_ffi_store8(lower_ptr + 44 + 0, 1)
-      mbt_ffi_store32(
-        lower_ptr + 44 + 4,
-        wasmGolemToolHost010MethodToolRpcAsyncInvokeAndAwaitStream0StreamLower(
-          payload0,
-        ),
-      )
-
-      ()
+      (1, handle447)
     }
   }
 
-  let result_ptr = mbt_ffi_malloc(4 * 1)
-  defer mbt_ffi_free(result_ptr)
+  let (lowered452, lowered453) = match stdout {
+    None => (0, 0)
+    Some(payload450) => {
+      let ToolStdout(handle451) = payload450
 
-  let subtask_code = wasmImportMethodToolRpcAsyncInvokeAndAwait(
-    lower_ptr, result_ptr,
+      (1, handle451)
+    }
+  }
+  let result : Int = wasmImportMethodToolRpcAsyncInvokeAndAwait(
+    handle,
+    address,
+    command_path.length(),
+    address361,
+    input.graph.type_nodes.length(),
+    address367,
+    input.graph.defs.length(),
+    input.graph.root,
+    address443,
+    input.value.value_nodes.length(),
+    input.value.root,
+    lowered,
+    lowered448,
+    lowered452,
+    lowered453,
   )
-  @async-core.suspend_for_subtask(
-    subtask_code,
-    fn(before_started) {
-      if before_started {
-        for index = 0; index < mbt_ffi_load32(lower_ptr + 8); index = index + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 4) + index * 8
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 4))
-
-        for index20 = 0
-            index20 < mbt_ffi_load32(lower_ptr + 16)
-            index20 = index20 + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 12) + index20 * 144
-
-          match mbt_ffi_load8_u(iter_base + 0) {
-            0 => ()
-            1 => ()
-            2 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            3 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            4 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            5 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            6 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            7 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            8 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            9 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            10 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            11 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            12 => ()
-            13 => ()
-            14 => {
-              for index2 = 0
-                  index2 < mbt_ffi_load32(iter_base + 12)
-                  index2 = index2 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index2 * 68
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                match mbt_ffi_load8_u(iter_base + 12) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  _ => panic()
-                }
-
-                for index0 = 0
-                    index0 < mbt_ffi_load32(iter_base + 28)
-                    index0 = index0 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 24) + index0 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-
-                for index1 = 0
-                    index1 < mbt_ffi_load32(iter_base + 36)
-                    index1 = index1 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index1 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
-
-                match mbt_ffi_load8_u(iter_base + 40) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 52) {
-                  0 => ()
-                  1 =>
-                    match mbt_ffi_load8_u(iter_base + 56) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
-                      _ => panic()
-                    }
-                  _ => panic()
-                }
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            15 => {
-              for index5 = 0
-                  index5 < mbt_ffi_load32(iter_base + 12)
-                  index5 = index5 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index5 * 72
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                match mbt_ffi_load8_u(iter_base + 16) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                  _ => panic()
-                }
-
-                for index3 = 0
-                    index3 < mbt_ffi_load32(iter_base + 32)
-                    index3 = index3 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 28) + index3 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-
-                for index4 = 0
-                    index4 < mbt_ffi_load32(iter_base + 40)
-                    index4 = index4 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 36) + index4 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
-
-                match mbt_ffi_load8_u(iter_base + 44) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 56) {
-                  0 => ()
-                  1 =>
-                    match mbt_ffi_load8_u(iter_base + 60) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
-                      _ => panic()
-                    }
-                  _ => panic()
-                }
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            16 => {
-              for index6 = 0
-                  index6 < mbt_ffi_load32(iter_base + 12)
-                  index6 = index6 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index6 * 8
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            17 => {
-              for index7 = 0
-                  index7 < mbt_ffi_load32(iter_base + 12)
-                  index7 = index7 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index7 * 8
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            19 => ()
-            20 => ()
-            21 => ()
-            22 => ()
-            23 => ()
-            24 => {
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => {
-                  for index8 = 0
-                      index8 < mbt_ffi_load32(iter_base + 16)
-                      index8 = index8 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index8 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                }
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 36) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
-                _ => panic()
-              }
-            }
-            25 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => {
-                  for index9 = 0
-                      index9 < mbt_ffi_load32(iter_base + 16)
-                      index9 = index9 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index9 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                }
-                _ => panic()
-              }
-            26 => {
-              match mbt_ffi_load8_u(iter_base + 12) {
-                0 => ()
-                1 => {
-                  for index10 = 0
-                      index10 < mbt_ffi_load32(iter_base + 20)
-                      index10 = index10 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 16) + index10 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                }
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 24) {
-                0 => ()
-                1 => {
-                  for index11 = 0
-                      index11 < mbt_ffi_load32(iter_base + 32)
-                      index11 = index11 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 28) + index11 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-                }
-                _ => panic()
-              }
-            }
-            27 => {
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => {
-                  for index12 = 0
-                      index12 < mbt_ffi_load32(iter_base + 16)
-                      index12 = index12 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index12 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                }
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 20) {
-                0 => ()
-                1 => {
-                  for index13 = 0
-                      index13 < mbt_ffi_load32(iter_base + 28)
-                      index13 = index13 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 24) + index13 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-                }
-                _ => panic()
-              }
-            }
-            28 => ()
-            29 => ()
-            30 => {
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-              for index14 = 0
-                  index14 < mbt_ffi_load32(iter_base + 20)
-                  index14 = index14 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 16) + index14 * 8
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-
-              match mbt_ffi_load8_u(iter_base + 24) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 56) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 76))
-                _ => panic()
-              }
-            }
-            31 => {
-              for index17 = 0
-                  index17 < mbt_ffi_load32(iter_base + 12)
-                  index17 = index17 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index17 * 92
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                match mbt_ffi_load8_u(iter_base + 12) {
-                  0 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  2 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  4 => {
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-
-                    match mbt_ffi_load8_u(iter_base + 24) {
-                      0 => ()
-                      1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-                      _ => panic()
-                    }
-                  }
-                  5 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 36) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
-                  _ => panic()
-                }
-
-                for index15 = 0
-                    index15 < mbt_ffi_load32(iter_base + 52)
-                    index15 = index15 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 48) + index15 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
-
-                for index16 = 0
-                    index16 < mbt_ffi_load32(iter_base + 60)
-                    index16 = index16 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 56) + index16 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
-
-                match mbt_ffi_load8_u(iter_base + 64) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 76) {
-                  0 => ()
-                  1 =>
-                    match mbt_ffi_load8_u(iter_base + 80) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
-                      _ => panic()
-                    }
-                  _ => panic()
-                }
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            32 =>
-              match mbt_ffi_load8_u(iter_base + 12) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                _ => panic()
-              }
-            33 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                _ => panic()
-              }
-            34 => ()
-            35 => ()
-            36 => ()
-            _ => panic()
-          }
-
-          match mbt_ffi_load8_u(iter_base + 88) {
-            0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 92))
-            _ => panic()
-          }
-
-          for index18 = 0
-              index18 < mbt_ffi_load32(iter_base + 104)
-              index18 = index18 + 1 {
-            let iter_base = mbt_ffi_load32(iter_base + 100) + index18 * 8
-            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-          }
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
-
-          for index19 = 0
-              index19 < mbt_ffi_load32(iter_base + 112)
-              index19 = index19 + 1 {
-            let iter_base = mbt_ffi_load32(iter_base + 108) + index19 * 8
-            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-          }
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
-
-          match mbt_ffi_load8_u(iter_base + 116) {
-            0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 120))
-            _ => panic()
-          }
-
-          match mbt_ffi_load8_u(iter_base + 128) {
-            0 => ()
-            1 =>
-              match mbt_ffi_load8_u(iter_base + 132) {
-                0 => ()
-                1 => ()
-                2 => ()
-                3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
-                _ => panic()
-              }
-            _ => panic()
-          }
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 12))
-
-        for index21 = 0
-            index21 < mbt_ffi_load32(lower_ptr + 24)
-            index21 = index21 + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 20) + index21 * 24
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-          match mbt_ffi_load8_u(iter_base + 8) {
-            0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-            _ => panic()
-          }
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 20))
-
-        for index22 = 0
-            index22 < mbt_ffi_load32(lower_ptr + 36)
-            index22 = index22 + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 32) + index22 * 32
-
-          match mbt_ffi_load8_u(iter_base + 0) {
-            0 => ()
-            1 => ()
-            2 => ()
-            3 => ()
-            4 => ()
-            5 => ()
-            6 => ()
-            7 => ()
-            8 => ()
-            9 => ()
-            10 => ()
-            11 => ()
-            12 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            13 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            14 => ()
-            15 => ()
-            16 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            17 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            19 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            20 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            21 => ()
-            22 => ()
-            23 => {
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-              match mbt_ffi_load8_u(iter_base + 16) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                _ => panic()
-              }
-            }
-            24 => {
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-              match mbt_ffi_load8_u(iter_base + 16) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                _ => panic()
-              }
-            }
-            25 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            27 => ()
-            28 => ()
-            29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            31 => @types.Secret::Secret(mbt_ffi_load32(iter_base + 8)).drop()
-            32 =>
-              @types.QuotaToken::QuotaToken(mbt_ffi_load32(iter_base + 8)).drop()
-            33 =>
-              @types.PermissionCard::PermissionCard(
-                mbt_ffi_load32(iter_base + 8),
-              ).drop()
-            34 =>
-              @types.SchemaValueStream::SchemaValueStream(
-                mbt_ffi_load32(iter_base + 8),
-              ).drop()
-            _ => panic()
-          }
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 32))
-
-        match mbt_ffi_load8_u(lower_ptr + 44) {
-          0 => ()
-          1 => {
-            let result = wasmGolemToolHost010MethodToolRpcAsyncInvokeAndAwaitStream0StreamLift(
-              mbt_ffi_load32(lower_ptr + 48),
-            )
-            result.drop_sync()
-          }
-          _ => panic()
-        }
-      } else {
-        for index = 0; index < mbt_ffi_load32(lower_ptr + 8); index = index + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 4) + index * 8
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 4))
-
-        for index20 = 0
-            index20 < mbt_ffi_load32(lower_ptr + 16)
-            index20 = index20 + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 12) + index20 * 144
-
-          match mbt_ffi_load8_u(iter_base + 0) {
-            0 => ()
-            1 => ()
-            2 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            3 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            4 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            5 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            6 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            7 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            8 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            9 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            10 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            11 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 =>
-                  match mbt_ffi_load8_u(iter_base + 64) {
-                    0 => ()
-                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                    _ => panic()
-                  }
-                _ => panic()
-              }
-            12 => ()
-            13 => ()
-            14 => {
-              for index2 = 0
-                  index2 < mbt_ffi_load32(iter_base + 12)
-                  index2 = index2 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index2 * 68
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                match mbt_ffi_load8_u(iter_base + 12) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  _ => panic()
-                }
-
-                for index0 = 0
-                    index0 < mbt_ffi_load32(iter_base + 28)
-                    index0 = index0 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 24) + index0 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-
-                for index1 = 0
-                    index1 < mbt_ffi_load32(iter_base + 36)
-                    index1 = index1 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 32) + index1 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
-
-                match mbt_ffi_load8_u(iter_base + 40) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 52) {
-                  0 => ()
-                  1 =>
-                    match mbt_ffi_load8_u(iter_base + 56) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
-                      _ => panic()
-                    }
-                  _ => panic()
-                }
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            15 => {
-              for index5 = 0
-                  index5 < mbt_ffi_load32(iter_base + 12)
-                  index5 = index5 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index5 * 72
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                match mbt_ffi_load8_u(iter_base + 16) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                  _ => panic()
-                }
-
-                for index3 = 0
-                    index3 < mbt_ffi_load32(iter_base + 32)
-                    index3 = index3 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 28) + index3 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-
-                for index4 = 0
-                    index4 < mbt_ffi_load32(iter_base + 40)
-                    index4 = index4 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 36) + index4 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
-
-                match mbt_ffi_load8_u(iter_base + 44) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 56) {
-                  0 => ()
-                  1 =>
-                    match mbt_ffi_load8_u(iter_base + 60) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
-                      _ => panic()
-                    }
-                  _ => panic()
-                }
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            16 => {
-              for index6 = 0
-                  index6 < mbt_ffi_load32(iter_base + 12)
-                  index6 = index6 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index6 * 8
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            17 => {
-              for index7 = 0
-                  index7 < mbt_ffi_load32(iter_base + 12)
-                  index7 = index7 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index7 * 8
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            19 => ()
-            20 => ()
-            21 => ()
-            22 => ()
-            23 => ()
-            24 => {
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => {
-                  for index8 = 0
-                      index8 < mbt_ffi_load32(iter_base + 16)
-                      index8 = index8 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index8 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                }
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 36) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
-                _ => panic()
-              }
-            }
-            25 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => {
-                  for index9 = 0
-                      index9 < mbt_ffi_load32(iter_base + 16)
-                      index9 = index9 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index9 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                }
-                _ => panic()
-              }
-            26 => {
-              match mbt_ffi_load8_u(iter_base + 12) {
-                0 => ()
-                1 => {
-                  for index10 = 0
-                      index10 < mbt_ffi_load32(iter_base + 20)
-                      index10 = index10 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 16) + index10 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                }
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 24) {
-                0 => ()
-                1 => {
-                  for index11 = 0
-                      index11 < mbt_ffi_load32(iter_base + 32)
-                      index11 = index11 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 28) + index11 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-                }
-                _ => panic()
-              }
-            }
-            27 => {
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => {
-                  for index12 = 0
-                      index12 < mbt_ffi_load32(iter_base + 16)
-                      index12 = index12 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 12) + index12 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                }
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 20) {
-                0 => ()
-                1 => {
-                  for index13 = 0
-                      index13 < mbt_ffi_load32(iter_base + 28)
-                      index13 = index13 + 1 {
-                    let iter_base = mbt_ffi_load32(iter_base + 24) + index13 * 8
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                  }
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
-                }
-                _ => panic()
-              }
-            }
-            28 => ()
-            29 => ()
-            30 => {
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-              for index14 = 0
-                  index14 < mbt_ffi_load32(iter_base + 20)
-                  index14 = index14 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 16) + index14 * 8
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-
-              match mbt_ffi_load8_u(iter_base + 24) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
-                _ => panic()
-              }
-
-              match mbt_ffi_load8_u(iter_base + 56) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 76))
-                _ => panic()
-              }
-            }
-            31 => {
-              for index17 = 0
-                  index17 < mbt_ffi_load32(iter_base + 12)
-                  index17 = index17 + 1 {
-                let iter_base = mbt_ffi_load32(iter_base + 8) + index17 * 92
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-                match mbt_ffi_load8_u(iter_base + 12) {
-                  0 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  2 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  4 => {
-                    mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-
-                    match mbt_ffi_load8_u(iter_base + 24) {
-                      0 => ()
-                      1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
-                      _ => panic()
-                    }
-                  }
-                  5 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 36) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
-                  _ => panic()
-                }
-
-                for index15 = 0
-                    index15 < mbt_ffi_load32(iter_base + 52)
-                    index15 = index15 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 48) + index15 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
-
-                for index16 = 0
-                    index16 < mbt_ffi_load32(iter_base + 60)
-                    index16 = index16 + 1 {
-                  let iter_base = mbt_ffi_load32(iter_base + 56) + index16 * 8
-                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-                }
-                mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
-
-                match mbt_ffi_load8_u(iter_base + 64) {
-                  0 => ()
-                  1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
-                  _ => panic()
-                }
-
-                match mbt_ffi_load8_u(iter_base + 76) {
-                  0 => ()
-                  1 =>
-                    match mbt_ffi_load8_u(iter_base + 80) {
-                      0 => ()
-                      1 => ()
-                      2 => ()
-                      3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
-                      _ => panic()
-                    }
-                  _ => panic()
-                }
-              }
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            }
-            32 =>
-              match mbt_ffi_load8_u(iter_base + 12) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
-                _ => panic()
-              }
-            33 =>
-              match mbt_ffi_load8_u(iter_base + 8) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-                _ => panic()
-              }
-            34 => ()
-            35 => ()
-            36 => ()
-            _ => panic()
-          }
-
-          match mbt_ffi_load8_u(iter_base + 88) {
-            0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 92))
-            _ => panic()
-          }
-
-          for index18 = 0
-              index18 < mbt_ffi_load32(iter_base + 104)
-              index18 = index18 + 1 {
-            let iter_base = mbt_ffi_load32(iter_base + 100) + index18 * 8
-            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-          }
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
-
-          for index19 = 0
-              index19 < mbt_ffi_load32(iter_base + 112)
-              index19 = index19 + 1 {
-            let iter_base = mbt_ffi_load32(iter_base + 108) + index19 * 8
-            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-          }
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
-
-          match mbt_ffi_load8_u(iter_base + 116) {
-            0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 120))
-            _ => panic()
-          }
-
-          match mbt_ffi_load8_u(iter_base + 128) {
-            0 => ()
-            1 =>
-              match mbt_ffi_load8_u(iter_base + 132) {
-                0 => ()
-                1 => ()
-                2 => ()
-                3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
-                _ => panic()
-              }
-            _ => panic()
-          }
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 12))
-
-        for index21 = 0
-            index21 < mbt_ffi_load32(lower_ptr + 24)
-            index21 = index21 + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 20) + index21 * 24
-          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
-
-          match mbt_ffi_load8_u(iter_base + 8) {
-            0 => ()
-            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
-            _ => panic()
-          }
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 20))
-
-        for index22 = 0
-            index22 < mbt_ffi_load32(lower_ptr + 36)
-            index22 = index22 + 1 {
-          let iter_base = mbt_ffi_load32(lower_ptr + 32) + index22 * 32
-
-          match mbt_ffi_load8_u(iter_base + 0) {
-            0 => ()
-            1 => ()
-            2 => ()
-            3 => ()
-            4 => ()
-            5 => ()
-            6 => ()
-            7 => ()
-            8 => ()
-            9 => ()
-            10 => ()
-            11 => ()
-            12 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            13 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            14 => ()
-            15 => ()
-            16 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            17 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            19 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            20 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            21 => ()
-            22 => ()
-            23 => {
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-              match mbt_ffi_load8_u(iter_base + 16) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                _ => panic()
-              }
-            }
-            24 => {
-              mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-
-              match mbt_ffi_load8_u(iter_base + 16) {
-                0 => ()
-                1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-                _ => panic()
-              }
-            }
-            25 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            27 => ()
-            28 => ()
-            29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
-            30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
-            31 => ()
-            32 => ()
-            33 => ()
-            34 => ()
-            _ => panic()
-          }
-        }
-        mbt_ffi_free(mbt_ffi_load32(lower_ptr + 32))
-
-        match mbt_ffi_load8_u(lower_ptr + 44) {
-          0 => ()
-          1 =>
-            wasmGolemToolHost010MethodToolRpcAsyncInvokeAndAwaitStream0StreamCommit(
-              mbt_ffi_load32(lower_ptr + 48),
-            )
-          _ => panic()
-        }
-      }
-    },
-    fn() {
-      FutureInvokeResult::FutureInvokeResult(mbt_ffi_load32(result_ptr + 0)).drop()
-    },
-  )
-
-  FutureInvokeResult::FutureInvokeResult(mbt_ffi_load32(result_ptr + 0))
+  let ret = FutureInvokeResult::FutureInvokeResult(result)
+  mbt_ffi_free(address)
+  mbt_ffi_free(address361)
+  mbt_ffi_free(address367)
+  mbt_ffi_free(address443)
+
+  cleanup_list.each(mbt_ffi_free)
+  return ret
 }
 
 ///|
+/// Sequential calls return the same immutable terminal. Only one call may
+/// be outstanding at a time.
 pub async fn FutureInvokeResult::get(
   self : FutureInvokeResult,
 ) -> Result[@common.InvocationResult, RpcError] {
@@ -35994,6 +34041,8 @@ pub async fn FutureInvokeResult::get(
                 }
                 _ => panic()
               }
+            5 => ()
+            6 => mbt_ffi_free(mbt_ffi_load32(result_ptr + 8))
             _ => panic()
           }
         _ => panic()
@@ -36001,7 +34050,7 @@ pub async fn FutureInvokeResult::get(
     },
   )
 
-  let lifted480 = match mbt_ffi_load8_u(result_ptr + 0) {
+  let lifted481 = match mbt_ffi_load8_u(result_ptr + 0) {
     0 => {
       let lifted230 : @types.TypedSchemaValue? = match
         mbt_ffi_load8_u(result_ptr + 4) {
@@ -38138,7 +36187,7 @@ pub async fn FutureInvokeResult::get(
       })
     }
     1 => {
-      let lifted479 = match mbt_ffi_load8_u(result_ptr + 4) {
+      let lifted480 = match mbt_ffi_load8_u(result_ptr + 4) {
         0 => {
           let result233 = mbt_ffi_ptr2str(
             mbt_ffi_load32(result_ptr + 8),
@@ -40416,19 +38465,5808 @@ pub async fn FutureInvokeResult::get(
 
           RpcError::RemoteToolError(lifted478)
         }
+        5 => RpcError::Cancelled
+        6 => {
+          let result479 = mbt_ffi_ptr2str(
+            mbt_ffi_load32(result_ptr + 8),
+            mbt_ffi_load32(result_ptr + 12),
+          )
+
+          RpcError::ResourceExhausted(result479)
+        }
         _ => panic()
       }
 
-      Result::Err(lifted479)
+      Result::Err(lifted480)
     }
     _ => panic()
   }
 
-  lifted480
+  lifted481
 }
 
 ///|
+/// Explicitly cancels the operation. Dropping this resource only detaches
+/// result observation and does not cancel accepted work.
 pub fn FutureInvokeResult::cancel(self : FutureInvokeResult) -> Unit {
   let FutureInvokeResult(handle) = self
   wasmImportMethodFutureInvokeResultCancel(handle)
+}
+
+///|
+/// Waits for an explicit set of result observers as one causal batch. The
+/// input order controls the result order; filesystem-capable bodies become
+/// eligible together and execute in durable Start order.
+pub async fn get_invoke_results(
+  futures : Array[FutureInvokeResult],
+) -> Array[Result[@common.InvocationResult, RpcError]] {
+  let address = mbt_ffi_malloc(futures.length() * 4)
+  for index = 0; index < futures.length(); index = index + 1 {
+    let iter_elem : FutureInvokeResult = futures[index]
+    let iter_base = address + index * 4
+
+    let FutureInvokeResult(handle) = iter_elem
+    mbt_ffi_store32(iter_base + 0, handle)
+  }
+
+  let lower_arg = address
+  let lower_arg0 = futures.length()
+  let result_ptr = mbt_ffi_malloc(8 * 1)
+  defer mbt_ffi_free(result_ptr)
+
+  let subtask_code = wasmImportGetInvokeResults(
+    lower_arg, lower_arg0, result_ptr,
+  )
+  @async-core.suspend_for_subtask(
+    subtask_code,
+    fn(before_started) {
+      if before_started {
+        mbt_ffi_free(lower_arg)
+      } else {
+        mbt_ffi_free(lower_arg)
+      }
+    },
+    fn() {
+      for index46 = 0
+          index46 < mbt_ffi_load32(result_ptr + 4)
+          index46 = index46 + 1 {
+        let iter_base = mbt_ffi_load32(result_ptr + 0) + index46 * 48
+
+        match mbt_ffi_load8_u(iter_base + 0) {
+          0 => {
+            match mbt_ffi_load8_u(iter_base + 4) {
+              0 => ()
+              1 => {
+                for index19 = 0
+                    index19 < mbt_ffi_load32(iter_base + 12)
+                    index19 = index19 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 8) + index19 * 144
+
+                  match mbt_ffi_load8_u(iter_base + 0) {
+                    0 => ()
+                    1 => ()
+                    2 =>
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 =>
+                          match mbt_ffi_load8_u(iter_base + 64) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                            _ => panic()
+                          }
+                        _ => panic()
+                      }
+                    3 =>
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 =>
+                          match mbt_ffi_load8_u(iter_base + 64) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                            _ => panic()
+                          }
+                        _ => panic()
+                      }
+                    4 =>
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 =>
+                          match mbt_ffi_load8_u(iter_base + 64) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                            _ => panic()
+                          }
+                        _ => panic()
+                      }
+                    5 =>
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 =>
+                          match mbt_ffi_load8_u(iter_base + 64) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                            _ => panic()
+                          }
+                        _ => panic()
+                      }
+                    6 =>
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 =>
+                          match mbt_ffi_load8_u(iter_base + 64) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                            _ => panic()
+                          }
+                        _ => panic()
+                      }
+                    7 =>
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 =>
+                          match mbt_ffi_load8_u(iter_base + 64) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                            _ => panic()
+                          }
+                        _ => panic()
+                      }
+                    8 =>
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 =>
+                          match mbt_ffi_load8_u(iter_base + 64) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                            _ => panic()
+                          }
+                        _ => panic()
+                      }
+                    9 =>
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 =>
+                          match mbt_ffi_load8_u(iter_base + 64) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                            _ => panic()
+                          }
+                        _ => panic()
+                      }
+                    10 =>
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 =>
+                          match mbt_ffi_load8_u(iter_base + 64) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                            _ => panic()
+                          }
+                        _ => panic()
+                      }
+                    11 =>
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 =>
+                          match mbt_ffi_load8_u(iter_base + 64) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                            _ => panic()
+                          }
+                        _ => panic()
+                      }
+                    12 => ()
+                    13 => ()
+                    14 => {
+                      for index1 = 0
+                          index1 < mbt_ffi_load32(iter_base + 12)
+                          index1 = index1 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index1 * 68
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+
+                        match mbt_ffi_load8_u(iter_base + 12) {
+                          0 => ()
+                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                          _ => panic()
+                        }
+
+                        for index = 0
+                            index < mbt_ffi_load32(iter_base + 28)
+                            index = index + 1 {
+                          let iter_base = mbt_ffi_load32(iter_base + 24) +
+                            index * 8
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                        }
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+
+                        for index0 = 0
+                            index0 < mbt_ffi_load32(iter_base + 36)
+                            index0 = index0 + 1 {
+                          let iter_base = mbt_ffi_load32(iter_base + 32) +
+                            index0 * 8
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                        }
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
+
+                        match mbt_ffi_load8_u(iter_base + 40) {
+                          0 => ()
+                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
+                          _ => panic()
+                        }
+
+                        match mbt_ffi_load8_u(iter_base + 52) {
+                          0 => ()
+                          1 =>
+                            match mbt_ffi_load8_u(iter_base + 56) {
+                              0 => ()
+                              1 => ()
+                              2 => ()
+                              3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
+                              _ => panic()
+                            }
+                          _ => panic()
+                        }
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    }
+                    15 => {
+                      for index4 = 0
+                          index4 < mbt_ffi_load32(iter_base + 12)
+                          index4 = index4 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index4 * 72
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+
+                        match mbt_ffi_load8_u(iter_base + 16) {
+                          0 => ()
+                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                          _ => panic()
+                        }
+
+                        for index2 = 0
+                            index2 < mbt_ffi_load32(iter_base + 32)
+                            index2 = index2 + 1 {
+                          let iter_base = mbt_ffi_load32(iter_base + 28) +
+                            index2 * 8
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                        }
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
+
+                        for index3 = 0
+                            index3 < mbt_ffi_load32(iter_base + 40)
+                            index3 = index3 + 1 {
+                          let iter_base = mbt_ffi_load32(iter_base + 36) +
+                            index3 * 8
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                        }
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
+
+                        match mbt_ffi_load8_u(iter_base + 44) {
+                          0 => ()
+                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
+                          _ => panic()
+                        }
+
+                        match mbt_ffi_load8_u(iter_base + 56) {
+                          0 => ()
+                          1 =>
+                            match mbt_ffi_load8_u(iter_base + 60) {
+                              0 => ()
+                              1 => ()
+                              2 => ()
+                              3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                              _ => panic()
+                            }
+                          _ => panic()
+                        }
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    }
+                    16 => {
+                      for index5 = 0
+                          index5 < mbt_ffi_load32(iter_base + 12)
+                          index5 = index5 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index5 * 8
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    }
+                    17 => {
+                      for index6 = 0
+                          index6 < mbt_ffi_load32(iter_base + 12)
+                          index6 = index6 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index6 * 8
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    }
+                    18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    19 => ()
+                    20 => ()
+                    21 => ()
+                    22 => ()
+                    23 => ()
+                    24 => {
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 => {
+                          for index7 = 0
+                              index7 < mbt_ffi_load32(iter_base + 16)
+                              index7 = index7 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 12) +
+                              index7 * 8
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                        }
+                        _ => panic()
+                      }
+
+                      match mbt_ffi_load8_u(iter_base + 36) {
+                        0 => ()
+                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
+                        _ => panic()
+                      }
+                    }
+                    25 =>
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 => {
+                          for index8 = 0
+                              index8 < mbt_ffi_load32(iter_base + 16)
+                              index8 = index8 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 12) +
+                              index8 * 8
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                        }
+                        _ => panic()
+                      }
+                    26 => {
+                      match mbt_ffi_load8_u(iter_base + 12) {
+                        0 => ()
+                        1 => {
+                          for index9 = 0
+                              index9 < mbt_ffi_load32(iter_base + 20)
+                              index9 = index9 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 16) +
+                              index9 * 8
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                        }
+                        _ => panic()
+                      }
+
+                      match mbt_ffi_load8_u(iter_base + 24) {
+                        0 => ()
+                        1 => {
+                          for index10 = 0
+                              index10 < mbt_ffi_load32(iter_base + 32)
+                              index10 = index10 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 28) +
+                              index10 * 8
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
+                        }
+                        _ => panic()
+                      }
+                    }
+                    27 => {
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 => {
+                          for index11 = 0
+                              index11 < mbt_ffi_load32(iter_base + 16)
+                              index11 = index11 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 12) +
+                              index11 * 8
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                        }
+                        _ => panic()
+                      }
+
+                      match mbt_ffi_load8_u(iter_base + 20) {
+                        0 => ()
+                        1 => {
+                          for index12 = 0
+                              index12 < mbt_ffi_load32(iter_base + 28)
+                              index12 = index12 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 24) +
+                              index12 * 8
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+                        }
+                        _ => panic()
+                      }
+                    }
+                    28 => ()
+                    29 => ()
+                    30 => {
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      for index13 = 0
+                          index13 < mbt_ffi_load32(iter_base + 20)
+                          index13 = index13 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 16) +
+                          index13 * 8
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+
+                      match mbt_ffi_load8_u(iter_base + 24) {
+                        0 => ()
+                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
+                        _ => panic()
+                      }
+
+                      match mbt_ffi_load8_u(iter_base + 56) {
+                        0 => ()
+                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 76))
+                        _ => panic()
+                      }
+                    }
+                    31 => {
+                      for index16 = 0
+                          index16 < mbt_ffi_load32(iter_base + 12)
+                          index16 = index16 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index16 * 92
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+
+                        match mbt_ffi_load8_u(iter_base + 12) {
+                          0 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                          2 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                          3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                          4 => {
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+
+                            match mbt_ffi_load8_u(iter_base + 24) {
+                              0 => ()
+                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
+                              _ => panic()
+                            }
+                          }
+                          5 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                          _ => panic()
+                        }
+
+                        match mbt_ffi_load8_u(iter_base + 36) {
+                          0 => ()
+                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
+                          _ => panic()
+                        }
+
+                        for index14 = 0
+                            index14 < mbt_ffi_load32(iter_base + 52)
+                            index14 = index14 + 1 {
+                          let iter_base = mbt_ffi_load32(iter_base + 48) +
+                            index14 * 8
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                        }
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
+
+                        for index15 = 0
+                            index15 < mbt_ffi_load32(iter_base + 60)
+                            index15 = index15 + 1 {
+                          let iter_base = mbt_ffi_load32(iter_base + 56) +
+                            index15 * 8
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                        }
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
+
+                        match mbt_ffi_load8_u(iter_base + 64) {
+                          0 => ()
+                          1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                          _ => panic()
+                        }
+
+                        match mbt_ffi_load8_u(iter_base + 76) {
+                          0 => ()
+                          1 =>
+                            match mbt_ffi_load8_u(iter_base + 80) {
+                              0 => ()
+                              1 => ()
+                              2 => ()
+                              3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
+                              _ => panic()
+                            }
+                          _ => panic()
+                        }
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    }
+                    32 =>
+                      match mbt_ffi_load8_u(iter_base + 12) {
+                        0 => ()
+                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                        _ => panic()
+                      }
+                    33 =>
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                        _ => panic()
+                      }
+                    34 => ()
+                    35 => ()
+                    36 => ()
+                    _ => panic()
+                  }
+
+                  match mbt_ffi_load8_u(iter_base + 88) {
+                    0 => ()
+                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 92))
+                    _ => panic()
+                  }
+
+                  for index17 = 0
+                      index17 < mbt_ffi_load32(iter_base + 104)
+                      index17 = index17 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 100) +
+                      index17 * 8
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
+
+                  for index18 = 0
+                      index18 < mbt_ffi_load32(iter_base + 112)
+                      index18 = index18 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 108) +
+                      index18 * 8
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
+
+                  match mbt_ffi_load8_u(iter_base + 116) {
+                    0 => ()
+                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 120))
+                    _ => panic()
+                  }
+
+                  match mbt_ffi_load8_u(iter_base + 128) {
+                    0 => ()
+                    1 =>
+                      match mbt_ffi_load8_u(iter_base + 132) {
+                        0 => ()
+                        1 => ()
+                        2 => ()
+                        3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
+                        _ => panic()
+                      }
+                    _ => panic()
+                  }
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                for index20 = 0
+                    index20 < mbt_ffi_load32(iter_base + 20)
+                    index20 = index20 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 16) + index20 * 24
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+
+                  match mbt_ffi_load8_u(iter_base + 8) {
+                    0 => ()
+                    1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                    _ => panic()
+                  }
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+
+                for index21 = 0
+                    index21 < mbt_ffi_load32(iter_base + 32)
+                    index21 = index21 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 28) + index21 * 32
+
+                  match mbt_ffi_load8_u(iter_base + 0) {
+                    0 => ()
+                    1 => ()
+                    2 => ()
+                    3 => ()
+                    4 => ()
+                    5 => ()
+                    6 => ()
+                    7 => ()
+                    8 => ()
+                    9 => ()
+                    10 => ()
+                    11 => ()
+                    12 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    13 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    14 => ()
+                    15 => ()
+                    16 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    17 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    19 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    20 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    21 => ()
+                    22 => ()
+                    23 => {
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      match mbt_ffi_load8_u(iter_base + 16) {
+                        0 => ()
+                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                        _ => panic()
+                      }
+                    }
+                    24 => {
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      match mbt_ffi_load8_u(iter_base + 16) {
+                        0 => ()
+                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                        _ => panic()
+                      }
+                    }
+                    25 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    27 => ()
+                    28 => ()
+                    29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                    30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                    31 =>
+                      @types.Secret::Secret(mbt_ffi_load32(iter_base + 8)).drop()
+                    32 =>
+                      @types.QuotaToken::QuotaToken(
+                        mbt_ffi_load32(iter_base + 8),
+                      ).drop()
+                    33 =>
+                      @types.PermissionCard::PermissionCard(
+                        mbt_ffi_load32(iter_base + 8),
+                      ).drop()
+                    34 =>
+                      @types.SchemaValueStream::SchemaValueStream(
+                        mbt_ffi_load32(iter_base + 8),
+                      ).drop()
+                    _ => panic()
+                  }
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
+              }
+              _ => panic()
+            }
+
+            match mbt_ffi_load8_u(iter_base + 40) {
+              0 => ()
+              1 => {
+                let result = wasmGolemToolHost010GetInvokeResultsStream0StreamLift(
+                  mbt_ffi_load32(iter_base + 44),
+                )
+                result.drop_sync()
+              }
+              _ => panic()
+            }
+          }
+          1 =>
+            match mbt_ffi_load8_u(iter_base + 4) {
+              0 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+              2 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+              3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+              4 =>
+                match mbt_ffi_load8_u(iter_base + 8) {
+                  0 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                  1 => {
+                    for index22 = 0
+                        index22 < mbt_ffi_load32(iter_base + 16)
+                        index22 = index22 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 12) +
+                        index22 * 8
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                  }
+                  2 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                  3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                  4 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                  5 => {
+                    for index43 = 0
+                        index43 < mbt_ffi_load32(iter_base + 16)
+                        index43 = index43 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 12) +
+                        index43 * 144
+
+                      match mbt_ffi_load8_u(iter_base + 0) {
+                        0 => ()
+                        1 => ()
+                        2 =>
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 =>
+                              match mbt_ffi_load8_u(iter_base + 64) {
+                                0 => ()
+                                1 =>
+                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                                _ => panic()
+                              }
+                            _ => panic()
+                          }
+                        3 =>
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 =>
+                              match mbt_ffi_load8_u(iter_base + 64) {
+                                0 => ()
+                                1 =>
+                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                                _ => panic()
+                              }
+                            _ => panic()
+                          }
+                        4 =>
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 =>
+                              match mbt_ffi_load8_u(iter_base + 64) {
+                                0 => ()
+                                1 =>
+                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                                _ => panic()
+                              }
+                            _ => panic()
+                          }
+                        5 =>
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 =>
+                              match mbt_ffi_load8_u(iter_base + 64) {
+                                0 => ()
+                                1 =>
+                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                                _ => panic()
+                              }
+                            _ => panic()
+                          }
+                        6 =>
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 =>
+                              match mbt_ffi_load8_u(iter_base + 64) {
+                                0 => ()
+                                1 =>
+                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                                _ => panic()
+                              }
+                            _ => panic()
+                          }
+                        7 =>
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 =>
+                              match mbt_ffi_load8_u(iter_base + 64) {
+                                0 => ()
+                                1 =>
+                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                                _ => panic()
+                              }
+                            _ => panic()
+                          }
+                        8 =>
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 =>
+                              match mbt_ffi_load8_u(iter_base + 64) {
+                                0 => ()
+                                1 =>
+                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                                _ => panic()
+                              }
+                            _ => panic()
+                          }
+                        9 =>
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 =>
+                              match mbt_ffi_load8_u(iter_base + 64) {
+                                0 => ()
+                                1 =>
+                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                                _ => panic()
+                              }
+                            _ => panic()
+                          }
+                        10 =>
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 =>
+                              match mbt_ffi_load8_u(iter_base + 64) {
+                                0 => ()
+                                1 =>
+                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                                _ => panic()
+                              }
+                            _ => panic()
+                          }
+                        11 =>
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 =>
+                              match mbt_ffi_load8_u(iter_base + 64) {
+                                0 => ()
+                                1 =>
+                                  mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                                _ => panic()
+                              }
+                            _ => panic()
+                          }
+                        12 => ()
+                        13 => ()
+                        14 => {
+                          for index25 = 0
+                              index25 < mbt_ffi_load32(iter_base + 12)
+                              index25 = index25 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 8) +
+                              index25 * 68
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+
+                            match mbt_ffi_load8_u(iter_base + 12) {
+                              0 => ()
+                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                              _ => panic()
+                            }
+
+                            for index23 = 0
+                                index23 < mbt_ffi_load32(iter_base + 28)
+                                index23 = index23 + 1 {
+                              let iter_base = mbt_ffi_load32(iter_base + 24) +
+                                index23 * 8
+                              mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                            }
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+
+                            for index24 = 0
+                                index24 < mbt_ffi_load32(iter_base + 36)
+                                index24 = index24 + 1 {
+                              let iter_base = mbt_ffi_load32(iter_base + 32) +
+                                index24 * 8
+                              mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                            }
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
+
+                            match mbt_ffi_load8_u(iter_base + 40) {
+                              0 => ()
+                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
+                              _ => panic()
+                            }
+
+                            match mbt_ffi_load8_u(iter_base + 52) {
+                              0 => ()
+                              1 =>
+                                match mbt_ffi_load8_u(iter_base + 56) {
+                                  0 => ()
+                                  1 => ()
+                                  2 => ()
+                                  3 =>
+                                    mbt_ffi_free(mbt_ffi_load32(iter_base + 60))
+                                  _ => panic()
+                                }
+                              _ => panic()
+                            }
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        }
+                        15 => {
+                          for index28 = 0
+                              index28 < mbt_ffi_load32(iter_base + 12)
+                              index28 = index28 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 8) +
+                              index28 * 72
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+
+                            match mbt_ffi_load8_u(iter_base + 16) {
+                              0 => ()
+                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                              _ => panic()
+                            }
+
+                            for index26 = 0
+                                index26 < mbt_ffi_load32(iter_base + 32)
+                                index26 = index26 + 1 {
+                              let iter_base = mbt_ffi_load32(iter_base + 28) +
+                                index26 * 8
+                              mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                            }
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
+
+                            for index27 = 0
+                                index27 < mbt_ffi_load32(iter_base + 40)
+                                index27 = index27 + 1 {
+                              let iter_base = mbt_ffi_load32(iter_base + 36) +
+                                index27 * 8
+                              mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                            }
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
+
+                            match mbt_ffi_load8_u(iter_base + 44) {
+                              0 => ()
+                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
+                              _ => panic()
+                            }
+
+                            match mbt_ffi_load8_u(iter_base + 56) {
+                              0 => ()
+                              1 =>
+                                match mbt_ffi_load8_u(iter_base + 60) {
+                                  0 => ()
+                                  1 => ()
+                                  2 => ()
+                                  3 =>
+                                    mbt_ffi_free(mbt_ffi_load32(iter_base + 64))
+                                  _ => panic()
+                                }
+                              _ => panic()
+                            }
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        }
+                        16 => {
+                          for index29 = 0
+                              index29 < mbt_ffi_load32(iter_base + 12)
+                              index29 = index29 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 8) +
+                              index29 * 8
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        }
+                        17 => {
+                          for index30 = 0
+                              index30 < mbt_ffi_load32(iter_base + 12)
+                              index30 = index30 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 8) +
+                              index30 * 8
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        }
+                        18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        19 => ()
+                        20 => ()
+                        21 => ()
+                        22 => ()
+                        23 => ()
+                        24 => {
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 => {
+                              for index31 = 0
+                                  index31 < mbt_ffi_load32(iter_base + 16)
+                                  index31 = index31 + 1 {
+                                let iter_base = mbt_ffi_load32(iter_base + 12) +
+                                  index31 * 8
+                                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                              }
+                              mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                            }
+                            _ => panic()
+                          }
+
+                          match mbt_ffi_load8_u(iter_base + 36) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
+                            _ => panic()
+                          }
+                        }
+                        25 =>
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 => {
+                              for index32 = 0
+                                  index32 < mbt_ffi_load32(iter_base + 16)
+                                  index32 = index32 + 1 {
+                                let iter_base = mbt_ffi_load32(iter_base + 12) +
+                                  index32 * 8
+                                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                              }
+                              mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                            }
+                            _ => panic()
+                          }
+                        26 => {
+                          match mbt_ffi_load8_u(iter_base + 12) {
+                            0 => ()
+                            1 => {
+                              for index33 = 0
+                                  index33 < mbt_ffi_load32(iter_base + 20)
+                                  index33 = index33 + 1 {
+                                let iter_base = mbt_ffi_load32(iter_base + 16) +
+                                  index33 * 8
+                                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                              }
+                              mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                            }
+                            _ => panic()
+                          }
+
+                          match mbt_ffi_load8_u(iter_base + 24) {
+                            0 => ()
+                            1 => {
+                              for index34 = 0
+                                  index34 < mbt_ffi_load32(iter_base + 32)
+                                  index34 = index34 + 1 {
+                                let iter_base = mbt_ffi_load32(iter_base + 28) +
+                                  index34 * 8
+                                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                              }
+                              mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
+                            }
+                            _ => panic()
+                          }
+                        }
+                        27 => {
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 => {
+                              for index35 = 0
+                                  index35 < mbt_ffi_load32(iter_base + 16)
+                                  index35 = index35 + 1 {
+                                let iter_base = mbt_ffi_load32(iter_base + 12) +
+                                  index35 * 8
+                                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                              }
+                              mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                            }
+                            _ => panic()
+                          }
+
+                          match mbt_ffi_load8_u(iter_base + 20) {
+                            0 => ()
+                            1 => {
+                              for index36 = 0
+                                  index36 < mbt_ffi_load32(iter_base + 28)
+                                  index36 = index36 + 1 {
+                                let iter_base = mbt_ffi_load32(iter_base + 24) +
+                                  index36 * 8
+                                mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                              }
+                              mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+                            }
+                            _ => panic()
+                          }
+                        }
+                        28 => ()
+                        29 => ()
+                        30 => {
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                          for index37 = 0
+                              index37 < mbt_ffi_load32(iter_base + 20)
+                              index37 = index37 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 16) +
+                              index37 * 8
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+
+                          match mbt_ffi_load8_u(iter_base + 24) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 44))
+                            _ => panic()
+                          }
+
+                          match mbt_ffi_load8_u(iter_base + 56) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 76))
+                            _ => panic()
+                          }
+                        }
+                        31 => {
+                          for index40 = 0
+                              index40 < mbt_ffi_load32(iter_base + 12)
+                              index40 = index40 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 8) +
+                              index40 * 92
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+
+                            match mbt_ffi_load8_u(iter_base + 12) {
+                              0 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                              2 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                              3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                              4 => {
+                                mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+
+                                match mbt_ffi_load8_u(iter_base + 24) {
+                                  0 => ()
+                                  1 =>
+                                    mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
+                                  _ => panic()
+                                }
+                              }
+                              5 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                              _ => panic()
+                            }
+
+                            match mbt_ffi_load8_u(iter_base + 36) {
+                              0 => ()
+                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 40))
+                              _ => panic()
+                            }
+
+                            for index38 = 0
+                                index38 < mbt_ffi_load32(iter_base + 52)
+                                index38 = index38 + 1 {
+                              let iter_base = mbt_ffi_load32(iter_base + 48) +
+                                index38 * 8
+                              mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                            }
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
+
+                            for index39 = 0
+                                index39 < mbt_ffi_load32(iter_base + 60)
+                                index39 = index39 + 1 {
+                              let iter_base = mbt_ffi_load32(iter_base + 56) +
+                                index39 * 8
+                              mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                            }
+                            mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
+
+                            match mbt_ffi_load8_u(iter_base + 64) {
+                              0 => ()
+                              1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 68))
+                              _ => panic()
+                            }
+
+                            match mbt_ffi_load8_u(iter_base + 76) {
+                              0 => ()
+                              1 =>
+                                match mbt_ffi_load8_u(iter_base + 80) {
+                                  0 => ()
+                                  1 => ()
+                                  2 => ()
+                                  3 =>
+                                    mbt_ffi_free(mbt_ffi_load32(iter_base + 84))
+                                  _ => panic()
+                                }
+                              _ => panic()
+                            }
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        }
+                        32 =>
+                          match mbt_ffi_load8_u(iter_base + 12) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+                            _ => panic()
+                          }
+                        33 =>
+                          match mbt_ffi_load8_u(iter_base + 8) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                            _ => panic()
+                          }
+                        34 => ()
+                        35 => ()
+                        36 => ()
+                        _ => panic()
+                      }
+
+                      match mbt_ffi_load8_u(iter_base + 88) {
+                        0 => ()
+                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 92))
+                        _ => panic()
+                      }
+
+                      for index41 = 0
+                          index41 < mbt_ffi_load32(iter_base + 104)
+                          index41 = index41 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 100) +
+                          index41 * 8
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
+
+                      for index42 = 0
+                          index42 < mbt_ffi_load32(iter_base + 112)
+                          index42 = index42 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 108) +
+                          index42 * 8
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
+
+                      match mbt_ffi_load8_u(iter_base + 116) {
+                        0 => ()
+                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 120))
+                        _ => panic()
+                      }
+
+                      match mbt_ffi_load8_u(iter_base + 128) {
+                        0 => ()
+                        1 =>
+                          match mbt_ffi_load8_u(iter_base + 132) {
+                            0 => ()
+                            1 => ()
+                            2 => ()
+                            3 => mbt_ffi_free(mbt_ffi_load32(iter_base + 136))
+                            _ => panic()
+                          }
+                        _ => panic()
+                      }
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+
+                    for index44 = 0
+                        index44 < mbt_ffi_load32(iter_base + 24)
+                        index44 = index44 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 20) +
+                        index44 * 24
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 0))
+
+                      match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => ()
+                        1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+                        _ => panic()
+                      }
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+
+                    for index45 = 0
+                        index45 < mbt_ffi_load32(iter_base + 36)
+                        index45 = index45 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 32) +
+                        index45 * 32
+
+                      match mbt_ffi_load8_u(iter_base + 0) {
+                        0 => ()
+                        1 => ()
+                        2 => ()
+                        3 => ()
+                        4 => ()
+                        5 => ()
+                        6 => ()
+                        7 => ()
+                        8 => ()
+                        9 => ()
+                        10 => ()
+                        11 => ()
+                        12 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        13 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        14 => ()
+                        15 => ()
+                        16 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        17 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        18 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        19 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        20 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        21 => ()
+                        22 => ()
+                        23 => {
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                          match mbt_ffi_load8_u(iter_base + 16) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                            _ => panic()
+                          }
+                        }
+                        24 => {
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                          match mbt_ffi_load8_u(iter_base + 16) {
+                            0 => ()
+                            1 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                            _ => panic()
+                          }
+                        }
+                        25 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        26 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        27 => ()
+                        28 => ()
+                        29 => mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+                        30 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+                        31 =>
+                          @types.Secret::Secret(mbt_ffi_load32(iter_base + 8)).drop()
+                        32 =>
+                          @types.QuotaToken::QuotaToken(
+                            mbt_ffi_load32(iter_base + 8),
+                          ).drop()
+                        33 =>
+                          @types.PermissionCard::PermissionCard(
+                            mbt_ffi_load32(iter_base + 8),
+                          ).drop()
+                        34 =>
+                          @types.SchemaValueStream::SchemaValueStream(
+                            mbt_ffi_load32(iter_base + 8),
+                          ).drop()
+                        _ => panic()
+                      }
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
+                  }
+                  _ => panic()
+                }
+              5 => ()
+              6 => mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+              _ => panic()
+            }
+          _ => panic()
+        }
+      }
+      mbt_ffi_free(mbt_ffi_load32(result_ptr + 0))
+    },
+  )
+
+  let array482 : Array[Result[@common.InvocationResult, RpcError]] = []
+  for index483 = 0
+      index483 < mbt_ffi_load32(result_ptr + 4)
+      index483 = index483 + 1 {
+    let iter_base = mbt_ffi_load32(result_ptr + 0) + index483 * 48
+
+    let lifted481 = match mbt_ffi_load8_u(iter_base + 0) {
+      0 => {
+        let lifted230 : @types.TypedSchemaValue? = match
+          mbt_ffi_load8_u(iter_base + 4) {
+          0 => Option::None
+          1 => {
+            let array192 : Array[@types.SchemaTypeNode] = []
+            for index193 = 0
+                index193 < mbt_ffi_load32(iter_base + 12)
+                index193 = index193 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 8) + index193 * 144
+
+              let lifted178 = match mbt_ffi_load8_u(iter_base + 0) {
+                0 =>
+                  @types.SchemaTypeBody::RefType(mbt_ffi_load32(iter_base + 8))
+                1 => @types.SchemaTypeBody::BoolType
+                2 => {
+                  let lifted4 : @types.NumericRestrictions? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let lifted0 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => {
+                          let lifted = match mbt_ffi_load8_u(iter_base + 24) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 32),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted2 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 40) {
+                        0 => Option::None
+                        1 => {
+                          let lifted1 = match mbt_ffi_load8_u(iter_base + 48) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 56),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted1)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted3 : String? = match
+                        mbt_ffi_load8_u(iter_base + 64) {
+                        0 => Option::None
+                        1 => {
+                          let result = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 68),
+                            mbt_ffi_load32(iter_base + 72),
+                          )
+
+                          Option::Some(result)
+                        }
+                        _ => panic()
+                      }
+
+                      Option::Some(@types.NumericRestrictions::{
+                        min: lifted0,
+                        max: lifted2,
+                        unit: lifted3,
+                      })
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::S8Type(lifted4)
+                }
+                3 => {
+                  let lifted11 : @types.NumericRestrictions? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let lifted6 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => {
+                          let lifted5 = match mbt_ffi_load8_u(iter_base + 24) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 32),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted5)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted8 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 40) {
+                        0 => Option::None
+                        1 => {
+                          let lifted7 = match mbt_ffi_load8_u(iter_base + 48) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 56),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted7)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted10 : String? = match
+                        mbt_ffi_load8_u(iter_base + 64) {
+                        0 => Option::None
+                        1 => {
+                          let result9 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 68),
+                            mbt_ffi_load32(iter_base + 72),
+                          )
+
+                          Option::Some(result9)
+                        }
+                        _ => panic()
+                      }
+
+                      Option::Some(@types.NumericRestrictions::{
+                        min: lifted6,
+                        max: lifted8,
+                        unit: lifted10,
+                      })
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::S16Type(lifted11)
+                }
+                4 => {
+                  let lifted18 : @types.NumericRestrictions? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let lifted13 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => {
+                          let lifted12 = match mbt_ffi_load8_u(iter_base + 24) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 32),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted12)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted15 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 40) {
+                        0 => Option::None
+                        1 => {
+                          let lifted14 = match mbt_ffi_load8_u(iter_base + 48) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 56),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted14)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted17 : String? = match
+                        mbt_ffi_load8_u(iter_base + 64) {
+                        0 => Option::None
+                        1 => {
+                          let result16 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 68),
+                            mbt_ffi_load32(iter_base + 72),
+                          )
+
+                          Option::Some(result16)
+                        }
+                        _ => panic()
+                      }
+
+                      Option::Some(@types.NumericRestrictions::{
+                        min: lifted13,
+                        max: lifted15,
+                        unit: lifted17,
+                      })
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::S32Type(lifted18)
+                }
+                5 => {
+                  let lifted25 : @types.NumericRestrictions? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let lifted20 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => {
+                          let lifted19 = match mbt_ffi_load8_u(iter_base + 24) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 32),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted19)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted22 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 40) {
+                        0 => Option::None
+                        1 => {
+                          let lifted21 = match mbt_ffi_load8_u(iter_base + 48) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 56),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted21)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted24 : String? = match
+                        mbt_ffi_load8_u(iter_base + 64) {
+                        0 => Option::None
+                        1 => {
+                          let result23 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 68),
+                            mbt_ffi_load32(iter_base + 72),
+                          )
+
+                          Option::Some(result23)
+                        }
+                        _ => panic()
+                      }
+
+                      Option::Some(@types.NumericRestrictions::{
+                        min: lifted20,
+                        max: lifted22,
+                        unit: lifted24,
+                      })
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::S64Type(lifted25)
+                }
+                6 => {
+                  let lifted32 : @types.NumericRestrictions? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let lifted27 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => {
+                          let lifted26 = match mbt_ffi_load8_u(iter_base + 24) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 32),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted26)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted29 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 40) {
+                        0 => Option::None
+                        1 => {
+                          let lifted28 = match mbt_ffi_load8_u(iter_base + 48) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 56),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted28)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted31 : String? = match
+                        mbt_ffi_load8_u(iter_base + 64) {
+                        0 => Option::None
+                        1 => {
+                          let result30 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 68),
+                            mbt_ffi_load32(iter_base + 72),
+                          )
+
+                          Option::Some(result30)
+                        }
+                        _ => panic()
+                      }
+
+                      Option::Some(@types.NumericRestrictions::{
+                        min: lifted27,
+                        max: lifted29,
+                        unit: lifted31,
+                      })
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::U8Type(lifted32)
+                }
+                7 => {
+                  let lifted39 : @types.NumericRestrictions? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let lifted34 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => {
+                          let lifted33 = match mbt_ffi_load8_u(iter_base + 24) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 32),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted33)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted36 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 40) {
+                        0 => Option::None
+                        1 => {
+                          let lifted35 = match mbt_ffi_load8_u(iter_base + 48) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 56),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted35)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted38 : String? = match
+                        mbt_ffi_load8_u(iter_base + 64) {
+                        0 => Option::None
+                        1 => {
+                          let result37 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 68),
+                            mbt_ffi_load32(iter_base + 72),
+                          )
+
+                          Option::Some(result37)
+                        }
+                        _ => panic()
+                      }
+
+                      Option::Some(@types.NumericRestrictions::{
+                        min: lifted34,
+                        max: lifted36,
+                        unit: lifted38,
+                      })
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::U16Type(lifted39)
+                }
+                8 => {
+                  let lifted46 : @types.NumericRestrictions? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let lifted41 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => {
+                          let lifted40 = match mbt_ffi_load8_u(iter_base + 24) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 32),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted40)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted43 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 40) {
+                        0 => Option::None
+                        1 => {
+                          let lifted42 = match mbt_ffi_load8_u(iter_base + 48) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 56),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted42)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted45 : String? = match
+                        mbt_ffi_load8_u(iter_base + 64) {
+                        0 => Option::None
+                        1 => {
+                          let result44 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 68),
+                            mbt_ffi_load32(iter_base + 72),
+                          )
+
+                          Option::Some(result44)
+                        }
+                        _ => panic()
+                      }
+
+                      Option::Some(@types.NumericRestrictions::{
+                        min: lifted41,
+                        max: lifted43,
+                        unit: lifted45,
+                      })
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::U32Type(lifted46)
+                }
+                9 => {
+                  let lifted53 : @types.NumericRestrictions? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let lifted48 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => {
+                          let lifted47 = match mbt_ffi_load8_u(iter_base + 24) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 32),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted47)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted50 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 40) {
+                        0 => Option::None
+                        1 => {
+                          let lifted49 = match mbt_ffi_load8_u(iter_base + 48) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 56),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted49)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted52 : String? = match
+                        mbt_ffi_load8_u(iter_base + 64) {
+                        0 => Option::None
+                        1 => {
+                          let result51 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 68),
+                            mbt_ffi_load32(iter_base + 72),
+                          )
+
+                          Option::Some(result51)
+                        }
+                        _ => panic()
+                      }
+
+                      Option::Some(@types.NumericRestrictions::{
+                        min: lifted48,
+                        max: lifted50,
+                        unit: lifted52,
+                      })
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::U64Type(lifted53)
+                }
+                10 => {
+                  let lifted60 : @types.NumericRestrictions? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let lifted55 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => {
+                          let lifted54 = match mbt_ffi_load8_u(iter_base + 24) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 32),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted54)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted57 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 40) {
+                        0 => Option::None
+                        1 => {
+                          let lifted56 = match mbt_ffi_load8_u(iter_base + 48) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 56),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted56)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted59 : String? = match
+                        mbt_ffi_load8_u(iter_base + 64) {
+                        0 => Option::None
+                        1 => {
+                          let result58 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 68),
+                            mbt_ffi_load32(iter_base + 72),
+                          )
+
+                          Option::Some(result58)
+                        }
+                        _ => panic()
+                      }
+
+                      Option::Some(@types.NumericRestrictions::{
+                        min: lifted55,
+                        max: lifted57,
+                        unit: lifted59,
+                      })
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::F32Type(lifted60)
+                }
+                11 => {
+                  let lifted67 : @types.NumericRestrictions? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let lifted62 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => {
+                          let lifted61 = match mbt_ffi_load8_u(iter_base + 24) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 32),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted61)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted64 : @types.NumericBound? = match
+                        mbt_ffi_load8_u(iter_base + 40) {
+                        0 => Option::None
+                        1 => {
+                          let lifted63 = match mbt_ffi_load8_u(iter_base + 48) {
+                            0 =>
+                              @types.NumericBound::Signed(
+                                mbt_ffi_load64(iter_base + 56),
+                              )
+                            1 =>
+                              @types.NumericBound::Unsigned(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            2 =>
+                              @types.NumericBound::FloatBits(
+                                mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                              )
+                            _ => panic()
+                          }
+
+                          Option::Some(lifted63)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted66 : String? = match
+                        mbt_ffi_load8_u(iter_base + 64) {
+                        0 => Option::None
+                        1 => {
+                          let result65 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 68),
+                            mbt_ffi_load32(iter_base + 72),
+                          )
+
+                          Option::Some(result65)
+                        }
+                        _ => panic()
+                      }
+
+                      Option::Some(@types.NumericRestrictions::{
+                        min: lifted62,
+                        max: lifted64,
+                        unit: lifted66,
+                      })
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::F64Type(lifted67)
+                }
+                12 => @types.SchemaTypeBody::CharType
+                13 => @types.SchemaTypeBody::StringType
+                14 => {
+                  let array80 : Array[@types.NamedFieldType] = []
+                  for index81 = 0
+                      index81 < mbt_ffi_load32(iter_base + 12)
+                      index81 = index81 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 8) + index81 * 68
+
+                    let result68 = mbt_ffi_ptr2str(
+                      mbt_ffi_load32(iter_base + 0),
+                      mbt_ffi_load32(iter_base + 4),
+                    )
+
+                    let lifted70 : String? = match
+                      mbt_ffi_load8_u(iter_base + 12) {
+                      0 => Option::None
+                      1 => {
+                        let result69 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 16),
+                          mbt_ffi_load32(iter_base + 20),
+                        )
+
+                        Option::Some(result69)
+                      }
+                      _ => panic()
+                    }
+
+                    let array : Array[String] = []
+                    for index = 0
+                        index < mbt_ffi_load32(iter_base + 28)
+                        index = index + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 24) + index * 8
+
+                      let result71 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 0),
+                        mbt_ffi_load32(iter_base + 4),
+                      )
+
+                      array.push(result71)
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+
+                    let array73 : Array[String] = []
+                    for index74 = 0
+                        index74 < mbt_ffi_load32(iter_base + 36)
+                        index74 = index74 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 32) +
+                        index74 * 8
+
+                      let result72 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 0),
+                        mbt_ffi_load32(iter_base + 4),
+                      )
+
+                      array73.push(result72)
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
+
+                    let lifted76 : String? = match
+                      mbt_ffi_load8_u(iter_base + 40) {
+                      0 => Option::None
+                      1 => {
+                        let result75 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 44),
+                          mbt_ffi_load32(iter_base + 48),
+                        )
+
+                        Option::Some(result75)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted79 : @types.Role? = match
+                      mbt_ffi_load8_u(iter_base + 52) {
+                      0 => Option::None
+                      1 => {
+                        let lifted78 = match mbt_ffi_load8_u(iter_base + 56) {
+                          0 => @types.Role::Multimodal
+                          1 => @types.Role::UnstructuredText
+                          2 => @types.Role::UnstructuredBinary
+                          3 => {
+                            let result77 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 60),
+                              mbt_ffi_load32(iter_base + 64),
+                            )
+
+                            @types.Role::Other(result77)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(lifted78)
+                      }
+                      _ => panic()
+                    }
+
+                    array80.push(@types.NamedFieldType::{
+                      name: result68,
+                      body: mbt_ffi_load32(iter_base + 8),
+                      metadata: @types.MetadataEnvelope::{
+                        doc: lifted70,
+                        aliases: array,
+                        examples: array73,
+                        deprecated: lifted76,
+                        role: lifted79,
+                      },
+                    })
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                  @types.SchemaTypeBody::RecordType(array80)
+                }
+                15 => {
+                  let array97 : Array[@types.VariantCaseType] = []
+                  for index98 = 0
+                      index98 < mbt_ffi_load32(iter_base + 12)
+                      index98 = index98 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 8) + index98 * 72
+
+                    let result82 = mbt_ffi_ptr2str(
+                      mbt_ffi_load32(iter_base + 0),
+                      mbt_ffi_load32(iter_base + 4),
+                    )
+
+                    let lifted83 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                      0 => Option::None
+                      1 => Option::Some(mbt_ffi_load32(iter_base + 12))
+                      _ => panic()
+                    }
+
+                    let lifted85 : String? = match
+                      mbt_ffi_load8_u(iter_base + 16) {
+                      0 => Option::None
+                      1 => {
+                        let result84 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 20),
+                          mbt_ffi_load32(iter_base + 24),
+                        )
+
+                        Option::Some(result84)
+                      }
+                      _ => panic()
+                    }
+
+                    let array87 : Array[String] = []
+                    for index88 = 0
+                        index88 < mbt_ffi_load32(iter_base + 32)
+                        index88 = index88 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 28) +
+                        index88 * 8
+
+                      let result86 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 0),
+                        mbt_ffi_load32(iter_base + 4),
+                      )
+
+                      array87.push(result86)
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
+
+                    let array90 : Array[String] = []
+                    for index91 = 0
+                        index91 < mbt_ffi_load32(iter_base + 40)
+                        index91 = index91 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 36) +
+                        index91 * 8
+
+                      let result89 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 0),
+                        mbt_ffi_load32(iter_base + 4),
+                      )
+
+                      array90.push(result89)
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
+
+                    let lifted93 : String? = match
+                      mbt_ffi_load8_u(iter_base + 44) {
+                      0 => Option::None
+                      1 => {
+                        let result92 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 48),
+                          mbt_ffi_load32(iter_base + 52),
+                        )
+
+                        Option::Some(result92)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted96 : @types.Role? = match
+                      mbt_ffi_load8_u(iter_base + 56) {
+                      0 => Option::None
+                      1 => {
+                        let lifted95 = match mbt_ffi_load8_u(iter_base + 60) {
+                          0 => @types.Role::Multimodal
+                          1 => @types.Role::UnstructuredText
+                          2 => @types.Role::UnstructuredBinary
+                          3 => {
+                            let result94 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 64),
+                              mbt_ffi_load32(iter_base + 68),
+                            )
+
+                            @types.Role::Other(result94)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(lifted95)
+                      }
+                      _ => panic()
+                    }
+
+                    array97.push(@types.VariantCaseType::{
+                      name: result82,
+                      payload: lifted83,
+                      metadata: @types.MetadataEnvelope::{
+                        doc: lifted85,
+                        aliases: array87,
+                        examples: array90,
+                        deprecated: lifted93,
+                        role: lifted96,
+                      },
+                    })
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                  @types.SchemaTypeBody::VariantType(array97)
+                }
+                16 => {
+                  let array100 : Array[String] = []
+                  for index101 = 0
+                      index101 < mbt_ffi_load32(iter_base + 12)
+                      index101 = index101 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 8) + index101 * 8
+
+                    let result99 = mbt_ffi_ptr2str(
+                      mbt_ffi_load32(iter_base + 0),
+                      mbt_ffi_load32(iter_base + 4),
+                    )
+
+                    array100.push(result99)
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                  @types.SchemaTypeBody::EnumType(array100)
+                }
+                17 => {
+                  let array103 : Array[String] = []
+                  for index104 = 0
+                      index104 < mbt_ffi_load32(iter_base + 12)
+                      index104 = index104 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 8) + index104 * 8
+
+                    let result102 = mbt_ffi_ptr2str(
+                      mbt_ffi_load32(iter_base + 0),
+                      mbt_ffi_load32(iter_base + 4),
+                    )
+
+                    array103.push(result102)
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                  @types.SchemaTypeBody::FlagsType(array103)
+                }
+                18 => {
+                  let array105 : Array[Int] = []
+                  for index106 = 0
+                      index106 < mbt_ffi_load32(iter_base + 12)
+                      index106 = index106 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 8) + index106 * 4
+
+                    array105.push(mbt_ffi_load32(iter_base + 0))
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                  @types.SchemaTypeBody::TupleType(array105)
+                }
+                19 =>
+                  @types.SchemaTypeBody::ListType(mbt_ffi_load32(iter_base + 8))
+                20 =>
+                  @types.SchemaTypeBody::FixedListType(@types.FixedListSpec::{
+                    element: mbt_ffi_load32(iter_base + 8),
+                    length: mbt_ffi_load32(iter_base + 12).reinterpret_as_uint(),
+                  })
+                21 =>
+                  @types.SchemaTypeBody::MapType(@types.MapSpec::{
+                    key: mbt_ffi_load32(iter_base + 8),
+                    value: mbt_ffi_load32(iter_base + 12),
+                  })
+                22 =>
+                  @types.SchemaTypeBody::OptionType(
+                    mbt_ffi_load32(iter_base + 8),
+                  )
+                23 => {
+                  let lifted107 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => Option::Some(mbt_ffi_load32(iter_base + 12))
+                    _ => panic()
+                  }
+
+                  let lifted108 : Int? = match mbt_ffi_load8_u(iter_base + 16) {
+                    0 => Option::None
+                    1 => Option::Some(mbt_ffi_load32(iter_base + 20))
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::ResultType(@types.ResultSpec::{
+                    ok: lifted107,
+                    err: lifted108,
+                  })
+                }
+                24 => {
+                  let lifted112 : Array[String]? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let array110 : Array[String] = []
+                      for index111 = 0
+                          index111 < mbt_ffi_load32(iter_base + 16)
+                          index111 = index111 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 12) +
+                          index111 * 8
+
+                        let result109 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        array110.push(result109)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+
+                      Option::Some(array110)
+                    }
+                    _ => panic()
+                  }
+
+                  let lifted113 : UInt? = match
+                    mbt_ffi_load8_u(iter_base + 20) {
+                    0 => Option::None
+                    1 =>
+                      Option::Some(
+                        mbt_ffi_load32(iter_base + 24).reinterpret_as_uint(),
+                      )
+                    _ => panic()
+                  }
+
+                  let lifted114 : UInt? = match
+                    mbt_ffi_load8_u(iter_base + 28) {
+                    0 => Option::None
+                    1 =>
+                      Option::Some(
+                        mbt_ffi_load32(iter_base + 32).reinterpret_as_uint(),
+                      )
+                    _ => panic()
+                  }
+
+                  let lifted116 : String? = match
+                    mbt_ffi_load8_u(iter_base + 36) {
+                    0 => Option::None
+                    1 => {
+                      let result115 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 40),
+                        mbt_ffi_load32(iter_base + 44),
+                      )
+
+                      Option::Some(result115)
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::TextType(@types.TextRestrictions::{
+                    languages: lifted112,
+                    min_length: lifted113,
+                    max_length: lifted114,
+                    regex: lifted116,
+                  })
+                }
+                25 => {
+                  let lifted120 : Array[String]? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let array118 : Array[String] = []
+                      for index119 = 0
+                          index119 < mbt_ffi_load32(iter_base + 16)
+                          index119 = index119 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 12) +
+                          index119 * 8
+
+                        let result117 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        array118.push(result117)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+
+                      Option::Some(array118)
+                    }
+                    _ => panic()
+                  }
+
+                  let lifted121 : UInt? = match
+                    mbt_ffi_load8_u(iter_base + 20) {
+                    0 => Option::None
+                    1 =>
+                      Option::Some(
+                        mbt_ffi_load32(iter_base + 24).reinterpret_as_uint(),
+                      )
+                    _ => panic()
+                  }
+
+                  let lifted122 : UInt? = match
+                    mbt_ffi_load8_u(iter_base + 28) {
+                    0 => Option::None
+                    1 =>
+                      Option::Some(
+                        mbt_ffi_load32(iter_base + 32).reinterpret_as_uint(),
+                      )
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::BinaryType(@types.BinaryRestrictions::{
+                    mime_types: lifted120,
+                    min_bytes: lifted121,
+                    max_bytes: lifted122,
+                  })
+                }
+                26 => {
+                  let lifted126 : Array[String]? = match
+                    mbt_ffi_load8_u(iter_base + 12) {
+                    0 => Option::None
+                    1 => {
+                      let array124 : Array[String] = []
+                      for index125 = 0
+                          index125 < mbt_ffi_load32(iter_base + 20)
+                          index125 = index125 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 16) +
+                          index125 * 8
+
+                        let result123 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        array124.push(result123)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+
+                      Option::Some(array124)
+                    }
+                    _ => panic()
+                  }
+
+                  let lifted130 : Array[String]? = match
+                    mbt_ffi_load8_u(iter_base + 24) {
+                    0 => Option::None
+                    1 => {
+                      let array128 : Array[String] = []
+                      for index129 = 0
+                          index129 < mbt_ffi_load32(iter_base + 32)
+                          index129 = index129 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 28) +
+                          index129 * 8
+
+                        let result127 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        array128.push(result127)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
+
+                      Option::Some(array128)
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::PathType(@types.PathSpec::{
+                    direction: @types.PathDirection::from(
+                      mbt_ffi_load8_u(iter_base + 8),
+                    ),
+                    kind: @types.PathKind::from(mbt_ffi_load8_u(iter_base + 9)),
+                    allowed_mime_types: lifted126,
+                    allowed_extensions: lifted130,
+                  })
+                }
+                27 => {
+                  let lifted134 : Array[String]? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let array132 : Array[String] = []
+                      for index133 = 0
+                          index133 < mbt_ffi_load32(iter_base + 16)
+                          index133 = index133 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 12) +
+                          index133 * 8
+
+                        let result131 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        array132.push(result131)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+
+                      Option::Some(array132)
+                    }
+                    _ => panic()
+                  }
+
+                  let lifted138 : Array[String]? = match
+                    mbt_ffi_load8_u(iter_base + 20) {
+                    0 => Option::None
+                    1 => {
+                      let array136 : Array[String] = []
+                      for index137 = 0
+                          index137 < mbt_ffi_load32(iter_base + 28)
+                          index137 = index137 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 24) +
+                          index137 * 8
+
+                        let result135 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        array136.push(result135)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+
+                      Option::Some(array136)
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::UrlType(@types.UrlRestrictions::{
+                    allowed_schemes: lifted134,
+                    allowed_hosts: lifted138,
+                  })
+                }
+                28 => @types.SchemaTypeBody::DatetimeType
+                29 => @types.SchemaTypeBody::DurationType
+                30 => {
+                  let result139 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 8),
+                    mbt_ffi_load32(iter_base + 12),
+                  )
+
+                  let array141 : Array[String] = []
+                  for index142 = 0
+                      index142 < mbt_ffi_load32(iter_base + 20)
+                      index142 = index142 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 16) +
+                      index142 * 8
+
+                    let result140 = mbt_ffi_ptr2str(
+                      mbt_ffi_load32(iter_base + 0),
+                      mbt_ffi_load32(iter_base + 4),
+                    )
+
+                    array141.push(result140)
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+
+                  let lifted144 : @types.QuantityValue? = match
+                    mbt_ffi_load8_u(iter_base + 24) {
+                    0 => Option::None
+                    1 => {
+                      let result143 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 44),
+                        mbt_ffi_load32(iter_base + 48),
+                      )
+
+                      Option::Some(@types.QuantityValue::{
+                        mantissa: mbt_ffi_load64(iter_base + 32),
+                        scale: mbt_ffi_load32(iter_base + 40),
+                        unit: result143,
+                      })
+                    }
+                    _ => panic()
+                  }
+
+                  let lifted146 : @types.QuantityValue? = match
+                    mbt_ffi_load8_u(iter_base + 56) {
+                    0 => Option::None
+                    1 => {
+                      let result145 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 76),
+                        mbt_ffi_load32(iter_base + 80),
+                      )
+
+                      Option::Some(@types.QuantityValue::{
+                        mantissa: mbt_ffi_load64(iter_base + 64),
+                        scale: mbt_ffi_load32(iter_base + 72),
+                        unit: result145,
+                      })
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::QuantityType(@types.QuantitySpec::{
+                    base_unit: result139,
+                    allowed_suffixes: array141,
+                    min: lifted144,
+                    max: lifted146,
+                  })
+                }
+                31 => {
+                  let array170 : Array[@types.UnionBranch] = []
+                  for index171 = 0
+                      index171 < mbt_ffi_load32(iter_base + 12)
+                      index171 = index171 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 8) +
+                      index171 * 92
+
+                    let result147 = mbt_ffi_ptr2str(
+                      mbt_ffi_load32(iter_base + 0),
+                      mbt_ffi_load32(iter_base + 4),
+                    )
+
+                    let lifted156 = match mbt_ffi_load8_u(iter_base + 12) {
+                      0 => {
+                        let result148 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 16),
+                          mbt_ffi_load32(iter_base + 20),
+                        )
+
+                        @types.DiscriminatorRule::Prefix(result148)
+                      }
+                      1 => {
+                        let result149 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 16),
+                          mbt_ffi_load32(iter_base + 20),
+                        )
+
+                        @types.DiscriminatorRule::Suffix(result149)
+                      }
+                      2 => {
+                        let result150 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 16),
+                          mbt_ffi_load32(iter_base + 20),
+                        )
+
+                        @types.DiscriminatorRule::Contains(result150)
+                      }
+                      3 => {
+                        let result151 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 16),
+                          mbt_ffi_load32(iter_base + 20),
+                        )
+
+                        @types.DiscriminatorRule::Regex(result151)
+                      }
+                      4 => {
+                        let result152 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 16),
+                          mbt_ffi_load32(iter_base + 20),
+                        )
+
+                        let lifted154 : String? = match
+                          mbt_ffi_load8_u(iter_base + 24) {
+                          0 => Option::None
+                          1 => {
+                            let result153 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 28),
+                              mbt_ffi_load32(iter_base + 32),
+                            )
+
+                            Option::Some(result153)
+                          }
+                          _ => panic()
+                        }
+
+                        @types.DiscriminatorRule::FieldEquals(@types.FieldDiscriminator::{
+                          field_name: result152,
+                          literal: lifted154,
+                        })
+                      }
+                      5 => {
+                        let result155 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 16),
+                          mbt_ffi_load32(iter_base + 20),
+                        )
+
+                        @types.DiscriminatorRule::FieldAbsent(result155)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted158 : String? = match
+                      mbt_ffi_load8_u(iter_base + 36) {
+                      0 => Option::None
+                      1 => {
+                        let result157 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 40),
+                          mbt_ffi_load32(iter_base + 44),
+                        )
+
+                        Option::Some(result157)
+                      }
+                      _ => panic()
+                    }
+
+                    let array160 : Array[String] = []
+                    for index161 = 0
+                        index161 < mbt_ffi_load32(iter_base + 52)
+                        index161 = index161 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 48) +
+                        index161 * 8
+
+                      let result159 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 0),
+                        mbt_ffi_load32(iter_base + 4),
+                      )
+
+                      array160.push(result159)
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
+
+                    let array163 : Array[String] = []
+                    for index164 = 0
+                        index164 < mbt_ffi_load32(iter_base + 60)
+                        index164 = index164 + 1 {
+                      let iter_base = mbt_ffi_load32(iter_base + 56) +
+                        index164 * 8
+
+                      let result162 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 0),
+                        mbt_ffi_load32(iter_base + 4),
+                      )
+
+                      array163.push(result162)
+                    }
+                    mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
+
+                    let lifted166 : String? = match
+                      mbt_ffi_load8_u(iter_base + 64) {
+                      0 => Option::None
+                      1 => {
+                        let result165 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 68),
+                          mbt_ffi_load32(iter_base + 72),
+                        )
+
+                        Option::Some(result165)
+                      }
+                      _ => panic()
+                    }
+
+                    let lifted169 : @types.Role? = match
+                      mbt_ffi_load8_u(iter_base + 76) {
+                      0 => Option::None
+                      1 => {
+                        let lifted168 = match mbt_ffi_load8_u(iter_base + 80) {
+                          0 => @types.Role::Multimodal
+                          1 => @types.Role::UnstructuredText
+                          2 => @types.Role::UnstructuredBinary
+                          3 => {
+                            let result167 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 84),
+                              mbt_ffi_load32(iter_base + 88),
+                            )
+
+                            @types.Role::Other(result167)
+                          }
+                          _ => panic()
+                        }
+
+                        Option::Some(lifted168)
+                      }
+                      _ => panic()
+                    }
+
+                    array170.push(@types.UnionBranch::{
+                      tag: result147,
+                      body: mbt_ffi_load32(iter_base + 8),
+                      discriminator: lifted156,
+                      metadata: @types.MetadataEnvelope::{
+                        doc: lifted158,
+                        aliases: array160,
+                        examples: array163,
+                        deprecated: lifted166,
+                        role: lifted169,
+                      },
+                    })
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                  @types.SchemaTypeBody::UnionType(@types.UnionSpec::{
+                    branches: array170,
+                  })
+                }
+                32 => {
+                  let lifted173 : String? = match
+                    mbt_ffi_load8_u(iter_base + 12) {
+                    0 => Option::None
+                    1 => {
+                      let result172 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 16),
+                        mbt_ffi_load32(iter_base + 20),
+                      )
+
+                      Option::Some(result172)
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
+                    inner: mbt_ffi_load32(iter_base + 8),
+                    category: lifted173,
+                  })
+                }
+                33 => {
+                  let lifted175 : String? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let result174 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 12),
+                        mbt_ffi_load32(iter_base + 16),
+                      )
+
+                      Option::Some(result174)
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::QuotaTokenType(@types.QuotaTokenSpec::{
+                    resource_name: lifted175,
+                  })
+                }
+                34 =>
+                  @types.SchemaTypeBody::PermissionCardType(@types.PermissionCardSpec::{
+                    polymorphic: mbt_ffi_load8_u(iter_base + 8) != 0,
+                  })
+                35 => {
+                  let lifted176 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => Option::Some(mbt_ffi_load32(iter_base + 12))
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::FutureType(lifted176)
+                }
+                36 => {
+                  let lifted177 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => Option::Some(mbt_ffi_load32(iter_base + 12))
+                    _ => panic()
+                  }
+
+                  @types.SchemaTypeBody::StreamType(lifted177)
+                }
+                _ => panic()
+              }
+
+              let lifted180 : String? = match mbt_ffi_load8_u(iter_base + 88) {
+                0 => Option::None
+                1 => {
+                  let result179 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 92),
+                    mbt_ffi_load32(iter_base + 96),
+                  )
+
+                  Option::Some(result179)
+                }
+                _ => panic()
+              }
+
+              let array182 : Array[String] = []
+              for index183 = 0
+                  index183 < mbt_ffi_load32(iter_base + 104)
+                  index183 = index183 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 100) + index183 * 8
+
+                let result181 = mbt_ffi_ptr2str(
+                  mbt_ffi_load32(iter_base + 0),
+                  mbt_ffi_load32(iter_base + 4),
+                )
+
+                array182.push(result181)
+              }
+              mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
+
+              let array185 : Array[String] = []
+              for index186 = 0
+                  index186 < mbt_ffi_load32(iter_base + 112)
+                  index186 = index186 + 1 {
+                let iter_base = mbt_ffi_load32(iter_base + 108) + index186 * 8
+
+                let result184 = mbt_ffi_ptr2str(
+                  mbt_ffi_load32(iter_base + 0),
+                  mbt_ffi_load32(iter_base + 4),
+                )
+
+                array185.push(result184)
+              }
+              mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
+
+              let lifted188 : String? = match mbt_ffi_load8_u(iter_base + 116) {
+                0 => Option::None
+                1 => {
+                  let result187 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 120),
+                    mbt_ffi_load32(iter_base + 124),
+                  )
+
+                  Option::Some(result187)
+                }
+                _ => panic()
+              }
+
+              let lifted191 : @types.Role? = match
+                mbt_ffi_load8_u(iter_base + 128) {
+                0 => Option::None
+                1 => {
+                  let lifted190 = match mbt_ffi_load8_u(iter_base + 132) {
+                    0 => @types.Role::Multimodal
+                    1 => @types.Role::UnstructuredText
+                    2 => @types.Role::UnstructuredBinary
+                    3 => {
+                      let result189 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 136),
+                        mbt_ffi_load32(iter_base + 140),
+                      )
+
+                      @types.Role::Other(result189)
+                    }
+                    _ => panic()
+                  }
+
+                  Option::Some(lifted190)
+                }
+                _ => panic()
+              }
+
+              array192.push(@types.SchemaTypeNode::{
+                body: lifted178,
+                metadata: @types.MetadataEnvelope::{
+                  doc: lifted180,
+                  aliases: array182,
+                  examples: array185,
+                  deprecated: lifted188,
+                  role: lifted191,
+                },
+              })
+            }
+            mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+            let array197 : Array[@types.SchemaTypeDef] = []
+            for index198 = 0
+                index198 < mbt_ffi_load32(iter_base + 20)
+                index198 = index198 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 16) + index198 * 24
+
+              let result194 = mbt_ffi_ptr2str(
+                mbt_ffi_load32(iter_base + 0),
+                mbt_ffi_load32(iter_base + 4),
+              )
+
+              let lifted196 : String? = match mbt_ffi_load8_u(iter_base + 8) {
+                0 => Option::None
+                1 => {
+                  let result195 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 12),
+                    mbt_ffi_load32(iter_base + 16),
+                  )
+
+                  Option::Some(result195)
+                }
+                _ => panic()
+              }
+
+              array197.push(@types.SchemaTypeDef::{
+                id: result194,
+                name: lifted196,
+                body: mbt_ffi_load32(iter_base + 20),
+              })
+            }
+            mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+
+            let array228 : Array[@types.SchemaValueNode] = []
+            for index229 = 0
+                index229 < mbt_ffi_load32(iter_base + 32)
+                index229 = index229 + 1 {
+              let iter_base = mbt_ffi_load32(iter_base + 28) + index229 * 32
+
+              let lifted227 = match mbt_ffi_load8_u(iter_base + 0) {
+                0 =>
+                  @types.SchemaValueNode::BoolValue(
+                    mbt_ffi_load8_u(iter_base + 8) != 0,
+                  )
+                1 =>
+                  @types.SchemaValueNode::S8Value(mbt_ffi_load8(iter_base + 8))
+                2 =>
+                  @types.SchemaValueNode::S16Value(
+                    mbt_ffi_load16(iter_base + 8),
+                  )
+                3 =>
+                  @types.SchemaValueNode::S32Value(
+                    mbt_ffi_load32(iter_base + 8),
+                  )
+                4 =>
+                  @types.SchemaValueNode::S64Value(
+                    mbt_ffi_load64(iter_base + 8),
+                  )
+                5 =>
+                  @types.SchemaValueNode::U8Value(
+                    mbt_ffi_load8_u(iter_base + 8).to_byte(),
+                  )
+                6 =>
+                  @types.SchemaValueNode::U16Value(
+                    mbt_ffi_load16_u(iter_base + 8)
+                    .land(0xFFFF)
+                    .reinterpret_as_uint(),
+                  )
+                7 =>
+                  @types.SchemaValueNode::U32Value(
+                    mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
+                  )
+                8 =>
+                  @types.SchemaValueNode::U64Value(
+                    mbt_ffi_load64(iter_base + 8).reinterpret_as_uint64(),
+                  )
+                9 =>
+                  @types.SchemaValueNode::F32Value(
+                    mbt_ffi_loadf32(iter_base + 8),
+                  )
+                10 =>
+                  @types.SchemaValueNode::F64Value(
+                    mbt_ffi_loadf64(iter_base + 8),
+                  )
+                11 =>
+                  @types.SchemaValueNode::CharValue(
+                    Int::unsafe_to_char(mbt_ffi_load32(iter_base + 8)),
+                  )
+                12 => {
+                  let result199 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 8),
+                    mbt_ffi_load32(iter_base + 12),
+                  )
+
+                  @types.SchemaValueNode::StringValue(result199)
+                }
+                13 => {
+                  let array200 : Array[Int] = []
+                  for index201 = 0
+                      index201 < mbt_ffi_load32(iter_base + 12)
+                      index201 = index201 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 8) + index201 * 4
+
+                    array200.push(mbt_ffi_load32(iter_base + 0))
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                  @types.SchemaValueNode::RecordValue(array200)
+                }
+                14 => {
+                  let lifted202 : Int? = match mbt_ffi_load8_u(iter_base + 12) {
+                    0 => Option::None
+                    1 => Option::Some(mbt_ffi_load32(iter_base + 16))
+                    _ => panic()
+                  }
+
+                  @types.SchemaValueNode::VariantValue(@types.VariantValuePayload::{
+                    case: mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
+                    payload: lifted202,
+                  })
+                }
+                15 =>
+                  @types.SchemaValueNode::EnumValue(
+                    mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
+                  )
+                16 => {
+                  let array203 : Array[Bool] = []
+                  for index204 = 0
+                      index204 < mbt_ffi_load32(iter_base + 12)
+                      index204 = index204 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 8) + index204 * 1
+
+                    array203.push(mbt_ffi_load8_u(iter_base + 0) != 0)
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                  @types.SchemaValueNode::FlagsValue(array203)
+                }
+                17 => {
+                  let array205 : Array[Int] = []
+                  for index206 = 0
+                      index206 < mbt_ffi_load32(iter_base + 12)
+                      index206 = index206 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 8) + index206 * 4
+
+                    array205.push(mbt_ffi_load32(iter_base + 0))
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                  @types.SchemaValueNode::TupleValue(array205)
+                }
+                18 => {
+                  let array207 : Array[Int] = []
+                  for index208 = 0
+                      index208 < mbt_ffi_load32(iter_base + 12)
+                      index208 = index208 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 8) + index208 * 4
+
+                    array207.push(mbt_ffi_load32(iter_base + 0))
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                  @types.SchemaValueNode::ListValue(array207)
+                }
+                19 => {
+                  let array209 : Array[Int] = []
+                  for index210 = 0
+                      index210 < mbt_ffi_load32(iter_base + 12)
+                      index210 = index210 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 8) + index210 * 4
+
+                    array209.push(mbt_ffi_load32(iter_base + 0))
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                  @types.SchemaValueNode::FixedListValue(array209)
+                }
+                20 => {
+                  let array211 : Array[@types.MapEntry] = []
+                  for index212 = 0
+                      index212 < mbt_ffi_load32(iter_base + 12)
+                      index212 = index212 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 8) + index212 * 8
+
+                    array211.push(@types.MapEntry::{
+                      key: mbt_ffi_load32(iter_base + 0),
+                      value: mbt_ffi_load32(iter_base + 4),
+                    })
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                  @types.SchemaValueNode::MapValue(array211)
+                }
+                21 => {
+                  let lifted213 : Int? = match mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => Option::Some(mbt_ffi_load32(iter_base + 12))
+                    _ => panic()
+                  }
+
+                  @types.SchemaValueNode::OptionValue(lifted213)
+                }
+                22 => {
+                  let lifted216 = match mbt_ffi_load8_u(iter_base + 8) {
+                    0 => {
+                      let lifted214 : Int? = match
+                        mbt_ffi_load8_u(iter_base + 12) {
+                        0 => Option::None
+                        1 => Option::Some(mbt_ffi_load32(iter_base + 16))
+                        _ => panic()
+                      }
+
+                      @types.ResultValuePayload::OkValue(lifted214)
+                    }
+                    1 => {
+                      let lifted215 : Int? = match
+                        mbt_ffi_load8_u(iter_base + 12) {
+                        0 => Option::None
+                        1 => Option::Some(mbt_ffi_load32(iter_base + 16))
+                        _ => panic()
+                      }
+
+                      @types.ResultValuePayload::ErrValue(lifted215)
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaValueNode::ResultValue(lifted216)
+                }
+                23 => {
+                  let result217 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 8),
+                    mbt_ffi_load32(iter_base + 12),
+                  )
+
+                  let lifted219 : String? = match
+                    mbt_ffi_load8_u(iter_base + 16) {
+                    0 => Option::None
+                    1 => {
+                      let result218 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 20),
+                        mbt_ffi_load32(iter_base + 24),
+                      )
+
+                      Option::Some(result218)
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaValueNode::TextValue(@types.TextValuePayload::{
+                    text: result217,
+                    language: lifted219,
+                  })
+                }
+                24 => {
+                  let result220 = mbt_ffi_ptr2bytes(
+                    mbt_ffi_load32(iter_base + 8),
+                    mbt_ffi_load32(iter_base + 12),
+                  )
+
+                  let lifted222 : String? = match
+                    mbt_ffi_load8_u(iter_base + 16) {
+                    0 => Option::None
+                    1 => {
+                      let result221 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 20),
+                        mbt_ffi_load32(iter_base + 24),
+                      )
+
+                      Option::Some(result221)
+                    }
+                    _ => panic()
+                  }
+
+                  @types.SchemaValueNode::BinaryValue(@types.BinaryValuePayload::{
+                    bytes: result220,
+                    mime_type: lifted222,
+                  })
+                }
+                25 => {
+                  let result223 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 8),
+                    mbt_ffi_load32(iter_base + 12),
+                  )
+
+                  @types.SchemaValueNode::PathValue(result223)
+                }
+                26 => {
+                  let result224 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 8),
+                    mbt_ffi_load32(iter_base + 12),
+                  )
+
+                  @types.SchemaValueNode::UrlValue(result224)
+                }
+                27 =>
+                  @types.SchemaValueNode::DatetimeValue(@types.Datetime::{
+                    seconds: mbt_ffi_load64(iter_base + 8),
+                    nanoseconds: mbt_ffi_load32(iter_base + 16).reinterpret_as_uint(),
+                  })
+                28 =>
+                  @types.SchemaValueNode::DurationValue(@types.DurationValuePayload::{
+                    nanoseconds: mbt_ffi_load64(iter_base + 8),
+                  })
+                29 => {
+                  let result225 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 20),
+                    mbt_ffi_load32(iter_base + 24),
+                  )
+
+                  @types.SchemaValueNode::QuantityValueNode(@types.QuantityValue::{
+                    mantissa: mbt_ffi_load64(iter_base + 8),
+                    scale: mbt_ffi_load32(iter_base + 16),
+                    unit: result225,
+                  })
+                }
+                30 => {
+                  let result226 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 8),
+                    mbt_ffi_load32(iter_base + 12),
+                  )
+
+                  @types.SchemaValueNode::UnionValue(@types.UnionValuePayload::{
+                    tag: result226,
+                    body: mbt_ffi_load32(iter_base + 16),
+                  })
+                }
+                31 =>
+                  @types.SchemaValueNode::SecretValue(
+                    @types.Secret::Secret(mbt_ffi_load32(iter_base + 8)),
+                  )
+                32 =>
+                  @types.SchemaValueNode::QuotaTokenHandle(
+                    @types.QuotaToken::QuotaToken(mbt_ffi_load32(iter_base + 8)),
+                  )
+                33 =>
+                  @types.SchemaValueNode::PermissionCardHandle(
+                    @types.PermissionCard::PermissionCard(
+                      mbt_ffi_load32(iter_base + 8),
+                    ),
+                  )
+                34 =>
+                  @types.SchemaValueNode::StreamValue(
+                    @types.SchemaValueStream::SchemaValueStream(
+                      mbt_ffi_load32(iter_base + 8),
+                    ),
+                  )
+                _ => panic()
+              }
+
+              array228.push(lifted227)
+            }
+            mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
+
+            Option::Some(@types.TypedSchemaValue::{
+              graph: @types.SchemaGraph::{
+                type_nodes: array192,
+                defs: array197,
+                root: mbt_ffi_load32(iter_base + 24),
+              },
+              value: @types.SchemaValueTree::{
+                value_nodes: array228,
+                root: mbt_ffi_load32(iter_base + 36),
+              },
+            })
+          }
+          _ => panic()
+        }
+
+        let lifted232 : @async-core.Stream[Byte]? = match
+          mbt_ffi_load8_u(iter_base + 40) {
+          0 => Option::None
+          1 => {
+            let result231 = wasmGolemToolHost010GetInvokeResultsStream0StreamLift(
+              mbt_ffi_load32(iter_base + 44),
+            )
+
+            Option::Some(result231)
+          }
+          _ => panic()
+        }
+
+        Result::Ok(@common.InvocationResult::{
+          result: lifted230,
+          stdout: lifted232,
+        })
+      }
+      1 => {
+        let lifted480 = match mbt_ffi_load8_u(iter_base + 4) {
+          0 => {
+            let result233 = mbt_ffi_ptr2str(
+              mbt_ffi_load32(iter_base + 8),
+              mbt_ffi_load32(iter_base + 12),
+            )
+
+            RpcError::ProtocolError(result233)
+          }
+          1 => {
+            let result234 = mbt_ffi_ptr2str(
+              mbt_ffi_load32(iter_base + 8),
+              mbt_ffi_load32(iter_base + 12),
+            )
+
+            RpcError::Denied(result234)
+          }
+          2 => {
+            let result235 = mbt_ffi_ptr2str(
+              mbt_ffi_load32(iter_base + 8),
+              mbt_ffi_load32(iter_base + 12),
+            )
+
+            RpcError::NotFound(result235)
+          }
+          3 => {
+            let result236 = mbt_ffi_ptr2str(
+              mbt_ffi_load32(iter_base + 8),
+              mbt_ffi_load32(iter_base + 12),
+            )
+
+            RpcError::RemoteInternalError(result236)
+          }
+          4 => {
+            let lifted478 = match mbt_ffi_load8_u(iter_base + 8) {
+              0 => {
+                let result237 = mbt_ffi_ptr2str(
+                  mbt_ffi_load32(iter_base + 12),
+                  mbt_ffi_load32(iter_base + 16),
+                )
+
+                @common.ToolError::InvalidToolName(result237)
+              }
+              1 => {
+                let array239 : Array[String] = []
+                for index240 = 0
+                    index240 < mbt_ffi_load32(iter_base + 16)
+                    index240 = index240 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 12) + index240 * 8
+
+                  let result238 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 0),
+                    mbt_ffi_load32(iter_base + 4),
+                  )
+
+                  array239.push(result238)
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+
+                @common.ToolError::InvalidCommandPath(array239)
+              }
+              2 => {
+                let result241 = mbt_ffi_ptr2str(
+                  mbt_ffi_load32(iter_base + 12),
+                  mbt_ffi_load32(iter_base + 16),
+                )
+
+                @common.ToolError::InvalidInput(result241)
+              }
+              3 => {
+                let result242 = mbt_ffi_ptr2str(
+                  mbt_ffi_load32(iter_base + 12),
+                  mbt_ffi_load32(iter_base + 16),
+                )
+
+                @common.ToolError::ConstraintViolation(result242)
+              }
+              4 => {
+                let result243 = mbt_ffi_ptr2str(
+                  mbt_ffi_load32(iter_base + 12),
+                  mbt_ffi_load32(iter_base + 16),
+                )
+
+                @common.ToolError::InvalidResult(result243)
+              }
+              5 => {
+                let array440 : Array[@types.SchemaTypeNode] = []
+                for index441 = 0
+                    index441 < mbt_ffi_load32(iter_base + 16)
+                    index441 = index441 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 12) +
+                    index441 * 144
+
+                  let lifted426 = match mbt_ffi_load8_u(iter_base + 0) {
+                    0 =>
+                      @types.SchemaTypeBody::RefType(
+                        mbt_ffi_load32(iter_base + 8),
+                      )
+                    1 => @types.SchemaTypeBody::BoolType
+                    2 => {
+                      let lifted250 : @types.NumericRestrictions? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let lifted245 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 16) {
+                            0 => Option::None
+                            1 => {
+                              let lifted244 = match
+                                mbt_ffi_load8_u(iter_base + 24) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 32),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted244)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted247 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 40) {
+                            0 => Option::None
+                            1 => {
+                              let lifted246 = match
+                                mbt_ffi_load8_u(iter_base + 48) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 56),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted246)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted249 : String? = match
+                            mbt_ffi_load8_u(iter_base + 64) {
+                            0 => Option::None
+                            1 => {
+                              let result248 = mbt_ffi_ptr2str(
+                                mbt_ffi_load32(iter_base + 68),
+                                mbt_ffi_load32(iter_base + 72),
+                              )
+
+                              Option::Some(result248)
+                            }
+                            _ => panic()
+                          }
+
+                          Option::Some(@types.NumericRestrictions::{
+                            min: lifted245,
+                            max: lifted247,
+                            unit: lifted249,
+                          })
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::S8Type(lifted250)
+                    }
+                    3 => {
+                      let lifted257 : @types.NumericRestrictions? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let lifted252 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 16) {
+                            0 => Option::None
+                            1 => {
+                              let lifted251 = match
+                                mbt_ffi_load8_u(iter_base + 24) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 32),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted251)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted254 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 40) {
+                            0 => Option::None
+                            1 => {
+                              let lifted253 = match
+                                mbt_ffi_load8_u(iter_base + 48) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 56),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted253)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted256 : String? = match
+                            mbt_ffi_load8_u(iter_base + 64) {
+                            0 => Option::None
+                            1 => {
+                              let result255 = mbt_ffi_ptr2str(
+                                mbt_ffi_load32(iter_base + 68),
+                                mbt_ffi_load32(iter_base + 72),
+                              )
+
+                              Option::Some(result255)
+                            }
+                            _ => panic()
+                          }
+
+                          Option::Some(@types.NumericRestrictions::{
+                            min: lifted252,
+                            max: lifted254,
+                            unit: lifted256,
+                          })
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::S16Type(lifted257)
+                    }
+                    4 => {
+                      let lifted264 : @types.NumericRestrictions? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let lifted259 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 16) {
+                            0 => Option::None
+                            1 => {
+                              let lifted258 = match
+                                mbt_ffi_load8_u(iter_base + 24) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 32),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted258)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted261 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 40) {
+                            0 => Option::None
+                            1 => {
+                              let lifted260 = match
+                                mbt_ffi_load8_u(iter_base + 48) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 56),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted260)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted263 : String? = match
+                            mbt_ffi_load8_u(iter_base + 64) {
+                            0 => Option::None
+                            1 => {
+                              let result262 = mbt_ffi_ptr2str(
+                                mbt_ffi_load32(iter_base + 68),
+                                mbt_ffi_load32(iter_base + 72),
+                              )
+
+                              Option::Some(result262)
+                            }
+                            _ => panic()
+                          }
+
+                          Option::Some(@types.NumericRestrictions::{
+                            min: lifted259,
+                            max: lifted261,
+                            unit: lifted263,
+                          })
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::S32Type(lifted264)
+                    }
+                    5 => {
+                      let lifted271 : @types.NumericRestrictions? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let lifted266 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 16) {
+                            0 => Option::None
+                            1 => {
+                              let lifted265 = match
+                                mbt_ffi_load8_u(iter_base + 24) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 32),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted265)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted268 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 40) {
+                            0 => Option::None
+                            1 => {
+                              let lifted267 = match
+                                mbt_ffi_load8_u(iter_base + 48) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 56),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted267)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted270 : String? = match
+                            mbt_ffi_load8_u(iter_base + 64) {
+                            0 => Option::None
+                            1 => {
+                              let result269 = mbt_ffi_ptr2str(
+                                mbt_ffi_load32(iter_base + 68),
+                                mbt_ffi_load32(iter_base + 72),
+                              )
+
+                              Option::Some(result269)
+                            }
+                            _ => panic()
+                          }
+
+                          Option::Some(@types.NumericRestrictions::{
+                            min: lifted266,
+                            max: lifted268,
+                            unit: lifted270,
+                          })
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::S64Type(lifted271)
+                    }
+                    6 => {
+                      let lifted278 : @types.NumericRestrictions? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let lifted273 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 16) {
+                            0 => Option::None
+                            1 => {
+                              let lifted272 = match
+                                mbt_ffi_load8_u(iter_base + 24) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 32),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted272)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted275 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 40) {
+                            0 => Option::None
+                            1 => {
+                              let lifted274 = match
+                                mbt_ffi_load8_u(iter_base + 48) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 56),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted274)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted277 : String? = match
+                            mbt_ffi_load8_u(iter_base + 64) {
+                            0 => Option::None
+                            1 => {
+                              let result276 = mbt_ffi_ptr2str(
+                                mbt_ffi_load32(iter_base + 68),
+                                mbt_ffi_load32(iter_base + 72),
+                              )
+
+                              Option::Some(result276)
+                            }
+                            _ => panic()
+                          }
+
+                          Option::Some(@types.NumericRestrictions::{
+                            min: lifted273,
+                            max: lifted275,
+                            unit: lifted277,
+                          })
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::U8Type(lifted278)
+                    }
+                    7 => {
+                      let lifted285 : @types.NumericRestrictions? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let lifted280 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 16) {
+                            0 => Option::None
+                            1 => {
+                              let lifted279 = match
+                                mbt_ffi_load8_u(iter_base + 24) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 32),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted279)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted282 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 40) {
+                            0 => Option::None
+                            1 => {
+                              let lifted281 = match
+                                mbt_ffi_load8_u(iter_base + 48) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 56),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted281)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted284 : String? = match
+                            mbt_ffi_load8_u(iter_base + 64) {
+                            0 => Option::None
+                            1 => {
+                              let result283 = mbt_ffi_ptr2str(
+                                mbt_ffi_load32(iter_base + 68),
+                                mbt_ffi_load32(iter_base + 72),
+                              )
+
+                              Option::Some(result283)
+                            }
+                            _ => panic()
+                          }
+
+                          Option::Some(@types.NumericRestrictions::{
+                            min: lifted280,
+                            max: lifted282,
+                            unit: lifted284,
+                          })
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::U16Type(lifted285)
+                    }
+                    8 => {
+                      let lifted292 : @types.NumericRestrictions? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let lifted287 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 16) {
+                            0 => Option::None
+                            1 => {
+                              let lifted286 = match
+                                mbt_ffi_load8_u(iter_base + 24) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 32),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted286)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted289 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 40) {
+                            0 => Option::None
+                            1 => {
+                              let lifted288 = match
+                                mbt_ffi_load8_u(iter_base + 48) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 56),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted288)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted291 : String? = match
+                            mbt_ffi_load8_u(iter_base + 64) {
+                            0 => Option::None
+                            1 => {
+                              let result290 = mbt_ffi_ptr2str(
+                                mbt_ffi_load32(iter_base + 68),
+                                mbt_ffi_load32(iter_base + 72),
+                              )
+
+                              Option::Some(result290)
+                            }
+                            _ => panic()
+                          }
+
+                          Option::Some(@types.NumericRestrictions::{
+                            min: lifted287,
+                            max: lifted289,
+                            unit: lifted291,
+                          })
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::U32Type(lifted292)
+                    }
+                    9 => {
+                      let lifted299 : @types.NumericRestrictions? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let lifted294 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 16) {
+                            0 => Option::None
+                            1 => {
+                              let lifted293 = match
+                                mbt_ffi_load8_u(iter_base + 24) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 32),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted293)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted296 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 40) {
+                            0 => Option::None
+                            1 => {
+                              let lifted295 = match
+                                mbt_ffi_load8_u(iter_base + 48) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 56),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted295)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted298 : String? = match
+                            mbt_ffi_load8_u(iter_base + 64) {
+                            0 => Option::None
+                            1 => {
+                              let result297 = mbt_ffi_ptr2str(
+                                mbt_ffi_load32(iter_base + 68),
+                                mbt_ffi_load32(iter_base + 72),
+                              )
+
+                              Option::Some(result297)
+                            }
+                            _ => panic()
+                          }
+
+                          Option::Some(@types.NumericRestrictions::{
+                            min: lifted294,
+                            max: lifted296,
+                            unit: lifted298,
+                          })
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::U64Type(lifted299)
+                    }
+                    10 => {
+                      let lifted306 : @types.NumericRestrictions? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let lifted301 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 16) {
+                            0 => Option::None
+                            1 => {
+                              let lifted300 = match
+                                mbt_ffi_load8_u(iter_base + 24) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 32),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted300)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted303 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 40) {
+                            0 => Option::None
+                            1 => {
+                              let lifted302 = match
+                                mbt_ffi_load8_u(iter_base + 48) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 56),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted302)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted305 : String? = match
+                            mbt_ffi_load8_u(iter_base + 64) {
+                            0 => Option::None
+                            1 => {
+                              let result304 = mbt_ffi_ptr2str(
+                                mbt_ffi_load32(iter_base + 68),
+                                mbt_ffi_load32(iter_base + 72),
+                              )
+
+                              Option::Some(result304)
+                            }
+                            _ => panic()
+                          }
+
+                          Option::Some(@types.NumericRestrictions::{
+                            min: lifted301,
+                            max: lifted303,
+                            unit: lifted305,
+                          })
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::F32Type(lifted306)
+                    }
+                    11 => {
+                      let lifted313 : @types.NumericRestrictions? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let lifted308 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 16) {
+                            0 => Option::None
+                            1 => {
+                              let lifted307 = match
+                                mbt_ffi_load8_u(iter_base + 24) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 32),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 32).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted307)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted310 : @types.NumericBound? = match
+                            mbt_ffi_load8_u(iter_base + 40) {
+                            0 => Option::None
+                            1 => {
+                              let lifted309 = match
+                                mbt_ffi_load8_u(iter_base + 48) {
+                                0 =>
+                                  @types.NumericBound::Signed(
+                                    mbt_ffi_load64(iter_base + 56),
+                                  )
+                                1 =>
+                                  @types.NumericBound::Unsigned(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                2 =>
+                                  @types.NumericBound::FloatBits(
+                                    mbt_ffi_load64(iter_base + 56).reinterpret_as_uint64(),
+                                  )
+                                _ => panic()
+                              }
+
+                              Option::Some(lifted309)
+                            }
+                            _ => panic()
+                          }
+
+                          let lifted312 : String? = match
+                            mbt_ffi_load8_u(iter_base + 64) {
+                            0 => Option::None
+                            1 => {
+                              let result311 = mbt_ffi_ptr2str(
+                                mbt_ffi_load32(iter_base + 68),
+                                mbt_ffi_load32(iter_base + 72),
+                              )
+
+                              Option::Some(result311)
+                            }
+                            _ => panic()
+                          }
+
+                          Option::Some(@types.NumericRestrictions::{
+                            min: lifted308,
+                            max: lifted310,
+                            unit: lifted312,
+                          })
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::F64Type(lifted313)
+                    }
+                    12 => @types.SchemaTypeBody::CharType
+                    13 => @types.SchemaTypeBody::StringType
+                    14 => {
+                      let array328 : Array[@types.NamedFieldType] = []
+                      for index329 = 0
+                          index329 < mbt_ffi_load32(iter_base + 12)
+                          index329 = index329 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index329 * 68
+
+                        let result314 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        let lifted316 : String? = match
+                          mbt_ffi_load8_u(iter_base + 12) {
+                          0 => Option::None
+                          1 => {
+                            let result315 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 16),
+                              mbt_ffi_load32(iter_base + 20),
+                            )
+
+                            Option::Some(result315)
+                          }
+                          _ => panic()
+                        }
+
+                        let array318 : Array[String] = []
+                        for index319 = 0
+                            index319 < mbt_ffi_load32(iter_base + 28)
+                            index319 = index319 + 1 {
+                          let iter_base = mbt_ffi_load32(iter_base + 24) +
+                            index319 * 8
+
+                          let result317 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 0),
+                            mbt_ffi_load32(iter_base + 4),
+                          )
+
+                          array318.push(result317)
+                        }
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+
+                        let array321 : Array[String] = []
+                        for index322 = 0
+                            index322 < mbt_ffi_load32(iter_base + 36)
+                            index322 = index322 + 1 {
+                          let iter_base = mbt_ffi_load32(iter_base + 32) +
+                            index322 * 8
+
+                          let result320 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 0),
+                            mbt_ffi_load32(iter_base + 4),
+                          )
+
+                          array321.push(result320)
+                        }
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
+
+                        let lifted324 : String? = match
+                          mbt_ffi_load8_u(iter_base + 40) {
+                          0 => Option::None
+                          1 => {
+                            let result323 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 44),
+                              mbt_ffi_load32(iter_base + 48),
+                            )
+
+                            Option::Some(result323)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted327 : @types.Role? = match
+                          mbt_ffi_load8_u(iter_base + 52) {
+                          0 => Option::None
+                          1 => {
+                            let lifted326 = match
+                              mbt_ffi_load8_u(iter_base + 56) {
+                              0 => @types.Role::Multimodal
+                              1 => @types.Role::UnstructuredText
+                              2 => @types.Role::UnstructuredBinary
+                              3 => {
+                                let result325 = mbt_ffi_ptr2str(
+                                  mbt_ffi_load32(iter_base + 60),
+                                  mbt_ffi_load32(iter_base + 64),
+                                )
+
+                                @types.Role::Other(result325)
+                              }
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted326)
+                          }
+                          _ => panic()
+                        }
+
+                        array328.push(@types.NamedFieldType::{
+                          name: result314,
+                          body: mbt_ffi_load32(iter_base + 8),
+                          metadata: @types.MetadataEnvelope::{
+                            doc: lifted316,
+                            aliases: array318,
+                            examples: array321,
+                            deprecated: lifted324,
+                            role: lifted327,
+                          },
+                        })
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      @types.SchemaTypeBody::RecordType(array328)
+                    }
+                    15 => {
+                      let array345 : Array[@types.VariantCaseType] = []
+                      for index346 = 0
+                          index346 < mbt_ffi_load32(iter_base + 12)
+                          index346 = index346 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index346 * 72
+
+                        let result330 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        let lifted331 : Int? = match
+                          mbt_ffi_load8_u(iter_base + 8) {
+                          0 => Option::None
+                          1 => Option::Some(mbt_ffi_load32(iter_base + 12))
+                          _ => panic()
+                        }
+
+                        let lifted333 : String? = match
+                          mbt_ffi_load8_u(iter_base + 16) {
+                          0 => Option::None
+                          1 => {
+                            let result332 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 20),
+                              mbt_ffi_load32(iter_base + 24),
+                            )
+
+                            Option::Some(result332)
+                          }
+                          _ => panic()
+                        }
+
+                        let array335 : Array[String] = []
+                        for index336 = 0
+                            index336 < mbt_ffi_load32(iter_base + 32)
+                            index336 = index336 + 1 {
+                          let iter_base = mbt_ffi_load32(iter_base + 28) +
+                            index336 * 8
+
+                          let result334 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 0),
+                            mbt_ffi_load32(iter_base + 4),
+                          )
+
+                          array335.push(result334)
+                        }
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
+
+                        let array338 : Array[String] = []
+                        for index339 = 0
+                            index339 < mbt_ffi_load32(iter_base + 40)
+                            index339 = index339 + 1 {
+                          let iter_base = mbt_ffi_load32(iter_base + 36) +
+                            index339 * 8
+
+                          let result337 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 0),
+                            mbt_ffi_load32(iter_base + 4),
+                          )
+
+                          array338.push(result337)
+                        }
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 36))
+
+                        let lifted341 : String? = match
+                          mbt_ffi_load8_u(iter_base + 44) {
+                          0 => Option::None
+                          1 => {
+                            let result340 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 48),
+                              mbt_ffi_load32(iter_base + 52),
+                            )
+
+                            Option::Some(result340)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted344 : @types.Role? = match
+                          mbt_ffi_load8_u(iter_base + 56) {
+                          0 => Option::None
+                          1 => {
+                            let lifted343 = match
+                              mbt_ffi_load8_u(iter_base + 60) {
+                              0 => @types.Role::Multimodal
+                              1 => @types.Role::UnstructuredText
+                              2 => @types.Role::UnstructuredBinary
+                              3 => {
+                                let result342 = mbt_ffi_ptr2str(
+                                  mbt_ffi_load32(iter_base + 64),
+                                  mbt_ffi_load32(iter_base + 68),
+                                )
+
+                                @types.Role::Other(result342)
+                              }
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted343)
+                          }
+                          _ => panic()
+                        }
+
+                        array345.push(@types.VariantCaseType::{
+                          name: result330,
+                          payload: lifted331,
+                          metadata: @types.MetadataEnvelope::{
+                            doc: lifted333,
+                            aliases: array335,
+                            examples: array338,
+                            deprecated: lifted341,
+                            role: lifted344,
+                          },
+                        })
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      @types.SchemaTypeBody::VariantType(array345)
+                    }
+                    16 => {
+                      let array348 : Array[String] = []
+                      for index349 = 0
+                          index349 < mbt_ffi_load32(iter_base + 12)
+                          index349 = index349 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index349 * 8
+
+                        let result347 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        array348.push(result347)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      @types.SchemaTypeBody::EnumType(array348)
+                    }
+                    17 => {
+                      let array351 : Array[String] = []
+                      for index352 = 0
+                          index352 < mbt_ffi_load32(iter_base + 12)
+                          index352 = index352 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index352 * 8
+
+                        let result350 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        array351.push(result350)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      @types.SchemaTypeBody::FlagsType(array351)
+                    }
+                    18 => {
+                      let array353 : Array[Int] = []
+                      for index354 = 0
+                          index354 < mbt_ffi_load32(iter_base + 12)
+                          index354 = index354 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index354 * 4
+
+                        array353.push(mbt_ffi_load32(iter_base + 0))
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      @types.SchemaTypeBody::TupleType(array353)
+                    }
+                    19 =>
+                      @types.SchemaTypeBody::ListType(
+                        mbt_ffi_load32(iter_base + 8),
+                      )
+                    20 =>
+                      @types.SchemaTypeBody::FixedListType(@types.FixedListSpec::{
+                        element: mbt_ffi_load32(iter_base + 8),
+                        length: mbt_ffi_load32(iter_base + 12).reinterpret_as_uint(),
+                      })
+                    21 =>
+                      @types.SchemaTypeBody::MapType(@types.MapSpec::{
+                        key: mbt_ffi_load32(iter_base + 8),
+                        value: mbt_ffi_load32(iter_base + 12),
+                      })
+                    22 =>
+                      @types.SchemaTypeBody::OptionType(
+                        mbt_ffi_load32(iter_base + 8),
+                      )
+                    23 => {
+                      let lifted355 : Int? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => Option::Some(mbt_ffi_load32(iter_base + 12))
+                        _ => panic()
+                      }
+
+                      let lifted356 : Int? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => Option::Some(mbt_ffi_load32(iter_base + 20))
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::ResultType(@types.ResultSpec::{
+                        ok: lifted355,
+                        err: lifted356,
+                      })
+                    }
+                    24 => {
+                      let lifted360 : Array[String]? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let array358 : Array[String] = []
+                          for index359 = 0
+                              index359 < mbt_ffi_load32(iter_base + 16)
+                              index359 = index359 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 12) +
+                              index359 * 8
+
+                            let result357 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 0),
+                              mbt_ffi_load32(iter_base + 4),
+                            )
+
+                            array358.push(result357)
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+
+                          Option::Some(array358)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted361 : UInt? = match
+                        mbt_ffi_load8_u(iter_base + 20) {
+                        0 => Option::None
+                        1 =>
+                          Option::Some(
+                            mbt_ffi_load32(iter_base + 24).reinterpret_as_uint(),
+                          )
+                        _ => panic()
+                      }
+
+                      let lifted362 : UInt? = match
+                        mbt_ffi_load8_u(iter_base + 28) {
+                        0 => Option::None
+                        1 =>
+                          Option::Some(
+                            mbt_ffi_load32(iter_base + 32).reinterpret_as_uint(),
+                          )
+                        _ => panic()
+                      }
+
+                      let lifted364 : String? = match
+                        mbt_ffi_load8_u(iter_base + 36) {
+                        0 => Option::None
+                        1 => {
+                          let result363 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 40),
+                            mbt_ffi_load32(iter_base + 44),
+                          )
+
+                          Option::Some(result363)
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::TextType(@types.TextRestrictions::{
+                        languages: lifted360,
+                        min_length: lifted361,
+                        max_length: lifted362,
+                        regex: lifted364,
+                      })
+                    }
+                    25 => {
+                      let lifted368 : Array[String]? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let array366 : Array[String] = []
+                          for index367 = 0
+                              index367 < mbt_ffi_load32(iter_base + 16)
+                              index367 = index367 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 12) +
+                              index367 * 8
+
+                            let result365 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 0),
+                              mbt_ffi_load32(iter_base + 4),
+                            )
+
+                            array366.push(result365)
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+
+                          Option::Some(array366)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted369 : UInt? = match
+                        mbt_ffi_load8_u(iter_base + 20) {
+                        0 => Option::None
+                        1 =>
+                          Option::Some(
+                            mbt_ffi_load32(iter_base + 24).reinterpret_as_uint(),
+                          )
+                        _ => panic()
+                      }
+
+                      let lifted370 : UInt? = match
+                        mbt_ffi_load8_u(iter_base + 28) {
+                        0 => Option::None
+                        1 =>
+                          Option::Some(
+                            mbt_ffi_load32(iter_base + 32).reinterpret_as_uint(),
+                          )
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::BinaryType(@types.BinaryRestrictions::{
+                        mime_types: lifted368,
+                        min_bytes: lifted369,
+                        max_bytes: lifted370,
+                      })
+                    }
+                    26 => {
+                      let lifted374 : Array[String]? = match
+                        mbt_ffi_load8_u(iter_base + 12) {
+                        0 => Option::None
+                        1 => {
+                          let array372 : Array[String] = []
+                          for index373 = 0
+                              index373 < mbt_ffi_load32(iter_base + 20)
+                              index373 = index373 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 16) +
+                              index373 * 8
+
+                            let result371 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 0),
+                              mbt_ffi_load32(iter_base + 4),
+                            )
+
+                            array372.push(result371)
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+
+                          Option::Some(array372)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted378 : Array[String]? = match
+                        mbt_ffi_load8_u(iter_base + 24) {
+                        0 => Option::None
+                        1 => {
+                          let array376 : Array[String] = []
+                          for index377 = 0
+                              index377 < mbt_ffi_load32(iter_base + 32)
+                              index377 = index377 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 28) +
+                              index377 * 8
+
+                            let result375 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 0),
+                              mbt_ffi_load32(iter_base + 4),
+                            )
+
+                            array376.push(result375)
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 28))
+
+                          Option::Some(array376)
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::PathType(@types.PathSpec::{
+                        direction: @types.PathDirection::from(
+                          mbt_ffi_load8_u(iter_base + 8),
+                        ),
+                        kind: @types.PathKind::from(
+                          mbt_ffi_load8_u(iter_base + 9),
+                        ),
+                        allowed_mime_types: lifted374,
+                        allowed_extensions: lifted378,
+                      })
+                    }
+                    27 => {
+                      let lifted382 : Array[String]? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let array380 : Array[String] = []
+                          for index381 = 0
+                              index381 < mbt_ffi_load32(iter_base + 16)
+                              index381 = index381 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 12) +
+                              index381 * 8
+
+                            let result379 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 0),
+                              mbt_ffi_load32(iter_base + 4),
+                            )
+
+                            array380.push(result379)
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+
+                          Option::Some(array380)
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted386 : Array[String]? = match
+                        mbt_ffi_load8_u(iter_base + 20) {
+                        0 => Option::None
+                        1 => {
+                          let array384 : Array[String] = []
+                          for index385 = 0
+                              index385 < mbt_ffi_load32(iter_base + 28)
+                              index385 = index385 + 1 {
+                            let iter_base = mbt_ffi_load32(iter_base + 24) +
+                              index385 * 8
+
+                            let result383 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 0),
+                              mbt_ffi_load32(iter_base + 4),
+                            )
+
+                            array384.push(result383)
+                          }
+                          mbt_ffi_free(mbt_ffi_load32(iter_base + 24))
+
+                          Option::Some(array384)
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::UrlType(@types.UrlRestrictions::{
+                        allowed_schemes: lifted382,
+                        allowed_hosts: lifted386,
+                      })
+                    }
+                    28 => @types.SchemaTypeBody::DatetimeType
+                    29 => @types.SchemaTypeBody::DurationType
+                    30 => {
+                      let result387 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 8),
+                        mbt_ffi_load32(iter_base + 12),
+                      )
+
+                      let array389 : Array[String] = []
+                      for index390 = 0
+                          index390 < mbt_ffi_load32(iter_base + 20)
+                          index390 = index390 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 16) +
+                          index390 * 8
+
+                        let result388 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        array389.push(result388)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 16))
+
+                      let lifted392 : @types.QuantityValue? = match
+                        mbt_ffi_load8_u(iter_base + 24) {
+                        0 => Option::None
+                        1 => {
+                          let result391 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 44),
+                            mbt_ffi_load32(iter_base + 48),
+                          )
+
+                          Option::Some(@types.QuantityValue::{
+                            mantissa: mbt_ffi_load64(iter_base + 32),
+                            scale: mbt_ffi_load32(iter_base + 40),
+                            unit: result391,
+                          })
+                        }
+                        _ => panic()
+                      }
+
+                      let lifted394 : @types.QuantityValue? = match
+                        mbt_ffi_load8_u(iter_base + 56) {
+                        0 => Option::None
+                        1 => {
+                          let result393 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 76),
+                            mbt_ffi_load32(iter_base + 80),
+                          )
+
+                          Option::Some(@types.QuantityValue::{
+                            mantissa: mbt_ffi_load64(iter_base + 64),
+                            scale: mbt_ffi_load32(iter_base + 72),
+                            unit: result393,
+                          })
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::QuantityType(@types.QuantitySpec::{
+                        base_unit: result387,
+                        allowed_suffixes: array389,
+                        min: lifted392,
+                        max: lifted394,
+                      })
+                    }
+                    31 => {
+                      let array418 : Array[@types.UnionBranch] = []
+                      for index419 = 0
+                          index419 < mbt_ffi_load32(iter_base + 12)
+                          index419 = index419 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index419 * 92
+
+                        let result395 = mbt_ffi_ptr2str(
+                          mbt_ffi_load32(iter_base + 0),
+                          mbt_ffi_load32(iter_base + 4),
+                        )
+
+                        let lifted404 = match mbt_ffi_load8_u(iter_base + 12) {
+                          0 => {
+                            let result396 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 16),
+                              mbt_ffi_load32(iter_base + 20),
+                            )
+
+                            @types.DiscriminatorRule::Prefix(result396)
+                          }
+                          1 => {
+                            let result397 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 16),
+                              mbt_ffi_load32(iter_base + 20),
+                            )
+
+                            @types.DiscriminatorRule::Suffix(result397)
+                          }
+                          2 => {
+                            let result398 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 16),
+                              mbt_ffi_load32(iter_base + 20),
+                            )
+
+                            @types.DiscriminatorRule::Contains(result398)
+                          }
+                          3 => {
+                            let result399 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 16),
+                              mbt_ffi_load32(iter_base + 20),
+                            )
+
+                            @types.DiscriminatorRule::Regex(result399)
+                          }
+                          4 => {
+                            let result400 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 16),
+                              mbt_ffi_load32(iter_base + 20),
+                            )
+
+                            let lifted402 : String? = match
+                              mbt_ffi_load8_u(iter_base + 24) {
+                              0 => Option::None
+                              1 => {
+                                let result401 = mbt_ffi_ptr2str(
+                                  mbt_ffi_load32(iter_base + 28),
+                                  mbt_ffi_load32(iter_base + 32),
+                                )
+
+                                Option::Some(result401)
+                              }
+                              _ => panic()
+                            }
+
+                            @types.DiscriminatorRule::FieldEquals(@types.FieldDiscriminator::{
+                              field_name: result400,
+                              literal: lifted402,
+                            })
+                          }
+                          5 => {
+                            let result403 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 16),
+                              mbt_ffi_load32(iter_base + 20),
+                            )
+
+                            @types.DiscriminatorRule::FieldAbsent(result403)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted406 : String? = match
+                          mbt_ffi_load8_u(iter_base + 36) {
+                          0 => Option::None
+                          1 => {
+                            let result405 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 40),
+                              mbt_ffi_load32(iter_base + 44),
+                            )
+
+                            Option::Some(result405)
+                          }
+                          _ => panic()
+                        }
+
+                        let array408 : Array[String] = []
+                        for index409 = 0
+                            index409 < mbt_ffi_load32(iter_base + 52)
+                            index409 = index409 + 1 {
+                          let iter_base = mbt_ffi_load32(iter_base + 48) +
+                            index409 * 8
+
+                          let result407 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 0),
+                            mbt_ffi_load32(iter_base + 4),
+                          )
+
+                          array408.push(result407)
+                        }
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 48))
+
+                        let array411 : Array[String] = []
+                        for index412 = 0
+                            index412 < mbt_ffi_load32(iter_base + 60)
+                            index412 = index412 + 1 {
+                          let iter_base = mbt_ffi_load32(iter_base + 56) +
+                            index412 * 8
+
+                          let result410 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 0),
+                            mbt_ffi_load32(iter_base + 4),
+                          )
+
+                          array411.push(result410)
+                        }
+                        mbt_ffi_free(mbt_ffi_load32(iter_base + 56))
+
+                        let lifted414 : String? = match
+                          mbt_ffi_load8_u(iter_base + 64) {
+                          0 => Option::None
+                          1 => {
+                            let result413 = mbt_ffi_ptr2str(
+                              mbt_ffi_load32(iter_base + 68),
+                              mbt_ffi_load32(iter_base + 72),
+                            )
+
+                            Option::Some(result413)
+                          }
+                          _ => panic()
+                        }
+
+                        let lifted417 : @types.Role? = match
+                          mbt_ffi_load8_u(iter_base + 76) {
+                          0 => Option::None
+                          1 => {
+                            let lifted416 = match
+                              mbt_ffi_load8_u(iter_base + 80) {
+                              0 => @types.Role::Multimodal
+                              1 => @types.Role::UnstructuredText
+                              2 => @types.Role::UnstructuredBinary
+                              3 => {
+                                let result415 = mbt_ffi_ptr2str(
+                                  mbt_ffi_load32(iter_base + 84),
+                                  mbt_ffi_load32(iter_base + 88),
+                                )
+
+                                @types.Role::Other(result415)
+                              }
+                              _ => panic()
+                            }
+
+                            Option::Some(lifted416)
+                          }
+                          _ => panic()
+                        }
+
+                        array418.push(@types.UnionBranch::{
+                          tag: result395,
+                          body: mbt_ffi_load32(iter_base + 8),
+                          discriminator: lifted404,
+                          metadata: @types.MetadataEnvelope::{
+                            doc: lifted406,
+                            aliases: array408,
+                            examples: array411,
+                            deprecated: lifted414,
+                            role: lifted417,
+                          },
+                        })
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      @types.SchemaTypeBody::UnionType(@types.UnionSpec::{
+                        branches: array418,
+                      })
+                    }
+                    32 => {
+                      let lifted421 : String? = match
+                        mbt_ffi_load8_u(iter_base + 12) {
+                        0 => Option::None
+                        1 => {
+                          let result420 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 16),
+                            mbt_ffi_load32(iter_base + 20),
+                          )
+
+                          Option::Some(result420)
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::SecretType(@types.SecretSpec::{
+                        inner: mbt_ffi_load32(iter_base + 8),
+                        category: lifted421,
+                      })
+                    }
+                    33 => {
+                      let lifted423 : String? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => {
+                          let result422 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 12),
+                            mbt_ffi_load32(iter_base + 16),
+                          )
+
+                          Option::Some(result422)
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::QuotaTokenType(@types.QuotaTokenSpec::{
+                        resource_name: lifted423,
+                      })
+                    }
+                    34 =>
+                      @types.SchemaTypeBody::PermissionCardType(@types.PermissionCardSpec::{
+                        polymorphic: mbt_ffi_load8_u(iter_base + 8) != 0,
+                      })
+                    35 => {
+                      let lifted424 : Int? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => Option::Some(mbt_ffi_load32(iter_base + 12))
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::FutureType(lifted424)
+                    }
+                    36 => {
+                      let lifted425 : Int? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => Option::Some(mbt_ffi_load32(iter_base + 12))
+                        _ => panic()
+                      }
+
+                      @types.SchemaTypeBody::StreamType(lifted425)
+                    }
+                    _ => panic()
+                  }
+
+                  let lifted428 : String? = match
+                    mbt_ffi_load8_u(iter_base + 88) {
+                    0 => Option::None
+                    1 => {
+                      let result427 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 92),
+                        mbt_ffi_load32(iter_base + 96),
+                      )
+
+                      Option::Some(result427)
+                    }
+                    _ => panic()
+                  }
+
+                  let array430 : Array[String] = []
+                  for index431 = 0
+                      index431 < mbt_ffi_load32(iter_base + 104)
+                      index431 = index431 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 100) +
+                      index431 * 8
+
+                    let result429 = mbt_ffi_ptr2str(
+                      mbt_ffi_load32(iter_base + 0),
+                      mbt_ffi_load32(iter_base + 4),
+                    )
+
+                    array430.push(result429)
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 100))
+
+                  let array433 : Array[String] = []
+                  for index434 = 0
+                      index434 < mbt_ffi_load32(iter_base + 112)
+                      index434 = index434 + 1 {
+                    let iter_base = mbt_ffi_load32(iter_base + 108) +
+                      index434 * 8
+
+                    let result432 = mbt_ffi_ptr2str(
+                      mbt_ffi_load32(iter_base + 0),
+                      mbt_ffi_load32(iter_base + 4),
+                    )
+
+                    array433.push(result432)
+                  }
+                  mbt_ffi_free(mbt_ffi_load32(iter_base + 108))
+
+                  let lifted436 : String? = match
+                    mbt_ffi_load8_u(iter_base + 116) {
+                    0 => Option::None
+                    1 => {
+                      let result435 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 120),
+                        mbt_ffi_load32(iter_base + 124),
+                      )
+
+                      Option::Some(result435)
+                    }
+                    _ => panic()
+                  }
+
+                  let lifted439 : @types.Role? = match
+                    mbt_ffi_load8_u(iter_base + 128) {
+                    0 => Option::None
+                    1 => {
+                      let lifted438 = match mbt_ffi_load8_u(iter_base + 132) {
+                        0 => @types.Role::Multimodal
+                        1 => @types.Role::UnstructuredText
+                        2 => @types.Role::UnstructuredBinary
+                        3 => {
+                          let result437 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 136),
+                            mbt_ffi_load32(iter_base + 140),
+                          )
+
+                          @types.Role::Other(result437)
+                        }
+                        _ => panic()
+                      }
+
+                      Option::Some(lifted438)
+                    }
+                    _ => panic()
+                  }
+
+                  array440.push(@types.SchemaTypeNode::{
+                    body: lifted426,
+                    metadata: @types.MetadataEnvelope::{
+                      doc: lifted428,
+                      aliases: array430,
+                      examples: array433,
+                      deprecated: lifted436,
+                      role: lifted439,
+                    },
+                  })
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 12))
+
+                let array445 : Array[@types.SchemaTypeDef] = []
+                for index446 = 0
+                    index446 < mbt_ffi_load32(iter_base + 24)
+                    index446 = index446 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 20) + index446 * 24
+
+                  let result442 = mbt_ffi_ptr2str(
+                    mbt_ffi_load32(iter_base + 0),
+                    mbt_ffi_load32(iter_base + 4),
+                  )
+
+                  let lifted444 : String? = match
+                    mbt_ffi_load8_u(iter_base + 8) {
+                    0 => Option::None
+                    1 => {
+                      let result443 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 12),
+                        mbt_ffi_load32(iter_base + 16),
+                      )
+
+                      Option::Some(result443)
+                    }
+                    _ => panic()
+                  }
+
+                  array445.push(@types.SchemaTypeDef::{
+                    id: result442,
+                    name: lifted444,
+                    body: mbt_ffi_load32(iter_base + 20),
+                  })
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 20))
+
+                let array476 : Array[@types.SchemaValueNode] = []
+                for index477 = 0
+                    index477 < mbt_ffi_load32(iter_base + 36)
+                    index477 = index477 + 1 {
+                  let iter_base = mbt_ffi_load32(iter_base + 32) + index477 * 32
+
+                  let lifted475 = match mbt_ffi_load8_u(iter_base + 0) {
+                    0 =>
+                      @types.SchemaValueNode::BoolValue(
+                        mbt_ffi_load8_u(iter_base + 8) != 0,
+                      )
+                    1 =>
+                      @types.SchemaValueNode::S8Value(
+                        mbt_ffi_load8(iter_base + 8),
+                      )
+                    2 =>
+                      @types.SchemaValueNode::S16Value(
+                        mbt_ffi_load16(iter_base + 8),
+                      )
+                    3 =>
+                      @types.SchemaValueNode::S32Value(
+                        mbt_ffi_load32(iter_base + 8),
+                      )
+                    4 =>
+                      @types.SchemaValueNode::S64Value(
+                        mbt_ffi_load64(iter_base + 8),
+                      )
+                    5 =>
+                      @types.SchemaValueNode::U8Value(
+                        mbt_ffi_load8_u(iter_base + 8).to_byte(),
+                      )
+                    6 =>
+                      @types.SchemaValueNode::U16Value(
+                        mbt_ffi_load16_u(iter_base + 8)
+                        .land(0xFFFF)
+                        .reinterpret_as_uint(),
+                      )
+                    7 =>
+                      @types.SchemaValueNode::U32Value(
+                        mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
+                      )
+                    8 =>
+                      @types.SchemaValueNode::U64Value(
+                        mbt_ffi_load64(iter_base + 8).reinterpret_as_uint64(),
+                      )
+                    9 =>
+                      @types.SchemaValueNode::F32Value(
+                        mbt_ffi_loadf32(iter_base + 8),
+                      )
+                    10 =>
+                      @types.SchemaValueNode::F64Value(
+                        mbt_ffi_loadf64(iter_base + 8),
+                      )
+                    11 =>
+                      @types.SchemaValueNode::CharValue(
+                        Int::unsafe_to_char(mbt_ffi_load32(iter_base + 8)),
+                      )
+                    12 => {
+                      let result447 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 8),
+                        mbt_ffi_load32(iter_base + 12),
+                      )
+
+                      @types.SchemaValueNode::StringValue(result447)
+                    }
+                    13 => {
+                      let array448 : Array[Int] = []
+                      for index449 = 0
+                          index449 < mbt_ffi_load32(iter_base + 12)
+                          index449 = index449 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index449 * 4
+
+                        array448.push(mbt_ffi_load32(iter_base + 0))
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      @types.SchemaValueNode::RecordValue(array448)
+                    }
+                    14 => {
+                      let lifted450 : Int? = match
+                        mbt_ffi_load8_u(iter_base + 12) {
+                        0 => Option::None
+                        1 => Option::Some(mbt_ffi_load32(iter_base + 16))
+                        _ => panic()
+                      }
+
+                      @types.SchemaValueNode::VariantValue(@types.VariantValuePayload::{
+                        case: mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
+                        payload: lifted450,
+                      })
+                    }
+                    15 =>
+                      @types.SchemaValueNode::EnumValue(
+                        mbt_ffi_load32(iter_base + 8).reinterpret_as_uint(),
+                      )
+                    16 => {
+                      let array451 : Array[Bool] = []
+                      for index452 = 0
+                          index452 < mbt_ffi_load32(iter_base + 12)
+                          index452 = index452 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index452 * 1
+
+                        array451.push(mbt_ffi_load8_u(iter_base + 0) != 0)
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      @types.SchemaValueNode::FlagsValue(array451)
+                    }
+                    17 => {
+                      let array453 : Array[Int] = []
+                      for index454 = 0
+                          index454 < mbt_ffi_load32(iter_base + 12)
+                          index454 = index454 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index454 * 4
+
+                        array453.push(mbt_ffi_load32(iter_base + 0))
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      @types.SchemaValueNode::TupleValue(array453)
+                    }
+                    18 => {
+                      let array455 : Array[Int] = []
+                      for index456 = 0
+                          index456 < mbt_ffi_load32(iter_base + 12)
+                          index456 = index456 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index456 * 4
+
+                        array455.push(mbt_ffi_load32(iter_base + 0))
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      @types.SchemaValueNode::ListValue(array455)
+                    }
+                    19 => {
+                      let array457 : Array[Int] = []
+                      for index458 = 0
+                          index458 < mbt_ffi_load32(iter_base + 12)
+                          index458 = index458 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index458 * 4
+
+                        array457.push(mbt_ffi_load32(iter_base + 0))
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      @types.SchemaValueNode::FixedListValue(array457)
+                    }
+                    20 => {
+                      let array459 : Array[@types.MapEntry] = []
+                      for index460 = 0
+                          index460 < mbt_ffi_load32(iter_base + 12)
+                          index460 = index460 + 1 {
+                        let iter_base = mbt_ffi_load32(iter_base + 8) +
+                          index460 * 8
+
+                        array459.push(@types.MapEntry::{
+                          key: mbt_ffi_load32(iter_base + 0),
+                          value: mbt_ffi_load32(iter_base + 4),
+                        })
+                      }
+                      mbt_ffi_free(mbt_ffi_load32(iter_base + 8))
+
+                      @types.SchemaValueNode::MapValue(array459)
+                    }
+                    21 => {
+                      let lifted461 : Int? = match
+                        mbt_ffi_load8_u(iter_base + 8) {
+                        0 => Option::None
+                        1 => Option::Some(mbt_ffi_load32(iter_base + 12))
+                        _ => panic()
+                      }
+
+                      @types.SchemaValueNode::OptionValue(lifted461)
+                    }
+                    22 => {
+                      let lifted464 = match mbt_ffi_load8_u(iter_base + 8) {
+                        0 => {
+                          let lifted462 : Int? = match
+                            mbt_ffi_load8_u(iter_base + 12) {
+                            0 => Option::None
+                            1 => Option::Some(mbt_ffi_load32(iter_base + 16))
+                            _ => panic()
+                          }
+
+                          @types.ResultValuePayload::OkValue(lifted462)
+                        }
+                        1 => {
+                          let lifted463 : Int? = match
+                            mbt_ffi_load8_u(iter_base + 12) {
+                            0 => Option::None
+                            1 => Option::Some(mbt_ffi_load32(iter_base + 16))
+                            _ => panic()
+                          }
+
+                          @types.ResultValuePayload::ErrValue(lifted463)
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaValueNode::ResultValue(lifted464)
+                    }
+                    23 => {
+                      let result465 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 8),
+                        mbt_ffi_load32(iter_base + 12),
+                      )
+
+                      let lifted467 : String? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => {
+                          let result466 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 20),
+                            mbt_ffi_load32(iter_base + 24),
+                          )
+
+                          Option::Some(result466)
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaValueNode::TextValue(@types.TextValuePayload::{
+                        text: result465,
+                        language: lifted467,
+                      })
+                    }
+                    24 => {
+                      let result468 = mbt_ffi_ptr2bytes(
+                        mbt_ffi_load32(iter_base + 8),
+                        mbt_ffi_load32(iter_base + 12),
+                      )
+
+                      let lifted470 : String? = match
+                        mbt_ffi_load8_u(iter_base + 16) {
+                        0 => Option::None
+                        1 => {
+                          let result469 = mbt_ffi_ptr2str(
+                            mbt_ffi_load32(iter_base + 20),
+                            mbt_ffi_load32(iter_base + 24),
+                          )
+
+                          Option::Some(result469)
+                        }
+                        _ => panic()
+                      }
+
+                      @types.SchemaValueNode::BinaryValue(@types.BinaryValuePayload::{
+                        bytes: result468,
+                        mime_type: lifted470,
+                      })
+                    }
+                    25 => {
+                      let result471 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 8),
+                        mbt_ffi_load32(iter_base + 12),
+                      )
+
+                      @types.SchemaValueNode::PathValue(result471)
+                    }
+                    26 => {
+                      let result472 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 8),
+                        mbt_ffi_load32(iter_base + 12),
+                      )
+
+                      @types.SchemaValueNode::UrlValue(result472)
+                    }
+                    27 =>
+                      @types.SchemaValueNode::DatetimeValue(@types.Datetime::{
+                        seconds: mbt_ffi_load64(iter_base + 8),
+                        nanoseconds: mbt_ffi_load32(iter_base + 16).reinterpret_as_uint(),
+                      })
+                    28 =>
+                      @types.SchemaValueNode::DurationValue(@types.DurationValuePayload::{
+                        nanoseconds: mbt_ffi_load64(iter_base + 8),
+                      })
+                    29 => {
+                      let result473 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 20),
+                        mbt_ffi_load32(iter_base + 24),
+                      )
+
+                      @types.SchemaValueNode::QuantityValueNode(@types.QuantityValue::{
+                        mantissa: mbt_ffi_load64(iter_base + 8),
+                        scale: mbt_ffi_load32(iter_base + 16),
+                        unit: result473,
+                      })
+                    }
+                    30 => {
+                      let result474 = mbt_ffi_ptr2str(
+                        mbt_ffi_load32(iter_base + 8),
+                        mbt_ffi_load32(iter_base + 12),
+                      )
+
+                      @types.SchemaValueNode::UnionValue(@types.UnionValuePayload::{
+                        tag: result474,
+                        body: mbt_ffi_load32(iter_base + 16),
+                      })
+                    }
+                    31 =>
+                      @types.SchemaValueNode::SecretValue(
+                        @types.Secret::Secret(mbt_ffi_load32(iter_base + 8)),
+                      )
+                    32 =>
+                      @types.SchemaValueNode::QuotaTokenHandle(
+                        @types.QuotaToken::QuotaToken(
+                          mbt_ffi_load32(iter_base + 8),
+                        ),
+                      )
+                    33 =>
+                      @types.SchemaValueNode::PermissionCardHandle(
+                        @types.PermissionCard::PermissionCard(
+                          mbt_ffi_load32(iter_base + 8),
+                        ),
+                      )
+                    34 =>
+                      @types.SchemaValueNode::StreamValue(
+                        @types.SchemaValueStream::SchemaValueStream(
+                          mbt_ffi_load32(iter_base + 8),
+                        ),
+                      )
+                    _ => panic()
+                  }
+
+                  array476.push(lifted475)
+                }
+                mbt_ffi_free(mbt_ffi_load32(iter_base + 32))
+
+                @common.ToolError::CustomError(@types.TypedSchemaValue::{
+                  graph: @types.SchemaGraph::{
+                    type_nodes: array440,
+                    defs: array445,
+                    root: mbt_ffi_load32(iter_base + 28),
+                  },
+                  value: @types.SchemaValueTree::{
+                    value_nodes: array476,
+                    root: mbt_ffi_load32(iter_base + 40),
+                  },
+                })
+              }
+              _ => panic()
+            }
+
+            RpcError::RemoteToolError(lifted478)
+          }
+          5 => RpcError::Cancelled
+          6 => {
+            let result479 = mbt_ffi_ptr2str(
+              mbt_ffi_load32(iter_base + 8),
+              mbt_ffi_load32(iter_base + 12),
+            )
+
+            RpcError::ResourceExhausted(result479)
+          }
+          _ => panic()
+        }
+
+        Result::Err(lifted480)
+      }
+      _ => panic()
+    }
+
+    array482.push(lifted481)
+  }
+  mbt_ffi_free(mbt_ffi_load32(result_ptr + 0))
+
+  array482
 }

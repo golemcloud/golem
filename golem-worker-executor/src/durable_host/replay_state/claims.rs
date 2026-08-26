@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Debug, Clone)]
+pub(crate) enum RequestClaimIdentity {
+    Exact(HostRequest),
+    EntityInvocation(EntityInvocationRequestIdentity),
+    ToolInvocation(Box<ToolInvocationClaimIdentity>),
+}
+
 /// Typed descriptor of the recorded `Start` entry a concurrent-replay claim is looking for.
 /// Every identity-based claim variant — top-level call, owned call, durable scope, dynamic
 /// "any call", with or without request-payload matching — is a variant of this descriptor driven
@@ -7,7 +14,7 @@ use super::*;
 /// the write side records in the `Start` entry for that kind of claim, so no invalid combination
 /// (e.g. a scope claim without a function name) is representable.
 #[derive(Debug, Clone)]
-pub(super) enum StartClaim {
+pub(crate) enum StartClaim {
     /// A top-level (unowned) durable-call `Start`. "Unowned" means the caller did not open its
     /// own durable scope; the expected recorded `parent_start_index` is still the scope encoded
     /// in the durable function type when there is one (batched / transaction
@@ -18,7 +25,7 @@ pub(super) enum StartClaim {
         function_type: DurableFunctionType,
         /// When `Some`, the recorded request payload must additionally match this value by
         /// value; see [`recorded_request_payload_matches`].
-        matching_request: Option<HostRequest>,
+        matching_request: Option<RequestClaimIdentity>,
     },
     /// A durable-call `Start` owned by another durable record (`parent_start_index` points at
     /// the owning scope/call `Start`).
@@ -28,7 +35,17 @@ pub(super) enum StartClaim {
         parent_start_index: OplogIndex,
         /// When `Some`, the recorded request payload must additionally match this value by
         /// value; see [`recorded_request_payload_matches`].
-        matching_request: Option<HostRequest>,
+        matching_request: Option<RequestClaimIdentity>,
+    },
+    /// Atomically claims either the accepted generic entity Start or the deterministic
+    /// predispatch-rejection Start for one tool invocation attempt, whichever occurs first in the
+    /// owner oplog.
+    OwnedToolInvocation {
+        accepted_function_name: HostFunctionName,
+        rejected_function_name: HostFunctionName,
+        function_type: DurableFunctionType,
+        parent_start_index: OplogIndex,
+        matching_request: RequestClaimIdentity,
     },
     /// A durable-*scope* `Start`: request-less and optionally owned by an entity invocation.
     /// Primary scopes remain unowned; entity scope Starts point at the entity invocation Start.
@@ -46,7 +63,7 @@ pub(super) enum StartClaim {
 
 impl StartClaim {
     /// See [`StartClaim::Unowned`].
-    pub(super) fn unowned(
+    pub(crate) fn unowned(
         function_name: &HostFunctionName,
         function_type: &DurableFunctionType,
     ) -> Self {
@@ -59,7 +76,7 @@ impl StartClaim {
 
     /// [`StartClaim::Unowned`] additionally requiring the recorded request payload to match
     /// `request` by value; see [`recorded_request_payload_matches`].
-    pub(super) fn unowned_matching_request(
+    pub(crate) fn unowned_matching_request(
         function_name: &HostFunctionName,
         function_type: &DurableFunctionType,
         request: &HostRequest,
@@ -67,12 +84,24 @@ impl StartClaim {
         Self::Unowned {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
-            matching_request: Some(request.clone()),
+            matching_request: Some(RequestClaimIdentity::Exact(request.clone())),
+        }
+    }
+
+    pub(crate) fn unowned_matching_entity_invocation(
+        function_name: &HostFunctionName,
+        function_type: &DurableFunctionType,
+        request: &EntityInvocationRequestIdentity,
+    ) -> Self {
+        Self::Unowned {
+            function_name: function_name.clone(),
+            function_type: function_type.clone(),
+            matching_request: Some(RequestClaimIdentity::EntityInvocation(request.clone())),
         }
     }
 
     /// See [`StartClaim::Owned`].
-    pub(super) fn owned(
+    pub(crate) fn owned(
         function_name: &HostFunctionName,
         function_type: &DurableFunctionType,
         parent_start_index: OplogIndex,
@@ -87,7 +116,7 @@ impl StartClaim {
 
     /// [`StartClaim::Owned`] additionally requiring the recorded request payload to match
     /// `request` by value; see [`recorded_request_payload_matches`].
-    pub(super) fn owned_matching_request(
+    pub(crate) fn owned_matching_request(
         function_name: &HostFunctionName,
         function_type: &DurableFunctionType,
         parent_start_index: OplogIndex,
@@ -97,12 +126,42 @@ impl StartClaim {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
             parent_start_index,
-            matching_request: Some(request.clone()),
+            matching_request: Some(RequestClaimIdentity::Exact(request.clone())),
+        }
+    }
+
+    pub(crate) fn owned_matching_entity_invocation(
+        function_name: &HostFunctionName,
+        function_type: &DurableFunctionType,
+        parent_start_index: OplogIndex,
+        request: &EntityInvocationRequestIdentity,
+    ) -> Self {
+        Self::Owned {
+            function_name: function_name.clone(),
+            function_type: function_type.clone(),
+            parent_start_index,
+            matching_request: Some(RequestClaimIdentity::EntityInvocation(request.clone())),
+        }
+    }
+
+    pub(crate) fn owned_tool_invocation(
+        accepted_function_name: &HostFunctionName,
+        rejected_function_name: &HostFunctionName,
+        function_type: &DurableFunctionType,
+        parent_start_index: OplogIndex,
+        request: &ToolInvocationClaimIdentity,
+    ) -> Self {
+        Self::OwnedToolInvocation {
+            accepted_function_name: accepted_function_name.clone(),
+            rejected_function_name: rejected_function_name.clone(),
+            function_type: function_type.clone(),
+            parent_start_index,
+            matching_request: RequestClaimIdentity::ToolInvocation(Box::new(request.clone())),
         }
     }
 
     /// See [`StartClaim::Scope`].
-    pub(super) fn scope(
+    pub(crate) fn scope(
         function_name: &HostFunctionName,
         function_type: &DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
@@ -125,7 +184,20 @@ impl StartClaim {
             Self::Unowned { function_name, .. }
             | Self::Owned { function_name, .. }
             | Self::Scope { function_name, .. } => Some(function_name),
-            Self::AnyUnownedCall => None,
+            Self::OwnedToolInvocation { .. } | Self::AnyUnownedCall => None,
+        }
+    }
+
+    pub(super) fn matches_function_name(&self, actual: &HostFunctionName) -> bool {
+        match self {
+            Self::OwnedToolInvocation {
+                accepted_function_name,
+                rejected_function_name,
+                ..
+            } => actual == accepted_function_name || actual == rejected_function_name,
+            _ => self
+                .expected_function_name()
+                .is_none_or(|expected| actual == expected),
         }
     }
 
@@ -134,7 +206,8 @@ impl StartClaim {
         match self {
             Self::Unowned { function_type, .. }
             | Self::Owned { function_type, .. }
-            | Self::Scope { function_type, .. } => Some(function_type),
+            | Self::Scope { function_type, .. }
+            | Self::OwnedToolInvocation { function_type, .. } => Some(function_type),
             Self::AnyUnownedCall => None,
         }
     }
@@ -143,7 +216,10 @@ impl StartClaim {
     /// for durable-scope `Start`s.
     pub(super) fn carries_request(&self) -> bool {
         match self {
-            Self::Unowned { .. } | Self::Owned { .. } | Self::AnyUnownedCall => true,
+            Self::Unowned { .. }
+            | Self::Owned { .. }
+            | Self::OwnedToolInvocation { .. }
+            | Self::AnyUnownedCall => true,
             Self::Scope { .. } => false,
         }
     }
@@ -158,6 +234,9 @@ impl StartClaim {
             Self::Owned {
                 parent_start_index, ..
             } => Some(*parent_start_index),
+            Self::OwnedToolInvocation {
+                parent_start_index, ..
+            } => Some(*parent_start_index),
             Self::Scope {
                 parent_start_index, ..
             } => *parent_start_index,
@@ -167,7 +246,7 @@ impl StartClaim {
 
     /// The request payload the recorded `Start` must additionally match by value, when the
     /// claim pins one; see [`recorded_request_payload_matches`].
-    pub(super) fn matching_request(&self) -> Option<&HostRequest> {
+    pub(super) fn matching_request(&self) -> Option<&RequestClaimIdentity> {
         match self {
             Self::Unowned {
                 matching_request, ..
@@ -175,14 +254,36 @@ impl StartClaim {
             | Self::Owned {
                 matching_request, ..
             } => matching_request.as_ref(),
+            Self::OwnedToolInvocation {
+                matching_request, ..
+            } => Some(matching_request),
             Self::Scope { .. } | Self::AnyUnownedCall => None,
         }
+    }
+
+    pub(super) fn matches_start_identity(&self, entry: &OplogEntry) -> bool {
+        matches!(entry, OplogEntry::Start {
+            function_name,
+            invocation_id,
+            observational_owner,
+            request,
+            durable_function_type,
+            parent_start_index,
+            ..
+        } if self.matches_function_name(function_name)
+            && self
+                .expected_function_type()
+                .is_none_or(|expected| durable_function_type == expected)
+            && invocation_id.is_none()
+            && observational_owner.is_none()
+            && request.is_some() == self.carries_request()
+            && *parent_start_index == self.expected_parent_start_index())
     }
 
     /// Human-readable description of the expected `Start`, used as the "expected" side of an
     /// `unexpected_oplog_entry` claim error. Worded per claim variant, matching exactly what each
     /// variant has always reported.
-    pub(super) fn expected_description(&self) -> String {
+    pub(crate) fn expected_description(&self) -> String {
         match self {
             Self::AnyUnownedCall => {
                 "Start { request: Some(..), parent_start_index: None }".to_string()
@@ -228,8 +329,26 @@ impl StartClaim {
                     )
                 }
             }
+            Self::OwnedToolInvocation {
+                accepted_function_name,
+                rejected_function_name,
+                function_type,
+                parent_start_index,
+                ..
+            } => format!(
+                "Start {{ {accepted_function_name} or {rejected_function_name}, {function_type:?}, request: Some(<matching tool invocation>), parent_start_index: Some({parent_start_index}) }}"
+            ),
         }
     }
+}
+
+pub(crate) enum ReplayStartClaimOutcome {
+    Claimed {
+        handle: ReplayCallHandle,
+        entry: Box<OplogEntry>,
+    },
+    ReplayEnded,
+    DeletedRegion,
 }
 
 impl ReplayState {
@@ -241,24 +360,67 @@ impl ReplayState {
         &self,
         claim: StartClaim,
     ) -> Result<(ReplayCallHandle, Box<OplogEntry>), WorkerExecutorError> {
+        let expected = claim.expected_description();
+        match self.claim_start_or_replay_end(claim).await? {
+            ReplayStartClaimOutcome::Claimed { handle, entry } => Ok((handle, entry)),
+            ReplayStartClaimOutcome::ReplayEnded => {
+                Err(WorkerExecutorError::unexpected_oplog_entry(
+                    expected,
+                    format!(
+                        "end of replay at {}; no recorded Start remains",
+                        self.last_replayed_index()
+                    ),
+                ))
+            }
+            ReplayStartClaimOutcome::DeletedRegion => {
+                Err(WorkerExecutorError::unexpected_oplog_entry(
+                    expected,
+                    "matching Start belongs to a deleted replay region".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Claims a recorded `Start`, reports that the same cursor transaction observed replay already
+    /// ended, or identifies a matching `Start` removed by a replay jump. Every other missing match
+    /// while replay is active remains strict divergence.
+    pub(crate) async fn claim_start_or_replay_end(
+        &self,
+        claim: StartClaim,
+    ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
             progress.as_mut().enable();
 
             let owned_claim = claim.clone();
-            let (claimed, blocked_on_completion_delivery) = self
+            let (claimed, blocked_on_completion_delivery, replay_ended, deleted_region) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
-                        .with_tx(async |tx| {
-                            let claimed = tx.claim_start(&owned_claim).await?;
-                            Ok((claimed, tx.blocked_on_completion_delivery))
+                        .with_tx(async |tx| match tx.claim_start(&owned_claim).await {
+                            Ok(claimed) => {
+                                Ok((claimed, tx.blocked_on_completion_delivery, false, false))
+                            }
+                            Err(_) if tx.cursor.is_live() => Ok((None, false, true, false)),
+                            Err(_) if tx.deleted_region_contains_start(&owned_claim).await? => {
+                                Ok((None, false, false, true))
+                            }
+                            Err(error) => Err(error),
                         })
                         .await
                 })
                 .await?;
             if let Some(claimed) = claimed {
-                return Ok(claimed);
+                return Ok(ReplayStartClaimOutcome::Claimed {
+                    handle: claimed.0,
+                    entry: claimed.1,
+                });
+            }
+            if replay_ended {
+                return Ok(ReplayStartClaimOutcome::ReplayEnded);
+            }
+            if deleted_region {
+                return Ok(ReplayStartClaimOutcome::DeletedRegion);
             }
             debug_assert!(blocked_on_completion_delivery);
             progress.await;
@@ -395,6 +557,7 @@ impl ReplayState {
     ///
     /// `expected_request` must be the [`HostRequest`] value the live path would have persisted in
     /// the `Start` entry; see [`recorded_request_payload_matches`] for the value-based comparison.
+    #[cfg(test)]
     pub async fn claim_concurrent_start_matching_request(
         &self,
         expected_function_name: &HostFunctionName,
@@ -412,6 +575,7 @@ impl ReplayState {
     }
 
     /// Claims by exact identity and also returns the recorded Start metadata.
+    #[cfg(test)]
     pub async fn claim_concurrent_start_matching_request_with_identity(
         &self,
         expected_function_name: &HostFunctionName,
@@ -585,7 +749,7 @@ impl ReplayState {
                                 let request_matches = recorded_request_payload_matches(
                                     tx.cursor.oplog.as_ref(),
                                     recorded_request,
-                                    &expected_request,
+                                    &RequestClaimIdentity::Exact(expected_request.clone()),
                                 )
                                 .await
                                 .map_err(|err| {
@@ -660,29 +824,6 @@ impl ReplayState {
             timestamp,
         })
     }
-
-    /// Claims the `Start` of a durable call owned by another durable record, matching identity
-    /// **and recorded request payload** — the owned counterpart of
-    /// [`Self::claim_concurrent_start_matching_request`]. With a claim-safe parent (a
-    /// discriminated scope) the parent index already pins the call, so the payload match acts as
-    /// a cheap validation that the claimed record really belongs to this call.
-    pub async fn claim_owned_concurrent_start_matching_request(
-        &self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-        parent_start_index: OplogIndex,
-        expected_request: &HostRequest,
-    ) -> Result<ReplayCallHandle, WorkerExecutorError> {
-        let (handle, _) = self
-            .claim_start(StartClaim::owned_matching_request(
-                expected_function_name,
-                expected_function_type,
-                parent_start_index,
-                expected_request,
-            ))
-            .await?;
-        Ok(handle)
-    }
 }
 
 /// The `parent_start_index` a durable call's `Start` entry is recorded with when the caller does
@@ -707,10 +848,10 @@ pub(super) fn parent_start_index_of(function_type: &DurableFunctionType) -> Opti
 pub(super) async fn recorded_request_payload_matches(
     oplog: &dyn Oplog,
     recorded: &OplogPayload<HostRequest>,
-    expected: &HostRequest,
+    expected: &RequestClaimIdentity,
 ) -> Result<bool, String> {
     match recorded {
-        OplogPayload::Inline(value) => Ok(value.as_ref() == expected),
+        OplogPayload::Inline(value) => request_claim_identity_matches(value, expected),
         OplogPayload::SerializedInline {
             cached: Some(cached),
             ..
@@ -718,16 +859,152 @@ pub(super) async fn recorded_request_payload_matches(
         | OplogPayload::External {
             cached: Some(cached),
             ..
-        } => Ok(cached.as_ref() == expected),
+        } => request_claim_identity_matches(cached, expected),
         OplogPayload::SerializedInline {
             bytes,
             cached: None,
         } => golem_common::serialization::deserialize::<HostRequest>(bytes)
-            .map(|value| &value == expected)
-            .map_err(|err| format!("failed to deserialize inline request payload: {err}")),
+            .map_err(|err| format!("failed to deserialize inline request payload: {err}"))
+            .and_then(|value| request_claim_identity_matches(&value, expected)),
         OplogPayload::External { cached: None, .. } => oplog
             .download_payload(recorded.clone())
             .await
-            .map(|value| &value == expected),
+            .and_then(|value| request_claim_identity_matches(&value, expected)),
+    }
+}
+
+fn request_claim_identity_matches(
+    value: &HostRequest,
+    expected: &RequestClaimIdentity,
+) -> Result<bool, String> {
+    match expected {
+        RequestClaimIdentity::Exact(expected) => Ok(value == expected),
+        RequestClaimIdentity::EntityInvocation(expected) => {
+            let HostRequest::EntityInvocation(request) = value else {
+                return Ok(false);
+            };
+            let metadata = desert_rust::deserialize::<EntityInvocationRequest>(&request.metadata)
+                .map_err(|error| {
+                format!("failed to decode entity invocation request metadata: {error}")
+            })?;
+            Ok(expected.matches(&metadata, &request.input))
+        }
+        RequestClaimIdentity::ToolInvocation(expected) => match value {
+            HostRequest::EntityInvocation(request) => {
+                let Some(expected) = &expected.accepted else {
+                    return Ok(false);
+                };
+                let metadata =
+                    desert_rust::deserialize::<EntityInvocationRequest>(&request.metadata)
+                        .map_err(|error| {
+                            format!("failed to decode entity invocation request metadata: {error}")
+                        })?;
+                Ok(expected.matches(&metadata, &request.input))
+            }
+            HostRequest::GolemToolInvocationRejected(request) => Ok(request.tool_name
+                == expected.rejected.tool_name.as_str()
+                && request.command_path == expected.rejected.command_path
+                && request.input == expected.rejected.input
+                && request.input_decode_failure == expected.rejected.input_decode_failure
+                && request.has_stdin == expected.rejected.has_stdin
+                && request.has_stdout == expected.rejected.has_stdout
+                && request.call_mode == expected.rejected.call_mode),
+            _ => Ok(false),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::entity::{
+        EntityCallMode, ToolInputDecodeFailure, ToolInvocationRejectedIdentity,
+    };
+    use golem_common::model::oplog::HostRequestGolemToolInvocationRejected;
+    use golem_common::model::oplog::payload::types::SerializableToolRpcError;
+    use golem_common::model::tool::ToolName;
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+    use test_r::test;
+
+    fn input(value: &str) -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::string()),
+            SchemaValue::String(value.to_string()),
+        )
+    }
+
+    #[test]
+    fn tool_rejection_claim_ignores_selected_error_but_matches_logical_attempt() {
+        let tool_name = ToolName::try_from("grep").unwrap();
+        let expected =
+            RequestClaimIdentity::ToolInvocation(Box::new(ToolInvocationClaimIdentity {
+                accepted: None,
+                rejected: ToolInvocationRejectedIdentity {
+                    tool_name: tool_name.clone(),
+                    command_path: vec!["search".to_string()],
+                    input: Some(input("needle")),
+                    input_decode_failure: None,
+                    has_stdin: true,
+                    has_stdout: false,
+                    call_mode: EntityCallMode::Asynchronous,
+                },
+            }));
+        let request =
+            HostRequest::GolemToolInvocationRejected(HostRequestGolemToolInvocationRejected {
+                tool_name: tool_name.into_inner(),
+                command_path: vec!["search".to_string()],
+                input: Some(input("needle")),
+                input_decode_failure: None,
+                has_stdin: true,
+                has_stdout: false,
+                call_mode: EntityCallMode::Asynchronous,
+                error: SerializableToolRpcError::Denied("recorded decision".to_string()),
+            });
+
+        assert!(request_claim_identity_matches(&request, &expected).unwrap());
+
+        let HostRequest::GolemToolInvocationRejected(mut mismatched) = request else {
+            unreachable!();
+        };
+        mismatched.has_stdout = true;
+        assert!(
+            !request_claim_identity_matches(
+                &HostRequest::GolemToolInvocationRejected(mismatched),
+                &expected,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn malformed_tool_rejection_claim_distinguishes_decode_failure_class() {
+        let expected =
+            RequestClaimIdentity::ToolInvocation(Box::new(ToolInvocationClaimIdentity {
+                accepted: None,
+                rejected: ToolInvocationRejectedIdentity {
+                    tool_name: ToolName::try_from("grep").unwrap(),
+                    command_path: Vec::new(),
+                    input: None,
+                    input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaGraph),
+                    has_stdin: false,
+                    has_stdout: false,
+                    call_mode: EntityCallMode::Synchronous,
+                },
+            }));
+        let request =
+            HostRequest::GolemToolInvocationRejected(HostRequestGolemToolInvocationRejected {
+                tool_name: "grep".to_string(),
+                command_path: Vec::new(),
+                input: None,
+                input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaValue),
+                has_stdin: false,
+                has_stdout: false,
+                call_mode: EntityCallMode::Synchronous,
+                error: SerializableToolRpcError::RemoteInternalError(
+                    "selected error is not claim identity".to_string(),
+                ),
+            });
+
+        assert!(!request_claim_identity_matches(&request, &expected).unwrap());
     }
 }

@@ -734,7 +734,7 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
         );
 
         let current_retry_policy_state = worker
-            .get_non_detached_last_known_status()
+            .get_attached_last_known_status()
             .await
             .current_retry_state
             .get(&begin_index)
@@ -983,7 +983,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                 Ok(Err(initial_error)) => {
                     let oplog = worker.oplog();
                     let current_retry_policy_state = worker
-                        .get_non_detached_last_known_status()
+                        .get_attached_last_known_status()
                         .await
                         .current_retry_state
                         .get(&begin_index)

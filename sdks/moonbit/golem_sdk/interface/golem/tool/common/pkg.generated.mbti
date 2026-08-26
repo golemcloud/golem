@@ -2,7 +2,6 @@
 package "golemcloud/golem_sdk/interface/golem/tool/common"
 
 import {
-  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
 }
 
@@ -137,8 +136,7 @@ pub(all) struct ImpliesC {
 
 pub(all) struct InvocationResult {
   result : @types.TypedSchemaValue?
-  stdout : @async-core.Stream[Byte]?
-}
+} derive(Eq, Show)
 
 pub(all) struct MonomorphicScope {
   presented : Tool

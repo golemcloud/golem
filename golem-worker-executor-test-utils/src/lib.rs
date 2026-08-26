@@ -686,6 +686,17 @@ impl TestWorkerExecutor {
             .await
     }
 
+    pub async fn active_entity_metadata(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<golem_worker_executor::services::active_agents::ActiveAgentEntityMetadata> {
+        self.additional_test_deps
+            .active_agents
+            .get()?
+            .entity_metadata(owned_agent_id)
+            .await
+    }
+
     pub async fn store_component_with_id(
         &self,
         name: &str,

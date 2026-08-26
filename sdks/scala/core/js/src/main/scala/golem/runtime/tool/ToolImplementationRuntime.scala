@@ -16,18 +16,102 @@
 
 package golem.runtime.tool
 
-import golem.host.js.tool.{JsWasiInputStream, JsWasiOutputStream}
+import golem.FutureInterop
+import golem.runtime.tool.host.ToolHostApi
 import golem.schema.wire.SchemaWire
 import golem.tool._
 import golem.tool.wire.WitToolError
 
 import scala.concurrent.Future
+import scala.scalajs.js
+import scala.scalajs.js.JSConverters._
 
 /** The stdin handle of a JS-guest tool invocation. */
-final class JsToolInputStream(val underlying: JsWasiInputStream) extends ToolInputStream
+final class JsToolInputStream(val underlying: ToolHostApi.RawByteStream) extends ToolInputStream {
+  private val iterator                                               = underlying.asyncIterator()
+  def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
+    FutureInterop
+      .fromPromise(iterator.next())
+      .map { next =>
+        if (next.done) Right(None)
+        else {
+          val item = next.value.asInstanceOf[js.Dynamic]
+          item.tag.asInstanceOf[String] match {
+            case "ok"  => Right(Some(item.`val`.asInstanceOf[js.typedarray.Uint8Array].toArray.map(_.toByte)))
+            case "err" => Left(JsToolOutputStream.decodeFailure(item.`val`))
+          }
+        }
+      }(ToolInvokerRuntime.executionContext)
+
+  def cancel(): Future[Unit] =
+    FutureInterop.fromPromise(iterator.returnIterator()).map(_ => ())(ToolInvokerRuntime.executionContext)
+}
 
 /** The stdout handle of a JS-guest tool invocation. */
-final class JsToolOutputStream(val underlying: JsWasiOutputStream) extends ToolOutputStream
+final class JsToolOutputStream(val underlying: ToolHostApi.RawToolStdoutWriter) extends ToolOutputStream {
+  private var terminal: Option[Future[Either[StreamWriteError, Unit]]] = None
+
+  def write(bytes: Array[Byte]): Future[Either[StreamWriteError, Unit]] =
+    call(underlying.write(js.typedarray.Uint8Array.from(bytes.map(_.toShort).toJSArray)))
+  def finish(): Future[Either[StreamWriteError, Unit]] =
+    selectTerminal(underlying.finish())
+  def fail(reason: ByteStreamFailure): Future[Either[StreamWriteError, Unit]] =
+    selectTerminal(underlying.fail(encodeFailure(reason)))
+
+  private[tool] def finishInvocation(): Future[Unit] =
+    terminal
+      .getOrElse(finish())
+      .flatMap {
+        case Right(_)                         => Future.successful(())
+        case Left(StreamWriteError.Closed(_)) => Future.successful(())
+        case Left(error)                      =>
+          Future.failed(new IllegalStateException(s"tool stdout terminal failed: $error"))
+      }(ToolInvokerRuntime.executionContext)
+
+  private def selectTerminal(
+    promise: => js.Promise[Unit]
+  ): Future[Either[StreamWriteError, Unit]] =
+    terminal match {
+      case Some(selected) => selected
+      case None           =>
+        val selected = call(promise)
+        terminal = Some(selected)
+        selected
+    }
+
+  private def call(promise: => js.Promise[Unit]): Future[Either[StreamWriteError, Unit]] =
+    try
+      FutureInterop
+        .fromPromise(promise)
+        .map(_ => Right(()): Either[StreamWriteError, Unit])(ToolInvokerRuntime.executionContext)
+        .recoverWith { case error: js.JavaScriptException =>
+          ToolHostApi
+            .decodeStreamWriteError(error.exception)
+            .fold(Future.failed[Either[StreamWriteError, Unit]](error))(value => Future.successful(Left(value)))
+        }(ToolInvokerRuntime.executionContext)
+    catch {
+      case error: js.JavaScriptException =>
+        ToolHostApi
+          .decodeStreamWriteError(error.exception)
+          .fold(Future.failed[Either[StreamWriteError, Unit]](error))(value => Future.successful(Left(value)))
+      case error: Throwable => Future.failed(error)
+    }
+
+  private def encodeFailure(failure: ByteStreamFailure): js.Any = failure match {
+    case ByteStreamFailure.Cancelled         => js.Dynamic.literal(tag = "cancelled")
+    case ByteStreamFailure.Abandoned         => js.Dynamic.literal(tag = "abandoned")
+    case ByteStreamFailure.ResourceExhausted => js.Dynamic.literal(tag = "resource-exhausted")
+    case ByteStreamFailure.Failed(message)   => js.Dynamic.literal(tag = "failed", `val` = message)
+  }
+}
+object JsToolOutputStream {
+  def decodeFailure(value: js.Dynamic): ByteStreamFailure = value.tag.asInstanceOf[String] match {
+    case "cancelled"          => ByteStreamFailure.Cancelled
+    case "abandoned"          => ByteStreamFailure.Abandoned
+    case "resource-exhausted" => ByteStreamFailure.ResourceExhausted
+    case "failed"             => ByteStreamFailure.Failed(value.`val`.asInstanceOf[String])
+  }
+}
 
 /**
  * Registers macro-generated tool implementations into the [[ToolRegistry]],
@@ -46,43 +130,51 @@ private[golem] object ToolImplementationRuntime {
       case Left(error) =>
         throw new IllegalArgumentException(s"tool descriptor build failed: ${error.message}")
     }
-    val handler = ToolInvokerRuntime.handler(extended, handle, JsToolInvokeEnv)
-    ToolRegistry.registerInvoker(extended, adaptHandler(handler))
+    ToolRegistry.registerInvoker(extended, adaptHandler(extended, handle))
   }
 
-  private def adaptHandler(handler: ToolInvokeHandler): ToolRegistry.ToolInvoker =
-    (commandPath, wireInput, stdin, principal) => {
+  private[tool] def adaptHandler(
+    tool: ExtendedToolType,
+    handle: ToolImplementationHandle
+  ): ToolRegistry.ToolInvoker =
+    (commandPath, wireInput, stdin, stdout, principal) => {
+      val output  = stdout.map(new JsToolOutputStream(_))
       val decoded =
         try Right(SchemaWire.typedSchemaValueFromWit(wireInput))
         catch {
           case t: Throwable =>
-            Left(WitToolError.InvalidInput(s"malformed invocation input: ${String.valueOf(t.getMessage)}"))
+            Left(ToolInvokeError.InvalidInput(s"malformed invocation input: ${String.valueOf(t.getMessage)}"))
         }
-      decoded match {
+      val invoked = decoded match {
         case Left(error)  => Future.successful(Left(error))
         case Right(input) =>
+          val env     = new JsToolInvokeEnv(output)
+          val handler = ToolInvokerRuntime.handler(tool, handle, env)
           handler
-            .invoke(commandPath, input, stdin.map(new JsToolInputStream(_)), principal)
-            .map {
-              case Right(result) =>
-                Right(
-                  ToolInvocationResult(
-                    result.result.map(SchemaWire.typedSchemaValueToWit),
-                    result.stdout.map(jsStdout)
-                  )
-                )
-              case Left(error) => Left(errorToWire(error))
-            }
+            .invoke(
+              commandPath,
+              input,
+              stdin.map(new JsToolInputStream(_)),
+              principal
+            )
       }
-    }
-
-  private def jsStdout(stream: ToolOutputStream): JsWasiOutputStream =
-    stream match {
-      case js: JsToolOutputStream => js.underlying
-      case other                  =>
-        throw new IllegalStateException(
-          s"unexpected non-JS tool stdout stream: ${other.getClass.getName}"
+      invoked.flatMap { outcome =>
+        val completed = output match {
+          case Some(stream) => stream.finishInvocation()
+          case None         => Future.successful(())
+        }
+        completed.map(_ =>
+          outcome match {
+            case Right(result) =>
+              Right(
+                ToolInvocationResult(
+                  result.result.map(SchemaWire.typedSchemaValueToWit)
+                )
+              )
+            case Left(error) => Left(errorToWire(error))
+          }
         )
+      }
     }
 
   private[tool] def errorToWire(error: ToolInvokeError): WitToolError =
@@ -109,15 +201,10 @@ private[golem] object ToolImplementationRuntime {
 
   /**
    * The JS-guest tool invocation environment: sibling tool lookup goes through
-   * the [[ToolRegistry]]; stdout acquisition is not yet wired into the QuickJS
-   * guest world.
+   * the [[ToolRegistry]] and forwards the invocation's directional stream
+   * capabilities.
    */
-  private[golem] object JsToolInvokeEnv extends ToolInvokeEnv {
-
-    def stdout(): ToolOutputStream =
-      throw new UnsupportedOperationException(
-        "tool stdout streams are not supported by the JS guest runtime yet"
-      )
+  private[golem] final class JsToolInvokeEnv(val stdout: Option[ToolOutputStream]) extends ToolInvokeEnv {
 
     def invokerFor(toolName: String): Option[ToolInvokeHandler] =
       ToolRegistry.getInvoker(toolName).map { registryInvoker =>
@@ -128,20 +215,29 @@ private[golem] object ToolImplementationRuntime {
             stdin: Option[ToolInputStream],
             principal: golem.Principal
           ): Future[Either[ToolInvokeError, ToolInvokeResult]] =
-            registryInvoker(
-              commandPath,
-              SchemaWire.typedSchemaValueToWit(input),
-              stdin.map(_.asInstanceOf[JsToolInputStream].underlying),
-              principal
-            ).map {
-              case Right(result) =>
-                Right(
-                  ToolInvokeResult(
-                    result.result.map(SchemaWire.typedSchemaValueFromWit),
-                    result.stdout.map(new JsToolOutputStream(_))
-                  )
-                )
-              case Left(error) => Left(errorFromWire(error))
+            val rawStdin = stdin match {
+              case Some(stream: JsToolInputStream) => Right(Some(stream.underlying))
+              case None                            => Right(None)
+              case Some(_)                         => Left(ToolInvokeError.InvalidInput("unsupported nested stdin stream"))
+            }
+            rawStdin match {
+              case Left(error)  => Future.successful(Left(error))
+              case Right(value) =>
+                registryInvoker(
+                  commandPath,
+                  SchemaWire.typedSchemaValueToWit(input),
+                  value,
+                  stdout.collect { case stream: JsToolOutputStream => stream.underlying },
+                  principal
+                ).map {
+                  case Right(result) =>
+                    Right(
+                      ToolInvokeResult(
+                        result.result.map(SchemaWire.typedSchemaValueFromWit)
+                      )
+                    )
+                  case Left(error) => Left(errorFromWire(error))
+                }
             }
         }
       }

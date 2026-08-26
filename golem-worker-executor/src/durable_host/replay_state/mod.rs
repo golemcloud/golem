@@ -18,6 +18,9 @@ use crate::durable_host::concurrent::{
 use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::card::{CardHolder, CardId, InvocationWalletPin, StoredCard};
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::entity::{
+    EntityInvocationRequest, EntityInvocationRequestIdentity, ToolInvocationClaimIdentity,
+};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
@@ -125,6 +128,7 @@ mod cursor;
 mod resolution;
 
 use abandoned::AbandonedStarts;
+pub(crate) use claims::{ReplayStartClaimOutcome, StartClaim};
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {

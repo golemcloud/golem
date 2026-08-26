@@ -19,7 +19,7 @@ package golem.runtime.guest
 import golem.host.{SchemaWireInterop, ToolWireInterop}
 import golem.host.js.{JsSnapshot, PrincipalConverter}
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedSchemaValue}
-import golem.host.js.tool.{JsInvocationResult, JsTool, JsWasiInputStream}
+import golem.host.js.tool.{JsInvocationResult, JsTool}
 import golem.runtime.autowire.AgentRegistry
 import golem.runtime.rpc.SchemaRpcCodec
 import golem.runtime.tool.ToolRegistry
@@ -171,7 +171,8 @@ object Guest {
     toolName: String,
     commandPath: js.Array[String],
     input: JsTypedSchemaValue,
-    stdin: js.UndefOr[JsWasiInputStream],
+    stdin: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawByteStream],
+    stdout: js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolStdoutWriter],
     principal: js.Dynamic
   ): js.Promise[JsInvocationResult] =
     ToolRegistry.getInvoker(toolName) match {
@@ -192,9 +193,9 @@ object Guest {
             // the wire-encoded `tool-error`; a failed Future (user code error)
             // propagates as an unhandled rejection so it becomes a WASM trap.
             FutureInterop.toPromise(
-              invoker(commandPath.toList, in, stdin.toOption, scalaPrincipal).map {
+              invoker(commandPath.toList, in, stdin.toOption, stdout.toOption, scalaPrincipal).map {
                 case Right(res) =>
-                  JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined, res.stdout.orUndefined)
+                  JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined)
                 case Left(error) =>
                   throw js.JavaScriptException(ToolWireInterop.toolErrorToJs(error))
               }
@@ -271,13 +272,15 @@ object Guest {
           commandPath: js.Array[String],
           input: js.Dynamic,
           stdin: js.UndefOr[js.Any],
+          stdout: js.UndefOr[js.Any],
           principal: js.Dynamic
         ) =>
           invokeTool(
             toolName,
             commandPath,
             input.asInstanceOf[JsTypedSchemaValue],
-            stdin.asInstanceOf[js.UndefOr[JsWasiInputStream]],
+            stdin.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawByteStream]],
+            stdout.asInstanceOf[js.UndefOr[golem.runtime.tool.host.ToolHostApi.RawToolStdoutWriter]],
             principal
           )
       )
