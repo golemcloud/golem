@@ -19,11 +19,17 @@ function onwarn(warning, warn) {
   warn(warning);
 }
 
+const entries = [
+  { input: 'src/index.ts', name: 'index' },
+  { input: 'src/schema/public.ts', name: 'schema' },
+  { input: 'src/reflection.ts', name: 'reflection' },
+];
+
 export default defineConfig([
-  {
-    input: 'src/index.ts',
+  ...entries.map(({ input, name }) => ({
+    input,
     output: {
-      file: 'dist/index.mjs',
+      file: `dist/${name}.mjs`,
       format: 'esm',
       sourcemap: true,
     },
@@ -43,12 +49,11 @@ export default defineConfig([
       }),
       terser(),
     ],
-  },
-
-  {
-    input: 'src/index.ts',
+  })),
+  ...entries.map(({ input, name }) => ({
+    input,
     output: {
-      file: 'dist/index.d.mts',
+      file: `dist/${name}.d.mts`,
       format: 'esm',
     },
     external,
@@ -65,11 +70,11 @@ export default defineConfig([
           const refLines =
             files.map((f) => `/// <reference path="../types/${f}" />`).join('\n') + '\n';
 
-          const mainDtsPath = path.resolve('dist/index.d.mts');
+          const mainDtsPath = path.resolve(`dist/${name}.d.mts`);
           const mainContent = fs.readFileSync(mainDtsPath, 'utf-8');
           fs.writeFileSync(mainDtsPath, refLines + mainContent, 'utf-8');
         },
       },
     ],
-  },
+  })),
 ]);

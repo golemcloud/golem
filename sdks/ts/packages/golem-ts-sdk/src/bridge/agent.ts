@@ -22,6 +22,15 @@ import type { Uuid } from '../uuid';
 
 export class RemoteCallError extends Error {
   readonly _tag = 'RemoteCallError';
+
+  constructor(
+    message: string,
+    public readonly rpcError?: RpcError,
+    options?: ErrorOptions,
+  ) {
+    super(message, { cause: options?.cause ?? rpcError });
+    this.name = 'RemoteCallError';
+  }
 }
 export interface RemoteInvocationResult {
   metadata: InvocationMetadata;
@@ -44,6 +53,24 @@ function isRpcError(error: unknown): error is RpcError {
       return true;
     default:
       return false;
+  }
+}
+
+function remoteCallError(context: string, error: RpcError): RemoteCallError {
+  return new RemoteCallError(
+    `${context}: ${JSON.stringify(error, (_, value) =>
+      typeof value === 'bigint' ? value.toString() : value,
+    )}`,
+    error,
+  );
+}
+
+function mapRpcError<T>(context: string, operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (!isRpcError(error)) throw error;
+    throw remoteCallError(context, error);
   }
 }
 
@@ -85,14 +112,16 @@ export function resolveRemoteAgent(
   const constructorTree = schemaValueToWit(constructorValue);
   const agentId =
     mode === 'ephemeral' ? agentTypeName : makeAgentId(agentTypeName, constructorTree, phantomId);
-  const rpc = WasmRpc.create(
-    agentTypeName,
-    constructorTree,
-    phantomId,
-    configEntries.map((entry) => ({
-      path: [...entry.path],
-      value: typedSchemaValueToWit(entry.value),
-    })),
+  const rpc = mapRpcError(`Failed to create remote agent client for ${agentId}`, () =>
+    WasmRpc.create(
+      agentTypeName,
+      constructorTree,
+      phantomId,
+      configEntries.map((entry) => ({
+        path: [...entry.path],
+        value: typedSchemaValueToWit(entry.value),
+      })),
+    ),
   );
   const awaitInvocation = async (
     method: string,
@@ -107,9 +136,7 @@ export function resolveRemoteAgent(
       result = await awaitAbortable(future.get(), signal, () => future.cancel());
     } catch (error) {
       if (!isRpcError(error)) throw error;
-      throw new RemoteCallError(
-        `Remote agent ${agentId}.${method} errored: ${JSON.stringify(error, (_, value) => (typeof value === 'bigint' ? value.toString() : value))}`,
-      );
+      throw remoteCallError(`Remote agent ${agentId}.${method} errored`, error);
     }
     try {
       return {
@@ -128,23 +155,34 @@ export function resolveRemoteAgent(
       (await awaitInvocation(method, params, signal)).value,
     invokeAndAwaitWithMetadata: awaitInvocation,
     invoke(method, params) {
-      rpc.invoke(method, schemaValueToWit(params), undefined);
+      mapRpcError(`Remote agent ${agentId}.${method} errored`, () =>
+        rpc.invoke(method, schemaValueToWit(params), undefined),
+      );
     },
     invokeWithMetadata(method, params) {
-      return rpc.invoke(method, schemaValueToWit(params), undefined);
+      return mapRpcError(`Remote agent ${agentId}.${method} errored`, () =>
+        rpc.invoke(method, schemaValueToWit(params), undefined),
+      );
     },
     schedule(at, method, params) {
-      rpc.scheduleInvocation(at, method, schemaValueToWit(params), undefined);
+      mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+        rpc.scheduleInvocation(at, method, schemaValueToWit(params), undefined),
+      );
     },
     scheduleWithMetadata(at, method, params) {
-      return rpc.scheduleInvocation(at, method, schemaValueToWit(params), undefined);
+      return mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+        rpc.scheduleInvocation(at, method, schemaValueToWit(params), undefined),
+      );
     },
     scheduleCancelable(at, method, params) {
-      return rpc.scheduleCancelableInvocation(at, method, schemaValueToWit(params), undefined)
-        .cancellationToken;
+      return mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+        rpc.scheduleCancelableInvocation(at, method, schemaValueToWit(params), undefined),
+      ).cancellationToken;
     },
     scheduleCancelableWithMetadata(at, method, params) {
-      return rpc.scheduleCancelableInvocation(at, method, schemaValueToWit(params), undefined);
+      return mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+        rpc.scheduleCancelableInvocation(at, method, schemaValueToWit(params), undefined),
+      );
     },
   };
 }
