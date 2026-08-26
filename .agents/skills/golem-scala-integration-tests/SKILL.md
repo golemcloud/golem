@@ -21,14 +21,14 @@ sbt '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packa
 
 ## Running Tests
 
-The simplest way to run all tests (unit + integration, Scala 2 + 3) is with non-client `sbt`:
+Run all Scala SDK integration tests with non-client `sbt`:
 
 ```bash
 cd sdks/scala
-GOLEM_TS_PACKAGES_PATH=<TS_PACKAGES_PATH> sbt golemTestAll
+GOLEM_TS_PACKAGES_PATH=<TS_PACKAGES_PATH> sbt "++3.8.2; integrationTests/test"
 ```
 
-The `GOLEM_TS_PACKAGES_PATH` env var is forwarded automatically by `build.sbt` to `javaOptions` and `envVars` for the integration tests.
+The `GOLEM_TS_PACKAGES_PATH` env var is forwarded automatically by `build.sbt` to `javaOptions` and `envVars` for the integration tests. The `golemTestAll` alias does not include integration tests.
 
 ### Running specific tests with `sbt --client`
 
