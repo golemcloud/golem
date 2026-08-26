@@ -256,6 +256,12 @@ impl<'a> GraphDecoder<'a> {
 /// move owned `quota-token` handles out of it; see the guest definition below.
 #[cfg(not(all(feature = "guest", not(feature = "host"))))]
 pub fn decode_value(wire_tree: &wire::SchemaValueTree) -> Result<SchemaValue, DecodeError> {
+    decode_value_by_ref(wire_tree)
+}
+
+pub(crate) fn decode_value_by_ref(
+    wire_tree: &wire::SchemaValueTree,
+) -> Result<SchemaValue, DecodeError> {
     reject_handles_in_pure_value_tree(wire_tree)?;
     decode_value_at(wire_tree, wire_tree.root, &mut HashSet::new())
 }
@@ -330,6 +336,19 @@ pub fn decode_typed(wire_typed: &wire::TypedSchemaValue) -> Result<TypedSchemaVa
         wire_typed.value.root,
         &mut HashSet::new(),
     )?;
+    Ok(TypedSchemaValue::new(graph, value))
+}
+
+/// Decode a typed value on a guest while consuming its wire representation.
+///
+/// Unlike [`decode_typed`], this entry point permits owned affine resources and
+/// moves each reachable handle into the returned value exactly once.
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub fn decode_typed_owned(
+    wire_typed: wire::TypedSchemaValue,
+) -> Result<TypedSchemaValue, DecodeError> {
+    let graph = decode_graph(&wire_typed.graph)?;
+    let value = decode_value(wire_typed.value)?;
     Ok(TypedSchemaValue::new(graph, value))
 }
 

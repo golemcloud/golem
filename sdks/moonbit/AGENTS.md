@@ -508,7 +508,8 @@ published to mooncakes.io for the release template to work.
 - SDK stub files (`gen/interface/*/stub.mbt`) ARE maintained by hand despite living in `gen/`.
 - The SDK library targets WASM only — use `moon check --target wasm` frequently.
 - Prefer `inspect()` snapshot tests (`moon test --update`); use `assert_eq` for structural checks.
-- Run `moon info && moon fmt` before finalizing changes.
+- Run `moon fmt` for changed MoonBit source and `moon info` when public interfaces change; review generated `.mbti` diffs.
+- Run targeted `moon test <package-or-file>` commands first. Use module-wide tests for broad or unclear impact.
 
 ## Important Technical Notes
 

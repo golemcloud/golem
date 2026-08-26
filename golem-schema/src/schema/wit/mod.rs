@@ -30,10 +30,10 @@ mod encode;
 mod model;
 
 #[cfg(all(feature = "guest", not(feature = "host")))]
-mod guest;
+pub(crate) mod guest;
 
 #[cfg(all(feature = "host", not(feature = "guest")))]
-mod host;
+pub(crate) mod host;
 
 /// Generated `golem:core@2.0.0` types used as the wire shape.
 #[cfg(all(feature = "guest", not(feature = "host")))]
@@ -43,12 +43,18 @@ pub use guest::generated::golem::core::types as wire;
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use host::generated::golem::core::types as wire;
 
+pub(crate) use decode::decode_value_by_ref;
 pub use decode::{
     DecodeError, GraphDecoder, decode_graph, decode_metadata, decode_typed, decode_value,
 };
 pub use encode::{
     EncodeError, GraphEncoder, encode_graph, encode_metadata, encode_typed, encode_value,
 };
+
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub use decode::decode_typed_owned;
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub use encode::encode_typed_owned;
 
 #[cfg(all(feature = "host", not(feature = "guest")))]
 pub use decode::{

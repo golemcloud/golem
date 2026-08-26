@@ -163,7 +163,8 @@ All MoonBit identifiers are used **as-is** (matching the source code) when used 
 - `moon check --target wasm` — type-check (must target WASM)
 - `moon test` — run tests; use `moon test --update` to update snapshots
 - `moon info` — regenerate `.mbti` interface files
-- Always run `moon info && moon fmt` before finalizing changes
+- Run `moon fmt` for changed MoonBit source and `moon info` when public interfaces change
+- Start with tests for the affected package or file; use all tests for broad or unclear impact
 
 ## Running Golem CLI commands non-interactively
 

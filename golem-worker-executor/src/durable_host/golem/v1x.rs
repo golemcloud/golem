@@ -40,7 +40,7 @@ use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
 use crate::services::{HasOplogService, HasWorker};
-use crate::worker::resolve_revert_last_invocations;
+use crate::worker::Worker;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::{StatusManagement, WorkerCtx};
 use anyhow::anyhow;
@@ -1223,25 +1223,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(target) => {
                     let owned_agent_id =
                         OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
-                    let Some(agent_mode) = self
-                        .state
-                        .worker_service
-                        .get_agent_mode(&owned_agent_id)
-                        .await
-                    else {
-                        return Ok(Err(agent_operation_error(format!(
-                            "agent {owned_agent_id} does not exist"
-                        ))));
-                    };
-                    match resolve_revert_last_invocations(
-                        self.state.oplog_service().as_ref(),
+                    match Worker::<Ctx>::resolve_revert_last_invocations(
+                        &self.state,
                         &owned_agent_id,
-                        agent_mode,
                         target.number_of_invocations,
                     )
                     .await
                     {
                         Ok(resolved) => Some(resolved),
+                        Err(WorkerExecutorError::AgentNotFound { .. }) => {
+                            return Ok(Err(agent_operation_error(format!(
+                                "agent {owned_agent_id} does not exist"
+                            ))));
+                        }
                         Err(error) => return Ok(Err(agent_operation_error(error.to_string()))),
                     }
                 }
