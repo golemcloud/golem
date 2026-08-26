@@ -32,7 +32,19 @@ sbt "++3.8.2; core/compile"    # Compile core (Scala 3)
 Tests use ZIO Test framework.
 
 ```shell
-sbt golemTestAll    # Run all tests
+sbt "++3.8.2; core/test"                 # One affected project
+sbt "++3.8.2; modelJVM/test; modelJS/test" # Shared model on both platforms
+sbt "++2.12.21!; sbtPlugin/test"         # sbt plugin
+sbt golemTestAll                            # Broad Scala 3 SDK checks
+```
+
+Start with affected projects and Scala versions. Compile affected consumers such as `testAgents` for public API, macro, codegen, or plugin changes. `golemTestAll` runs Scala 3.8.2 model/core/macros tests and links `testAgents`; it does not run codegen, Scala 2.12, sbt plugin, or integration tests.
+
+For broad changes, add the applicable checks explicitly:
+
+```shell
+sbt "++3.8.2; codegen/test; ++2.12.21!; codegen/test; sbtPlugin/test"
+GOLEM_TS_PACKAGES_PATH=<TS_PACKAGES_PATH> sbt "++3.8.2; integrationTests/test"
 ```
 
 ## Scala Versions
@@ -48,7 +60,7 @@ sbt scalafmtAll           # Format all sources
 sbt scalafmtCheckAll      # Check formatting
 ```
 
-Run before committing.
+Use `<project>/scalafmtCheckAll` for isolated project changes when possible. Use root `scalafmtCheckAll` for cross-project changes, and apply `scalafmtAll` only when fixes are needed.
 
 ## Integration with Main Repository
 
