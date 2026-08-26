@@ -19,8 +19,10 @@ use std::task::{Context, Poll};
 use crate::durable_host::TcpSocketStreamDirection;
 use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access, resolve_current_observational_owner,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, DemandDelivery, DemandDeliveryMode,
+    DurableCallSession, DurableDemandItem, DurableDemandStream,
+    authorize_live_permissions_at_serialized_access, closed_demand, deliver_demand, demand_channel,
+    resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
     CustomInvocationContext, DurabilityHost, DurableCallTrapContext, mark_durable_call_trap_context,
@@ -994,7 +996,7 @@ fn fail_tcp_receive_task(
 async fn run_tcp_socket_receive<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     socket: Resource<TcpSocket>,
-    mut demand_rx: mpsc::Receiver<TcpReceiveDemand>,
+    demand_rx: mpsc::Receiver<TcpReceiveDemand>,
     result_tx: oneshot::Sender<TcpReceiveResolution>,
     observational_owner: Option<OplogIndex>,
     activity: TailActivity,
@@ -1003,26 +1005,30 @@ where
     Ctx: WorkerCtx,
     U: Send + 'static,
 {
-    // Open the parent batched scope. Children nest under its begin index.
-    let mut parent =
-        match DurableCallSession::<P3SocketsTypesTcpSocketReceive, Cancellable>::start_access_with_options(
-            accessor,
-            durable_worker_ctx::<Ctx, U>,
-            DurableFunctionType::WriteRemoteBatched(None),
-            AccessClaimOptions {
-                observational_owner,
-                ..Default::default()
-            },
-            async |_| Ok(HostRequestNoInput {}),
-        )
-        .await
-        {
-            Ok(parent) => parent,
-            Err(error) => {
-                return fail_tcp_receive_task(result_tx, wasmtime::Error::from(error), None);
-            }
-        };
-    let parent_begin = parent.begin_index();
+    // Open the parent batched scope. The demand stream owns it until every requested child has
+    // reached its delivery boundary, so the parent terminal is necessarily written last.
+    let mut stream = match DurableDemandStream::<
+        P3SocketsTypesTcpSocketReceive,
+        P3SocketsTypesTcpSocketReceiveChunk,
+        TcpReceiveDemand,
+    >::start(
+        accessor,
+        durable_worker_ctx::<Ctx, U>,
+        demand_rx,
+        AccessClaimOptions {
+            observational_owner,
+            ..Default::default()
+        },
+        DemandDeliveryMode::Markerless,
+        async |_| Ok(HostRequestNoInput {}),
+    )
+    .await
+    {
+        Ok(parent) => parent,
+        Err(error) => {
+            return fail_tcp_receive_task(result_tx, wasmtime::Error::from(error), None);
+        }
+    };
 
     // Live upstream wiring: only touch the socket when the parent call is live.
     // The upstream stream is piped into a demand-gated consumer over a bounded
@@ -1031,15 +1037,15 @@ where
     let mut bytes_rx: Option<mpsc::Receiver<Vec<u8>>> = None;
     let mut permit_tx: Option<mpsc::Sender<()>> = None;
     let mut socket_result_rx: Option<oneshot::Receiver<Result<(), types::ErrorCode>>> = None;
-    if parent.is_live() {
+    if stream.is_live() {
         let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
         match <WasiSockets as types::HostTcpSocketWithStore<U>>::receive(&sockets, socket).await {
-            Ok((stream, result_future)) => {
+            Ok((socket_stream, result_future)) => {
                 let (chunk_tx, chunk_rx) = mpsc::channel::<Vec<u8>>(1);
                 let (demand_permit_tx, demand_permit_rx) = mpsc::channel::<()>(1);
                 let (inner_result_tx, inner_result_rx) = oneshot::channel();
                 if let Err(error) = accessor.with(|mut store| -> wasmtime::Result<()> {
-                    stream.pipe(
+                    socket_stream.pipe(
                         &mut store,
                         TcpReceiveForwardConsumer::new(PollSender::new(chunk_tx), demand_permit_rx),
                     )?;
@@ -1047,10 +1053,10 @@ where
                         .pipe(&mut store, TcpSocketResultConsumer::new(inner_result_tx))?;
                     Ok(())
                 }) {
-                    let trap_context = parent.trap_context();
+                    let trap_context = stream.trap_context();
                     return fail_tcp_receive_task(
                         result_tx,
-                        wasmtime::Error::from_anyhow(parent.trap(error)),
+                        wasmtime::Error::from_anyhow(stream.trap(error)),
                         Some(trap_context),
                     );
                 }
@@ -1059,10 +1065,10 @@ where
                 socket_result_rx = Some(inner_result_rx);
             }
             Err(error) => {
-                let trap_context = parent.trap_context();
+                let trap_context = stream.trap_context();
                 return fail_tcp_receive_task(
                     result_tx,
-                    wasmtime::Error::from_anyhow(parent.trap(error)),
+                    wasmtime::Error::from_anyhow(stream.trap(error)),
                     Some(trap_context),
                 );
             }
@@ -1075,26 +1081,19 @@ where
 
     loop {
         // Safe park: waiting for the guest to demand the next chunk.
-        let demand = activity.park(demand_rx.recv()).await;
+        let demand = stream.next_demand(&activity).await;
 
-        let mut child = match DurableCallSession::<
-            P3SocketsTypesTcpSocketReceiveChunk,
-            NotCancellable,
-        >::start_access_with_options(
-            accessor,
-            durable_worker_ctx::<Ctx, U>,
-            DurableFunctionType::WriteRemoteBatched(Some(parent_begin)),
-            AccessClaimOptions {
-                observational_owner,
-                ..Default::default()
-            },
-            async |_| Ok(HostRequestNoInput {}),
-        )
-        .await
+        let item = match stream
+            .next(
+                accessor,
+                durable_worker_ctx::<Ctx, U>,
+                HostRequestNoInput {},
+            )
+            .await
         {
-            Ok(child) => child,
+            Ok(item) => item,
             Err(error) => {
-                let trap_context = parent.trap_context();
+                let trap_context = stream.trap_context();
                 if let Some(reply_tx) = demand {
                     let _ = reply_tx.send(TcpReceiveReply::Failed {
                         message: error.to_string(),
@@ -1103,7 +1102,7 @@ where
                 }
                 return fail_tcp_receive_task(
                     result_tx,
-                    wasmtime::Error::from_anyhow(parent.trap(error)),
+                    wasmtime::Error::from_anyhow(stream.trap(error)),
                     Some(trap_context),
                 );
             }
@@ -1111,227 +1110,167 @@ where
 
         // Produce the next item: replay the recorded child (replay) or read the
         // upstream socket and persist it (live).
-        let produced = if !child.is_live() {
-            match child
-                .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
-                .await
-            {
-                Ok(CallReplayOutcome::Replayed(response)) => match response.chunk {
+        let (produced, delivery) = match item {
+            DurableDemandItem::Replayed { response, delivery } => {
+                let produced = match response.chunk {
                     SerializableP3TcpChunk::Data(bytes) => {
                         ProducedTcpChunk::Data(Bytes::from(bytes))
                     }
                     SerializableP3TcpChunk::End => ProducedTcpChunk::Terminal,
-                },
-                Ok(CallReplayOutcome::Incomplete(mut child)) => {
-                    // A batched child is not re-executable: `replay_access`
-                    // hard-errors on an incomplete `Start` rather than returning
-                    // `Incomplete`, so this arm is not reachable in normal
-                    // operation. Treat it defensively: abandon the live child
-                    // handle (a trap is not a cancellation), then trap the parent.
-                    child.abandon_for_trap();
-                    let message =
-                        "tcp receive chunk replay returned an unexpected incomplete child"
-                            .to_string();
-                    let trap_context = parent.trap_context();
-                    if let Some(reply_tx) = demand {
-                        let _ = reply_tx.send(TcpReceiveReply::Failed {
-                            message: message.clone(),
-                            trap_context,
-                        });
-                    }
-                    return fail_tcp_receive_task(
-                        result_tx,
-                        wasmtime::Error::from_anyhow(parent.trap(anyhow::Error::msg(message))),
-                        Some(trap_context),
-                    );
-                }
-                Err(error) => {
-                    let trap_context = parent.trap_context();
-                    if let Some(reply_tx) = demand {
-                        let _ = reply_tx.send(TcpReceiveReply::Failed {
-                            message: error.to_string(),
-                            trap_context,
-                        });
-                    }
-                    return fail_tcp_receive_task(
-                        result_tx,
-                        wasmtime::Error::from_anyhow(parent.trap(error)),
-                        Some(trap_context),
-                    );
-                }
+                };
+                (produced, delivery)
             }
-        } else {
-            // When the producer is already gone (guest dropped the stream) we
-            // terminate the recorded stream with an `End` child instead of reading
-            // more of the socket — and we must not start a new socket read whose
-            // persisted chunk could never be delivered.
-            let producer_gone = demand
-                .as_ref()
-                .map(|reply_tx| reply_tx.is_closed())
-                .unwrap_or(true);
-            let frame = if producer_gone {
-                TcpReceiveFrame::End(Ok(()))
-            } else {
-                let bytes_rx = bytes_rx
-                    .as_mut()
-                    .expect("live tcp receive has an upstream byte channel");
-                // Grant the demand-gated consumer permission to forward exactly one
-                // chunk. The consumer holds no other read-ahead, so this is the only
-                // point at which a socket chunk can reach the Golem channel. A send
-                // failure means the consumer is already gone (upstream EOF/teardown),
-                // which surfaces below as a closed `bytes_rx`.
-                if let Some(permit_tx) = permit_tx.as_ref() {
-                    // `Closed` is harmless (upstream EOF/teardown, surfaces below
-                    // as a closed `bytes_rx`). `Full` cannot happen — at most one
-                    // permit is outstanding per served demand — but if it ever
-                    // did, the already-queued permit serves this demand, so the
-                    // extra one is dropped after flagging the bug. Deliberately no
-                    // `debug_assert!` here: panicking would unwind through the
-                    // still-open `NotCancellable` child call handle below, which
-                    // itself panics on drop.
-                    if let Err(mpsc::error::TrySendError::Full(())) = permit_tx.try_send(()) {
+            DurableDemandItem::Live(mut child) => {
+                // When the producer is already gone (guest dropped the stream) we
+                // terminate the recorded stream with an `End` child instead of reading
+                // more of the socket.
+                let producer_gone = demand
+                    .as_ref()
+                    .map(|reply_tx| reply_tx.is_closed())
+                    .unwrap_or(true);
+                let frame = if producer_gone {
+                    TcpReceiveFrame::End(Ok(()))
+                } else {
+                    let bytes_rx = bytes_rx
+                        .as_mut()
+                        .expect("live tcp receive has an upstream byte channel");
+                    // Grant the upstream consumer permission to forward exactly one
+                    // chunk for this demand.
+                    if let Some(permit_tx) = permit_tx.as_ref()
+                        && let Err(mpsc::error::TrySendError::Full(())) = permit_tx.try_send(())
+                    {
                         tracing::error!(
                             "tcp receive permit channel unexpectedly full; \
                              continuing with the already-queued permit"
                         );
                     }
-                }
-                // This live socket wait can park indefinitely (no bytes may ever
-                // arrive), so it must race the worker's interrupt signal: worker
-                // interruption / the invocation deadline can only unwind the event
-                // loop cooperatively, from within a parked host future.
-                let interrupt = accessor.with(|mut access| {
-                    durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
-                });
-                let socket_result_rx = &mut socket_result_rx;
-                let read_frame = async {
-                    match bytes_rx.recv().await {
-                        Some(bytes) => TcpReceiveFrame::Data(Bytes::from(bytes)),
-                        None => {
-                            let result = match socket_result_rx.take() {
-                                Some(rx) => {
-                                    rx.await.unwrap_or(Err(types::ErrorCode::ConnectionBroken))
-                                }
-                                None => Ok(()),
-                            };
-                            TcpReceiveFrame::End(result)
+                    let interrupt = accessor.with(|mut access| {
+                        durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
+                    });
+                    let socket_result_rx = &mut socket_result_rx;
+                    let read_frame = async {
+                        match bytes_rx.recv().await {
+                            Some(bytes) => TcpReceiveFrame::Data(Bytes::from(bytes)),
+                            None => {
+                                let result = match socket_result_rx.take() {
+                                    Some(rx) => {
+                                        rx.await.unwrap_or(Err(types::ErrorCode::ConnectionBroken))
+                                    }
+                                    None => Ok(()),
+                                };
+                                TcpReceiveFrame::End(result)
+                            }
+                        }
+                    };
+                    tokio::select! {
+                        frame = read_frame => frame,
+                        kind = interrupt => {
+                            // Leave both starts incomplete so they re-execute on resume.
+                            child.abandon_for_trap();
+                            stream.abandon_for_trap();
+                            return Err(wasmtime::Error::from_anyhow(kind.into()));
                         }
                     }
                 };
-                tokio::select! {
-                    frame = read_frame => frame,
-                    kind = interrupt => {
-                        // An interrupt is not a cancellation and not a hard error:
-                        // abandon the open chunk child first, then the parent, so
-                        // neither writes a terminal (both `Start`s stay incomplete
-                        // and re-execute on resume), and unwind the event loop with
-                        // the interrupt kind directly so it classifies as
-                        // `TrapType::Interrupt`.
-                        child.abandon_for_trap();
-                        parent.abandon_for_trap();
-                        return Err(wasmtime::Error::from_anyhow(kind.into()));
+
+                let chunk = match &frame {
+                    TcpReceiveFrame::Data(bytes) => SerializableP3TcpChunk::Data(bytes.to_vec()),
+                    TcpReceiveFrame::End(_) => SerializableP3TcpChunk::End,
+                };
+                let produced = match frame {
+                    TcpReceiveFrame::Data(bytes) => ProducedTcpChunk::Data(bytes),
+                    TcpReceiveFrame::End(result) => {
+                        terminal = result;
+                        ProducedTcpChunk::Terminal
                     }
-                }
-            };
-
-            let chunk = match &frame {
-                TcpReceiveFrame::Data(bytes) => SerializableP3TcpChunk::Data(bytes.to_vec()),
-                TcpReceiveFrame::End(_) => SerializableP3TcpChunk::End,
-            };
-
-            if let Err(error) = child
-                .complete_access(
-                    accessor,
-                    durable_worker_ctx::<Ctx, U>,
-                    HostResponseP3SocketsTcpReceiveChunk { chunk },
-                )
-                .await
-            {
-                // The child `Start` is already persisted but its `End` failed: the
-                // recorded chunk history is now incomplete. Fail loud rather than
-                // committing a completed parent marker over it. `complete_access`
-                // already finished the child handle without recording a `Cancelled`
-                // and its error carries the child scope's trap context, so preserve
-                // it; we only abandon the still-open parent so it is not dropped
-                // unfinished (which would wrongly record a parent `Cancelled`).
-                let trap_context = parent.trap_context();
-                if let Some(reply_tx) = demand {
-                    let _ = reply_tx.send(TcpReceiveReply::Failed {
-                        message: error.to_string(),
-                        trap_context,
-                    });
-                }
-                parent.abandon_for_trap();
-                return fail_tcp_receive_task(
-                    result_tx,
-                    wasmtime::Error::from(error),
-                    Some(trap_context),
-                );
-            }
-
-            match frame {
-                TcpReceiveFrame::Data(bytes) => ProducedTcpChunk::Data(bytes),
-                TcpReceiveFrame::End(result) => {
-                    terminal = result;
-                    ProducedTcpChunk::Terminal
-                }
-            }
-        };
-
-        // Deliver the produced item to the guest-facing stream. This is the single
-        // point where chunks reach the guest, identically live and on replay, so
-        // the count/order of delivered chunks always matches the count/order of
-        // persisted children.
-        match produced {
-            ProducedTcpChunk::Data(bytes) => match demand {
-                Some(reply_tx) => {
-                    if reply_tx.send(TcpReceiveReply::Data(bytes)).is_err() {
-                        // The chunk was persisted but the producer vanished before
-                        // it could be delivered. The recorded stream would diverge
-                        // on replay (where the chunk *would* be delivered), so fail
-                        // loud instead of finalizing the parent with a clean
-                        // terminal over an undelivered chunk.
-                        let trap_context = parent.trap_context();
-                        parent.abandon_for_trap();
+                };
+                let delivery = match stream
+                    .complete_item(
+                        accessor,
+                        durable_worker_ctx::<Ctx, U>,
+                        child,
+                        HostResponseP3SocketsTcpReceiveChunk { chunk },
+                    )
+                    .await
+                {
+                    Ok(delivery) => delivery,
+                    Err(error) => {
+                        let trap_context = stream.trap_context();
+                        if let Some(reply_tx) = demand {
+                            let _ = reply_tx.send(TcpReceiveReply::Failed {
+                                message: error.to_string(),
+                                trap_context,
+                            });
+                        }
+                        stream.abandon_for_trap();
                         return fail_tcp_receive_task(
                             result_tx,
-                            wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
-                                anyhow::Error::msg(
-                                    "tcp receive persisted a chunk that could not be delivered to \
-                                     the guest stream",
-                                ),
-                                trap_context,
-                            )),
+                            wasmtime::Error::from(error),
                             Some(trap_context),
                         );
                     }
-                }
-                None => {
-                    // A `Data` item is only ever produced in response to a demand,
-                    // so a missing demand here is a protocol invariant violation
-                    // rather than a clean stream end.
-                    let trap_context = parent.trap_context();
-                    parent.abandon_for_trap();
+                };
+
+                (produced, delivery)
+            }
+        };
+
+        // Delivery is the same after a live write and a replayed child. TCP's oplog protocol uses
+        // markerless child terminals, so a data item that cannot cross this boundary fails loud
+        // instead of changing the recorded stream shape.
+        match produced {
+            ProducedTcpChunk::Data(bytes) => {
+                let result = match deliver_demand(
+                    &activity,
+                    demand.unwrap_or_else(closed_demand),
+                    TcpReceiveReply::Data(bytes),
+                    delivery,
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let trap_context = stream.trap_context();
+                        return fail_tcp_receive_task(
+                            result_tx,
+                            wasmtime::Error::from_anyhow(stream.trap(error)),
+                            Some(trap_context),
+                        );
+                    }
+                };
+                if matches!(result, DemandDelivery::Abandoned) {
+                    let trap_context = stream.trap_context();
                     return fail_tcp_receive_task(
                         result_tx,
-                        wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
-                            anyhow::Error::msg(
-                                "tcp receive produced a chunk without a pending demand",
-                            ),
-                            trap_context,
-                        )),
+                        wasmtime::Error::from_anyhow(stream.trap(anyhow::Error::msg(
+                            "tcp receive persisted a chunk that could not be delivered to the \
+                             guest stream",
+                        ))),
                         Some(trap_context),
                     );
                 }
-            },
+            }
             ProducedTcpChunk::Terminal => {
-                if let Some(reply_tx) = demand {
-                    let (ack_tx, ack_rx) = oneshot::channel();
-                    if reply_tx.send(TcpReceiveReply::End { ack: ack_tx }).is_ok() {
-                        // Wait for the producer to observe the terminal (report EOF
-                        // to the guest) before resolving the result / finalizing the
-                        // parent.
+                let (ack_tx, ack_rx) = oneshot::channel();
+                match deliver_demand(
+                    &activity,
+                    demand.unwrap_or_else(closed_demand),
+                    TcpReceiveReply::End { ack: ack_tx },
+                    delivery,
+                )
+                .await
+                {
+                    Ok(DemandDelivery::Delivered) => {
                         let _ = ack_rx.await;
+                    }
+                    Ok(DemandDelivery::Abandoned) => {}
+                    Err(error) => {
+                        let trap_context = stream.trap_context();
+                        return fail_tcp_receive_task(
+                            result_tx,
+                            wasmtime::Error::from_anyhow(stream.trap(error)),
+                            Some(trap_context),
+                        );
                     }
                 }
                 break;
@@ -1339,67 +1278,25 @@ where
         }
     }
 
-    // Finalize the parent with the terminal marker. Capture the parent scope's
-    // trap context first so every finalize failure can tag the guest-facing
-    // result trap for correct retry grouping.
-    let parent_trap_context = parent.trap_context();
-    let outcome = if parent.is_live() {
-        match parent
-            .complete_access(
-                accessor,
-                durable_worker_ctx::<Ctx, U>,
-                HostResponseP3SocketsTcpReceive {
-                    result: serialize_tcp_stream_result(terminal),
-                },
-            )
-            .await
-        {
-            Ok(response) => deserialize_tcp_stream_result(response.result),
-            Err(error) => {
-                return fail_tcp_receive_task(
-                    result_tx,
-                    wasmtime::Error::from(error),
-                    Some(parent_trap_context),
-                );
-            }
-        }
-    } else {
-        match parent
-            .replay_access(accessor, durable_worker_ctx::<Ctx, U>)
-            .await
-        {
-            Ok(CallReplayOutcome::Replayed(response)) => {
-                deserialize_tcp_stream_result(response.result)
-            }
-            Ok(CallReplayOutcome::Incomplete(parent)) => match parent
-                .complete_access(
-                    accessor,
-                    durable_worker_ctx::<Ctx, U>,
-                    HostResponseP3SocketsTcpReceive {
-                        result: serialize_tcp_stream_result(terminal),
-                    },
-                )
-                .await
-            {
-                Ok(response) => deserialize_tcp_stream_result(response.result),
-                Err(error) => {
-                    return fail_tcp_receive_task(
-                        result_tx,
-                        wasmtime::Error::from(error),
-                        Some(parent_trap_context),
-                    );
-                }
+    // The parent terminal is persisted only after all child terminals and delivery boundaries.
+    let parent_trap_context = stream.trap_context();
+    let outcome = match stream
+        .finish(
+            accessor,
+            durable_worker_ctx::<Ctx, U>,
+            HostResponseP3SocketsTcpReceive {
+                result: serialize_tcp_stream_result(terminal),
             },
-            Err(error) => {
-                return fail_tcp_receive_task(
-                    result_tx,
-                    wasmtime::Error::from_anyhow(mark_durable_call_trap_context(
-                        anyhow::Error::from(error),
-                        parent_trap_context,
-                    )),
-                    Some(parent_trap_context),
-                );
-            }
+        )
+        .await
+    {
+        Ok(response) => deserialize_tcp_stream_result(response.result),
+        Err(error) => {
+            return fail_tcp_receive_task(
+                result_tx,
+                wasmtime::Error::from(error),
+                Some(parent_trap_context),
+            );
         }
     };
 
@@ -1468,7 +1365,7 @@ where
     // scope. The actual byte transmission stays a `WriteRemoteBatched` call. The
     // recorded outcome is still persisted and replayed for determinism, exactly
     // like the clock `ReadLocal` calls.
-    let response = run_read_access::<_, _, Ctx, Pair, _, _>(
+    let response = run_read_access::<_, _, Ctx, Pair, _>(
         accessor,
         HostRequestNoInput {},
         DurableFunctionType::ReadLocal,
@@ -1554,7 +1451,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             false
         };
         let request_address = remote_address;
-        let response = run_read_access::<_, _, Ctx, P3SocketsTypesTcpSocketConnect, _, _>(
+        let response = run_read_access::<_, _, Ctx, P3SocketsTypesTcpSocketConnect, _>(
             store,
             HostRequestP3SocketsConnect {
                 remote_address: request_address.into(),
@@ -1699,7 +1596,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
 
         // Capacity 1 suffices (and bounds memory as defense in depth): the
         // producer keeps at most one demand in flight at a time.
-        let (demand_tx, demand_rx) = mpsc::channel(1);
+        let (demand_tx, demand_rx) = demand_channel();
         let (result_tx, result_rx) = oneshot::channel();
 
         // Build both guest-facing handles before spawning the durable task. The

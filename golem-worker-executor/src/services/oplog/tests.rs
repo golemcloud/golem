@@ -560,13 +560,13 @@ impl IndexedStorage for ReadCountingIndexedStorage {
     }
 }
 
-/// `BlobStorage` decorator counting read-type operations, used to prove at the
-/// storage level that fresh oplog construction performs no reads before its
-/// first append.
+/// `BlobStorage` decorator counting read-type operations and optionally failing a raw write.
 #[derive(Debug)]
 struct ReadCountingBlobStorage {
     inner: InMemoryBlobStorage,
     reads: AtomicUsize,
+    puts: AtomicUsize,
+    fail_put: Option<usize>,
 }
 
 impl ReadCountingBlobStorage {
@@ -574,6 +574,17 @@ impl ReadCountingBlobStorage {
         Self {
             inner: InMemoryBlobStorage::new(),
             reads: AtomicUsize::new(0),
+            puts: AtomicUsize::new(0),
+            fail_put: None,
+        }
+    }
+
+    fn failing_on_put(fail_put: usize) -> Self {
+        Self {
+            inner: InMemoryBlobStorage::new(),
+            reads: AtomicUsize::new(0),
+            puts: AtomicUsize::new(0),
+            fail_put: Some(fail_put),
         }
     }
 
@@ -639,6 +650,10 @@ impl BlobStorage for ReadCountingBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), anyhow::Error> {
+        let put = self.puts.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.fail_put == Some(put) {
+            return Err(anyhow::anyhow!("injected blob write failure {put}"));
+        }
         self.inner
             .put_raw(target_label, op_label, namespace, path, data)
             .await
@@ -2097,6 +2112,84 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     assert_eq!(p3, "response");
     assert_eq!(p4, vec![1, 2, 3]);
     assert_eq!(p4_mime, "application/octet-stream");
+}
+
+#[test]
+async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(ReadCountingBlobStorage::failing_on_put(2));
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "completed-host-call-upload-failure".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    let before = oplog.current_oplog_index().await;
+
+    let result = oplog
+        .add_completed_host_call(
+            HostFunctionName::Custom("completed-call".to_string()),
+            &HostRequest::Custom(vec![1u8; 1024].into_typed_schema_value().unwrap()),
+            &HostResponse::Custom(vec![2u8; 1024].into_typed_schema_value().unwrap()),
+            DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::INITIAL)),
+            Some(OplogIndex::INITIAL),
+        )
+        .await;
+
+    assert!(result.is_err());
+    assert_eq!(oplog.current_oplog_index().await, before);
+    assert!(oplog.read_many(before.next(), 10).await.is_empty());
+
+    let parent = OplogIndex::INITIAL;
+    let function_name = HostFunctionName::Custom("completed-call".to_string());
+    let (start_index, end_index) = oplog
+        .add_completed_host_call(
+            function_name.clone(),
+            &HostRequest::Custom(vec![1u8; 1024].into_typed_schema_value().unwrap()),
+            &HostResponse::Custom(vec![2u8; 1024].into_typed_schema_value().unwrap()),
+            DurableFunctionType::WriteRemoteBatched(Some(parent)),
+            Some(parent),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(start_index, before.next());
+    assert_eq!(end_index, start_index.next());
+    assert!(matches!(
+        oplog.read(start_index).await,
+        OplogEntry::Start {
+            parent_start_index: Some(entry_parent),
+            function_name: entry_function_name,
+            ..
+        } if entry_parent == parent && entry_function_name == function_name
+    ));
+    assert!(matches!(
+        oplog.read(end_index).await,
+        OplogEntry::End {
+            start_index: entry_start_index,
+            ..
+        } if entry_start_index == start_index
+    ));
 }
 
 #[test]

@@ -67,6 +67,7 @@ use std::fmt::Display;
 mod access;
 mod call;
 mod delivery;
+mod demand_stream;
 mod drop_events;
 mod replay;
 
@@ -85,6 +86,7 @@ use call::{
     BegunCallExecutionScope, CallExecutionScope, ScopedRetryHost, unregistered_atomic_lease,
 };
 pub use delivery::*;
+pub(crate) use demand_stream::*;
 pub use drop_events::*;
 pub use replay::*;
 

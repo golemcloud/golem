@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{
-    DurableCallSession, NotCancellable, drain_queued_dropped_call_events,
-};
+use crate::durable_host::concurrent::{DurableCallSession, NotCancellable};
 use crate::durable_host::p3::DurableP3View;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
@@ -31,50 +29,38 @@ use wasmtime_wasi::random::WasiRandomView as _;
 impl<Ctx: WorkerCtx> random::Host for DurableP3View<'_, Ctx> {
     async fn get_random_bytes(&mut self, len: u64) -> wasmtime::Result<Vec<u8>> {
         let ctx = self.0.durable_ctx_mut();
-        drain_queued_dropped_call_events(ctx)
-            .await
-            .map_err(wasmtime::Error::from)?;
-        let handle = DurableCallSession::<P3RandomRandomGetRandomBytes, NotCancellable>::start(
+        let result = DurableCallSession::<P3RandomRandomGetRandomBytes, NotCancellable>::invoke(
             ctx,
             HostRequestRandomBytes { length: len },
             DurableFunctionType::ReadLocal,
-        )
-        .await?;
-
-        let result = handle
-            .run(ctx, async |ctx| -> wasmtime::Result<_> {
+            async |ctx| -> wasmtime::Result<_> {
                 let bytes = {
                     let mut view = ctx.as_wasi_view();
                     random::Host::get_random_bytes(view.random(), len).await?
                 };
                 Ok(HostResponseRandomBytes { bytes })
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         Ok(result.bytes)
     }
 
     async fn get_random_u64(&mut self) -> wasmtime::Result<u64> {
         let ctx = self.0.durable_ctx_mut();
-        drain_queued_dropped_call_events(ctx)
-            .await
-            .map_err(wasmtime::Error::from)?;
-        let handle = DurableCallSession::<P3RandomRandomGetRandomU64, NotCancellable>::start(
+        let result = DurableCallSession::<P3RandomRandomGetRandomU64, NotCancellable>::invoke(
             ctx,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
-        )
-        .await?;
-
-        let result = handle
-            .run(ctx, async |ctx| -> wasmtime::Result<_> {
+            async |ctx| -> wasmtime::Result<_> {
                 let value = {
                     let mut view = ctx.as_wasi_view();
                     random::Host::get_random_u64(view.random()).await?
                 };
                 Ok(HostResponseRandomU64 { value })
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         Ok(result.value)
     }
@@ -83,25 +69,19 @@ impl<Ctx: WorkerCtx> random::Host for DurableP3View<'_, Ctx> {
 impl<Ctx: WorkerCtx> insecure::Host for DurableP3View<'_, Ctx> {
     async fn get_insecure_random_bytes(&mut self, len: u64) -> wasmtime::Result<Vec<u8>> {
         let ctx = self.0.durable_ctx_mut();
-        drain_queued_dropped_call_events(ctx)
-            .await
-            .map_err(wasmtime::Error::from)?;
-        let handle =
-            DurableCallSession::<P3RandomInsecureGetInsecureRandomBytes, NotCancellable>::start(
+        let result =
+            DurableCallSession::<P3RandomInsecureGetInsecureRandomBytes, NotCancellable>::invoke(
                 ctx,
                 HostRequestRandomBytes { length: len },
                 DurableFunctionType::ReadLocal,
+                async |ctx| -> wasmtime::Result<_> {
+                    let bytes = {
+                        let mut view = ctx.as_wasi_view();
+                        insecure::Host::get_insecure_random_bytes(view.random(), len).await?
+                    };
+                    Ok(HostResponseRandomBytes { bytes })
+                },
             )
-            .await?;
-
-        let result = handle
-            .run(ctx, async |ctx| -> wasmtime::Result<_> {
-                let bytes = {
-                    let mut view = ctx.as_wasi_view();
-                    insecure::Host::get_insecure_random_bytes(view.random(), len).await?
-                };
-                Ok(HostResponseRandomBytes { bytes })
-            })
             .await?;
 
         Ok(result.bytes)
@@ -109,25 +89,19 @@ impl<Ctx: WorkerCtx> insecure::Host for DurableP3View<'_, Ctx> {
 
     async fn get_insecure_random_u64(&mut self) -> wasmtime::Result<u64> {
         let ctx = self.0.durable_ctx_mut();
-        drain_queued_dropped_call_events(ctx)
-            .await
-            .map_err(wasmtime::Error::from)?;
-        let handle =
-            DurableCallSession::<P3RandomInsecureGetInsecureRandomU64, NotCancellable>::start(
+        let result =
+            DurableCallSession::<P3RandomInsecureGetInsecureRandomU64, NotCancellable>::invoke(
                 ctx,
                 HostRequestNoInput {},
                 DurableFunctionType::ReadLocal,
+                async |ctx| -> wasmtime::Result<_> {
+                    let value = {
+                        let mut view = ctx.as_wasi_view();
+                        insecure::Host::get_insecure_random_u64(view.random()).await?
+                    };
+                    Ok(HostResponseRandomU64 { value })
+                },
             )
-            .await?;
-
-        let result = handle
-            .run(ctx, async |ctx| -> wasmtime::Result<_> {
-                let value = {
-                    let mut view = ctx.as_wasi_view();
-                    insecure::Host::get_insecure_random_u64(view.random()).await?
-                };
-                Ok(HostResponseRandomU64 { value })
-            })
             .await?;
 
         Ok(result.value)
@@ -137,28 +111,22 @@ impl<Ctx: WorkerCtx> insecure::Host for DurableP3View<'_, Ctx> {
 impl<Ctx: WorkerCtx> insecure_seed::Host for DurableP3View<'_, Ctx> {
     async fn get_insecure_seed(&mut self) -> wasmtime::Result<(u64, u64)> {
         let ctx = self.0.durable_ctx_mut();
-        drain_queued_dropped_call_events(ctx)
-            .await
-            .map_err(wasmtime::Error::from)?;
-        let handle =
-            DurableCallSession::<P3RandomInsecureSeedGetInsecureSeed, NotCancellable>::start(
+        let result =
+            DurableCallSession::<P3RandomInsecureSeedGetInsecureSeed, NotCancellable>::invoke(
                 ctx,
                 HostRequestNoInput {},
                 DurableFunctionType::ReadLocal,
+                async |ctx| -> wasmtime::Result<_> {
+                    let result = {
+                        let mut view = ctx.as_wasi_view();
+                        insecure_seed::Host::get_insecure_seed(view.random()).await?
+                    };
+                    Ok(HostResponseRandomSeed {
+                        lo: result.0,
+                        hi: result.1,
+                    })
+                },
             )
-            .await?;
-
-        let result = handle
-            .run(ctx, async |ctx| -> wasmtime::Result<_> {
-                let result = {
-                    let mut view = ctx.as_wasi_view();
-                    insecure_seed::Host::get_insecure_seed(view.random()).await?
-                };
-                Ok(HostResponseRandomSeed {
-                    lo: result.0,
-                    hi: result.1,
-                })
-            })
             .await?;
 
         Ok((result.lo, result.hi))
