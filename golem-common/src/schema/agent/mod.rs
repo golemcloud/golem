@@ -655,7 +655,8 @@ fn contains_future(ty: &SchemaType) -> bool {
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
-        | SchemaType::QuotaToken { .. } => false,
+        | SchemaType::QuotaToken { .. }
+        | SchemaType::PermissionCard { .. } => false,
     }
 }
 
@@ -708,7 +709,8 @@ fn contains_stream(ty: &SchemaType) -> bool {
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
-        | SchemaType::QuotaToken { .. } => false,
+        | SchemaType::QuotaToken { .. }
+        | SchemaType::PermissionCard { .. } => false,
     }
 }
 
@@ -730,6 +732,7 @@ pub mod bindings {
           anyhow: true,
           with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
           },
           wasmtime_crate: ::wasmtime
     });

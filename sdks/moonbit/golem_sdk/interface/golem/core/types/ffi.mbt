@@ -10,6 +10,9 @@ fn wasmImportResourceDropSecret(resource : Int) = "golem:core/types@2.0.0" "[res
 fn wasmImportResourceDropSchemaValueStream(resource : Int) = "golem:core/types@2.0.0" "[resource-drop]schema-value-stream"
 
 ///|
+fn wasmImportResourceDropPermissionCard(resource : Int) = "golem:core/types@2.0.0" "[resource-drop]permission-card"
+
+///|
 fn wasmImportParseUuid(p0 : Int, p1 : Int, p2 : Int) = "golem:core/types@2.0.0" "parse-uuid"
 
 ///|
@@ -126,6 +129,7 @@ fn wasmGolemCoreTypes200StaticSchemaValueStreamWrapStream0Commit(
         31 => ()
         32 => ()
         33 => ()
+        34 => ()
         _ => panic()
       }
     }
@@ -196,6 +200,8 @@ fn wasmGolemCoreTypes200StaticSchemaValueStreamWrapStream0Reject(
         31 => Secret::Secret(mbt_ffi_load32(iter_base + 8)).drop()
         32 => QuotaToken::QuotaToken(mbt_ffi_load32(iter_base + 8)).drop()
         33 =>
+          PermissionCard::PermissionCard(mbt_ffi_load32(iter_base + 8)).drop()
+        34 =>
           SchemaValueStream::SchemaValueStream(mbt_ffi_load32(iter_base + 8)).drop()
         _ => panic()
       }
@@ -479,6 +485,10 @@ fn wasmGolemCoreTypes200StaticSchemaValueStreamWrapStream0Lift(
           QuotaToken::QuotaToken(mbt_ffi_load32(iter_base + 8)),
         )
       33 =>
+        SchemaValueNode::PermissionCardHandle(
+          PermissionCard::PermissionCard(mbt_ffi_load32(iter_base + 8)),
+        )
+      34 =>
         SchemaValueNode::StreamValue(
           SchemaValueStream::SchemaValueStream(mbt_ffi_load32(iter_base + 8)),
         )
@@ -497,10 +507,10 @@ fn wasmGolemCoreTypes200StaticSchemaValueStreamWrapStream0Lower(
   value : SchemaValueTree,
   ptr : Int,
 ) -> Unit {
-  let address68 = mbt_ffi_malloc(value.value_nodes.length() * 32)
-  for index69 = 0; index69 < value.value_nodes.length(); index69 = index69 + 1 {
-    let iter_elem : SchemaValueNode = value.value_nodes[index69]
-    let iter_base = address68 + index69 * 32
+  let address70 = mbt_ffi_malloc(value.value_nodes.length() * 32)
+  for index71 = 0; index71 < value.value_nodes.length(); index71 = index71 + 1 {
+    let iter_elem : SchemaValueNode = value.value_nodes[index71]
+    let iter_base = address70 + index71 * 32
 
     match iter_elem {
       BoolValue(payload) => {
@@ -884,18 +894,26 @@ fn wasmGolemCoreTypes200StaticSchemaValueStreamWrapStream0Lower(
 
         ()
       }
-      StreamValue(payload66) => {
+      PermissionCardHandle(payload66) => {
         mbt_ffi_store8(iter_base + 0, 33)
 
-        let SchemaValueStream(handle67) = payload66
+        let PermissionCard(handle67) = payload66
         mbt_ffi_store32(iter_base + 8, handle67)
+
+        ()
+      }
+      StreamValue(payload68) => {
+        mbt_ffi_store8(iter_base + 0, 34)
+
+        let SchemaValueStream(handle69) = payload68
+        mbt_ffi_store32(iter_base + 8, handle69)
 
         ()
       }
     }
   }
   mbt_ffi_store32(ptr + 4, value.value_nodes.length())
-  mbt_ffi_store32(ptr + 0, address68)
+  mbt_ffi_store32(ptr + 0, address70)
   mbt_ffi_store32(ptr + 8, value.root)
 }
 
@@ -1447,6 +1465,8 @@ fn wasmGolemCoreTypes200StaticSchemaValueStreamUnwrapStream0Reject(
         31 => Secret::Secret(mbt_ffi_load32(iter_base + 8)).drop()
         32 => QuotaToken::QuotaToken(mbt_ffi_load32(iter_base + 8)).drop()
         33 =>
+          PermissionCard::PermissionCard(mbt_ffi_load32(iter_base + 8)).drop()
+        34 =>
           SchemaValueStream::SchemaValueStream(mbt_ffi_load32(iter_base + 8)).drop()
         _ => panic()
       }
@@ -1730,6 +1750,10 @@ fn wasmGolemCoreTypes200StaticSchemaValueStreamUnwrapStream0Lift(
           QuotaToken::QuotaToken(mbt_ffi_load32(iter_base + 8)),
         )
       33 =>
+        SchemaValueNode::PermissionCardHandle(
+          PermissionCard::PermissionCard(mbt_ffi_load32(iter_base + 8)),
+        )
+      34 =>
         SchemaValueNode::StreamValue(
           SchemaValueStream::SchemaValueStream(mbt_ffi_load32(iter_base + 8)),
         )

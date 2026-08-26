@@ -20,8 +20,8 @@ use crate::metrics::storage::{
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogConstructor, OplogService, OrderedOplogStart, PendingUpload, ReservedPayload,
-    ReservedRawStartBuilder, cursor_value, next_scan_cursor, scan_modes,
+    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, PendingUpload,
+    ReservedPayload, ReservedRawStartBuilder, cursor_value, next_scan_cursor, scan_modes,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -1404,8 +1404,17 @@ impl Debug for PrimaryOplog {
 
 #[async_trait]
 impl Oplog for PrimaryOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        self.run_job(|done| OplogJob::Add { entry, done }).await
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        let (done, done_rx) = tokio::sync::oneshot::channel();
+        if self.jobs.send(OplogJob::Add { entry, done }).is_err() {
+            panic!("Oplog actor for {} terminated unexpectedly", self.key);
+        }
+        let key = self.key.clone();
+        Box::pin(async move {
+            done_rx.await.unwrap_or_else(|_| {
+                panic!("Oplog actor for {key} dropped an add request without replying")
+            })
+        })
     }
 
     async fn add_durable_stream_batch(

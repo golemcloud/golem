@@ -406,6 +406,15 @@ object JsQuotaTokenSpec {
   }
 }
 
+@js.native
+sealed trait JsPermissionCardSpec extends js.Object {
+  def polymorphic: Boolean = js.native
+}
+object JsPermissionCardSpec {
+  def apply(polymorphic: Boolean): JsPermissionCardSpec =
+    js.Dynamic.literal("polymorphic" -> polymorphic).asInstanceOf[JsPermissionCardSpec]
+}
+
 // === Schema type body / node / graph ===
 
 @js.native
@@ -467,6 +476,8 @@ object JsSchemaTypeBody {
   def secretType(spec: JsSecretSpec): JsSchemaTypeBody         = JsShape.tagged[JsSchemaTypeBody]("secret-type", spec)
   def quotaTokenType(spec: JsQuotaTokenSpec): JsSchemaTypeBody =
     JsShape.tagged[JsSchemaTypeBody]("quota-token-type", spec)
+  def permissionCardType(spec: JsPermissionCardSpec): JsSchemaTypeBody =
+    JsShape.tagged[JsSchemaTypeBody]("permission-card-type", spec)
 
   def futureType(element: js.UndefOr[Int]): JsSchemaTypeBody =
     JsShape.taggedOptional[JsSchemaTypeBody]("future-type", element.map(_.asInstanceOf[js.Any]))
@@ -644,6 +655,10 @@ object JsSchemaValueNode {
 
   def streamValue(resource: js.Any): JsSchemaValueNode =
     JsShape.tagged[JsSchemaValueNode]("stream-value", resource)
+
+  /** `schema-value-node :: permission-card-handle(own<permission-card>)`. */
+  def permissionCardHandle(resource: js.Any): JsSchemaValueNode =
+    JsShape.tagged[JsSchemaValueNode]("permission-card-handle", resource)
 }
 
 @js.native

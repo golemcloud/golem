@@ -47,6 +47,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
 };
+use golem_common::model::card::ScopeCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, PersistedStreamInvocationDescriptorV1,
@@ -266,6 +267,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let mode = request.mode();
 
+        let scope_card: Option<ScopeCard> = request
+            .scope_card
+            .clone()
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(WorkerExecutorError::permission_denied)?;
+        if scope_card.is_some()
+            && mode != golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await
+        {
+            return Err(WorkerExecutorError::permission_denied(
+                "scope cards are supported only for invoke-and-await",
+            ));
+        }
+
         let ik = idempotency_key.unwrap_or(IdempotencyKey::fresh());
         let final_agent_id: AgentId = request
             .agent_id
@@ -363,6 +378,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             input: method_parameters.clone(),
             invocation_context,
             principal,
+            scope_card,
         };
 
         match mode {
@@ -1913,7 +1929,7 @@ pub(crate) fn build_durable_streaming_request(
     execution.attempt_id = None;
     execution.expected_callee_fingerprint = None;
     execution.durable_input_mappings.clear();
-    let effective_identity = effective_session_identity(&request.auth_ctx, &request.principal);
+    let effective_identity = effective_session_identity(&request.auth_ctx, &request.principal)?;
     let attempt = StartAttemptDescriptorV1 {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         session_key: session_key.clone(),
@@ -2133,7 +2149,7 @@ fn build_resume_attempt(
         expected_callee_fingerprint,
         attempt_id,
         expected_epoch: request.expected_epoch,
-        effective_identity: effective_session_identity(&request.auth_ctx, &request.principal),
+        effective_identity: effective_session_identity(&request.auth_ctx, &request.principal)?,
         cursors,
         live_join_buffer_events: u32::try_from(live_join_buffer_events).map_err(|_| {
             WorkerExecutorError::invalid_request("live join buffer capacity does not fit in u32")
@@ -2144,19 +2160,37 @@ fn build_resume_attempt(
 fn effective_session_identity(
     auth_ctx: &Option<golem_api_grpc::proto::golem::auth::AuthCtx>,
     principal: &Option<golem_api_grpc::proto::golem::component::Principal>,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, WorkerExecutorError> {
+    let auth_ctx = auth_ctx
+        .as_ref()
+        .map(|auth_ctx| {
+            use golem_api_grpc::proto::golem::auth::auth_ctx::Value;
+
+            let auth_ctx = golem_service_base::model::auth::AuthCtx::try_from(auth_ctx.clone())
+                .map_err(|error| {
+                    WorkerExecutorError::invalid_request(format!(
+                        "failed converting auth_ctx: {error}"
+                    ))
+                })?;
+            let mut auth_ctx: golem_api_grpc::proto::golem::auth::AuthCtx = auth_ctx.into();
+            match auth_ctx.value.as_mut() {
+                Some(Value::User(user)) => user.account_email.clear(),
+                Some(Value::Agent(agent)) => agent.account_email.clear(),
+                Some(Value::AdminImpersonation(admin)) => admin.target_account_email.clear(),
+                Some(Value::System(_)) | None => {}
+            }
+            Ok::<_, WorkerExecutorError>(auth_ctx.encode_to_vec())
+        })
+        .transpose()?;
     let mut effective_identity = Vec::new();
-    for identity in [
-        auth_ctx.as_ref().map(Message::encode_to_vec),
-        principal.as_ref().map(Message::encode_to_vec),
-    ]
-    .into_iter()
-    .flatten()
+    for identity in [auth_ctx, principal.as_ref().map(Message::encode_to_vec)]
+        .into_iter()
+        .flatten()
     {
         effective_identity.extend_from_slice(&(identity.len() as u64).to_be_bytes());
         effective_identity.extend_from_slice(&identity);
     }
-    effective_identity
+    Ok(effective_identity)
 }
 
 fn require_expected_callee_fingerprint(
@@ -2259,12 +2293,14 @@ fn replace_streams_for_persistence(invocation: AgentInvocation) -> AgentInvocati
             input,
             invocation_context,
             principal,
+            scope_card,
         } => AgentInvocation::AgentMethod {
             idempotency_key,
             method_name,
             input: erase_streams(input),
             invocation_context,
             principal,
+            scope_card,
         },
         other => other,
     }
@@ -2629,10 +2665,16 @@ async fn route_durable_request(
 #[cfg(test)]
 mod freshness_tests {
     use super::{
-        AcceptanceRace, decode_invocation_freshness_disposition, pre_acceptance_rejection_reason,
-        race_invocation_acceptance, require_expected_callee_fingerprint,
+        AcceptanceRace, decode_invocation_freshness_disposition, effective_session_identity,
+        pre_acceptance_rejection_reason, race_invocation_acceptance,
+        require_expected_callee_fingerprint,
     };
     use futures::future;
+    use golem_api_grpc::proto::golem::account::PlanId;
+    use golem_api_grpc::proto::golem::auth::{
+        AuthCtx, AuthEffectiveSurface, UserAuthCtx, auth_ctx,
+    };
+    use golem_api_grpc::proto::golem::common::{AccountId, Uuid};
     use golem_api_grpc::proto::golem::worker::InvocationRejectionReason;
     use golem_common::model::AgentFingerprint;
     use golem_common::model::agent::InvocationFreshnessDisposition;
@@ -2679,6 +2721,77 @@ mod freshness_tests {
         assert!(mismatch.to_string().contains("does not match"));
 
         require_expected_callee_fingerprint(Some(actual.0.into()), actual).unwrap();
+    }
+
+    #[test]
+    fn durable_stream_identity_ignores_non_authoritative_account_email() {
+        let auth_ctx = |account_email: &str| {
+            Some(AuthCtx {
+                value: Some(auth_ctx::Value::User(UserAuthCtx {
+                    account_id: Some(AccountId {
+                        value: Some(Uuid {
+                            high_bits: 1,
+                            low_bits: 2,
+                        }),
+                    }),
+                    plan_id: Some(PlanId {
+                        value: Some(Uuid {
+                            high_bits: 3,
+                            low_bits: 4,
+                        }),
+                    }),
+                    effective_surface: Some(AuthEffectiveSurface::default()),
+                    account_email: account_email.to_string(),
+                    ..Default::default()
+                })),
+            })
+        };
+
+        assert_eq!(
+            effective_session_identity(&auth_ctx("old@example.com"), &None).unwrap(),
+            effective_session_identity(&auth_ctx("new@example.com"), &None).unwrap(),
+            "resume identity must pin the effective principal/grant, not mutable account metadata"
+        );
+    }
+
+    #[test]
+    fn durable_stream_identity_ignores_account_role_wire_order() {
+        let auth_ctx = |account_roles| {
+            Some(AuthCtx {
+                value: Some(auth_ctx::Value::User(UserAuthCtx {
+                    account_id: Some(AccountId {
+                        value: Some(Uuid {
+                            high_bits: 1,
+                            low_bits: 2,
+                        }),
+                    }),
+                    plan_id: Some(PlanId {
+                        value: Some(Uuid {
+                            high_bits: 3,
+                            low_bits: 4,
+                        }),
+                    }),
+                    account_roles,
+                    effective_surface: Some(AuthEffectiveSurface::default()),
+                    ..Default::default()
+                })),
+            })
+        };
+        let admin = golem_api_grpc::proto::golem::auth::AccountRole::Admin as i32;
+        let marketing = golem_api_grpc::proto::golem::auth::AccountRole::MarketingAdmin as i32;
+        let ordered = auth_ctx(vec![admin, marketing]);
+        let reversed = auth_ctx(vec![marketing, admin]);
+        let ordered_auth: golem_service_base::model::auth::AuthCtx =
+            ordered.clone().unwrap().try_into().unwrap();
+        let reversed_auth: golem_service_base::model::auth::AuthCtx =
+            reversed.clone().unwrap().try_into().unwrap();
+        assert_eq!(ordered_auth, reversed_auth);
+
+        assert_eq!(
+            effective_session_identity(&ordered, &None).unwrap(),
+            effective_session_identity(&reversed, &None).unwrap(),
+            "account roles are a set after auth validation, so protobuf ordering must not change the pinned resume identity"
+        );
     }
 
     #[test]

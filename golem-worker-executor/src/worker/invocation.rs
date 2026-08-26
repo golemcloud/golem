@@ -123,22 +123,46 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         read_only_method,
         call,
     } = lowered;
-
-    // Encode the schema-native inputs into wire trees (minting any quota-token
-    // handles into the guest store) before the invocation is marked started, so
-    // an encoding failure surfaces before invocation bookkeeping.
-    let call = materialize_call(&mut store, call)?;
+    let operator_authorized_oplog_processor =
+        matches!(&call, LoweredCall::ProcessOplogEntries { .. });
 
     if let InvocationMode::Live(invocation) = mode {
-        async {
+        let started = async {
             store
                 .data_mut()
                 .on_agent_invocation_started(invocation)
                 .await
         }
         .instrument(span!(Level::INFO, "on_agent_invocation_started"))
-        .await?;
+        .await;
+        if let Err(error) = started {
+            store.data_mut().on_agent_invocation_finished().await;
+            return Err(error);
+        }
     }
+
+    // The invocation start records the authority that admits any secret handles
+    // carried by the input. Materialize those handles only after that admission.
+    let call = match materialize_call(&mut store, call) {
+        Ok(call) => call,
+        Err(error) => {
+            store.data_mut().on_agent_invocation_finished().await;
+            return Err(error);
+        }
+    };
+
+    let primary_body = match store
+        .data()
+        .durable_ctx()
+        .enter_primary_invocation_body()
+        .await
+    {
+        Ok(primary_body) => primary_body,
+        Err(error) => {
+            store.data_mut().on_agent_invocation_finished().await;
+            return Err(error);
+        }
+    };
 
     store.data_mut().set_running();
 
@@ -156,6 +180,12 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     if let Some(method_name) = &read_only_method {
         store.data_mut().enter_read_only_mode(method_name.clone());
     }
+    let operator_authorization = operator_authorized_oplog_processor.then(|| {
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .enter_operator_authorized_oplog_processor_invocation()
+    });
 
     let call_future = dispatch_call(&mut store, instance, call, &display_name);
 
@@ -166,6 +196,9 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     if read_only_method.is_some() {
         store.data_mut().exit_read_only_mode();
     }
+    drop(operator_authorization);
+
+    store.data_mut().on_agent_invocation_finished().await;
 
     let call_result = match call_outcome {
         Ok(result) => result,
@@ -175,6 +208,10 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     let call_result = apply_invocation_deadline(&mut store, deadline, call_result).await;
 
     store.data().set_suspended();
+
+    if let Some(primary_body) = primary_body {
+        primary_body.complete().await;
+    }
 
     call_result
 }
@@ -261,7 +298,7 @@ fn tail_work_settled(active_spawned_tasks: usize, replay_cursor_open: bool) -> b
 /// future is dropped, no `AgentInvocationFinished` entry is written, and normal retry handling
 /// replays any calls left incomplete — the same contract as a crash at this point.
 ///
-/// The event loop future itself is never dropped while unfinished: durable `CallHandle`s owned
+/// The event loop future itself is never dropped while unfinished: durable `DurableCallSession`s owned
 /// by parked host futures are not cancellation-safe (`NotCancellable` handles panic when dropped
 /// unfinished, and even `Cancellable` drops may leave terminal oplog effects unwritten).
 /// External cancellation — worker interruption and the optional max-invocation-duration limit —
@@ -477,6 +514,7 @@ async fn prepare_guest_call<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     display_name: &str,
 ) {
+    rearm_fuel_check(store);
     store.data_mut().reset_invocation_call_counts();
 
     let idempotency_key = store.data().get_current_idempotency_key().await;
@@ -487,6 +525,10 @@ async fn prepare_guest_call<Ctx: WorkerCtx>(
             .event_service()
             .emit_invocation_start(display_name, idempotency_key, store.data().is_live());
     }
+}
+
+pub(crate) fn rearm_fuel_check<T>(store: &mut StoreContextMut<'_, T>) {
+    store.set_epoch_deadline(0);
 }
 
 /// Builds an [`InvokeResult`] from a wasmtime trap (guest panic, interrupt,
@@ -923,13 +965,14 @@ enum PreparedCall {
 }
 
 /// Encode the schema-native inputs of a [`LoweredCall`] into the wire trees the
-/// guest expects, minting any `quota-token` handles into the guest store's
-/// resource table via the [`QuotaTokenResolver`](golem_schema::schema::wit::QuotaTokenResolver)
-/// implemented by [`DurableWorkerCtx`](crate::durable_host::DurableWorkerCtx).
+/// guest expects, minting any capability handles into the guest store's resource
+/// table through the resolvers implemented by
+/// [`DurableWorkerCtx`](crate::durable_host::DurableWorkerCtx).
 ///
-/// Run before the live invocation is marked started so that an encoding failure
-/// (e.g. a malformed quota snapshot) surfaces before invocation bookkeeping,
-/// matching the previous eager-encoding behavior.
+/// For live invocations this runs after the invocation input's capability
+/// snapshots have been admitted, so no guest-owned capability handle is minted
+/// before its required permissions are checked. Replay materializes the
+/// previously admitted snapshots without consulting current authority.
 fn materialize_call<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     call: LoweredCall,
@@ -1007,7 +1050,7 @@ pub fn lower_invocation(
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
             // The input carrier is already the schema-native parameter-record
             // value the guest export expects. Encoding to the wire tree (which
-            // may mint owned quota-token handles) is deferred to
+            // may mint owned capability handles) is deferred to
             // `materialize_call` where the guest store is available.
             Ok(LoweredInvocation {
                 display_name: "initialize".to_string(),
@@ -1028,7 +1071,7 @@ pub fn lower_invocation(
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
             // The method is resolved only to classify read-only methods; the
             // input carrier is already the schema-native parameter record.
-            // Encoding to the wire tree (which may mint owned quota-token
+            // Encoding to the wire tree (which may mint owned capability
             // handles) is deferred to `materialize_call`.
             let method = agent_type
                 .methods
@@ -1291,6 +1334,7 @@ mod tests {
             input,
             invocation_context: InvocationContextStack::fresh(),
             principal: Principal::anonymous(),
+            scope_card: None,
         }
     }
 

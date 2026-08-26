@@ -20,7 +20,7 @@ use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use golem_worker_executor::services::golem_config::{
-    ActiveWorkersConfig, AgentTypesServiceConfig, AgentWebhooksServiceConfig, ComponentCacheConfig,
+    ActiveAgentsConfig, AgentTypesServiceConfig, AgentWebhooksServiceConfig, ComponentCacheConfig,
     EngineConfig, EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
     KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, QuotaServiceConfig, RdbmsConfig,
     ResourceLimitsConfig, SchedulerConfig, SchedulerStorageConfig, SuspendConfig,
@@ -47,7 +47,7 @@ pub struct DebugConfig {
     pub compiled_component_service: CompiledComponentServiceConfig,
     pub oplog: OplogConfig,
     pub suspend: SuspendConfig,
-    pub active_workers: ActiveWorkersConfig,
+    pub active_agents: ActiveAgentsConfig,
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
@@ -82,7 +82,7 @@ impl DebugConfig {
             compiled_component_service: self.compiled_component_service,
             oplog: self.oplog,
             suspend: self.suspend,
-            active_workers: self.active_workers,
+            active_agents: self.active_agents,
             agent_status_flush: Default::default(),
             agent_status_checkpoint: Default::default(),
             scheduler: self.scheduler,
@@ -144,7 +144,7 @@ impl Default for DebugConfig {
             compiled_component_service: default_golem_config.compiled_component_service,
             oplog: default_golem_config.oplog,
             suspend: default_golem_config.suspend,
-            active_workers: default_golem_config.active_workers,
+            active_agents: default_golem_config.active_agents,
             scheduler: default_golem_config.scheduler,
             public_worker_api: default_golem_config.public_worker_api,
             memory: default_golem_config.memory,

@@ -19,10 +19,14 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::entity::{
+    EntityActivation, EntityActivationPolicy, ExecutableTarget, FilesystemCapability,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, ToolDeploymentState, ToolName,
+    CompiledToolBinding, RegisteredTool, ToolDeploymentState, ToolFilesystemAccess, ToolName,
+    ToolSource,
 };
 use golem_common::schema::tool::DiscoveredTool;
 use golem_service_base::clients::registry::RegistryService;
@@ -157,6 +161,119 @@ pub struct ToolDiscoverySnapshot {
     agent_tool_bindings: BTreeMap<AgentTypeName, BTreeSet<ToolName>>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolActivationSnapshot {
+    registered_tool: RegisteredTool,
+    binding: CompiledToolBinding,
+    filesystem: FilesystemCapability,
+}
+
+impl ToolActivationSnapshot {
+    pub fn registered_tool(&self) -> &RegisteredTool {
+        &self.registered_tool
+    }
+
+    pub fn binding(&self) -> &CompiledToolBinding {
+        &self.binding
+    }
+
+    pub fn filesystem(&self) -> FilesystemCapability {
+        self.filesystem
+    }
+
+    pub fn into_entity_activation(self) -> Result<EntityActivation, ToolDiscoveryError> {
+        let ToolSource::Component {
+            component_id,
+            component_revision,
+            ..
+        } = self.registered_tool.source;
+        EntityActivation::new(
+            ExecutableTarget::new(component_id, component_revision),
+            self.registered_tool.deployment_revision,
+            EntityActivationPolicy::Tool {
+                provision: self.registered_tool.provision,
+                binding: Box::new(self.binding),
+            },
+            self.filesystem,
+        )
+        .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details })
+    }
+}
+
+pub fn get_tool_activation_from_deployment(
+    deployment: Option<&ToolDeploymentState>,
+    agent_type: &AgentTypeName,
+    tool_name: &ToolName,
+) -> Result<Option<ToolActivationSnapshot>, ToolDiscoveryError> {
+    let Some(deployment) = deployment else {
+        return Ok(None);
+    };
+    let binding = deployment
+        .agent_tool_bindings
+        .get(agent_type)
+        .and_then(|bindings| bindings.get(tool_name));
+    let registered_tool = deployment.registered_tools.get(tool_name);
+
+    let Some(binding) = binding else {
+        return Ok(None);
+    };
+    let Some(registered_tool) = registered_tool else {
+        return Err(ToolDiscoveryError::dangling_binding(agent_type, tool_name));
+    };
+
+    let consistent = registered_tool.deployment_revision == deployment.deployment_revision
+        && registered_tool
+            .definition
+            .name()
+            .is_some_and(|name| name == tool_name.as_str())
+        && binding.deployment_revision == deployment.deployment_revision
+        && binding.agent_type_name == *agent_type
+        && binding.tool_name == *tool_name
+        && binding.version == registered_tool.definition.version
+        && binding.metadata_version == registered_tool.metadata_version
+        && binding.account_id == registered_tool.owner_account_id
+        && binding.account_email == registered_tool.owner_account_email
+        && binding.source == registered_tool.source
+        && binding
+            .secret_keys_revealable
+            .is_subset_of(&binding.secret_keys_readable);
+
+    if !consistent {
+        return Err(ToolDiscoveryError::InconsistentSnapshot {
+            details: format!(
+                "registration and binding for agent type '{}' and tool '{}' do not describe one deployment activation",
+                agent_type.0, tool_name
+            ),
+        });
+    }
+
+    let filesystem = match (
+        binding.filesystem_access,
+        registered_tool.provision.files.is_empty(),
+    ) {
+        (ToolFilesystemAccess::Allowed, _) | (ToolFilesystemAccess::Unset, false) => {
+            FilesystemCapability::Capable
+        }
+        (ToolFilesystemAccess::Denied, false) => {
+            return Err(ToolDiscoveryError::InconsistentSnapshot {
+                details: format!(
+                    "tool '{}' denies filesystem access but declares provisioned files",
+                    tool_name
+                ),
+            });
+        }
+        (ToolFilesystemAccess::Denied | ToolFilesystemAccess::Unset, true) => {
+            FilesystemCapability::Incapable
+        }
+    };
+
+    Ok(Some(ToolActivationSnapshot {
+        filesystem,
+        registered_tool: registered_tool.clone(),
+        binding: binding.clone(),
+    }))
+}
+
 impl From<ToolDeploymentState> for ToolDiscoverySnapshot {
     fn from(value: ToolDeploymentState) -> Self {
         let ToolDeploymentState {
@@ -266,6 +383,15 @@ pub trait EnvironmentStateService: Send + Sync {
         _agent_type: &AgentTypeName,
         _tool_name: &ToolName,
     ) -> Result<Option<CompiledToolBinding>, WorkerExecutorError> {
+        Ok(None)
+    }
+
+    async fn get_tool_activation(
+        &self,
+        _environment_id: EnvironmentId,
+        _agent_type: &AgentTypeName,
+        _tool_name: &ToolName,
+    ) -> Result<Option<ToolActivationSnapshot>, ToolDiscoveryError> {
         Ok(None)
     }
 
@@ -446,6 +572,20 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
             .cloned())
     }
 
+    async fn get_tool_activation(
+        &self,
+        environment_id: EnvironmentId,
+        agent_type: &AgentTypeName,
+        tool_name: &ToolName,
+    ) -> Result<Option<ToolActivationSnapshot>, ToolDiscoveryError> {
+        let environment_state = self.get_environment_state(environment_id).await?;
+        get_tool_activation_from_deployment(
+            environment_state.tool_deployment.as_ref(),
+            agent_type,
+            tool_name,
+        )
+    }
+
     async fn get_accessible_tools(
         &self,
         environment_id: EnvironmentId,
@@ -494,15 +634,20 @@ mod tests {
     use super::{
         ToolDiscoveryCache, ToolDiscoveryError, ToolDiscoverySnapshot,
         get_accessible_tool_from_snapshot, get_accessible_tools_from_snapshot,
+        get_tool_activation_from_deployment,
     };
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::agent::AgentTypeName;
-    use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+    use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
+    use golem_common::model::component::{
+        AgentFilePath, AgentFilePermissions, ComponentId, ComponentName, ComponentRevision,
+        InitialAgentFile,
+    };
     use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::entity::FilesystemCapability;
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::tool::{
-        CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolDeploymentState, ToolName,
-        ToolProvisionConfig, ToolSource,
+        CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolDeploymentState,
+        ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
     };
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
@@ -556,6 +701,7 @@ mod tests {
             parameters: NormalizedJsonValue::new(serde_json::json!({})),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
+            filesystem_access: ToolFilesystemAccess::Unset,
             source: registered_tool.source.clone(),
         }
     }
@@ -725,6 +871,124 @@ mod tests {
         ));
         assert!(matches!(
             get_error,
+            ToolDiscoveryError::InconsistentSnapshot { .. }
+        ));
+    }
+
+    #[test]
+    fn activation_lookup_returns_one_coherent_registration_and_binding() {
+        let (deployment, agent_a, _) = deployment_state();
+        let alpha = ToolName::try_from("alpha").unwrap();
+
+        let activation = get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            activation.registered_tool,
+            deployment.registered_tools[&alpha]
+        );
+        assert_eq!(
+            activation.binding,
+            deployment.agent_tool_bindings[&agent_a][&alpha]
+        );
+        assert_eq!(activation.filesystem, FilesystemCapability::Incapable);
+        assert_eq!(
+            activation.into_entity_activation().unwrap().filesystem(),
+            FilesystemCapability::Incapable
+        );
+    }
+
+    #[test]
+    fn activation_lookup_uses_explicit_filesystem_verdict() {
+        let (mut deployment, agent_a, _) = deployment_state();
+        let alpha = ToolName::try_from("alpha").unwrap();
+        deployment
+            .agent_tool_bindings
+            .get_mut(&agent_a)
+            .unwrap()
+            .get_mut(&alpha)
+            .unwrap()
+            .filesystem_access = ToolFilesystemAccess::Allowed;
+
+        let activation = get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(activation.filesystem(), FilesystemCapability::Capable);
+    }
+
+    #[test]
+    fn activation_lookup_rejects_files_with_explicit_filesystem_denial() {
+        let (mut deployment, agent_a, _) = deployment_state();
+        let alpha = ToolName::try_from("alpha").unwrap();
+        deployment
+            .agent_tool_bindings
+            .get_mut(&agent_a)
+            .unwrap()
+            .get_mut(&alpha)
+            .unwrap()
+            .filesystem_access = ToolFilesystemAccess::Denied;
+        deployment
+            .registered_tools
+            .get_mut(&alpha)
+            .unwrap()
+            .provision
+            .files
+            .push(InitialAgentFile {
+                content_hash: AgentFileContentHash(golem_common::model::diff::Hash::empty()),
+                path: AgentFilePath::from_rel_str("fixture").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+                size: 0,
+            });
+
+        let result = get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha);
+
+        assert!(matches!(
+            result,
+            Err(ToolDiscoveryError::InconsistentSnapshot { .. })
+        ));
+    }
+
+    #[test]
+    fn activation_lookup_rejects_cross_revision_pairs() {
+        let (mut deployment, agent_a, _) = deployment_state();
+        let alpha = ToolName::try_from("alpha").unwrap();
+        deployment
+            .agent_tool_bindings
+            .get_mut(&agent_a)
+            .unwrap()
+            .get_mut(&alpha)
+            .unwrap()
+            .deployment_revision = DeploymentRevision::try_from(2_u64).unwrap();
+
+        let error =
+            get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ToolDiscoveryError::InconsistentSnapshot { .. }
+        ));
+    }
+
+    #[test]
+    fn activation_lookup_rejects_registration_under_the_wrong_name() {
+        let (mut deployment, agent_a, _) = deployment_state();
+        let alpha = ToolName::try_from("alpha").unwrap();
+        deployment
+            .registered_tools
+            .get_mut(&alpha)
+            .unwrap()
+            .definition
+            .commands
+            .nodes[0]
+            .name = "other".to_string();
+
+        let error =
+            get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha).unwrap_err();
+
+        assert!(matches!(
+            error,
             ToolDiscoveryError::InconsistentSnapshot { .. }
         ));
     }

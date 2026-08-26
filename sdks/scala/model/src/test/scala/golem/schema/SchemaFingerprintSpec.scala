@@ -32,7 +32,13 @@ object SchemaFingerprintSpec extends ZIOSpecDefault {
         140,
         "3931585d2d02a2b7d5c99e3da1082ac8fe904c535e2700bd45e29a95ff2399fa"
       ) &&
-      vector(empty, Some(constrained), 87, "b985cdb5445862be90e8dca06bbfa9c46b50cf40edc84ed34205bb3a214c5bb0")
+      vector(empty, Some(constrained), 87, "b985cdb5445862be90e8dca06bbfa9c46b50cf40edc84ed34205bb3a214c5bb0") &&
+      vector(
+        empty,
+        Some(SchemaType(SchemaTypeBody.PermissionCardType(PermissionCardSpec(polymorphic = true)))),
+        39,
+        "b7d3c09af5db4e56b527051f561689f451dfdb21213cd70aabd11618e244da8b"
+      )
     },
     test("rejects dangling refs and duplicate set values") {
       val dangling  = SchemaGraph(ListMap.empty, t.ref("missing"))

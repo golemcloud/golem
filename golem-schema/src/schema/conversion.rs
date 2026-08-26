@@ -461,6 +461,7 @@ pub fn value_kind(v: &SchemaValue) -> &'static str {
         SchemaValue::Secret(_) => "secret",
         SchemaValue::QuotaToken(_) => "quota-token",
         SchemaValue::Stream(_) => "stream",
+        SchemaValue::PermissionCard(_) => "permission-card",
     }
 }
 

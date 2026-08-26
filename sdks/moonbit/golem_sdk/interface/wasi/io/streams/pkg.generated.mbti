@@ -39,4 +39,3 @@ pub fn OutputStream::write_zeroes(Self, UInt64) -> Result[Unit, StreamError]
 // Type aliases
 
 // Traits
-

@@ -271,6 +271,19 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
             }),
         ),
         (
+            "network_hostname_normalization",
+            "network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : API.Internal.:8080",
+            PermissionPattern::Network(ClassPermissionPattern::<NetworkClass> {
+                verb: Some(NetworkVerb::Connect),
+                owner: EmptyOwnerPattern,
+                recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
+                resource: NetworkResourcePattern::HostPort {
+                    host: "api.internal".to_string(),
+                    ports: PortPattern::Single(8080),
+                },
+            }),
+        ),
+        (
             "network_any_resource",
             "network() @ acme/shop/prod/cart-svc/CartAgent(\"42\") : connect : *",
             PermissionPattern::Network(ClassPermissionPattern::<NetworkClass> {
@@ -451,7 +464,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "agent_delete_component",
-            "agent(acme/shop/prod/cart-svc/*) @ acme/shop/prod/cart-svc/* : delete : *",
+            "agent(acme/shop/prod/cart-svc/*) @ acme/shop/prod/cart-svc/* : delete :",
             PermissionPattern::Agent(ClassPermissionPattern::<AgentClass> {
                 verb: Some(AgentVerb::Delete),
                 owner: AgentOwnerPattern::ComponentAgents {
@@ -466,7 +479,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
                     environment: environment_name("prod"),
                     component: component_name("cart-svc"),
                 },
-                resource: AgentResourcePattern::Any,
+                resource: AgentResourcePattern::Empty,
             }),
         ),
         (
@@ -1193,7 +1206,8 @@ fn rejects_invalid_network_resource_patterns() {
         ":8080",
         "api..internal",
         ".api.internal",
-        "api.internal.",
+        "api.internal..",
+        "*.",
         "api.*ternal:8080",
         "api.internal:*",
         "api.internal:abc",
@@ -1237,10 +1251,6 @@ fn rejects_invalid_filesystem_resource_patterns() {
 #[test]
 fn rejects_empty_resource_ids_when_any_resource_is_available() {
     let cases = [
-        (
-            "agent(acme/shop/prod/cart-svc/*) @ acme/shop/prod/cart-svc/* : delete :",
-            AgentClass::NAME,
-        ),
         (
             "card(acme) @ acme/shop/prod/cart-svc/ShoppingCart : derive :",
             CardClass::NAME,
@@ -1632,6 +1642,48 @@ fn empty_resource_classes_reject_polymorphic_resource_slots() {
 }
 
 #[test]
+fn agent_resources_are_validated_for_each_verb() {
+    let prefix =
+        "agent(acme/shop/prod/cart-svc/ShoppingCart(*)) @ acme/shop/prod/cart-svc/ShoppingCart";
+
+    for grant in [
+        format!("{prefix} : delete : *"),
+        format!("{prefix} : interrupt : method"),
+        format!("{prefix} : resume : 42"),
+        format!("{prefix} : update-revision : plugin"),
+        format!("{prefix} : fork : *"),
+        format!("{prefix} : revert : method"),
+        format!("{prefix} : cancel-invocation :"),
+        format!("{prefix} : activate-plugin :"),
+        format!("{prefix} : invoke :"),
+    ] {
+        assert!(
+            matches!(
+                parse_permission(&grant),
+                Err(CardParseError::InvalidResource { .. })
+            ),
+            "accepted invalid agent grant: {grant}"
+        );
+    }
+
+    for grant in [
+        format!("{prefix} : delete :"),
+        format!("{prefix} : fork :"),
+        format!("{prefix} : revert : 42"),
+        format!("{prefix} : cancel-invocation : invocation-1"),
+        format!("{prefix} : activate-plugin : plugin-a"),
+        format!("{prefix} : invoke : run"),
+        format!("{prefix} : view :"),
+        format!("{prefix} : view : inspect"),
+    ] {
+        assert!(
+            parse_permission(&grant).is_ok(),
+            "rejected agent grant: {grant}"
+        );
+    }
+}
+
+#[test]
 fn rejects_polymorphic_resource_slots_and_templates() {
     assert_eq!(
         parse_polymorphic_manifest_permission("env(?agent) @ ?agent : read : ?env_var"),
@@ -1722,4 +1774,62 @@ fn concrete_parser_rejects_slot_variables() {
             "?env".to_string()
         ))
     );
+}
+
+#[test]
+fn legacy_agent_debug_is_only_a_parse_time_expansion() {
+    let alias = "agent(acme/shop/prod/cart/Cart(42)) @ acme : debug : *";
+
+    assert!(matches!(
+        parse_permission(alias),
+        Err(CardParseError::UnknownVerb { .. })
+    ));
+
+    let rendered = parse_permission_grant(alias)
+        .unwrap()
+        .into_iter()
+        .map(|permission| permission.render().unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        rendered,
+        vec![
+            "oplog(acme/shop/prod/cart/Cart(42)) @ acme : read : *",
+            "agent(acme/shop/prod/cart/Cart(42)) @ acme : view : ",
+            "filesystem(acme/shop/prod/cart/Cart(42)) @ acme : read : /**",
+            "env(acme/shop/prod/cart/Cart(42)) @ acme : read : *",
+            "config(acme/shop/prod/cart/Cart(42)) @ acme : read : *",
+            "agent(acme/shop/prod/cart/Cart(42)) @ acme : fork : ",
+            "agent(acme/shop/prod/cart/Cart(42)) @ acme : interrupt : ",
+            "agent(acme/shop/prod/cart/Cart(42)) @ acme : resume : ",
+        ]
+    );
+}
+
+#[test]
+fn legacy_agent_debug_alias_rejects_non_wildcard_resources() {
+    assert_eq!(
+        parse_permission_grant("agent(acme/shop/prod/cart/Cart(42)) @ acme : debug : method"),
+        Err(CardParseError::InvalidResource {
+            class: "agent".to_string(),
+            resource: "method".to_string(),
+        })
+    );
+}
+
+#[test]
+fn scope_card_deserialization_expands_legacy_agent_debug_alias() {
+    let scope_card: ScopeCard = serde_json::from_value(serde_json::json!({
+        "scopeCardId": CardId::new(),
+        "rootCardIds": [],
+        "lowerPositive": [
+            "agent(acme/shop/prod/cart/Cart(42)) @ acme : debug : *"
+        ],
+        "lowerNegative": [],
+        "upperPositive": [],
+        "upperNegative": []
+    }))
+    .unwrap();
+
+    assert_eq!(scope_card.lower_positive.len(), 8);
 }

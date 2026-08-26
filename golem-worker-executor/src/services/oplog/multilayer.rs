@@ -23,8 +23,8 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder, downcast_oplog,
-    scan_modes,
+    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
+    downcast_oplog, scan_modes,
 };
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
@@ -1135,10 +1135,14 @@ impl Debug for MultiLayerOplog {
 
 #[async_trait]
 impl Oplog for MultiLayerOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        let result = self.primary.add(entry).await;
-        self.last_oplog_index.set(result);
-        result
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        let pending = self.primary.enqueue_add(entry);
+        let last_oplog_index = self.last_oplog_index.clone();
+        Box::pin(async move {
+            let result = pending.await;
+            last_oplog_index.set(result);
+            result
+        })
     }
 
     async fn add_durable_stream_batch(

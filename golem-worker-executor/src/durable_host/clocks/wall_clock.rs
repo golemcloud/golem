@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::concurrent::{CallHandle, NotCancellable};
+use crate::durable_host::concurrent::{DurableCallSession, NotCancellable};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostResponseWallClock, host_functions,
@@ -23,9 +23,9 @@ use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime, Host};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> wasmtime::Result<Datetime> {
-        // Re-executable `ReadLocal`: the `CallHandle::run` combinator reads the clock on the live /
+        // Re-executable `ReadLocal`: the `DurableCallSession::run` combinator reads the clock on the live /
         // incomplete-replay paths and replays a recorded value otherwise.
-        let handle = CallHandle::<host_functions::WallClockNow, NotCancellable>::start(
+        let handle = DurableCallSession::<host_functions::WallClockNow, NotCancellable>::start(
             self,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
@@ -48,12 +48,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn resolution(&mut self) -> wasmtime::Result<Datetime> {
-        let handle = CallHandle::<host_functions::WallClockResolution, NotCancellable>::start(
-            self,
-            HostRequestNoInput {},
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        let handle =
+            DurableCallSession::<host_functions::WallClockResolution, NotCancellable>::start(
+                self,
+                HostRequestNoInput {},
+                DurableFunctionType::ReadLocal,
+            )
+            .await?;
 
         let result = handle
             .run(self, async |ctx| -> wasmtime::Result<_> {

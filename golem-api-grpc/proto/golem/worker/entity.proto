@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package golem.worker;
+
+import "golem/common/empty.proto";
+import "golem/common/environment.proto";
+import "golem/component/agent.proto";
+import "golem/component/component_id.proto";
+import "golem/component/component_metadata.proto";
+import "golem/registry/environment_state.proto";
+import "golem/worker/worker_id.proto";
+
+message AgentEntity {
+  oneof value {
+    string tool_name = 1;
+    string tool_middleware_name = 2;
+  }
+}
+
+message OwnerRuntime {
+  oneof value {
+    golem.common.Empty agent = 1;
+    AgentEntity entity = 2;
+  }
+}
+
+message OwnedAgentEntityId {
+  golem.common.EnvironmentId environment_id = 1;
+  AgentId owner_agent_id = 2;
+  AgentEntity entity = 3;
+}
+
+message EntityInvocationId {
+  OwnedAgentEntityId entity_id = 1;
+  uint64 start_index = 2;
+}
+
+message ExecutableTarget {
+  golem.component.ComponentId component_id = 1;
+  uint64 component_revision = 2;
+}
+
+enum FilesystemCapability {
+  FILESYSTEM_CAPABILITY_UNSPECIFIED = 0;
+  FILESYSTEM_CAPABILITY_CAPABLE = 1;
+  FILESYSTEM_CAPABILITY_INCAPABLE = 2;
+}
+
+message ToolEntityActivationPolicy {
+  golem.component.ToolProvisionConfig provision = 1;
+  golem.registry.CompiledToolBinding binding = 2;
+}
+
+message ToolMiddlewareEntityActivationPolicy {
+  string middleware_name = 1;
+  golem.component.ToolProvisionConfig provision = 2;
+  golem.component.SecretKeyScope secret_keys_readable = 3;
+  golem.component.SecretKeyScope secret_keys_revealable = 4;
+  golem.registry.ToolFilesystemAccess filesystem_access = 5;
+}
+
+message EntityActivationPolicy {
+  oneof value {
+    ToolEntityActivationPolicy tool = 1;
+    ToolMiddlewareEntityActivationPolicy tool_middleware = 2;
+  }
+}
+
+message EntityActivationFingerprint {
+  bytes value = 1;
+}
+
+message EntityActivation {
+  ExecutableTarget executable = 1;
+  uint64 deployment_revision = 2;
+  EntityActivationPolicy policy = 3;
+  FilesystemCapability filesystem = 4;
+  EntityActivationFingerprint fingerprint = 5;
+}
+
+enum InvocationExecutionMode {
+  INVOCATION_EXECUTION_MODE_UNSPECIFIED = 0;
+  INVOCATION_EXECUTION_MODE_LIVE = 1;
+  INVOCATION_EXECUTION_MODE_REPLAYING_COMPLETED = 2;
+  INVOCATION_EXECUTION_MODE_REPLAYING_INCOMPLETE = 3;
+}
+
+message EntityInvocationScope {
+  EntityInvocationId invocation_id = 1;
+  uint64 parent_start_index = 2;
+  EntityActivation activation = 3;
+  golem.component.Principal calling_principal = 4;
+  InvocationExecutionMode mode = 5;
+}

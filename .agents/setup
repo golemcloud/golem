@@ -35,6 +35,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 rustup update stable --no-self-update
 rustup default stable
+rustup component add clippy rustfmt
 rustup target add wasm32-wasip1 wasm32-wasip2
 
 if ! command -v cargo-binstall >/dev/null 2>&1; then

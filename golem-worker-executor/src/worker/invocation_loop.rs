@@ -17,7 +17,7 @@ use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogOps};
-use crate::services::{HasEvents, HasOplog, HasWorker};
+use crate::services::{HasActiveAgents, HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
@@ -28,7 +28,6 @@ use crate::worker::{
     WorkerInterruptState, WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
-use anyhow::anyhow;
 use async_lock::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
@@ -95,7 +94,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     /// (set to `None`) when the agent goes idle, re-acquired when it wakes up.
     /// Only actively running agents hold a permit. Dropped automatically when
     /// the task is aborted (e.g. `RunningWorker::stop()`).
-    pub concurrent_agent_permit: Option<crate::services::active_workers::ConcurrentAgentPermit>,
+    pub concurrent_agent_permit: Option<crate::services::active_agents::ConcurrentAgentPermit>,
     /// `ResumeReplay` is not represented in the internal queue, so we track it
     /// explicitly to avoid evicting a worker that is blocked waking up for it.
     pub resume_replay_pending: Arc<AtomicBool>,
@@ -138,6 +137,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         let mut deferred_wakeups = VecDeque::new();
 
         'outer: loop {
+            let entity_generation = self
+                .parent
+                .active_agents()
+                .try_get_active_agent(&self.owned_agent_id)
+                .await
+                .map(|active_agent| {
+                    let generation = active_agent.entity_fence_generation();
+                    (active_agent, generation)
+                });
             let (instance, store) = match self.create_instance().await {
                 CreateInstanceResult::Created { instance, store } => (instance, store),
                 CreateInstanceResult::Interrupted(kind) => {
@@ -183,6 +191,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             };
 
+            if let Some((active_agent, generation)) = entity_generation {
+                let interrupt_state = self.interrupt_signal.lock().await;
+                if !interrupt_state.has_interrupt() {
+                    active_agent.reopen_entity_admission_if_generation(generation);
+                }
+            }
             let mut final_decision = self.recover_instance_state(&instance, &store).await;
             let mut final_interrupt = None;
             let mut cleanup_ephemeral_worker = false;
@@ -259,7 +273,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     )
                     .await;
                     if cleanup_ephemeral_worker {
-                        self.parent.remove_from_active_workers().await;
+                        self.parent.remove_from_active_agents().await;
                         self.archive_ephemeral_oplog();
                     }
                     break;
@@ -369,6 +383,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
+        if let Some(active_agent) = self
+            .parent
+            .active_agents()
+            .try_get_active_agent(&self.owned_agent_id)
+            .await
+        {
+            active_agent.fence_entity_bodies();
+        }
         self.parent
             .stop_internal(
                 true,
@@ -556,7 +578,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     /// Mutable reference to the concurrent-agent permit held by the outer
     /// `InvocationLoop`. Set to `None` when entering idle (releasing the
     /// permit back to the semaphore pool) and re-acquired on wake.
-    concurrent_agent_permit: &'a mut Option<crate::services::active_workers::ConcurrentAgentPermit>,
+    concurrent_agent_permit: &'a mut Option<crate::services::active_agents::ConcurrentAgentPermit>,
     resume_replay_pending: Arc<AtomicBool>,
     deferred_wakeups: &'a mut VecDeque<WorkerCommand>,
     /// What this worker's phase spans link back to, and the fields they carry.
@@ -1083,6 +1105,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         debug!(
                             "Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result"
                         );
+                        if let Err(error) =
+                            self.parent.cancel_invocation(idempotency_key.clone()).await
+                        {
+                            warn!(
+                                agent_id = %self.owned_agent_id.agent_id,
+                                "Failed to remove completed invocation from the pending queue: {error}"
+                            );
+                            return CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
+                        }
                         CommandOutcome::Continue
                     }
                 } else {
@@ -1418,8 +1449,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let details = format!("{result:?}");
         let trap_type = match result {
             Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
-            Err(error) => Some(TrapType::from_error::<Ctx>(
-                &anyhow!(error),
+            Err(error) => Some(TrapType::from_worker_executor_error::<Ctx>(
+                error,
                 OplogIndex::INITIAL,
                 false,
                 false,
@@ -1631,6 +1662,19 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         path: CanonicalFilePath,
         sender: Sender<Result<GetFileSystemNodeResult, WorkerExecutorError>>,
     ) {
+        let _filesystem_access = match self
+            .store
+            .data()
+            .durable_ctx()
+            .acquire_owner_filesystem_inspection()
+            .await
+        {
+            Ok(access) => access,
+            Err(error) => {
+                let _ = sender.send(Err(error));
+                return;
+            }
+        };
         let result = self.store.data().get_file_system_node(&path).await;
         let _ = sender.send(result);
     }
@@ -1644,6 +1688,19 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         path: CanonicalFilePath,
         sender: Sender<Result<ReadFileResult, WorkerExecutorError>>,
     ) {
+        let _filesystem_access = match self
+            .store
+            .data()
+            .durable_ctx()
+            .acquire_owner_filesystem_inspection()
+            .await
+        {
+            Ok(access) => access,
+            Err(error) => {
+                let _ = sender.send(Err(error));
+                return;
+            }
+        };
         let result = self.store.data().read_file(&path).await;
         match result {
             Ok(ReadFileResult::Ok(stream)) => {
@@ -1816,11 +1873,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                         .data()
                                         .durable_ctx()
                                         .agent_wallet_cards_snapshot();
+                                    let wallet_generation =
+                                        self.store.data().durable_ctx().wallet_generation();
                                     self.parent
                                         .add_and_commit_oplog(OplogEntry::snapshot(
                                             payload,
                                             snapshot.mime_type,
                                             active_cards,
+                                            wallet_generation,
                                         ))
                                         .await;
                                     debug!("Periodic snapshot saved successfully");

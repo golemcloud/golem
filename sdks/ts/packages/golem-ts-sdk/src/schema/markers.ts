@@ -46,6 +46,8 @@ import { GuestSecretHandle } from '../internal/schema-model/secretHandle';
 import { SECRET_INTERNAL } from '../internal/schema-model/secretInternal';
 import { GuestQuotaTokenHandle } from '../internal/schema-model/quotaTokenHandle';
 import { QUOTA_INTERNAL } from '../internal/schema-model/quotaInternal';
+import { GuestPermissionCardHandle } from '../internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
 import type {
   BinaryRestrictions,
   PathDirection,
@@ -54,6 +56,7 @@ import type {
   QuantityValue,
   Secret as RawSecret,
   QuotaToken as RawQuotaToken,
+  PermissionCard as RawPermissionCard,
 } from 'golem:core/types@2.0.0';
 import { SchemaCodec } from './codec';
 import { buildResultCodec } from './result';
@@ -751,6 +754,45 @@ function streamMarker<Output>(
 }
 
 // ============================================================
+// Capability node: permission-card
+// ============================================================
+
+export interface PermissionCardOptions {
+  /** Whether the card schema may carry slot variables in its owner or resource id. */
+  polymorphic: boolean;
+}
+
+function permissionCardMarker(options: PermissionCardOptions): MarkerSchema<RawPermissionCard> {
+  const validate: Validator<RawPermissionCard> = (value) =>
+    value !== null && typeof value === 'object'
+      ? ok(value as RawPermissionCard)
+      : fail('Expected an opaque permission-card handle for WIT permission-card');
+  const descriptor: MarkerDescriptor = () => ({
+    graph: { defs: new Map(), root: t.permissionCard(options) },
+    toValue: (value) =>
+      v.permissionCard(
+        GuestPermissionCardHandle.fromRaw(PERMISSION_CARD_INTERNAL, value as RawPermissionCard),
+      ),
+    fromValue: (sv) => {
+      const handle = (
+        sv as {
+          tag: 'permission-card';
+          handle: GuestPermissionCardHandle;
+        }
+      ).handle;
+      const raw = handle.take();
+      if (raw === undefined) {
+        throw new Error(
+          'permission-card handle was already consumed; an owned permission-card can only be decoded once',
+        );
+      }
+      return raw;
+    },
+  });
+  return marker(validate, descriptor);
+}
+
+// ============================================================
 // Rich nodes: unstructured text / binary
 // ============================================================
 
@@ -1152,7 +1194,7 @@ function principalMarker(): MarkerSchema<Principal, 'principal'> {
 /**
  * Vendor-neutral marker schemas for WIT kinds Standard Schema can't express on
  * its own: numeric pins, `char`, `datetime`, `duration`, `url`, `bytes`, plus
- * the capability / rich nodes (`secret`, `quota-token`, `multimodal`,
+ * the capability / rich nodes (`secret`, `quota-token`, `permission-card`, `multimodal`,
  * `unstructured*`). Each returns a {@link MarkerSchema} usable anywhere a
  * Standard Schema is accepted; `stream` is restricted to agent method inputs
  * and outputs by the agent schema validator.
@@ -1203,6 +1245,7 @@ export const s = {
   secret: <Output>(inner: StandardSchemaV1<Output>) => secretMarker(inner),
   quotaToken: () => quotaTokenMarker(),
   stream: <Output>(inner: StandardSchemaV1<Output>) => streamMarker(inner),
+  permissionCard: (options: PermissionCardOptions) => permissionCardMarker(options),
 
   // Principal carried as a data value (WIT `principal` variant).
   principal: () => principalMarker(),

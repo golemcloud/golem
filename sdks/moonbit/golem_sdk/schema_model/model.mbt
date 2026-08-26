@@ -72,6 +72,7 @@ pub(all) enum SchemaTypeBody {
   // Capability nodes
   Secret(SecretSpec)
   QuotaToken(@types.QuotaTokenSpec)
+  PermissionCard(@types.PermissionCardSpec)
   // WASI P3 asynchronous values
   Future(SchemaType?)
   Stream(SchemaType?)
@@ -187,6 +188,8 @@ pub(all) enum SchemaValue {
   QuotaToken(GuestQuotaTokenHandle)
   // native stream endpoint, retained without proxying or materialization
   Stream(GuestSchemaValueStreamHandle)
+  // owned `permission-card` resource carried as an opaque, affine handle
+  PermissionCard(GuestPermissionCardHandle)
 } derive(Show, Eq)
 
 ///|

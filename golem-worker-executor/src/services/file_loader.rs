@@ -29,7 +29,7 @@ use tokio::io::AsyncWriteExt;
 use tracing::debug;
 
 use crate::metrics::storage::record_filesystem_pool_released;
-use crate::services::active_workers::{FilesystemStoragePermit, FilesystemStorageSemaphore};
+use crate::services::active_agents::{FilesystemStoragePermit, FilesystemStorageSemaphore};
 
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
 // Make sure to not drop this token until you are done with the file.
@@ -278,7 +278,7 @@ impl FileLoader {
                             {
                                 // Round up to permit granularity (1 permit = 1 KB) so the
                                 // released byte count matches what was actually acquired.
-                                crate::services::active_workers::filesystem_storage_bytes_rounded_up(
+                                crate::services::active_agents::filesystem_storage_bytes_rounded_up(
                                     file_size,
                                 )
                             } else {
@@ -403,7 +403,7 @@ impl Drop for InitializedCacheEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::active_workers::FilesystemStorageSemaphore;
+    use crate::services::active_agents::FilesystemStorageSemaphore;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::widen_infallible;
     use golem_service_base::replayable_stream::ReplayableStream as _;

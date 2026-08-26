@@ -240,6 +240,11 @@ impl AtomicResourceEntry {
         sum.max(0).min(u64::MAX as i128) as u64
     }
 
+    #[cfg(test)]
+    pub(crate) fn fuel_delta(&self) -> i64 {
+        self.delta.load(Ordering::Acquire)
+    }
+
     pub fn borrow_fuel(&self, amount: u64) -> bool {
         let available = self.effective_fuel();
 

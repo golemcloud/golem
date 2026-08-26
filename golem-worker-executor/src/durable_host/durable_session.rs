@@ -1219,15 +1219,16 @@ impl DurableSessionStreams {
                 .expect("durable stream mapping lock poisoned")
                 .iter()
                 .find_map(|(transport_stream_id, (handle, role))| {
-                    (handle.stream_id == cursor.stream_id).then_some(StreamSessionMappingRecordV1 {
-                        transport_stream_id: *transport_stream_id,
-                        handle: handle.clone(),
-                        role: *role,
-                    })
+                    (handle.stream_id == cursor.stream_id && *role == SessionStreamRoleV1::Output)
+                        .then_some(StreamSessionMappingRecordV1 {
+                            transport_stream_id: *transport_stream_id,
+                            handle: handle.clone(),
+                            role: *role,
+                        })
                 })
                 .ok_or_else(|| {
                     format!(
-                        "resume cursor names unmapped durable stream {}",
+                        "resume cursor names no output mapping for durable stream {}",
                         cursor.stream_id
                     )
                 })?;
@@ -4258,6 +4259,7 @@ mod tests {
         async fn create_demand(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _method_name: &str,
             _self_created_by: AccountId,
             _self_agent_id: &AgentId,
             _self_env: &[(String, String)],
@@ -4281,6 +4283,7 @@ mod tests {
             _self_stack: golem_common::model::invocation_context::InvocationContextStack,
             _config: Vec<AgentConfigEntryDto>,
             _auth_ctx: &AuthCtx,
+            _scope_card: Option<golem_common::base_model::card::ScopeCard>,
         ) -> Result<SchemaValue, RpcError> {
             unreachable!("test RPC only serves attached stream segments")
         }
@@ -4751,6 +4754,102 @@ mod tests {
                 details: None,
             }
         ));
+    }
+
+    #[test]
+    async fn resume_cursors_cannot_name_input_streams() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::AgentHostedInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let streams = DurableSessionStreams::new(
+            producer,
+            oplog,
+            identity.invocation,
+            [(1, handle.clone(), SessionStreamRoleV1::Input)],
+        );
+
+        let error = streams
+            .validate_resume_cursors(
+                &[golem_common::model::durable_stream::StreamResumeCursorV1 {
+                    stream_id: handle.stream_id,
+                    last_observed_offset: None,
+                }],
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("no output mapping"));
+    }
+
+    #[test]
+    async fn output_resume_cursor_is_not_shadowed_by_same_handle_input_mapping() {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamProducer::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = producer
+            .register(registration(
+                &identity,
+                StreamRegistrationCoordinateV1::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKindV1::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKindV1::AgentHostedInput,
+            ))
+            .await
+            .unwrap()
+            .value;
+        let cursor = golem_common::model::durable_stream::StreamResumeCursorV1 {
+            stream_id: handle.stream_id,
+            last_observed_offset: None,
+        };
+
+        for _ in 0..32 {
+            let streams = DurableSessionStreams::new(
+                producer.clone(),
+                oplog.clone(),
+                identity.invocation.clone(),
+                [
+                    (1, handle.clone(), SessionStreamRoleV1::Input),
+                    (2, handle.clone(), SessionStreamRoleV1::Output),
+                ],
+            );
+            assert!(
+                streams
+                    .validate_resume_cursors(std::slice::from_ref(&cursor))
+                    .await
+                    .is_ok(),
+                "the output mapping must authorize its cursor regardless of the same handle's input mapping"
+            );
+        }
     }
 
     #[test]

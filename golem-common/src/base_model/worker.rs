@@ -162,6 +162,17 @@ declare_structs! {
         pub number_of_invocations: u64,
     }
 
+    #[derive(
+        golem_schema_derive::IntoSchema,
+        golem_schema_derive::FromSchema
+    )]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct ResolvedRevert {
+        pub last_oplog_index: OplogIndex,
+        pub observed_oplog_index: OplogIndex,
+    }
+
     pub struct AgentFileSystemNode {
         pub name: String,
         pub last_modified: u64,

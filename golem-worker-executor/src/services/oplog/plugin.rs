@@ -17,7 +17,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
+    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -1141,9 +1141,16 @@ impl Drop for ForwardingOplog {
 
 #[async_trait]
 impl Oplog for ForwardingOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        self.run_job(|done| ForwardingJob::Add { entry, done })
-            .await
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        let (done, done_rx) = tokio::sync::oneshot::channel();
+        if self.jobs.send(ForwardingJob::Add { entry, done }).is_err() {
+            panic!("Forwarding oplog actor terminated unexpectedly");
+        }
+        Box::pin(async move {
+            done_rx.await.unwrap_or_else(|_| {
+                panic!("Forwarding oplog actor dropped an add request without replying")
+            })
+        })
     }
 
     async fn add_durable_stream_batch(
@@ -2308,18 +2315,18 @@ mod tests {
     /// leaf oplogs, so the forwarding actor's `last_committed_idx` tracking is exercised.
     #[allow(dead_code)]
     struct InMemoryOplog {
-        entries: async_lock::Mutex<Vec<OplogEntry>>,
-        current_idx: async_lock::Mutex<OplogIndex>,
-        committed_idx: async_lock::Mutex<OplogIndex>,
+        entries: std::sync::Mutex<Vec<OplogEntry>>,
+        current_idx: std::sync::Mutex<OplogIndex>,
+        committed_idx: std::sync::Mutex<OplogIndex>,
     }
 
     #[allow(dead_code)]
     impl InMemoryOplog {
         fn new() -> Self {
             Self {
-                entries: async_lock::Mutex::new(Vec::new()),
-                current_idx: async_lock::Mutex::new(OplogIndex::NONE),
-                committed_idx: async_lock::Mutex::new(OplogIndex::NONE),
+                entries: std::sync::Mutex::new(Vec::new()),
+                current_idx: std::sync::Mutex::new(OplogIndex::NONE),
+                committed_idx: std::sync::Mutex::new(OplogIndex::NONE),
             }
         }
     }
@@ -2332,12 +2339,13 @@ mod tests {
 
     #[async_trait]
     impl Oplog for InMemoryOplog {
-        async fn add(&self, entry: OplogEntry) -> OplogIndex {
-            let mut entries = self.entries.lock().await;
-            let mut idx = self.current_idx.lock().await;
+        fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+            let mut entries = self.entries.lock().unwrap();
+            let mut idx = self.current_idx.lock().unwrap();
             *idx = idx.next();
             entries.push(entry);
-            *idx
+            let result = *idx;
+            Box::pin(async move { result })
         }
 
         async fn add_pair(
@@ -2345,8 +2353,8 @@ mod tests {
             start: OplogEntry,
             make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
         ) -> (OplogIndex, OplogIndex) {
-            let mut entries = self.entries.lock().await;
-            let mut idx = self.current_idx.lock().await;
+            let mut entries = self.entries.lock().unwrap();
+            let mut idx = self.current_idx.lock().unwrap();
             *idx = idx.next();
             let first_idx = *idx;
             entries.push(start);
@@ -2374,8 +2382,8 @@ mod tests {
             &self,
             build_request: IndexedReservedStartBuilder,
         ) -> Result<OrderedOplogStart, String> {
-            let mut entries = self.entries.lock().await;
-            let mut idx = self.current_idx.lock().await;
+            let mut entries = self.entries.lock().unwrap();
+            let mut idx = self.current_idx.lock().unwrap();
             let index = idx.next();
             let (serialized_request, build_start) = build_request(index)?;
             let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
@@ -2393,9 +2401,9 @@ mod tests {
         }
 
         async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-            let entries = self.entries.lock().await;
-            let current = *self.current_idx.lock().await;
-            let mut committed = self.committed_idx.lock().await;
+            let entries = self.entries.lock().unwrap();
+            let current = *self.current_idx.lock().unwrap();
+            let mut committed = self.committed_idx.lock().unwrap();
             let mut result = BTreeMap::new();
             let mut idx = *committed;
             while idx < current {
@@ -2407,7 +2415,7 @@ mod tests {
         }
 
         async fn current_oplog_index(&self) -> OplogIndex {
-            *self.current_idx.lock().await
+            *self.current_idx.lock().unwrap()
         }
 
         async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
@@ -2419,7 +2427,7 @@ mod tests {
         }
 
         async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-            let entries = self.entries.lock().await;
+            let entries = self.entries.lock().unwrap();
             let idx: u64 = oplog_index.into();
             entries[(idx - 1) as usize].clone()
         }
@@ -2429,7 +2437,7 @@ mod tests {
             oplog_index: OplogIndex,
             n: u64,
         ) -> BTreeMap<OplogIndex, OplogEntry> {
-            let entries = self.entries.lock().await;
+            let entries = self.entries.lock().unwrap();
             let start: u64 = oplog_index.into();
             let mut result = BTreeMap::new();
             for i in start..(start + n) {
@@ -2441,7 +2449,7 @@ mod tests {
         }
 
         async fn length(&self) -> u64 {
-            self.entries.lock().await.len() as u64
+            self.entries.lock().unwrap().len() as u64
         }
 
         async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
@@ -2707,6 +2715,41 @@ mod tests {
     // --------------------------------------------------------------------------
     // Reserved-start through the forwarding actor
     // --------------------------------------------------------------------------
+
+    #[test]
+    async fn synchronously_enqueued_add_keeps_position_before_later_async_add() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (metadata, status_lock) = test_worker_metadata(HashSet::new());
+        let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+        let components: Arc<dyn ComponentService> = Arc::new(
+            FakeComponentService::with_one_oplog_processor_plugin(grant_id),
+        );
+        let inner: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
+        let oplog = ForwardingOplog::new(
+            inner,
+            recording_plugin,
+            components,
+            metadata,
+            status_lock,
+            OplogIndex::NONE,
+            Box::new(|| {}),
+            usize::MAX,
+            Duration::from_secs(3600),
+        )
+        .await;
+
+        let first = oplog.enqueue_add(OplogEntry::NoOp {
+            timestamp: Timestamp::now_utc(),
+        });
+        let second = oplog
+            .add(OplogEntry::NoOp {
+                timestamp: Timestamp::now_utc(),
+            })
+            .await;
+
+        assert_eq!(first.await, OplogIndex::INITIAL);
+        assert_eq!(second, OplogIndex::INITIAL.next());
+    }
 
     /// Reserved starts pass through the forwarding actor in initiation order: the indices the
     /// wrapper returns are the ones the inner (leaf) oplog assigned, the mirrored buffer stays in

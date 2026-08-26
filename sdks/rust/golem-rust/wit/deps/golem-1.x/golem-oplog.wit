@@ -165,6 +165,15 @@ interface oplog {
         start-index: oplog-index,
     }
 
+    /// Parameters of a `completion-delivered` entry: the successful result of the durable host
+    /// call started at `start-index` was handed to the agent at this point in the recorded
+    /// execution. Replay may prepare the recorded host result earlier, but does not hand it to the
+    /// agent until this marker and prevents later oplog entries from advancing until that handoff.
+    record completion-delivered-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
     record local-span-data {
         span-id: span-id,
         start: datetime,
@@ -626,6 +635,11 @@ interface oplog {
         start-index: oplog-index,
     }
 
+    record raw-completion-delivered-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
     /// Parameters for a host-stream-frame oplog entry, with the frame payload in raw
     /// (possibly externally stored) form.
     record raw-host-stream-frame-parameters {
@@ -866,7 +880,10 @@ interface oplog {
         /// The successful completion of the durable host call started by the matching `start`
         /// was persisted, but its response was never delivered to the agent (the agent dropped
         /// the completion future after the `end` was recorded)
-        completion-discarded(raw-completion-discarded-parameters)
+        completion-discarded(raw-completion-discarded-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was delivered to the agent at this point in the recorded execution
+        completion-delivered(raw-completion-delivered-parameters)
     }
 
     variant public-oplog-entry {
@@ -985,20 +1002,28 @@ interface oplog {
         /// The successful completion of the durable host call started by the matching `start`
         /// was persisted, but its response was never delivered to the agent (the agent dropped
         /// the completion future after the `end` was recorded)
-        completion-discarded(completion-discarded-parameters)
+        completion-discarded(completion-discarded-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was delivered to the agent at this point in the recorded execution
+        completion-delivered(completion-delivered-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads
     /// and augmenting entries with component metadata.
     enrich-oplog-entries: func(environment-id: environment-id, agent-id: agent-id, entries: list<tuple<oplog-index, oplog-entry>>, component-revision: component-revision) -> result<list<public-oplog-entry>, string>;
 
+    variant oplog-read-error {
+        permission-denied,
+        internal-error(string),
+    }
+
     resource get-oplog {
         constructor(agent-id: agent-id, start: oplog-index);
-        get-next: func() -> option<list<public-oplog-entry>>;
+        get-next: func() -> result<option<list<public-oplog-entry>>, oplog-read-error>;
     }
 
     resource search-oplog {
         constructor(agent-id: agent-id, text: string);
-        get-next: func() -> option<list<tuple<oplog-index, public-oplog-entry>>>;
+        get-next: func() -> result<option<list<tuple<oplog-index, public-oplog-entry>>>, oplog-read-error>;
     }
 }

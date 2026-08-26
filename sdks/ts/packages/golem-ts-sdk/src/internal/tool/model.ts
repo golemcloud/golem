@@ -297,11 +297,7 @@ export class CanonicalInputModel {
         `tool input record has ${input.fields.length} fields, expected ${this.fields.length} canonical fields`,
       );
     }
-    return this.fields.map((entry, index) => ({
-      ...entry,
-      value: entry.codec.fromValue(input.fields[index]),
-      schemaValue: input.fields[index],
-    }));
+    return this.fields.map((entry, index) => lazyCanonicalInputValue(entry, input.fields[index]));
   }
 
   /**
@@ -330,11 +326,7 @@ export class CanonicalInputModel {
       } else if (!value.optionalCarrier && field.optionalCarrier) {
         schemaValue = v.option(schemaValue);
       }
-      return {
-        ...field,
-        value: field.codec.fromValue(schemaValue),
-        schemaValue,
-      };
+      return lazyCanonicalInputValue(field, schemaValue);
     });
   }
 
@@ -343,6 +335,25 @@ export class CanonicalInputModel {
     const values = this.projectValues(input).map((value) => value.schemaValue);
     return { graph: this.codec.graph, value: v.record(values) };
   }
+}
+
+function lazyCanonicalInputValue(
+  field: CanonicalInputField,
+  schemaValue: SchemaValue,
+): CanonicalInputValue {
+  let decoded = false;
+  let value: unknown;
+  return {
+    ...field,
+    schemaValue,
+    get value(): unknown {
+      if (!decoded) {
+        value = field.codec.fromValue(schemaValue);
+        decoded = true;
+      }
+      return value;
+    },
+  };
 }
 
 function assertCanonicalGraph(graph: SchemaGraph, position: string): void {

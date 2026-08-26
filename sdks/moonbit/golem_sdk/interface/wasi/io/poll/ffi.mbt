@@ -13,12 +13,12 @@ fn wasmImportMethodPollableBlock(p0 : Int) = "wasi:io/poll@0.2.6" "[method]polla
 fn wasmImportPoll(p0 : Int, p1 : Int, p2 : Int) = "wasi:io/poll@0.2.6" "poll"
 
 ///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
-
-///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
   #|(func (param i32) local.get 0 call $moonbit.decref)
+
+///|
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
 
 ///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =

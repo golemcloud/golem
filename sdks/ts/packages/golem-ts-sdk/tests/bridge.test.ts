@@ -382,7 +382,7 @@ describe('public bridge runtime', () => {
     const at = { seconds: 1n, nanoseconds: 0 };
 
     expect(remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]))).toBe(receipt);
-    expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything());
+    expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything(), undefined);
   });
 
   it('returns unit output from an awaited agent invocation', async () => {

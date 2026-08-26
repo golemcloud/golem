@@ -14,7 +14,7 @@
 
 pub mod types;
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::quota::types::{LeaseInterestHandle, QuotaTokenEntry, ReservationEntry};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::quota::types::{FailedReservation, Host, HostReservation};
@@ -126,15 +126,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         // `WriteLocal` (no external side effect): re-executable on an incomplete `Start`, so the
         // live acquire runs from one shared block for both the live and incomplete-replay paths.
-        let mut handle = CallHandle::<host_functions::GolemQuotaTokenNew, NotCancellable>::start(
-            self,
-            HostRequestQuotaTokenRequest {
-                resource_name,
-                expected_use,
-            },
-            DurableFunctionType::WriteLocal,
-        )
-        .await?;
+        let mut handle =
+            DurableCallSession::<host_functions::GolemQuotaTokenNew, NotCancellable>::start(
+                self,
+                HostRequestQuotaTokenRequest {
+                    resource_name,
+                    expected_use,
+                },
+                DurableFunctionType::WriteLocal,
+            )
+            .await?;
 
         let token_entry = 'token: {
             if !handle.is_live() {
@@ -177,7 +178,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         amount: u64,
     ) -> anyhow::Result<Result<Resource<ReservationEntry>, FailedReservation>> {
         let mut handle =
-            CallHandle::<host_functions::GolemQuotaTokenReserve, NotCancellable>::start(
+            DurableCallSession::<host_functions::GolemQuotaTokenReserve, NotCancellable>::start(
                 self,
                 HostRequestQuotaReserveRequest { amount },
                 DurableFunctionType::WriteRemote,
@@ -523,13 +524,15 @@ impl<Ctx: WorkerCtx> HostReservation for DurableWorkerCtx<Ctx> {
     async fn commit(&mut self, self_: Resource<ReservationEntry>, used: u64) -> anyhow::Result<()> {
         let entry = self.table().delete(self_)?;
 
-        let mut handle =
-            CallHandle::<host_functions::GolemQuotaReservationCommit, NotCancellable>::start(
-                self,
-                HostRequestQuotaCommitRequest { used },
-                DurableFunctionType::WriteRemote,
-            )
-            .await?;
+        let mut handle = DurableCallSession::<
+            host_functions::GolemQuotaReservationCommit,
+            NotCancellable,
+        >::start(
+            self,
+            HostRequestQuotaCommitRequest { used },
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
 
         if !handle.is_live() {
             match handle.replay(self).await? {

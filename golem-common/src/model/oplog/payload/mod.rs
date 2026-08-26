@@ -18,15 +18,14 @@ pub mod types;
 mod tests;
 
 use crate::model::agent::AgentTypeName;
+use crate::model::card::ScopeCard;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
-use crate::model::oplog::CardInstallFailure;
-use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
-    FileSystemError, ObjectMetadata, SecretRevealAudit, SecretRevealError, SerializableDateTime,
-    SerializableFileTimes, SerializableP3FileSystemError, SerializableP3IpSocketAddress,
-    SerializableP3SocketErrorCode, SerializableP3UdpDatagram, SerializableSocketError,
-    SerializableWebsocketError, SerializableWebsocketMessage,
+    FileSystemError, ObjectMetadata, PermissionCardRevokeError, SecretRevealAudit,
+    SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableP3FileSystemError,
+    SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
+    SerializableSocketError, SerializableWebsocketError, SerializableWebsocketMessage,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -36,10 +35,11 @@ use crate::model::oplog::types::{
     SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
     SerializableP3IpNameLookupError, SerializableP3TcpChunk, SerializableRdbmsError,
     SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
-    SerializableStreamError,
+    SerializableStreamError, SerializableToolInvocationResult, SerializableToolRpcError,
 };
+use crate::model::oplog::{CardInstallFailure, PayloadId};
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
-use crate::model::worker::RevertWorkerTarget;
+use crate::model::worker::{ResolvedRevert, RevertWorkerTarget};
 use crate::model::{
     AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
 };
@@ -61,6 +61,7 @@ pub type HttpTrailers = HashMap<String, Vec<Vec<u8>>>;
 pub type HttpTrailersResult = Result<Option<HttpTrailers>, SerializableHttpErrorCode>;
 pub type HttpFutureTrailersPoll = Result<HttpTrailersResult, ()>;
 pub type HttpFutureTrailersGetResult = Result<Option<HttpFutureTrailersPoll>, String>;
+pub type AgentsPage = (Option<(u64, u64)>, Vec<AgentMetadataForGuests>);
 
 oplog_payload! {
     HostRequest => {
@@ -119,7 +120,8 @@ oplog_payload! {
         },
         GolemApiRevertAgent {
             agent_id: AgentId,
-            target: RevertWorkerTarget
+            target: RevertWorkerTarget,
+            resolved_revert: Option<ResolvedRevert>
         },
         GolemApiUpdateAgent {
             agent_id: AgentId,
@@ -147,6 +149,8 @@ oplog_payload! {
             #[transient(None::<TypedSchemaValue>)]
             #[schema(skip)]
             remote_agent_parameters: Option<TypedSchemaValue>, // enriched field, only filled when exposed as public oplog entry
+            #[schema(skip)]
+            scope_card: Option<ScopeCard>,
         },
         GolemRpcScheduledInvocation {
             remote_agent_id: AgentId,
@@ -226,6 +230,20 @@ oplog_payload! {
         QuotaCommitRequest {
             used: u64,
         },
+        PermissionCardDerive {
+            card: Vec<u8>,
+            provenance: Vec<u8>,
+        },
+        PermissionCardRevoke {
+            card_id: Uuid,
+        },
+        PermissionCardTransfer {
+            transfer_id: Uuid,
+            source_card: Vec<u8>,
+            installed_card: Vec<u8>,
+            installed_card_provenance: Option<Vec<u8>>,
+            target_agent_id: AgentId,
+        },
         GolemRetryPolicyByName {
             name: String
         },
@@ -276,6 +294,48 @@ oplog_payload! {
         GolemToolGetTool {
             name: String
         },
+        GolemApiOplogRead {
+            agent_id: AgentId,
+            next_oplog_index: OplogIndex,
+            query: Option<String>,
+            page_size: usize,
+            current_component_revision: Option<ComponentRevision>
+        },
+        GolemApiOplogEnrich {
+            environment_id: EnvironmentId,
+            agent_id: AgentId,
+            entries: Vec<(u64, Vec<u8>)>,
+            component_revision: u64
+        },
+        ConfigGet {
+            key: String,
+        },
+        ConfigGetAll {},
+        P3SocketsConnect {
+            remote_address: SerializableP3IpSocketAddress
+        },
+        GolemToolInvoke {
+            tool_name: String,
+            command_path: Vec<String>,
+            args: Vec<String>,
+            input: TypedSchemaValue,
+            has_stdin: bool,
+        },
+        GolemApiGetAgents {
+            component_id: ComponentId,
+        },
+        CliEnvironmentGetEnvironment {
+            environment: Vec<(String, String)>
+        },
+        GolemRpcActivate {
+            remote_agent_id: AgentId,
+            method_name: String,
+            decision: Result<(), SerializableRpcError>,
+        },
+        EntityInvocation {
+            metadata: Vec<u8>,
+            input: TypedSchemaValue,
+        },
     }
 }
 
@@ -312,7 +372,7 @@ oplog_payload! {
             result: Result<SerializableFileTimes, FileSystemError>,
         },
         GolemAgentGetConfigValue {
-            result: SchemaValue,
+            result: Result<SchemaValue, String>,
         },
         GolemAgentWebhookUrl {
             result: Result<String, String>
@@ -321,10 +381,10 @@ oplog_payload! {
             result: Result<Option<AgentId>, String>
         },
         GolemApiAgentMetadata {
-            metadata: Option<AgentMetadataForGuests>
+            result: Result<Option<AgentMetadataForGuests>, String>
         },
         GolemApiSelfAgentMetadata {
-            metadata: AgentMetadataForGuests
+            result: Result<AgentMetadataForGuests, String>
         },
         GolemApiComponentId {
             result: Result<Option<ComponentId>, String>
@@ -480,6 +540,13 @@ oplog_payload! {
             /// Unix timestamp in milliseconds when credit_after was recorded.
             credit_after_at_ms: i64,
         },
+        PermissionCardDerived {
+            card: Vec<u8>,
+        },
+        PermissionCardsRevoked {
+            result: Result<Vec<Uuid>, PermissionCardRevokeError>,
+        },
+        PermissionCardTransferComplete {},
         GolemRetryPolicies {
             policies: Vec<NamedRetryPolicy>
         },
@@ -550,6 +617,86 @@ oplog_payload! {
         },
         GolemToolTool {
             result: Result<Option<Arc<DiscoveredTool>>, String>
+        },
+        GolemApiOplogChunk {
+            result: Result<Option<Vec<u8>>, String>,
+            next_oplog_index: OplogIndex,
+            current_component_revision: ComponentRevision,
+        },
+        GolemApiOplogEntries {
+            result: Result<Vec<u8>, String>
+        },
+        ConfigGetResponse {
+            result: Result<Option<String>, String>,
+        },
+        ConfigGetAllResponse {
+            result: Result<Vec<(String, String)>, String>,
+        },
+        P3SocketsConnect {
+            result: Result<(), SerializableP3SocketErrorCode>
+        },
+        P3FileSystemWriteAdmission {
+            result: Result<(), SerializableP3FileSystemError>,
+        },
+        GolemRpcScheduledInvocationError {
+            error: SerializableRpcError
+        },
+        GolemToolInvokeResult {
+            result: Result<SerializableToolInvocationResult, SerializableToolRpcError>
+        },
+        GolemToolUnitOrFailure {
+            result: Result<(), SerializableToolRpcError>
+        },
+        GolemApiAgents {
+            result: Result<AgentsPage, String>
+        },
+        CliEnvironmentGetEnvironment {
+            environment: Vec<(String, String)>
+        },
+        GolemRpcActivate {
+            result: Result<AgentFingerprint, SerializableRpcError>
+        },
+        EntityInvocation {
+            result: Result<TypedSchemaValue, String>
+        },
+    }
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+pub struct HostResponseGolemRpcScheduledInvocationCompat {
+    pub result: Result<SerializableScheduleId, SerializableRpcError>,
+}
+
+impl From<HostResponseGolemRpcScheduledInvocationCompat> for HostResponse {
+    fn from(value: HostResponseGolemRpcScheduledInvocationCompat) -> Self {
+        match value.result {
+            Ok(schedule_id) => HostResponseGolemRpcScheduledInvocation { schedule_id }.into(),
+            Err(error) => HostResponseGolemRpcScheduledInvocationError { error }.into(),
+        }
+    }
+}
+
+impl TryFrom<HostResponse> for HostResponseGolemRpcScheduledInvocationCompat {
+    type Error = String;
+
+    fn try_from(value: HostResponse) -> Result<Self, Self::Error> {
+        match value {
+            HostResponse::GolemRpcScheduledInvocation(value) => Ok(Self {
+                result: Ok(value.schedule_id),
+            }),
+            HostResponse::GolemRpcScheduledInvocationError(value) => Ok(Self {
+                result: Err(value.error),
+            }),
+            other => Err(format!(
+                "Expected GolemRpcScheduledInvocation or GolemRpcScheduledInvocationError, got {other:?}"
+            )),
         }
     }
 }
@@ -609,7 +756,7 @@ pub mod host_functions {
         (GolemRpcFutureInvokeResultGet => "golem::rpc::future-invoke-result", "get", GolemRpcInvoke, GolemRpcInvokeGet),
         (GolemRpcWasmRpcInvokeAndAwaitResult => "golem::rpc::wasm-rpc", "invoke_and_await", GolemRpcInvoke, GolemRpcInvokeAndAwait),
         (GolemRpcWasmRpcInvoke => "golem::rpc::wasm-rpc", "invoke", GolemRpcInvoke, GolemRpcUnitOrFailure),
-        (GolemRpcWasmRpcScheduleInvocation => "golem::rpc::wasm-rpc", "schedule_invocation", GolemRpcScheduledInvocation, GolemRpcScheduledInvocation),
+        (GolemRpcWasmRpcScheduleInvocation => "golem::rpc::wasm-rpc", "schedule_invocation", GolemRpcScheduledInvocation, GolemRpcScheduledInvocationCompat),
         (GolemRpcCancellationTokenCancel => "golem::rpc::cancellation-token", "cancel", GolemRpcScheduledInvocationCancellation, GolemRpcUnit),
         (GolemRpcFutureInvokeResultCancel => "golem::rpc::future-invoke-result", "cancel", GolemRpcInvoke, GolemRpcUnit),
         (IoPollReady => "io::poll::pollable", "ready", NoInput, PollReady),
@@ -717,8 +864,31 @@ pub mod host_functions {
         (FilesystemInputStreamRead => "filesystem::input_stream", "read", NoInput, StreamSkip),
         (FilesystemInputStreamSkip => "filesystem::input_stream", "skip", NoInput, StreamSkip),
         (FilesystemOutputStreamCheckWrite => "filesystem::output_stream", "check_write", NoInput, StreamCheckWrite),
+        (GolemPermissionsDerivePersist => "golem::permissions::derive", "persist-derived-card", PermissionCardDerive, PermissionCardDerived),
+        (GolemPermissionsRevokePersist => "golem::permissions::revoke", "persist-revoked-cards", PermissionCardRevoke, PermissionCardsRevoked),
+        (GolemPermissionsInstallChildPersist => "golem::permissions::wallet", "persist-installed-child-card", PermissionCardDerive, PermissionCardDerived),
+        (GolemPermissionsInstallTransfer => "golem::permissions::wallet", "install-card-transfer", PermissionCardTransfer, PermissionCardTransferComplete),
         (GolemToolGetAllTools => "golem::tool::host", "get_all_tools", NoInput, GolemToolTools),
-        (GolemToolGetTool => "golem::tool::host", "get_tool", GolemToolGetTool, GolemToolTool)
+        (GolemToolGetTool => "golem::tool::host", "get_tool", GolemToolGetTool, GolemToolTool),
+        (RdbmsMysqlDbConnectionBeginTransaction => "rdbms::mysql::db-connection", "begin-transaction", NoInput, GolemRdbmsRowCount),
+        (RdbmsPostgresDbConnectionBeginTransaction => "rdbms::postgres::db-connection", "begin-transaction", NoInput, GolemRdbmsRowCount),
+        (RdbmsIgnite2DbConnectionBeginTransaction => "rdbms::ignite2::db-connection", "begin-transaction", NoInput, GolemRdbmsRowCount),
+        (GolemApiGetOplogNext => "golem::api::get-oplog", "get-next", GolemApiOplogRead, GolemApiOplogChunk),
+        (GolemApiSearchOplogNext => "golem::api::search-oplog", "get-next", GolemApiOplogRead, GolemApiOplogChunk),
+        (GolemApiEnrichOplogEntries => "golem::api::oplog", "enrich-oplog-entries", GolemApiOplogEnrich, GolemApiOplogEntries),
+        (WasiConfigGet => "wasi:config/store", "get", ConfigGet, ConfigGetResponse),
+        (WasiConfigGetAll => "wasi:config/store", "get-all", ConfigGetAll, ConfigGetAllResponse),
+        (P3FilesystemTypesDescriptorWriteViaStream => "filesystem::types::descriptor", "write-via-stream", NoInput, P3FileSystemWriteAdmission),
+        (P3FilesystemTypesDescriptorAppendViaStream => "filesystem::types::descriptor", "append-via-stream", NoInput, P3FileSystemWriteAdmission),
+        (P3SocketsTypesTcpSocketConnect => "sockets::types::tcp-socket", "connect", P3SocketsConnect, P3SocketsConnect),
+        (P3SocketsTypesUdpSocketConnect => "sockets::types::udp-socket", "connect", P3SocketsConnect, P3SocketsConnect),
+        (GolemToolRpcInvokeAndAwait => "golem::tool::host::tool-rpc", "invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
+        (GolemToolRpcInvoke => "golem::tool::host::tool-rpc", "invoke", GolemToolInvoke, GolemToolUnitOrFailure),
+        (GolemToolRpcAsyncInvokeAndAwait => "golem::tool::host::tool-rpc", "async-invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
+        (GolemApiGetAgents => "golem::api::get-agents", "get-next", GolemApiGetAgents, GolemApiAgents),
+        (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
+        (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
+        (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation)
     }
 }
 

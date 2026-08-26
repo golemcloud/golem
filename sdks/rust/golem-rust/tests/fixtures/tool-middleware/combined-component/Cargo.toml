@@ -1,0 +1,12 @@
+[package]
+name = "combined-agentic-middleware-component"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+middleware-definition = { path = "../definition" }
+golem-rust = { path = "../../../..", features = ["export_golem_agentic_tool_middleware"] }

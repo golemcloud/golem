@@ -26,14 +26,14 @@ use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{InvocationResponseStream, WorkerProxy, WorkerProxyError};
 use crate::services::{
-    HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasCardService,
+    HasActiveAgents, HasAgentTypesService, HasBlobStoreService, HasCardService,
     HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
     HasKeyValueService, HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService,
     HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWorkerActivator,
     HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
-    active_workers, agent_types, blob_store, card, component, golem_config, key_value, oplog,
+    active_agents, agent_types, blob_store, card, component, golem_config, key_value, oplog,
     promise, rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
     worker_fork,
 };
@@ -56,7 +56,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentInvocationMode, AgentPrincipal, InvocationFreshnessDisposition, ParsedAgentId, Principal,
 };
-use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb};
+use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb, ScopeCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
@@ -98,6 +98,7 @@ pub trait Rpc: Send + Sync {
     async fn create_demand(
         &self,
         owned_agent_id: &OwnedAgentId,
+        method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -119,6 +120,7 @@ pub trait Rpc: Send + Sync {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError>;
 
     async fn invoke_and_await_streaming(
@@ -136,6 +138,7 @@ pub trait Rpc: Send + Sync {
         _self_stack: InvocationContextStack,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
+        _scope_card: Option<ScopeCard>,
     ) -> Result<DurableRpcInvocationResult, RpcError> {
         Err(RpcError::ProtocolError {
             details: "durable streaming invocation is not supported by this RPC implementation"
@@ -267,6 +270,7 @@ impl From<WorkerExecutorError> for RpcError {
             WorkerExecutorError::InvalidAccount => RpcError::Denied {
                 details: "Invalid account".to_string(),
             },
+            WorkerExecutorError::PermissionDenied { details } => RpcError::Denied { details },
             WorkerExecutorError::InvalidRequest { details } => RpcError::ProtocolError { details },
             _ => RpcError::RemoteInternalError {
                 details: value.to_string(),
@@ -384,6 +388,7 @@ impl Rpc for RemoteInvocationRpc {
     async fn create_demand(
         &self,
         owned_agent_id: &OwnedAgentId,
+        method_name: &str,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -399,6 +404,7 @@ impl Rpc for RemoteInvocationRpc {
             .worker_proxy
             .start(
                 owned_agent_id,
+                method_name,
                 self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
@@ -427,6 +433,7 @@ impl Rpc for RemoteInvocationRpc {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError> {
         let principal = caller_agent_principal(self_agent_id);
 
@@ -447,6 +454,7 @@ impl Rpc for RemoteInvocationRpc {
                 principal,
                 owned_agent_id.environment_id,
                 auth_ctx,
+                scope_card,
             )
             .await?;
 
@@ -475,6 +483,7 @@ impl Rpc for RemoteInvocationRpc {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
     ) -> Result<DurableRpcInvocationResult, RpcError> {
         let start = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
@@ -500,6 +509,11 @@ impl Rpc for RemoteInvocationRpc {
                 attempt_id: Some(attempt_id.into()),
                 expected_callee_fingerprint: Some(expected_callee_fingerprint.0.into()),
                 durable_input_mappings: input_mappings,
+                scope_card: scope_card
+                    .as_ref()
+                    .map(golem_api_grpc::proto::golem::worker::EncodedScopeCard::try_from)
+                    .transpose()
+                    .map_err(|details| RpcError::ProtocolError { details })?,
             })),
         };
         let mut retry_delay = std::time::Duration::from_millis(25);
@@ -681,6 +695,7 @@ impl Rpc for RemoteInvocationRpc {
                 principal,
                 owned_agent_id.environment_id,
                 auth_ctx,
+                None,
             )
             .await?;
 
@@ -771,7 +786,7 @@ fn caller_agent_principal(self_agent_id: &AgentId) -> Principal {
 pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     remote_rpc: Arc<RemoteInvocationRpc>,
     direct_invocation_auth: Arc<dyn DirectInvocationAuthService>,
-    active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+    active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
@@ -812,7 +827,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
         Self {
             remote_rpc: self.remote_rpc.clone(),
             direct_invocation_auth: self.direct_invocation_auth.clone(),
-            active_workers: self.active_workers.clone(),
+            active_agents: self.active_agents.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
@@ -855,9 +870,9 @@ impl<Ctx: WorkerCtx> HasEvents for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DirectWorkerInvocationRpc<Ctx> {
-    fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>> {
-        self.active_workers.clone()
+impl<Ctx: WorkerCtx> HasActiveAgents<Ctx> for DirectWorkerInvocationRpc<Ctx> {
+    fn active_agents(&self) -> Arc<active_agents::ActiveAgents<Ctx>> {
+        self.active_agents.clone()
     }
 }
 
@@ -1063,7 +1078,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     pub fn new(
         remote_rpc: Arc<RemoteInvocationRpc>,
         direct_invocation_auth: Arc<dyn DirectInvocationAuthService>,
-        active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+        active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
@@ -1102,7 +1117,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         Self {
             remote_rpc,
             direct_invocation_auth,
-            active_workers,
+            active_agents,
             engine,
             linker,
             runtime,
@@ -1193,6 +1208,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn create_demand(
         &self,
         owned_agent_id: &OwnedAgentId,
+        method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -1208,16 +1224,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .is_ok()
         {
             debug!(target_agent_id = %owned_agent_id, "Ensuring local target worker exists");
-
-            self.direct_invocation_auth
-                .check(
-                    self_created_by,
-                    owned_agent_id,
-                    AgentVerb::Invoke,
-                    AgentResourcePattern::Any,
-                    auth_ctx,
-                )
-                .await?;
 
             let worker = Worker::get_or_create_running(
                 self,
@@ -1242,6 +1248,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             self.remote_rpc
                 .create_demand(
                     owned_agent_id,
+                    method_name,
                     self_created_by,
                     self_agent_id,
                     self_env,
@@ -1266,6 +1273,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
 
@@ -1336,6 +1344,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 input: method_parameters,
                 invocation_context: self_stack,
                 principal,
+                scope_card,
             };
 
             let output = worker.invoke_and_await(invocation).await?;
@@ -1362,6 +1371,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_stack,
                     config,
                     auth_ctx,
+                    scope_card,
                 )
                 .await
         }
@@ -1382,6 +1392,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
     ) -> Result<DurableRpcInvocationResult, RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
         if self
@@ -1405,6 +1416,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_stack,
                     config,
                     auth_ctx,
+                    scope_card,
                 )
                 .await;
         }
@@ -1495,6 +1507,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             attempt_id: Some(attempt_id.into()),
             expected_callee_fingerprint: Some(expected_callee_fingerprint.0.into()),
             durable_input_mappings: input_mappings,
+            scope_card: scope_card
+                .as_ref()
+                .map(golem_api_grpc::proto::golem::worker::EncodedScopeCard::try_from)
+                .transpose()
+                .map_err(|details| RpcError::ProtocolError { details })?,
         };
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: idempotency_key.clone(),
@@ -1502,6 +1519,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             input,
             invocation_context: self_stack,
             principal,
+            scope_card,
         };
         let (acceptance_committed, accepted) = tokio::sync::oneshot::channel();
         let request = build_durable_streaming_request(
@@ -1743,6 +1761,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 input: method_parameters,
                 invocation_context: self_stack,
                 principal,
+                scope_card: None,
             };
 
             match worker.clone().invoke(invocation).await? {

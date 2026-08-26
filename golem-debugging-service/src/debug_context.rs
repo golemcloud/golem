@@ -22,6 +22,9 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::entity::{
+    EntityActivation, EntityInvocationScope, FilesystemCapability, OwnerRuntime,
+};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -48,7 +51,7 @@ use golem_worker_executor::preview2::golem::agent::host::{
     InvocationMetadata, InvocationResultWithMetadata, RpcError, ScheduledInvocationReceipt,
     WasmRpc,
 };
-use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::active_agents::ActiveAgents;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
@@ -63,7 +66,7 @@ use golem_worker_executor::services::oplog::{Oplog, OplogService};
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
 use golem_worker_executor::services::rdbms::RdbmsService;
-use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
+use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::Rpc;
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
@@ -72,17 +75,18 @@ use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{HasAll, worker_enumeration};
+use golem_worker_executor::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
+    CallCountManagement, EntityInvocationManagement, ExternalOperations, FileSystemReading,
+    FuelManagement, InvocationContextManagement, InvocationHooks, InvocationManagement,
+    LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
 use uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
-use wasmtime::{ResourceLimiterAsync, Store};
+use wasmtime::{MemoryKind, ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
 
 pub struct DebugContext {
@@ -120,6 +124,8 @@ impl FuelManagement for DebugContext {
     fn return_fuel(&mut self, _current_level: u64) -> u64 {
         0
     }
+
+    fn settle_fuel(&mut self, _current_level: u64) {}
 }
 
 impl CallCountManagement for DebugContext {
@@ -210,6 +216,19 @@ impl InvocationManagement for DebugContext {
     }
 }
 
+impl EntityInvocationManagement for DebugContext {
+    fn set_entity_invocation_scope(
+        &mut self,
+        scope: Option<EntityInvocationScope>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.durable_ctx.set_entity_invocation_scope(scope)
+    }
+
+    fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope> {
+        self.durable_ctx.entity_invocation_scope()
+    }
+}
+
 #[async_trait]
 impl StatusManagement for DebugContext {
     fn check_interrupt(&self) -> Option<InterruptKind> {
@@ -238,6 +257,10 @@ impl InvocationHooks for DebugContext {
         self.durable_ctx
             .on_agent_invocation_started(invocation)
             .await
+    }
+
+    async fn on_agent_invocation_finished(&mut self) {
+        self.durable_ctx.on_agent_invocation_finished().await
     }
 
     async fn on_invocation_failure(
@@ -367,16 +390,22 @@ impl ResourceLimiterAsync for DebugContext {
         current: usize,
         desired: usize,
         maximum: Option<usize>,
+        kind: MemoryKind,
     ) -> wasmtime::Result<bool> {
-        self.durable_memory_growing(current, desired, maximum).await
+        self.durable_memory_growing(current, desired, maximum, kind)
+            .await
     }
 
-    fn memory_grown(&mut self, current: usize, desired: usize) {
-        self.durable_memory_grown(current, desired);
+    fn memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) {
+        self.durable_memory_grown(current, desired, kind);
     }
 
-    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
-        self.durable_memory_grow_failed()
+    fn memory_grow_failed(
+        &mut self,
+        _error: wasmtime::Error,
+        kind: MemoryKind,
+    ) -> wasmtime::Result<()> {
+        self.durable_memory_grow_failed(kind)
     }
 
     async fn table_growing(
@@ -409,9 +438,10 @@ impl HostWasmRpc for DebugContext {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
         self.durable_ctx
-            .invoke_and_await(self_, method_name, input)
+            .invoke_and_await(self_, method_name, input, scope_card)
             .await
     }
 
@@ -420,8 +450,11 @@ impl HostWasmRpc for DebugContext {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
-        self.durable_ctx.invoke(self_, method_name, input).await
+        self.durable_ctx
+            .invoke(self_, method_name, input, scope_card)
+            .await
     }
 
     async fn async_invoke_and_await(
@@ -429,9 +462,10 @@ impl HostWasmRpc for DebugContext {
         self_: Resource<WasmRpc>,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
     ) -> anyhow::Result<AsyncInvocationWithMetadata> {
         self.durable_ctx
-            .async_invoke_and_await(self_, method_name, input)
+            .async_invoke_and_await(self_, method_name, input, scope_card)
             .await
     }
 
@@ -441,9 +475,10 @@ impl HostWasmRpc for DebugContext {
         scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
-    ) -> anyhow::Result<ScheduledInvocationReceipt> {
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
+    ) -> anyhow::Result<Result<ScheduledInvocationReceipt, RpcError>> {
         self.durable_ctx
-            .schedule_invocation(self_, scheduled_time, method_name, input)
+            .schedule_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
     }
 
@@ -453,9 +488,10 @@ impl HostWasmRpc for DebugContext {
         scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
         method_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
-    ) -> anyhow::Result<CancelableScheduledInvocationReceipt> {
+        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
+    ) -> anyhow::Result<Result<CancelableScheduledInvocationReceipt, RpcError>> {
         self.durable_ctx
-            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input)
+            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input, scope_card)
             .await
     }
 
@@ -563,7 +599,7 @@ impl WorkerCtx for DebugContext {
         rdbms_service: Arc<dyn RdbmsService>,
         quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
-        _active_workers: Arc<ActiveWorkers<Self>>,
+        _active_agents: Arc<ActiveAgents<Self>>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Self>>,
@@ -588,14 +624,14 @@ impl WorkerCtx for DebugContext {
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<uuid::Uuid>,
+        runtime: OwnerRuntime,
+        owner_execution: Arc<OwnerExecution>,
+        owner_resources: Arc<OwnerRuntimeResources>,
+        filesystem: FilesystemCapability,
+        executable_component: Component,
+        entity_activation: Option<Arc<EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
-        let account_resource_limits = Arc::new(AtomicResourceEntry::new(
-            u64::MAX,
-            usize::MAX,
-            usize::MAX,
-            u64::MAX,
-            u64::MAX,
-        ));
+        let account_resource_limits = owner_resources.resource_limits();
 
         let golem_ctx = DurableWorkerCtx::create(
             owned_agent_id,
@@ -633,6 +669,12 @@ impl WorkerCtx for DebugContext {
             original_phantom_id,
             u64::MAX,
             u64::MAX,
+            runtime,
+            owner_execution,
+            owner_resources,
+            filesystem,
+            executable_component,
+            entity_activation,
         )
         .await?;
         Ok(Self {

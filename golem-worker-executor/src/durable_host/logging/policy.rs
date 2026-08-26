@@ -27,7 +27,7 @@ use crate::services::HasWorker;
 use crate::services::oplog::Oplog;
 use crate::workerctx::{LogEventEmitBehaviour, PublicWorkerIo, WorkerCtx};
 use golem_common::model::OwnedAgentId;
-use golem_common::model::oplog::{LogLevel, OplogEntry};
+use golem_common::model::oplog::{LogLevel, OplogEntry, OplogIndex};
 use std::sync::Arc;
 
 /// Applies the common log emission policy for a single worker log event.
@@ -44,84 +44,93 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
     replay_state: &ReplayState,
     oplog: &Arc<dyn Oplog>,
     is_live: bool,
+    parent_start_index: Option<OplogIndex>,
 ) {
-    if let Some(entry) = event.as_oplog_entry()
-        && let OplogEntry::Log {
+    if let Some(mut entry) = event.as_oplog_entry() {
+        if let OplogEntry::Log {
+            parent_start_index: recorded_parent,
+            ..
+        } = &mut entry
+        {
+            *recorded_parent = parent_start_index;
+        }
+        if let OplogEntry::Log {
             level,
             context,
             message,
             ..
         } = &entry
-    {
-        // Oplog processor plugin logs are emitted into the server log because
-        // they cannot be easily watched with CLI tools.
-        if has_oplog_processor {
-            // Under `target::PLUGIN_LOG` rather than this module: the plugin
-            // decides how much of this there is, so an operator needs to be
-            // able to name it on its own.
-            use golem_common::tracing::target::PLUGIN_LOG;
-            match level {
-                LogLevel::Stdout | LogLevel::Debug | LogLevel::Trace => {
-                    tracing::debug!(
-                        target: PLUGIN_LOG,
-                        plugin_agent = %owned_agent_id,
-                        context,
-                        "Plugin: {message}"
-                    );
-                }
-                LogLevel::Stderr | LogLevel::Info => {
-                    tracing::info!(
-                        target: PLUGIN_LOG,
-                        plugin_agent = %owned_agent_id,
-                        context,
-                        "Plugin: {message}"
-                    );
-                }
-                LogLevel::Warn => {
-                    tracing::warn!(
-                        target: PLUGIN_LOG,
-                        plugin_agent = %owned_agent_id,
-                        context,
-                        "Plugin: {message}"
-                    );
-                }
-                LogLevel::Error | LogLevel::Critical => {
-                    tracing::error!(
-                        target: PLUGIN_LOG,
-                        plugin_agent = %owned_agent_id,
-                        context,
-                        "Plugin: {message}"
-                    );
-                }
-            }
-        }
-
-        match Ctx::LOG_EVENT_EMIT_BEHAVIOUR {
-            LogEventEmitBehaviour::LiveOnly => {
-                // Stdout and stderr writes are persistent and overwritten by sending the data to
-                // the event service instead of the real output stream
-                if is_live {
-                    if !replay_state.seen_log(*level, context, message).await {
-                        // haven't seen this log before
-                        public_state.event_service().emit_event(event.clone(), true);
-                        public_state.worker().add_to_oplog(entry).await;
-                    } else {
-                        // we have persisted emitting this log before, so we mark it as non-live and
-                        // remove the entry from the seen log set.
-                        // note that we still call emit_event because we need replayed log events
-                        // for improved error reporting in case of invocation failures
-                        public_state
-                            .event_service()
-                            .emit_event(event.clone(), false);
-                        replay_state.remove_seen_log(*level, context, message).await;
+        {
+            // Oplog processor plugin logs are emitted into the server log because
+            // they cannot be easily watched with CLI tools.
+            if has_oplog_processor {
+                // Under `target::PLUGIN_LOG` rather than this module: the plugin
+                // decides how much of this there is, so an operator needs to be
+                // able to name it on its own.
+                use golem_common::tracing::target::PLUGIN_LOG;
+                match level {
+                    LogLevel::Stdout | LogLevel::Debug | LogLevel::Trace => {
+                        tracing::debug!(
+                            target: PLUGIN_LOG,
+                            plugin_agent = %owned_agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                    LogLevel::Stderr | LogLevel::Info => {
+                        tracing::info!(
+                            target: PLUGIN_LOG,
+                            plugin_agent = %owned_agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                    LogLevel::Warn => {
+                        tracing::warn!(
+                            target: PLUGIN_LOG,
+                            plugin_agent = %owned_agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                    LogLevel::Error | LogLevel::Critical => {
+                        tracing::error!(
+                            target: PLUGIN_LOG,
+                            plugin_agent = %owned_agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
                     }
                 }
             }
-            LogEventEmitBehaviour::Always => {
-                public_state.event_service().emit_event(event.clone(), true);
 
-                if is_live && !replay_state.seen_log(*level, context, message).await {
-                    oplog.add(entry).await;
+            match Ctx::LOG_EVENT_EMIT_BEHAVIOUR {
+                LogEventEmitBehaviour::LiveOnly => {
+                    // Stdout and stderr writes are persistent and overwritten by sending the data to
+                    // the event service instead of the real output stream
+                    if is_live {
+                        if !replay_state.seen_log(*level, context, message).await {
+                            // haven't seen this log before
+                            public_state.event_service().emit_event(event.clone(), true);
+                            public_state.worker().add_to_oplog(entry).await;
+                        } else {
+                            // we have persisted emitting this log before, so we mark it as non-live and
+                            // remove the entry from the seen log set.
+                            // note that we still call emit_event because we need replayed log events
+                            // for improved error reporting in case of invocation failures
+                            public_state
+                                .event_service()
+                                .emit_event(event.clone(), false);
+                            replay_state.remove_seen_log(*level, context, message).await;
+                        }
+                    }
+                }
+                LogEventEmitBehaviour::Always => {
+                    public_state.event_service().emit_event(event.clone(), true);
+
+                    if is_live && !replay_state.seen_log(*level, context, message).await {
+                        oplog.add(entry).await;
+                    }
                 }
             }
         }

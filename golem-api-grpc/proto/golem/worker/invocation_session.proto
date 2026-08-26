@@ -13,6 +13,7 @@ import "golem/worker/agent_config.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation.proto";
 import "golem/worker/invocation_context.proto";
+import "golem/worker/scope_card.proto";
 import "golem/worker/v1/worker_execution_error.proto";
 import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
@@ -34,6 +35,7 @@ message InvocationStart {
   golem.common.UUID attempt_id = 14;
   golem.common.UUID expected_callee_fingerprint = 15;
   repeated DurableStreamMapping durable_input_mappings = 16;
+  optional golem.worker.EncodedScopeCard scope_card = 17;
 }
 
 message PublicInvocationStart {

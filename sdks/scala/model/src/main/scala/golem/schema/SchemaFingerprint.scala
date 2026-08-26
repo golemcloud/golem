@@ -172,9 +172,10 @@ object SchemaFingerprintV1 {
         encodeMetadata(e, t.metadata)
       case SecretType(s) =>
         e.array(4); e.uint(33); encodeType(e, s.inner); e.optionalText(s.category); encodeMetadata(e, t.metadata)
-      case QuotaTokenType(s) => e.array(3); e.uint(34); e.optionalText(s.resourceName); encodeMetadata(e, t.metadata)
-      case FutureType(x)     => e.array(3); e.uint(35); optionalType(e, x); encodeMetadata(e, t.metadata)
-      case StreamType(x)     => e.array(3); e.uint(36); optionalType(e, x); encodeMetadata(e, t.metadata)
+      case QuotaTokenType(s)     => e.array(3); e.uint(34); e.optionalText(s.resourceName); encodeMetadata(e, t.metadata)
+      case FutureType(x)         => e.array(3); e.uint(35); optionalType(e, x); encodeMetadata(e, t.metadata)
+      case StreamType(x)         => e.array(3); e.uint(36); optionalType(e, x); encodeMetadata(e, t.metadata)
+      case PermissionCardType(s) => e.array(3); e.uint(37); e.bool(s.polymorphic); encodeMetadata(e, t.metadata)
     }
   }
 
@@ -251,6 +252,7 @@ object SchemaFingerprintV1 {
     def array(n: Int): Unit                         = major(4, n.toLong)
     def text(s: String): Unit                       = { val b = utf8(s); major(3, b.length.toLong); out ++= b }
     def optionalText(x: Option[String]): Unit       = x.fold(nil())(text)
+    def bool(x: Boolean): Unit                      = out += (if (x) 0xf5 else 0xf4).toByte
     def nil(): Unit                                 = out += 0xf6.toByte
     private def major(kind: Int, value: Long): Unit = {
       def byte(x: Long): Unit = out += x.toByte

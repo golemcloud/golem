@@ -14,7 +14,8 @@
 
 pub mod types;
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::authorization::targets::secret_target;
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::secrets::types::SecretEntry;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
@@ -27,6 +28,9 @@ use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
 use golem_common::model::agent_secret::{AgentSecretRevision, CanonicalAgentSecretPath};
+use golem_common::model::card::PermissionTarget;
+use golem_common::model::card::SecretVerb;
+use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::host_functions::GolemSecretsReveal;
 use golem_common::model::oplog::payload::types::{
@@ -141,6 +145,135 @@ fn canonical_config_key(
         })
 }
 
+fn canonical_secret_resource_segments(
+    segments: Option<&[String]>,
+) -> Result<String, SecretRevealError> {
+    let segments = segments.ok_or_else(|| {
+        SecretRevealError::Unavailable(
+            "secret handle is not backed by a versioned config key".to_string(),
+        )
+    })?;
+    if segments.is_empty()
+        || segments
+            .iter()
+            .any(|segment| segment.is_empty() || segment.contains('.') || segment.contains('*'))
+    {
+        return Err(SecretRevealError::Internal(
+            "secret handle has an invalid config key".to_string(),
+        ));
+    }
+    Ok(segments.join("."))
+}
+
+fn canonical_secret_resource(entry: &SecretEntry) -> Result<String, SecretRevealError> {
+    canonical_secret_resource_segments(entry.config_key.as_deref())
+}
+
+fn environment_owner<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> EnvironmentOwnerPattern {
+    EnvironmentOwnerPattern::Environment {
+        account: ctx.state.component_metadata.account_email.clone(),
+        application: ctx.state.component_metadata.application_name.clone(),
+        environment: ctx.state.component_metadata.environment_name.clone(),
+    }
+}
+
+pub(crate) fn secret_hold_target_for_path<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    segments: &[String],
+) -> Result<PermissionTarget, WorkerExecutorError> {
+    let resource = canonical_secret_resource_segments(Some(segments))
+        .map_err(|_| WorkerExecutorError::runtime("secret handle has an invalid config key"))?;
+    secret_target(environment_owner(ctx), SecretVerb::Hold, &resource)
+        .map_err(|_| WorkerExecutorError::runtime("secret handle has an invalid config key"))
+}
+
+fn secret_paths_for_value(value: &SchemaValue) -> Result<Vec<&[String]>, WorkerExecutorError> {
+    fn collect<'a>(
+        value: &'a SchemaValue,
+        paths: &mut Vec<&'a [String]>,
+    ) -> Result<(), WorkerExecutorError> {
+        match value {
+            SchemaValue::Record { fields }
+            | SchemaValue::Tuple { elements: fields }
+            | SchemaValue::List { elements: fields }
+            | SchemaValue::FixedList { elements: fields } => {
+                for value in fields {
+                    collect(value, paths)?;
+                }
+            }
+            SchemaValue::Variant(payload) => {
+                if let Some(value) = &payload.payload {
+                    collect(value, paths)?;
+                }
+            }
+            SchemaValue::Map { entries } => {
+                for (key, value) in entries {
+                    collect(key, paths)?;
+                    collect(value, paths)?;
+                }
+            }
+            SchemaValue::Option { inner: Some(value) } => collect(value, paths)?,
+            SchemaValue::Option { inner: None } => {}
+            SchemaValue::Result(result) => match result {
+                golem_common::schema::schema_value::ResultValuePayload::Ok { value }
+                | golem_common::schema::schema_value::ResultValuePayload::Err { value } => {
+                    if let Some(value) = value {
+                        collect(value, paths)?;
+                    }
+                }
+            },
+            SchemaValue::Union(payload) => collect(&payload.body, paths)?,
+            SchemaValue::Secret(snapshot) => {
+                SecretEntry::from_snapshot(snapshot)
+                    .map_err(|_| WorkerExecutorError::runtime("invalid secret handle snapshot"))?;
+                let path = snapshot.config_key.as_ref().ok_or_else(|| {
+                    WorkerExecutorError::runtime(
+                        "secret handle is not backed by a versioned config key",
+                    )
+                })?;
+                paths.push(path);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    let mut paths = Vec::new();
+    collect(value, &mut paths)?;
+    Ok(paths)
+}
+
+pub(crate) fn secret_hold_targets_for_value<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    value: &SchemaValue,
+) -> Result<Vec<PermissionTarget>, WorkerExecutorError> {
+    secret_paths_for_value(value)?
+        .into_iter()
+        .map(|path| secret_hold_target_for_path(ctx, path))
+        .collect()
+}
+
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(crate) async fn secret_holds_allowed_for_value(
+        &mut self,
+        value: &SchemaValue,
+    ) -> Result<bool, WorkerExecutorError> {
+        if !self.state.is_live() {
+            return Ok(true);
+        }
+        let targets = secret_hold_targets_for_value(self, value)?;
+        if targets.is_empty() {
+            Ok(true)
+        } else {
+            Ok(self.authorize_live_permissions(&targets).await?.is_ok())
+        }
+    }
+}
+
+fn permission_denied() -> SecretRevealError {
+    SecretRevealError::Unavailable("secret permission denied".to_string())
+}
+
 fn classify_secret_revision_error(error: &WorkerExecutorError) -> HostFailureKind {
     match error {
         WorkerExecutorError::InvalidRequest { .. }
@@ -240,34 +373,109 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
         s: Resource<SecretHandleRep>,
         expected: golem_schema::schema::wit::wire::SchemaGraph,
     ) -> anyhow::Result<Result<SchemaValueTree, SecretError>> {
-        let expected_graph = match decode_graph(&expected) {
-            Ok(graph) => graph,
-            Err(error) => {
-                return Ok(Err(SecretError::Internal(format!(
-                    "invalid expected schema graph: {error}"
-                ))));
-            }
-        };
-
         let entry = secret_entry(self, &s)?.clone();
-        let mut handle = CallHandle::<GolemSecretsReveal, NotCancellable>::start(
+        let config_key = match canonical_config_key(&entry) {
+            Ok(config_key) => config_key,
+            Err(error) => return Ok(Err(reveal_error_to_wit(error))),
+        };
+        if self.entity_invocation_scope().is_some_and(|scope| {
+            !scope
+                .activation()
+                .policy()
+                .secret_keys_revealable()
+                .contains(&config_key)
+        }) {
+            return Ok(Err(SecretError::Unavailable(format!(
+                "Entity invocation is not allowed to reveal secret config key {config_key}"
+            ))));
+        }
+
+        let (denied, mut expected_graph) = if self.state.is_live() {
+            let denied = match canonical_secret_resource(&entry) {
+                Ok(resource) => {
+                    match secret_target(environment_owner(self), SecretVerb::Reveal, &resource) {
+                        Ok(target) => self
+                            .authorize_live_permission(&target)
+                            .await?
+                            .err()
+                            .map(|_| permission_denied()),
+                        Err(_) => Some(permission_denied()),
+                    }
+                }
+                Err(_) => Some(permission_denied()),
+            };
+            let expected_graph = match decode_graph(&expected) {
+                Ok(graph) => graph,
+                Err(error) => {
+                    return Ok(Err(SecretError::Internal(format!(
+                        "invalid expected schema graph: {error}"
+                    ))));
+                }
+            };
+            (denied, Some(expected_graph))
+        } else {
+            (None, None)
+        };
+        let begun = DurableCallSession::<GolemSecretsReveal, NotCancellable>::begin(
             self,
-            HostRequestSecretReveal {
-                secret_id: entry.secret_id.0,
-                expected_type: expected_graph.clone(),
-            },
             DurableFunctionType::ReadRemote,
         )
         .await?;
+
+        let mut handle = if begun.is_live() {
+            begun
+                .start_live(
+                    self,
+                    HostRequestSecretReveal {
+                        secret_id: entry.secret_id.0,
+                        expected_type: expected_graph
+                            .as_ref()
+                            .expect("live secret reveal has a decoded expected graph")
+                            .clone(),
+                    },
+                )
+                .await?
+        } else {
+            begun.start_replay(self).await?
+        };
 
         let mut live_secret = None;
         let response = 'reveal: {
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(replayed) => break 'reveal replayed,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+                    CallReplayOutcome::Incomplete(live) => {
+                        handle = live;
+                        expected_graph =
+                            Some(decode_graph(&expected).map_err(|error| {
+                                anyhow!("invalid expected schema graph: {error}")
+                            })?);
+                    }
                 }
             }
+
+            if let Some(error) = denied {
+                break 'reveal handle
+                    .complete(
+                        self,
+                        HostResponseSecretRevealed {
+                            secret_id: entry.secret_id.0,
+                            pinned_revision: entry.pinned_revision.get(),
+                            resolved_at: entry.resolved_at.into(),
+                            result: Err(error),
+                            audit: SecretRevealAudit {
+                                calling_agent: self.owned_agent_id.agent_id.clone(),
+                                config_key: None,
+                                timestamp: Utc::now().into(),
+                            },
+                        },
+                    )
+                    .await?;
+            }
+
+            let expected_graph = expected_graph
+                .as_ref()
+                .expect("live secret reveal has a decoded expected graph");
 
             let config_key = match canonical_config_key(&entry) {
                 Ok(path) => path,
@@ -313,13 +521,21 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
 
             let result = match secret {
                 Ok(Some(secret)) => {
-                    let result = validate_expected_type(&secret, &expected_graph).and_then(|()| {
-                        let value = secret.secret_value.as_ref().ok_or_else(|| {
-                            SecretRevealError::Unavailable("secret value is missing".to_string())
-                        })?;
-                        validate_secret_value(&secret, value)
-                    });
-                    if result.is_ok() {
+                    let mut result =
+                        validate_expected_type(&secret, expected_graph).and_then(|()| {
+                            let value = secret.secret_value.as_ref().ok_or_else(|| {
+                                SecretRevealError::Unavailable(
+                                    "secret value is missing".to_string(),
+                                )
+                            })?;
+                            validate_secret_value(&secret, value)
+                        });
+                    if result.is_ok()
+                        && let Some(value) = &secret.secret_value
+                        && !self.secret_holds_allowed_for_value(value).await?
+                    {
+                        result = Err(permission_denied());
+                    } else if result.is_ok() {
                         live_secret = Some(secret);
                     }
                     result
@@ -359,6 +575,12 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
         if let Err(error) = response.result {
             return Ok(Err(reveal_error_to_wit(error)));
         }
+
+        let expected_graph = match expected_graph {
+            Some(graph) => graph,
+            None => decode_graph(&expected)
+                .map_err(|error| anyhow!("invalid expected schema graph during replay: {error}"))?,
+        };
 
         let secret = match live_secret {
             Some(secret) => secret,
@@ -430,6 +652,16 @@ mod tests {
         }
     }
 
+    fn secret_value(path: &[&str]) -> SchemaValue {
+        SchemaValue::Secret(SecretValuePayload {
+            secret_id: uuid::Uuid::nil(),
+            config_key: Some(path.iter().map(|segment| (*segment).to_string()).collect()),
+            version: AgentSecretRevision::INITIAL.get(),
+            resolved_at: Utc::now(),
+            category: None,
+        })
+    }
+
     #[test]
     fn reveal_validation_accepts_matching_inner_type() {
         let secret = secret_with_inner(SchemaType::string(), SchemaValue::String("s3".to_string()));
@@ -473,5 +705,85 @@ mod tests {
             secret_id_bytes(&second).bytes,
             "secret ids should identify the pinned secret material/version, not only the stable registry id"
         );
+    }
+
+    #[test]
+    fn canonical_secret_resource_is_exact_and_dot_separated() {
+        let entry = SecretEntry {
+            secret_id: golem_common::model::agent_secret::AgentSecretId(uuid::Uuid::nil()),
+            pinned_revision: AgentSecretRevision::INITIAL,
+            config_key: Some(vec!["service".to_string(), "api-key".to_string()]),
+            resolved_at: Utc::now(),
+            category: None,
+        };
+
+        assert_eq!(
+            canonical_secret_resource(&entry).unwrap(),
+            "service.api-key"
+        );
+    }
+
+    #[test]
+    fn canonical_secret_resource_rejects_pattern_segments() {
+        let entry = SecretEntry {
+            secret_id: golem_common::model::agent_secret::AgentSecretId(uuid::Uuid::nil()),
+            pinned_revision: AgentSecretRevision::INITIAL,
+            config_key: Some(vec!["service".to_string(), "*".to_string()]),
+            resolved_at: Utc::now(),
+            category: None,
+        };
+
+        assert!(canonical_secret_resource(&entry).is_err());
+    }
+
+    #[test]
+    fn secret_hold_admission_finds_every_nested_secret_handle() {
+        let value = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Option {
+                    inner: Some(Box::new(secret_value(&["first"]))),
+                },
+                SchemaValue::Map {
+                    entries: vec![(
+                        SchemaValue::String("key".to_string()),
+                        SchemaValue::Variant(
+                            golem_common::schema::schema_value::VariantValuePayload {
+                                case: 0,
+                                payload: Some(Box::new(secret_value(&["second", "nested"]))),
+                            },
+                        ),
+                    )],
+                },
+                SchemaValue::Result(golem_common::schema::schema_value::ResultValuePayload::Ok {
+                    value: Some(Box::new(SchemaValue::Union(
+                        golem_common::schema::schema_value::UnionValuePayload {
+                            tag: "secret".to_string(),
+                            body: Box::new(secret_value(&["third"])),
+                        },
+                    ))),
+                }),
+            ],
+        };
+
+        let paths = secret_paths_for_value(&value)
+            .unwrap()
+            .into_iter()
+            .map(|path| path.join("."))
+            .collect::<Vec<_>>();
+
+        assert_eq!(paths, ["first", "second.nested", "third"]);
+    }
+
+    #[test]
+    fn secret_hold_admission_rejects_handles_without_a_config_key() {
+        let value = SchemaValue::Secret(SecretValuePayload {
+            secret_id: uuid::Uuid::nil(),
+            config_key: None,
+            version: AgentSecretRevision::INITIAL.get(),
+            resolved_at: Utc::now(),
+            category: None,
+        });
+
+        assert!(secret_paths_for_value(&value).is_err());
     }
 }

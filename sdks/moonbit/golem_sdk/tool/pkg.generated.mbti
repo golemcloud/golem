@@ -344,4 +344,3 @@ pub(open) trait ToolErrorSchema {
   fn to_error_payload_value(Self) -> Result[@schema_model.TypedSchemaValue, String]
   fn from_error_payload_value(@schema_model.TypedSchemaValue) -> Result[Self, String]
 }
-

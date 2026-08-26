@@ -101,7 +101,11 @@ export function resolveRemoteAgent(
     signal?: AbortSignal,
   ): Promise<RemoteInvocationResult> => {
     throwIfAborted(signal);
-    const invocation = rpc.asyncInvokeAndAwait(method, await schemaValueToWitAsync(params));
+    const invocation = rpc.asyncInvokeAndAwait(
+      method,
+      await schemaValueToWitAsync(params),
+      undefined,
+    );
     const future = invocation.future;
     let result;
     try {
@@ -129,23 +133,23 @@ export function resolveRemoteAgent(
       (await awaitInvocation(method, params, signal)).value,
     invokeAndAwaitWithMetadata: awaitInvocation,
     invoke(method, params) {
-      rpc.invoke(method, schemaValueToWit(params));
+      rpc.invoke(method, schemaValueToWit(params), undefined);
     },
     invokeWithMetadata(method, params) {
-      return rpc.invoke(method, schemaValueToWit(params));
+      return rpc.invoke(method, schemaValueToWit(params), undefined);
     },
     schedule(at, method, params) {
-      rpc.scheduleInvocation(at, method, schemaValueToWit(params));
+      rpc.scheduleInvocation(at, method, schemaValueToWit(params), undefined);
     },
     scheduleWithMetadata(at, method, params) {
-      return rpc.scheduleInvocation(at, method, schemaValueToWit(params));
+      return rpc.scheduleInvocation(at, method, schemaValueToWit(params), undefined);
     },
     scheduleCancelable(at, method, params) {
-      return rpc.scheduleCancelableInvocation(at, method, schemaValueToWit(params))
+      return rpc.scheduleCancelableInvocation(at, method, schemaValueToWit(params), undefined)
         .cancellationToken;
     },
     scheduleCancelableWithMetadata(at, method, params) {
-      return rpc.scheduleCancelableInvocation(at, method, schemaValueToWit(params));
+      return rpc.scheduleCancelableInvocation(at, method, schemaValueToWit(params), undefined);
     },
   };
 }

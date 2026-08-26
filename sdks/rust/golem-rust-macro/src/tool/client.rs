@@ -38,7 +38,7 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
         #(#subtree_wrappers)*
 
         pub struct #client_ident {
-            rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc,
             root_tool_name: ::std::string::String,
             command_path: ::std::vec::Vec<::std::string::String>,
             schema_path: ::std::vec::Vec<::std::string::String>,
@@ -48,7 +48,7 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
         impl #client_ident {
             pub fn #constructor_ident() -> Self {
                 Self {
-                    rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::new(#tool_name),
+                    rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(#tool_name),
                     root_tool_name: #tool_name.to_string(),
                     command_path: ::std::vec::Vec::new(),
                     schema_path: ::std::vec::Vec::new(),
@@ -67,7 +67,7 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
                 inherited_prefix: ::std::vec::Vec<golem_rust::agentic::CanonicalInputValue>,
             ) -> Self {
                 Self {
-                    rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::new(&root_tool_name),
+                    rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&root_tool_name),
                     root_tool_name,
                     command_path,
                     schema_path,
@@ -217,7 +217,7 @@ fn synthesize_subtree_method(
             let mut __inherited_prefix = self.inherited_prefix.clone();
             #(#value_prefixes)*
             #wrapper_ident::<{ #child_omitted_tag }, #child_omitted_ty> {
-                rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::new(&self.root_tool_name),
+                rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&self.root_tool_name),
                 root_tool_name: self.root_tool_name.clone(),
                 command_path: __command_path,
                 schema_path: __schema_path,
@@ -307,7 +307,7 @@ fn synthesize_subtree_method_dynamic(
             let mut #inherited_prefix = self.inherited_prefix.clone();
             #value_prefixes
             #wrapper_ident::<{ #child_omitted_tag }, #child_omitted_ty> {
-                rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc::new(&self.root_tool_name),
+                rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&self.root_tool_name),
                 root_tool_name: self.root_tool_name.clone(),
                 command_path: __command_path,
                 schema_path: __schema_path,
@@ -336,7 +336,7 @@ fn synthesize_subtree_wrapper(ir: &ToolDefinitionIr, cmd: &CommandIr) -> Option<
     };
     Some(quote! {
         pub struct #wrapper_ident<const __GOLEM_OMITTED_TAG: u64 = 0, __GOLEM_OMITTED = ()> {
-            rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc,
+            rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc,
             root_tool_name: ::std::string::String,
             command_path: ::std::vec::Vec<::std::string::String>,
             schema_path: ::std::vec::Vec<::std::string::String>,
@@ -378,6 +378,7 @@ fn synthesize_subtree_client_macro(ir: &ToolDefinitionIr, tool_name: &str) -> To
         }
 
         #[doc(hidden)]
+        #[allow(unused_imports)]
         pub(crate) use #macro_ident;
     }
 }
@@ -799,7 +800,7 @@ fn omitted_markers(surfaces: &[String]) -> Vec<Ident> {
         .collect()
 }
 
-fn omitted_marker_ident(surface: &str) -> Ident {
+pub(crate) fn omitted_marker_ident(surface: &str) -> Ident {
     format_ident!("__golem_omitted_{}", omitted_surface_id(surface))
 }
 
@@ -850,7 +851,7 @@ fn omitted_matches_param(
     })
 }
 
-fn param_omission_surfaces(
+pub(crate) fn param_omission_surfaces(
     ir: &ToolDefinitionIr,
     cmd: &CommandIr,
     param: &ParamIr,
@@ -940,7 +941,11 @@ fn prefix_value_builders(
         .collect()
 }
 
-fn inherited_root_params(ir: &ToolDefinitionIr, cmd: &CommandIr, tool_name: &str) -> Vec<ParamIr> {
+pub(crate) fn inherited_root_params(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    tool_name: &str,
+) -> Vec<ParamIr> {
     let is_root = to_kebab_case(&cmd.method_ident.to_string()) == tool_name;
     if is_root {
         return Vec::new();
@@ -969,7 +974,7 @@ fn inherited_root_params(ir: &ToolDefinitionIr, cmd: &CommandIr, tool_name: &str
         .collect()
 }
 
-fn canonical_value_name(
+pub(crate) fn canonical_value_name(
     ir: &ToolDefinitionIr,
     cmd: &CommandIr,
     param: &ParamIr,
@@ -1110,7 +1115,7 @@ fn is_flag_param(cmd: &CommandIr, param: &ParamIr) -> bool {
         || type_last_ident(&param.ty).as_deref() == Some("bool")
 }
 
-fn stream_idents(cmd: &CommandIr) -> (Option<Ident>, bool) {
+pub(crate) fn stream_idents(cmd: &CommandIr) -> (Option<Ident>, bool) {
     let mut stdin = None;
     let mut stdout = false;
     for param in &cmd.params {
@@ -1228,14 +1233,14 @@ fn pascal_case(input: &str) -> String {
     out
 }
 
-fn is_stream_type(ty: &Type) -> bool {
+pub(crate) fn is_stream_type(ty: &Type) -> bool {
     matches!(
         type_last_ident(ty).as_deref(),
         Some("InputStream" | "OutputStream")
     )
 }
 
-fn is_principal_type(ty: &Type) -> bool {
+pub(crate) fn is_principal_type(ty: &Type) -> bool {
     let Type::Path(tp) = ty else {
         return false;
     };
@@ -1248,7 +1253,7 @@ fn is_principal_type(ty: &Type) -> bool {
     let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
     matches!(
         segments.as_slice(),
-        ["golem_rust", "agentic", "Principal"]
+        ["golem_rust", "agentic" | "tool", "Principal"]
             | [
                 "golem_rust",
                 "golem_agentic",
@@ -1283,7 +1288,7 @@ fn type_last_ident(ty: &Type) -> Option<String> {
     }
 }
 
-fn split_result(output: &ReturnType) -> (Option<&Type>, Option<&Type>) {
+pub(crate) fn split_result(output: &ReturnType) -> (Option<&Type>, Option<&Type>) {
     let ty = match output {
         ReturnType::Default => return (None, None),
         ReturnType::Type(_, t) => t.as_ref(),

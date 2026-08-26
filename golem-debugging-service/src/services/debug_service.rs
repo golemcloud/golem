@@ -24,7 +24,9 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
-    AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+    AgentResourcePattern, AgentVerb, ClassPermissionTarget, ConfigResourcePattern, ConfigVerb,
+    EnvResourcePattern, EnvVerb, FilesystemResourcePattern, FilesystemVerb, OplogResourcePattern,
+    OplogVerb, PermissionTarget,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -334,20 +336,19 @@ impl DebugServiceDefault {
     }
 
     /// Scans the full recorded oplog and returns the first durable call whose `End` lies at or
-    /// before `target_index` while its `CompletionDiscarded` marker lies strictly after it —
-    /// that is, a target that splits a call's completion from its recorded delivery status.
+    /// before `target_index` while its completion-delivery marker lies strictly after it — that
+    /// is, a target that splits a call's completion from its recorded delivery status or timing.
     /// Returns `(start_index, end_index, marker_index)` for the offending call.
     ///
-    /// Replaying to such a target would deliver the completion to the guest, but the recorded
-    /// execution never observed it (the marker records that it was discarded before delivery),
-    /// so every recorded entry after the `End` reflects the discarded outcome. A debug session
-    /// parked at such a target would diverge from the recording as soon as its target advances
-    /// past the marker, so the target is rejected up front.
+    /// Without the marker replay would use the legacy behavior and deliver at the `End`, either
+    /// delivering a discarded completion or delivering a successful completion too early. A
+    /// debug session parked at such a target would therefore diverge from the recording, so the
+    /// target is rejected up front.
     ///
     /// Regions dropped by `Jump` or `Revert` entries are excluded on both sides, mirroring how
     /// replay skips them: a marker in a dropped region never influences replay, and an `End` in
     /// a dropped region is never resolved from.
-    pub async fn find_split_discarded_completion_at(
+    pub async fn find_split_completion_delivery_at(
         raw_oplog: Arc<dyn Oplog>,
         target_index: OplogIndex,
     ) -> Option<(OplogIndex, OplogIndex, OplogIndex)> {
@@ -361,7 +362,7 @@ impl DebugServiceDefault {
         // start_index -> End index, for End entries at or before the target
         let mut ends: std::collections::BTreeMap<OplogIndex, OplogIndex> =
             std::collections::BTreeMap::new();
-        // marker index -> start_index, for CompletionDiscarded entries after the target
+        // marker index -> start_index, for completion-delivery entries after the target
         let mut markers: std::collections::BTreeMap<OplogIndex, OplogIndex> =
             std::collections::BTreeMap::new();
 
@@ -377,7 +378,10 @@ impl DebugServiceDefault {
                     OplogEntry::End { start_index, .. } if *idx <= target_index => {
                         ends.insert(*start_index, *idx);
                     }
-                    OplogEntry::CompletionDiscarded { start_index, .. } if *idx > target_index => {
+                    OplogEntry::CompletionDiscarded { start_index, .. }
+                    | OplogEntry::CompletionDelivered { start_index, .. }
+                        if *idx > target_index =>
+                    {
                         markers.insert(*idx, *start_index);
                     }
                     OplogEntry::Jump { jump, .. } => {
@@ -600,17 +604,16 @@ impl DebugService for DebugServiceDefault {
             });
         }
 
-        // Refuse targets that split a completed durable call's `End` from its
-        // `CompletionDiscarded` marker: replay to such a target would deliver a completion the
-        // recorded execution never observed, diverging from the recording as soon as the target
-        // advances past the marker.
+        // Refuse targets that split a completed durable call's `End` from its delivery marker:
+        // without the marker replay would deliver at the End, either incorrectly delivering a
+        // discarded completion or delivering a successful completion too early.
         if let Some((start_index, end_index, marker_index)) =
-            Self::find_split_discarded_completion_at(raw_oplog.clone(), new_target_index).await
+            Self::find_split_completion_delivery_at(raw_oplog.clone(), new_target_index).await
         {
             return Err(DebugServiceError::ValidationFailed {
                 agent_id: Some(agent_id.clone()),
                 errors: vec![format!(
-                    "Playback target index {new_target_index} splits a durable call's completion from its recorded delivery status: the call started at oplog index {start_index} completed at {end_index}, but its completion was discarded before reaching the guest (CompletionDiscarded marker at {marker_index}). Replaying to this target would deliver a completion the recorded execution never observed; choose a target index before the call's completion or at/after the marker"
+                    "Playback target index {new_target_index} splits a durable call's completion from its recorded delivery outcome: the call started at oplog index {start_index}, completed at {end_index}, and has a delivery marker at {marker_index}. Replaying to this target would use legacy End-time delivery instead of the recorded outcome; choose a target index before the call's completion or at/after the marker"
                 )],
             });
         }
@@ -782,16 +785,15 @@ impl DebugService for DebugServiceDefault {
             });
         }
 
-        // Refuse targets that split a completed durable call's `End` from its
-        // `CompletionDiscarded` marker, exactly like playback: replay to such a target would
-        // deliver a completion the recorded execution never observed.
+        // Refuse targets that split a completed durable call's `End` from its delivery marker,
+        // exactly like playback.
         if let Some((start_index, end_index, marker_index)) =
-            Self::find_split_discarded_completion_at(raw_oplog.clone(), new_target_index).await
+            Self::find_split_completion_delivery_at(raw_oplog.clone(), new_target_index).await
         {
             return Err(DebugServiceError::ValidationFailed {
                 agent_id: Some(owned_agent_id.agent_id.clone()),
                 errors: vec![format!(
-                    "Rewind target index {new_target_index} splits a durable call's completion from its recorded delivery status: the call started at oplog index {start_index} completed at {end_index}, but its completion was discarded before reaching the guest (CompletionDiscarded marker at {marker_index}). Replaying to this target would deliver a completion the recorded execution never observed; choose a target index before the call's completion or at/after the marker"
+                    "Rewind target index {new_target_index} splits a durable call's completion from its recorded delivery outcome: the call started at oplog index {start_index}, completed at {end_index}, and has a delivery marker at {marker_index}. Replaying to this target would use legacy End-time delivery instead of the recorded outcome; choose a target index before the call's completion or at/after the marker"
                 )],
             });
         }
@@ -934,29 +936,75 @@ fn authorize_debugging(
     component: &Component,
     agent_id: &AgentId,
 ) -> Result<(), DebugServiceError> {
-    auth_ctx
-        .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
-            owner: AgentOwnerPattern::Agent {
-                account: component.account_email.clone(),
-                application: component.application_name.clone(),
-                environment: component.environment_name.clone(),
-                component: component.component_name.clone(),
-                agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
-            },
-            verb: Some(AgentVerb::Debug),
-            resource: AgentResourcePattern::Any,
-        }))
-        .map_err(|e| DebugServiceError::Unauthorized {
-            message: e.to_safe_string(),
-        })?;
+    let owner = AgentOwnerPattern::Agent {
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
+        component: component.component_name.clone(),
+        agent: AgentOwnerLeafPattern::Agent(agent_id.agent_id.clone()),
+    };
+    for target in &debugging_permission_targets(owner) {
+        auth_ctx
+            .authorize_permission(target)
+            .map_err(|e| DebugServiceError::Unauthorized {
+                message: e.to_safe_string(),
+            })?;
+    }
 
     Ok(())
+}
+
+fn debugging_permission_targets(owner: AgentOwnerPattern) -> [PermissionTarget; 8] {
+    [
+        PermissionTarget::Oplog(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(OplogVerb::Read),
+            resource: OplogResourcePattern::Any,
+        }),
+        PermissionTarget::Agent(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(AgentVerb::View),
+            resource: AgentResourcePattern::Empty,
+        }),
+        PermissionTarget::Filesystem(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(FilesystemVerb::Read),
+            resource: FilesystemResourcePattern::any(),
+        }),
+        PermissionTarget::Env(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(EnvVerb::Read),
+            resource: EnvResourcePattern::Any,
+        }),
+        PermissionTarget::Config(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(ConfigVerb::Read),
+            resource: ConfigResourcePattern::Any,
+        }),
+        PermissionTarget::Agent(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(AgentVerb::Fork),
+            resource: AgentResourcePattern::Empty,
+        }),
+        PermissionTarget::Agent(ClassPermissionTarget {
+            owner: owner.clone(),
+            verb: Some(AgentVerb::Interrupt),
+            resource: AgentResourcePattern::Empty,
+        }),
+        PermissionTarget::Agent(ClassPermissionTarget {
+            owner,
+            verb: Some(AgentVerb::Resume),
+            resource: AgentResourcePattern::Empty,
+        }),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use golem_common::base_model::component::ComponentRevision;
+    use golem_common::model::account::AccountEmail;
+    use golem_common::model::card::{EffectiveSurface, GrantSurface};
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::oplog::{OplogEntry, OplogPayload, PayloadId, RawOplogPayload};
     use golem_common::model::regions::OplogRegion;
@@ -966,6 +1014,47 @@ mod tests {
     use std::fmt::{Debug, Formatter};
     use std::time::Duration;
     use test_r::test;
+
+    #[test]
+    fn debugging_requires_every_permission_in_the_legacy_alias_expansion() {
+        let owner =
+            AgentOwnerPattern::parse("owner@example.com/shop/prod/cart/ShoppingCart(\"alice\")")
+                .unwrap();
+        let targets = debugging_permission_targets(owner);
+
+        let authorize_all = |positive: Vec<PermissionTarget>| {
+            let auth_ctx = AuthCtx::agent_with_effective_surface(
+                AccountId::new(),
+                AccountEmail::new("caller@example.com"),
+                EffectiveSurface {
+                    source_card_ids: Vec::new(),
+                    lower: vec![GrantSurface {
+                        positive,
+                        negative: Vec::new(),
+                    }],
+                    upper: Vec::new(),
+                },
+            );
+            targets
+                .iter()
+                .all(|target| auth_ctx.authorize_permission(target).is_ok())
+        };
+
+        assert!(authorize_all(targets.to_vec()));
+        for missing in 0..targets.len() {
+            let positive = targets
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != missing)
+                .map(|(_, target)| target.clone())
+                .collect();
+            assert!(
+                !authorize_all(positive),
+                "debugging was allowed without constituent permission {missing}: {:?}",
+                targets[missing]
+            );
+        }
+    }
 
     #[test]
     async fn test_get_target_oplog_index_at_invocation_boundary_1() {
@@ -1019,6 +1108,13 @@ mod tests {
         }
     }
 
+    fn delivered_entry(start_index: u64) -> OplogEntry {
+        OplogEntry::CompletionDelivered {
+            timestamp: Timestamp::now_utc(),
+            start_index: OplogIndex::from_u64(start_index),
+        }
+    }
+
     fn jump_entry(start: u64, end: u64) -> OplogEntry {
         OplogEntry::Jump {
             timestamp: Timestamp::now_utc(),
@@ -1040,7 +1136,7 @@ mod tests {
     }
 
     async fn split_at(entries: Vec<OplogEntry>, target: u64) -> Option<(u64, u64, u64)> {
-        DebugServiceDefault::find_split_discarded_completion_at(
+        DebugServiceDefault::find_split_completion_delivery_at(
             Arc::new(SeqOplog { entries }),
             OplogIndex::from_u64(target),
         )
@@ -1058,6 +1154,15 @@ mod tests {
         // Target before the End: the completion is not visible at all, nothing splits
         assert_eq!(split_at(entries.clone(), 1).await, None);
         // Target at the marker: the marker is visible and replay parks the delivery
+        assert_eq!(split_at(entries, 4).await, None);
+    }
+
+    #[test]
+    async fn split_delivered_completion_is_rejected_between_end_and_marker() {
+        let entries = vec![noop_entry(), end_entry(1), noop_entry(), delivered_entry(1)];
+        assert_eq!(split_at(entries.clone(), 2).await, Some((1, 2, 4)));
+        assert_eq!(split_at(entries.clone(), 3).await, Some((1, 2, 4)));
+        assert_eq!(split_at(entries.clone(), 1).await, None);
         assert_eq!(split_at(entries, 4).await, None);
     }
 
@@ -1117,6 +1222,13 @@ mod tests {
             unimplemented!()
         }
 
+        fn enqueue_add(
+            &self,
+            _entry: OplogEntry,
+        ) -> golem_worker_executor::services::oplog::OplogAddReceipt {
+            Box::pin(async { unimplemented!() })
+        }
+
         async fn add_pair(
             &self,
             _start: OplogEntry,
@@ -1129,6 +1241,13 @@ mod tests {
             &self,
             _serialized_request: Vec<u8>,
             _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        ) -> Result<golem_worker_executor::services::oplog::OrderedOplogStart, String> {
+            unimplemented!()
+        }
+
+        async fn add_start_with_indexed_reserved_raw_payload(
+            &self,
+            _build_request: golem_worker_executor::services::oplog::IndexedReservedStartBuilder,
         ) -> Result<golem_worker_executor::services::oplog::OrderedOplogStart, String> {
             unimplemented!()
         }
@@ -1215,6 +1334,13 @@ mod tests {
             unimplemented!()
         }
 
+        fn enqueue_add(
+            &self,
+            _entry: OplogEntry,
+        ) -> golem_worker_executor::services::oplog::OplogAddReceipt {
+            Box::pin(async { unimplemented!() })
+        }
+
         async fn add_pair(
             &self,
             _start: OplogEntry,
@@ -1227,6 +1353,13 @@ mod tests {
             &self,
             _serialized_request: Vec<u8>,
             _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        ) -> Result<golem_worker_executor::services::oplog::OrderedOplogStart, String> {
+            unimplemented!()
+        }
+
+        async fn add_start_with_indexed_reserved_raw_payload(
+            &self,
+            _build_request: golem_worker_executor::services::oplog::IndexedReservedStartBuilder,
         ) -> Result<golem_worker_executor::services::oplog::OrderedOplogStart, String> {
             unimplemented!()
         }

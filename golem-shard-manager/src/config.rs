@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "kubernetes")]
 use crate::config::HealthCheckMode::K8s;
 use golem_common::SafeDisplay;
 use golem_common::config::{
@@ -121,19 +122,27 @@ impl Default for ShardManagerConfig {
 
 impl HasConfigExamples<ShardManagerConfig> for ShardManagerConfig {
     fn examples() -> Vec<ConfigExample<ShardManagerConfig>> {
-        vec![(
-            "with k8s healthcheck",
-            Self {
-                health_check: HealthCheckConfig {
-                    delay: Duration::from_secs(1),
-                    mode: K8s(HealthCheckK8sConfig {
-                        namespace: "namespace".to_string(),
-                    }),
-                    silent: false,
+        #[cfg(feature = "kubernetes")]
+        {
+            vec![(
+                "with k8s healthcheck",
+                Self {
+                    health_check: HealthCheckConfig {
+                        delay: Duration::from_secs(1),
+                        mode: K8s(HealthCheckK8sConfig {
+                            namespace: "namespace".to_string(),
+                        }),
+                        silent: false,
+                    },
+                    ..Self::default()
                 },
-                ..Self::default()
-            },
-        )]
+            )]
+        }
+
+        #[cfg(not(feature = "kubernetes"))]
+        {
+            Vec::new()
+        }
     }
 }
 

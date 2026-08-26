@@ -57,8 +57,22 @@ object SchemaWireInterop {
     JsSchemaValueTree(v.valueNodes.map(valueNodeToJs).toJSArray, v.root)
   }
 
-  def valueTreeFromJs(j: JsSchemaValueTree): WitSchemaValueTree =
-    WitSchemaValueTree(j.valueNodes.toList.toVector.map(valueNodeFromJs), j.root)
+  def valueTreeFromJs(j: JsSchemaValueTree): WitSchemaValueTree = {
+    val converted = mutable.ArrayBuffer.empty[WitSchemaValueNode]
+    var i         = 0
+    try {
+      while (i < j.valueNodes.length) {
+        converted += valueNodeFromJs(j.valueNodes(i))
+        i += 1
+      }
+      WitSchemaValueTree(converted.toVector, j.root)
+    } catch {
+      case error: Throwable =>
+        drainWitQuotaAndPermissionCardHandles(converted)
+        drainJsQuotaAndPermissionCardHandles(j.valueNodes)
+        throw error
+    }
+  }
 
   /**
    * Async stream-aware lowering. No reader is advanced while constructing the
@@ -72,8 +86,16 @@ object SchemaWireInterop {
   def typedToJs(t: WitTypedSchemaValue): JsTypedSchemaValue =
     JsTypedSchemaValue(graphToJs(t.graph), valueTreeToJs(t.value))
 
-  def typedFromJs(j: JsTypedSchemaValue): WitTypedSchemaValue =
-    WitTypedSchemaValue(graphFromJs(j.graph), valueTreeFromJs(j.value))
+  def typedFromJs(j: JsTypedSchemaValue): WitTypedSchemaValue = {
+    val graph =
+      try graphFromJs(j.graph)
+      catch {
+        case error: Throwable =>
+          drainJsQuotaAndPermissionCardHandles(j.value.valueNodes)
+          throw error
+      }
+    WitTypedSchemaValue(graph, valueTreeFromJs(j.value))
+  }
 
   /**
    * Convert a model metadata envelope to its JS facade (used by the agent-type
@@ -91,6 +113,30 @@ object SchemaWireInterop {
   /** Read the positional `val` payload of a `{ tag, val }` JS object. */
   private def valOf(o: js.Object): js.Dynamic =
     o.asInstanceOf[js.Dynamic].selectDynamic("val")
+
+  /** Move an owned resource out of a JS `{ tag, val }` node exactly once. */
+  private def takeOwnedVal(o: js.Object, resourceName: String): js.Any = {
+    val dynamic = o.asInstanceOf[js.Dynamic]
+    val raw     = dynamic.selectDynamic("val")
+    if (js.isUndefined(raw))
+      throw new IllegalArgumentException(s"$resourceName handle was already transferred")
+    dynamic.updateDynamic("val")(js.undefined)
+    raw.asInstanceOf[js.Any]
+  }
+
+  private def drainJsQuotaAndPermissionCardHandles(nodes: js.Array[JsSchemaValueNode]): Unit =
+    nodes.foreach { node =>
+      if (node.tag == "quota-token-handle" || node.tag == "permission-card-handle") {
+        node.asInstanceOf[js.Dynamic].updateDynamic("val")(js.undefined)
+      }
+    }
+
+  private def drainWitQuotaAndPermissionCardHandles(nodes: Iterable[WitSchemaValueNode]): Unit =
+    nodes.foreach {
+      case WitSchemaValueNode.QuotaTokenHandle(handle)     => handle.take()
+      case WitSchemaValueNode.PermissionCardHandle(handle) => handle.take()
+      case _                                               => ()
+    }
 
   /** Read an optional index `val` (absent => `None`). */
   private def optIntVal(o: js.Object): Option[Int] =
@@ -322,6 +368,11 @@ object SchemaWireInterop {
   private def quotaSpecToJs(s: QuotaTokenSpec): JsQuotaTokenSpec   = JsQuotaTokenSpec(s.resourceName.orUndefined)
   private def quotaSpecFromJs(j: JsQuotaTokenSpec): QuotaTokenSpec = QuotaTokenSpec(j.resourceName.toOption)
 
+  private def permissionCardSpecToJs(s: PermissionCardSpec): JsPermissionCardSpec =
+    JsPermissionCardSpec(s.polymorphic)
+  private def permissionCardSpecFromJs(j: JsPermissionCardSpec): PermissionCardSpec =
+    PermissionCardSpec(j.polymorphic)
+
   // ===========================================================================
   // Schema graph: defs / fields / cases / type body / node
   // ===========================================================================
@@ -363,42 +414,43 @@ object SchemaWireInterop {
   private def typeBodyToJs(b: WitSchemaTypeBody): JsSchemaTypeBody = {
     import WitSchemaTypeBody._
     b match {
-      case RefType(i)        => JsSchemaTypeBody.refType(i)
-      case BoolType          => JsSchemaTypeBody.boolType
-      case S8Type(r)         => JsSchemaTypeBody.s8Type(r.map(numericRToJs).orUndefined)
-      case S16Type(r)        => JsSchemaTypeBody.s16Type(r.map(numericRToJs).orUndefined)
-      case S32Type(r)        => JsSchemaTypeBody.s32Type(r.map(numericRToJs).orUndefined)
-      case S64Type(r)        => JsSchemaTypeBody.s64Type(r.map(numericRToJs).orUndefined)
-      case U8Type(r)         => JsSchemaTypeBody.u8Type(r.map(numericRToJs).orUndefined)
-      case U16Type(r)        => JsSchemaTypeBody.u16Type(r.map(numericRToJs).orUndefined)
-      case U32Type(r)        => JsSchemaTypeBody.u32Type(r.map(numericRToJs).orUndefined)
-      case U64Type(r)        => JsSchemaTypeBody.u64Type(r.map(numericRToJs).orUndefined)
-      case F32Type(r)        => JsSchemaTypeBody.f32Type(r.map(numericRToJs).orUndefined)
-      case F64Type(r)        => JsSchemaTypeBody.f64Type(r.map(numericRToJs).orUndefined)
-      case CharType          => JsSchemaTypeBody.charType
-      case StringType        => JsSchemaTypeBody.stringType
-      case RecordType(fs)    => JsSchemaTypeBody.recordType(fs.map(namedFieldToJs).toJSArray)
-      case VariantType(cs)   => JsSchemaTypeBody.variantType(cs.map(variantCaseToJs).toJSArray)
-      case EnumType(cs)      => JsSchemaTypeBody.enumType(cs.toJSArray)
-      case FlagsType(ns)     => JsSchemaTypeBody.flagsType(ns.toJSArray)
-      case TupleType(es)     => JsSchemaTypeBody.tupleType(es.toJSArray)
-      case ListType(e)       => JsSchemaTypeBody.listType(e)
-      case FixedListType(s)  => JsSchemaTypeBody.fixedListType(JsFixedListSpec(s.element, s.length))
-      case MapType(s)        => JsSchemaTypeBody.mapType(JsMapSpec(s.key, s.value))
-      case OptionType(e)     => JsSchemaTypeBody.optionType(e)
-      case ResultType(s)     => JsSchemaTypeBody.resultType(resultSpecToJs(s))
-      case TextType(r)       => JsSchemaTypeBody.textType(textRToJs(r))
-      case BinaryType(r)     => JsSchemaTypeBody.binaryType(binRToJs(r))
-      case PathType(s)       => JsSchemaTypeBody.pathType(pathToJs(s))
-      case UrlType(r)        => JsSchemaTypeBody.urlType(urlRToJs(r))
-      case DatetimeType      => JsSchemaTypeBody.datetimeType
-      case DurationType      => JsSchemaTypeBody.durationType
-      case QuantityType(s)   => JsSchemaTypeBody.quantityType(quantToJs(s))
-      case UnionType(s)      => JsSchemaTypeBody.unionType(unionSpecToJs(s))
-      case SecretType(s)     => JsSchemaTypeBody.secretType(secretSpecToJs(s))
-      case QuotaTokenType(s) => JsSchemaTypeBody.quotaTokenType(quotaSpecToJs(s))
-      case FutureType(e)     => JsSchemaTypeBody.futureType(e.orUndefined)
-      case StreamType(e)     => JsSchemaTypeBody.streamType(e.orUndefined)
+      case RefType(i)            => JsSchemaTypeBody.refType(i)
+      case BoolType              => JsSchemaTypeBody.boolType
+      case S8Type(r)             => JsSchemaTypeBody.s8Type(r.map(numericRToJs).orUndefined)
+      case S16Type(r)            => JsSchemaTypeBody.s16Type(r.map(numericRToJs).orUndefined)
+      case S32Type(r)            => JsSchemaTypeBody.s32Type(r.map(numericRToJs).orUndefined)
+      case S64Type(r)            => JsSchemaTypeBody.s64Type(r.map(numericRToJs).orUndefined)
+      case U8Type(r)             => JsSchemaTypeBody.u8Type(r.map(numericRToJs).orUndefined)
+      case U16Type(r)            => JsSchemaTypeBody.u16Type(r.map(numericRToJs).orUndefined)
+      case U32Type(r)            => JsSchemaTypeBody.u32Type(r.map(numericRToJs).orUndefined)
+      case U64Type(r)            => JsSchemaTypeBody.u64Type(r.map(numericRToJs).orUndefined)
+      case F32Type(r)            => JsSchemaTypeBody.f32Type(r.map(numericRToJs).orUndefined)
+      case F64Type(r)            => JsSchemaTypeBody.f64Type(r.map(numericRToJs).orUndefined)
+      case CharType              => JsSchemaTypeBody.charType
+      case StringType            => JsSchemaTypeBody.stringType
+      case RecordType(fs)        => JsSchemaTypeBody.recordType(fs.map(namedFieldToJs).toJSArray)
+      case VariantType(cs)       => JsSchemaTypeBody.variantType(cs.map(variantCaseToJs).toJSArray)
+      case EnumType(cs)          => JsSchemaTypeBody.enumType(cs.toJSArray)
+      case FlagsType(ns)         => JsSchemaTypeBody.flagsType(ns.toJSArray)
+      case TupleType(es)         => JsSchemaTypeBody.tupleType(es.toJSArray)
+      case ListType(e)           => JsSchemaTypeBody.listType(e)
+      case FixedListType(s)      => JsSchemaTypeBody.fixedListType(JsFixedListSpec(s.element, s.length))
+      case MapType(s)            => JsSchemaTypeBody.mapType(JsMapSpec(s.key, s.value))
+      case OptionType(e)         => JsSchemaTypeBody.optionType(e)
+      case ResultType(s)         => JsSchemaTypeBody.resultType(resultSpecToJs(s))
+      case TextType(r)           => JsSchemaTypeBody.textType(textRToJs(r))
+      case BinaryType(r)         => JsSchemaTypeBody.binaryType(binRToJs(r))
+      case PathType(s)           => JsSchemaTypeBody.pathType(pathToJs(s))
+      case UrlType(r)            => JsSchemaTypeBody.urlType(urlRToJs(r))
+      case DatetimeType          => JsSchemaTypeBody.datetimeType
+      case DurationType          => JsSchemaTypeBody.durationType
+      case QuantityType(s)       => JsSchemaTypeBody.quantityType(quantToJs(s))
+      case UnionType(s)          => JsSchemaTypeBody.unionType(unionSpecToJs(s))
+      case SecretType(s)         => JsSchemaTypeBody.secretType(secretSpecToJs(s))
+      case QuotaTokenType(s)     => JsSchemaTypeBody.quotaTokenType(quotaSpecToJs(s))
+      case PermissionCardType(s) => JsSchemaTypeBody.permissionCardType(permissionCardSpecToJs(s))
+      case FutureType(e)         => JsSchemaTypeBody.futureType(e.orUndefined)
+      case StreamType(e)         => JsSchemaTypeBody.streamType(e.orUndefined)
     }
   }
 
@@ -433,21 +485,23 @@ object SchemaWireInterop {
       case "map-type" =>
         val s = valOf(j).asInstanceOf[JsMapSpec]
         MapType(WitMapSpec(s.key, s.value))
-      case "option-type"      => OptionType(valOf(j).asInstanceOf[Int])
-      case "result-type"      => ResultType(resultSpecFromJs(valOf(j).asInstanceOf[JsResultSpec]))
-      case "text-type"        => TextType(textRFromJs(valOf(j).asInstanceOf[JsTextRestrictions]))
-      case "binary-type"      => BinaryType(binRFromJs(valOf(j).asInstanceOf[JsBinaryRestrictions]))
-      case "path-type"        => PathType(pathFromJs(valOf(j).asInstanceOf[JsPathSpec]))
-      case "url-type"         => UrlType(urlRFromJs(valOf(j).asInstanceOf[JsUrlRestrictions]))
-      case "datetime-type"    => DatetimeType
-      case "duration-type"    => DurationType
-      case "quantity-type"    => QuantityType(quantFromJs(valOf(j).asInstanceOf[JsQuantitySpec]))
-      case "union-type"       => UnionType(unionSpecFromJs(valOf(j).asInstanceOf[JsUnionSpec]))
-      case "secret-type"      => SecretType(secretSpecFromJs(valOf(j).asInstanceOf[JsSecretSpec]))
-      case "quota-token-type" => QuotaTokenType(quotaSpecFromJs(valOf(j).asInstanceOf[JsQuotaTokenSpec]))
-      case "future-type"      => FutureType(optIntVal(j))
-      case "stream-type"      => StreamType(optIntVal(j))
-      case other              => throw new IllegalArgumentException(s"Unknown schema-type-body tag: $other")
+      case "option-type"          => OptionType(valOf(j).asInstanceOf[Int])
+      case "result-type"          => ResultType(resultSpecFromJs(valOf(j).asInstanceOf[JsResultSpec]))
+      case "text-type"            => TextType(textRFromJs(valOf(j).asInstanceOf[JsTextRestrictions]))
+      case "binary-type"          => BinaryType(binRFromJs(valOf(j).asInstanceOf[JsBinaryRestrictions]))
+      case "path-type"            => PathType(pathFromJs(valOf(j).asInstanceOf[JsPathSpec]))
+      case "url-type"             => UrlType(urlRFromJs(valOf(j).asInstanceOf[JsUrlRestrictions]))
+      case "datetime-type"        => DatetimeType
+      case "duration-type"        => DurationType
+      case "quantity-type"        => QuantityType(quantFromJs(valOf(j).asInstanceOf[JsQuantitySpec]))
+      case "union-type"           => UnionType(unionSpecFromJs(valOf(j).asInstanceOf[JsUnionSpec]))
+      case "secret-type"          => SecretType(secretSpecFromJs(valOf(j).asInstanceOf[JsSecretSpec]))
+      case "quota-token-type"     => QuotaTokenType(quotaSpecFromJs(valOf(j).asInstanceOf[JsQuotaTokenSpec]))
+      case "permission-card-type" =>
+        PermissionCardType(permissionCardSpecFromJs(valOf(j).asInstanceOf[JsPermissionCardSpec]))
+      case "future-type" => FutureType(optIntVal(j))
+      case "stream-type" => StreamType(optIntVal(j))
+      case other         => throw new IllegalArgumentException(s"Unknown schema-type-body tag: $other")
     }
   }
 
@@ -493,8 +547,7 @@ object SchemaWireInterop {
    */
   private def preflightValueTree(v: WitSchemaValueTree): Unit = {
     import WitSchemaValueNode._
-    val seenRawSecret = mutable.Set.empty[Any]
-    val seenRawQuota  = mutable.Set.empty[Any]
+    val seenRaw       = mutable.Set.empty[Any]
     val seenRawStream = mutable.Set.empty[Any]
 
     def checkRange(name: String, value: Long, min: Long, max: Long): Unit =
@@ -522,7 +575,7 @@ object SchemaWireInterop {
           .getOrElse(
             throw SchemaEncodeError("secret handle was already transferred; an owned secret can only be sent once")
           )
-        if (!seenRawSecret.add(raw))
+        if (!seenRaw.add(raw))
           throw SchemaEncodeError("the same secret handle appeared more than once in one value tree")
       case QuotaTokenHandle(h) =>
         // Peek the underlying owned resource without consuming it so two distinct
@@ -534,13 +587,23 @@ object SchemaWireInterop {
               "quota-token handle was already transferred; an owned quota-token can only be sent once"
             )
           )
-        if (!seenRawQuota.add(raw))
+        if (!seenRaw.add(raw))
           throw SchemaEncodeError("the same quota-token handle appeared more than once in one value tree")
       case StreamValue(h) =>
         val ownershipKey = h.ownershipKey
           .getOrElse(throw SchemaEncodeError("schema value stream was already transferred"))
         if (!seenRawStream.add(ownershipKey))
           throw SchemaEncodeError("the same schema value stream appeared more than once in one value tree")
+      case PermissionCardHandle(h) =>
+        val raw = h
+          .withHandle(identity)
+          .getOrElse(
+            throw SchemaEncodeError(
+              "permission-card handle was already transferred; an owned permission-card can only be sent once"
+            )
+          )
+        if (!seenRaw.add(raw))
+          throw SchemaEncodeError("the same permission-card handle appeared more than once in one value tree")
       case _ => ()
     }
   }
@@ -602,6 +665,14 @@ object SchemaWireInterop {
         }
       case StreamValue(_) =>
         throw SchemaEncodeError("schema value streams require asynchronous encoding")
+      case PermissionCardHandle(h) =>
+        h.take() match {
+          case Some(raw) => JsSchemaValueNode.permissionCardHandle(raw.asInstanceOf[js.Any])
+          case None      =>
+            throw new IllegalStateException(
+              "permission-card handle was already transferred; an owned permission-card can only be sent once"
+            )
+        }
     }
   }
 
@@ -684,7 +755,7 @@ object SchemaWireInterop {
         SecretValue(GuestSecretHandle.fromRaw(valOf(j)))
       case "quota-token-handle" =>
         // Wrap the owned `quota-token` resource in a fresh take-once handle.
-        QuotaTokenHandle(GuestQuotaTokenHandle.fromRaw(valOf(j)))
+        QuotaTokenHandle(GuestQuotaTokenHandle.fromRaw(takeOwnedVal(j, "quota-token")))
       case "stream-value" =>
         val raw = valOf(j).asInstanceOf[JsSchemaValueStream]
         StreamValue(
@@ -702,6 +773,8 @@ object SchemaWireInterop {
               }
           )
         )
+      case "permission-card-handle" =>
+        PermissionCardHandle(GuestPermissionCardHandle.fromRaw(takeOwnedVal(j, "permission-card")))
       case other => throw new IllegalArgumentException(s"Unknown schema-value-node tag: $other")
     }
   }

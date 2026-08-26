@@ -140,6 +140,11 @@ pub(all) struct InvocationResult {
   stdout : @async-core.Stream[Byte]?
 }
 
+pub(all) struct MonomorphicScope {
+  presented : Tool
+  expected : Tool?
+} derive(Eq, Show)
+
 pub(all) enum OptionShape {
   Scalar(Int)
   OptionalScalar(Int)
@@ -238,6 +243,22 @@ pub(all) struct Tool {
   schema : @types.SchemaGraph
 } derive(Eq, Show)
 
+pub(all) struct ToolMiddleware {
+  name : String
+  aliases : Array[String]
+  doc : Doc
+  scope : ToolMiddlewareScope
+} derive(Eq, Show)
+
+pub(all) enum ToolMiddlewareScope {
+  Monomorphic(MonomorphicScope)
+  Universal
+} derive(Eq, Show)
+
+pub(all) struct UnderlyingTool(Int) derive(Eq, Show)
+pub fn UnderlyingTool::drop(Self) -> Unit
+pub async fn UnderlyingTool::invoke(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[InvocationResult, ToolError]
+
 pub(all) struct ValueIsRef {
   name : String
   value : @types.SchemaValueTree
@@ -246,4 +267,3 @@ pub(all) struct ValueIsRef {
 // Type aliases
 
 // Traits
-

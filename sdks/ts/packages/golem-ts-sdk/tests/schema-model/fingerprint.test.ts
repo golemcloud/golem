@@ -95,4 +95,14 @@ describe('SchemaFingerprintV1 golden vectors', () => {
       'b985cdb5445862be90e8dca06bbfa9c46b50cf40edc84ed34205bb3a214c5bb0',
     );
   });
+
+  test('permission-card', () => {
+    const card = type({ tag: 'permission-card', spec: { polymorphic: true } });
+    expect(hex(canonicalSchemaBytesV1(emptyGraph(card), card))).toBe(
+      '847818676f6c656d2d736368656d612d66696e6765727072696e7401831825f585f68080f6f680',
+    );
+    expect(hex(schemaFingerprintV1(emptyGraph(card), card))).toBe(
+      'b7d3c09af5db4e56b527051f561689f451dfdb21213cd70aabd11618e244da8b',
+    );
+  });
 });

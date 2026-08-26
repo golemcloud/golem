@@ -28,11 +28,12 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
     DeleteWorkerRequest, ForkWorkerRequest, GetAgentMetadataRequest, GetFileContentsRequest,
     GetFileSystemNodeRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest,
-    UpdateWorkerRequest, cancel_invocation_response, complete_promise_response,
-    create_worker_response, delete_worker_response, get_oplog_response,
-    get_workers_metadata_response, interrupt_worker_response, resume_worker_response,
-    revert_worker_response, search_oplog_response, update_worker_response,
+    InterruptWorkerRequest, ResolveRevertLastInvocationsRequest, ResumeWorkerRequest,
+    RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest, cancel_invocation_response,
+    complete_promise_response, create_worker_response, delete_worker_response, get_oplog_response,
+    get_workers_metadata_response, interrupt_worker_response,
+    resolve_revert_last_invocations_response, resume_worker_response, revert_worker_response,
+    search_oplog_response, update_worker_response,
 };
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::worker::TypedAgentConfigEntry;
@@ -551,6 +552,7 @@ impl TestDsl for TestWorkerExecutor {
             attempt_id: None,
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
+            scope_card: None,
         })
         .await?;
         Ok(())
@@ -596,6 +598,7 @@ impl TestDsl for TestWorkerExecutor {
                 attempt_id: None,
                 expected_callee_fingerprint: None,
                 durable_input_mappings: Vec::new(),
+                scope_card: None,
             })
             .await?;
 
@@ -618,6 +621,32 @@ impl TestDsl for TestWorkerExecutor {
             .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
+        let resolved_revert = match &target {
+            RevertWorkerTarget::RevertToOplogIndex(_) => None,
+            RevertWorkerTarget::RevertLastInvocations(target) => {
+                let response = self
+                    .client
+                    .clone()
+                    .resolve_revert_last_invocations(ResolveRevertLastInvocationsRequest {
+                        agent_id: Some(agent_id.clone().into()),
+                        number_of_invocations: target.number_of_invocations,
+                        environment_id: Some(latest_version.environment_id.into()),
+                        auth_ctx: Some(self.auth_ctx().into()),
+                    })
+                    .await?
+                    .into_inner();
+                match response.result {
+                    Some(resolve_revert_last_invocations_response::Result::Success(resolved)) => {
+                        Some(resolved)
+                    }
+                    Some(resolve_revert_last_invocations_response::Result::Failure(error)) => {
+                        return Err(anyhow!("Failed to resolve revert: {error:?}"));
+                    }
+                    None => return Err(anyhow!("Failed to resolve revert: unknown error")),
+                }
+            }
+        };
+
         let response = self
             .client
             .clone()
@@ -627,6 +656,7 @@ impl TestDsl for TestWorkerExecutor {
                 target: Some(target.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                resolved_revert,
             })
             .await?
             .into_inner();

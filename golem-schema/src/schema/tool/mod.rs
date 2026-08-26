@@ -24,7 +24,7 @@
 //! and each typed position embeds a recursive [`SchemaType`]; metadata-time
 //! defaults and `value-is` literals embed a recursive [`SchemaValue`]. The
 //! flattening into the WIT `schema-graph` / `type-node-index` /
-//! `schema-value-tree` wire form happens in `golem_common::schema::tool::wit`.
+//! `schema-value-tree` wire form happens in [`wit`].
 //!
 //! The only tool-specific recursion site is the command tree: a flattened
 //! command hierarchy with the root at index 0 and children referenced by
@@ -43,6 +43,11 @@ pub mod canonical;
 #[cfg(feature = "full")]
 mod protobuf;
 pub mod validation;
+#[cfg(all(
+    any(feature = "guest", feature = "host"),
+    not(all(feature = "guest", feature = "host"))
+))]
+pub mod wit;
 
 /// Index into [`CommandTree::nodes`].
 #[derive(

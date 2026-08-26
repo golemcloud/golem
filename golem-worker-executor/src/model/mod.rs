@@ -34,6 +34,7 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
+use golem_service_base::model::component::Component;
 use nonempty_collections::NEVec;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
@@ -76,6 +77,7 @@ pub struct AgentConfig {
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
     pub agent_effective_surface: EffectiveSurface,
+    pub owner_component_metadata: Option<Arc<Component>>,
 }
 
 impl AgentConfig {
@@ -89,6 +91,7 @@ impl AgentConfig {
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
         agent_effective_surface: EffectiveSurface,
+        owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
         AgentConfig {
             deleted_regions,
@@ -100,6 +103,7 @@ impl AgentConfig {
             initial_agent_config,
             last_snapshot_index,
             agent_effective_surface,
+            owner_component_metadata,
         }
     }
 
@@ -282,6 +286,31 @@ pub enum TrapType {
 }
 
 impl TrapType {
+    pub fn from_worker_executor_error<Ctx: WorkerCtx>(
+        error: WorkerExecutorError,
+        fallback_retry_from: OplogIndex,
+        fallback_in_atomic_region: bool,
+        fallback_atomic_region_had_side_effects: bool,
+        agent_mode: AgentMode,
+    ) -> TrapType {
+        match error {
+            WorkerExecutorError::PermissionDenied { details } => TrapType::Error {
+                error: AgentError::PermissionDenied(details),
+                retry_from: fallback_retry_from,
+                in_atomic_region: fallback_in_atomic_region,
+                atomic_region_had_side_effects: fallback_atomic_region_had_side_effects,
+                semantic_trap_retry_override: None,
+            },
+            error => Self::from_error::<Ctx>(
+                &anyhow::Error::new(error),
+                fallback_retry_from,
+                fallback_in_atomic_region,
+                fallback_atomic_region_had_side_effects,
+                agent_mode,
+            ),
+        }
+    }
+
     /// Classifies an escaping error into a [`TrapType`].
     ///
     /// `fallback_retry_from`, `fallback_in_atomic_region`, and
@@ -449,6 +478,9 @@ impl TrapType {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
                                 make_error(AgentError::InvalidRequest(details.clone()))
                             }
+                            Some(WorkerExecutorError::PermissionDenied { details }) => {
+                                make_error(AgentError::PermissionDenied(details.clone()))
+                            }
                             Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
                                 make_error(AgentError::InvalidRequest(details.clone()))
                             }
@@ -509,6 +541,9 @@ impl TrapType {
                 AgentError::InvalidRequest(msg) => {
                     Some(WorkerExecutorError::invalid_request(msg.clone()))
                 }
+                AgentError::PermissionDenied(msg) => {
+                    Some(WorkerExecutorError::permission_denied(msg.clone()))
+                }
                 _ => Some(WorkerExecutorError::InvocationFailed {
                     error: error.clone(),
                     stderr: error_logs.to_string(),
@@ -517,6 +552,16 @@ impl TrapType {
             TrapType::Exit => Some(WorkerExecutorError::runtime("Process exited")),
             _ => None,
         }
+    }
+
+    pub fn is_invocation_rejection(&self) -> bool {
+        matches!(
+            self,
+            TrapType::Error {
+                error: AgentError::InvalidRequest(_) | AgentError::PermissionDenied(_),
+                ..
+            }
+        )
     }
 }
 
@@ -936,6 +981,39 @@ mod tests {
             }
             other => panic!("expected TrapType::Error(AgentError::InternalError), got {other:?}"),
         }
+
+        let decision = crate::durable_host::DurableWorkerCtx::<
+            crate::workerctx::default::Context,
+        >::fixed_decision_for_trap_type(&trap);
+        assert_eq!(decision, Some(RetryDecision::None));
+    }
+
+    #[test]
+    fn permission_denied_is_a_non_retriable_invocation_rejection() {
+        let trap = TrapType::from_worker_executor_error::<crate::workerctx::default::Context>(
+            golem_service_base::error::worker_executor::WorkerExecutorError::permission_denied(
+                "card-revoked: scope root was revoked while the invocation was queued",
+            ),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        assert!(matches!(
+            trap,
+            TrapType::Error {
+                error: AgentError::PermissionDenied(ref details),
+                ..
+            } if details.starts_with("card-revoked:")
+        ));
+
+        assert!(matches!(
+            trap.as_golem_error(""),
+            Some(WorkerExecutorError::PermissionDenied { details })
+                if details.starts_with("card-revoked:")
+        ));
+        assert!(trap.is_invocation_rejection());
 
         let decision = crate::durable_host::DurableWorkerCtx::<
             crate::workerctx::default::Context,

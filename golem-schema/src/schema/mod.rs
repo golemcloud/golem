@@ -52,12 +52,14 @@ pub use host_managed::{HostManagedKind, RedactedSchemaValue, redacted_schema_val
 pub use metadata::{MetadataEnvelope, Role, TypeId};
 pub use schema_type::{
     BinaryRestrictions, DiscriminatorRule, FieldDiscriminator, NamedFieldType, PathDirection,
-    PathKind, PathSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType,
-    SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+    PathKind, PathSpec, PermissionCardSpec, QuantitySpec, QuantityValue, QuotaTokenSpec,
+    ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
+    VariantCaseType,
 };
 pub use schema_value::{
-    BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
-    SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
+    BinaryValuePayload, DurationValuePayload, PermissionCardValuePayload, QuotaTokenValuePayload,
+    ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
+    VariantValuePayload,
 };
 pub use stream::SchemaValueStream;
 #[cfg(all(feature = "host", not(feature = "guest")))]

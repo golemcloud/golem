@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::active_workers::MemoryGrant;
+use crate::services::active_agents::MemoryGrant;
 use crate::services::agent_memory_meter::AgentMemoryMeter;
 use crate::services::resource_limits::AtomicResourceEntry;
 use golem_common::model::agent::AgentMode;
@@ -101,6 +101,10 @@ impl LinearMemoryTracker {
         self.inner.meter.set_limit_exceeded_callback(callback);
     }
 
+    pub(crate) fn clear_limit_exceeded_callback(&self) {
+        self.inner.meter.clear_limit_exceeded_callback();
+    }
+
     pub fn initially_reserved_bytes(&self) -> u64 {
         self.inner.initially_reserved_bytes
     }
@@ -116,6 +120,10 @@ impl LinearMemoryTracker {
         } else {
             bytes
         }
+    }
+
+    pub(crate) fn retained_growth_grant(&self) -> Arc<Mutex<MemoryGrant>> {
+        self.inner.retained_growth_grant.clone()
     }
 
     pub fn reconcile(&self, bytes: u64, now: Instant) -> u64 {
@@ -311,10 +319,10 @@ pub fn desired_total_after_growth(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::active_workers::admission::{
+    use crate::services::active_agents::admission::{
         AdmissionController, AdmissionPolicy, NoEvictionSource,
     };
-    use crate::services::active_workers::memory_probe::FixedProbe;
+    use crate::services::active_agents::memory_probe::FixedProbe;
     use crate::services::resource_limits::AtomicResourceEntry;
     use golem_common::model::agent::AgentMode;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -561,6 +569,42 @@ mod tests {
             100,
             "a failed Wasmtime growth must return its pending admission reservation"
         );
+    }
+
+    #[test]
+    async fn reconciled_transient_tracker_accounts_repeated_growth_and_releases_grants() {
+        let now = Instant::now();
+        let controller = Arc::new(AdmissionController::new(
+            Box::new(FixedProbe::new(100, 0)),
+            AdmissionPolicy { usable_ratio: 1.0 },
+        ));
+        let initial_grant = controller.admit(40, &NoEvictionSource).await.unwrap();
+        let tracker = LinearMemoryTracker::new(
+            40,
+            40,
+            AgentMode::Durable,
+            false,
+            Arc::new(AtomicResourceEntry::new(0, 100, 0, 0, 0)),
+            Arc::new(Mutex::new(initial_grant)),
+            now,
+        );
+        tracker.reconcile(40, now);
+
+        for (current, desired) in [(40, 50), (50, 60)] {
+            let growth = tracker.prepare_unshared_growth(current, desired).unwrap();
+            assert_eq!(growth.protected_total, desired as u64);
+            let grant = controller
+                .admit(growth.admission_delta, &NoEvictionSource)
+                .await
+                .unwrap();
+            tracker.retain_growth_grant(grant);
+            assert!(!tracker.grow((desired - current) as u64, now).1);
+        }
+
+        assert_eq!(tracker.current_bytes(), 60);
+        assert_eq!(controller.headroom_bytes(), 40);
+        drop(tracker);
+        assert_eq!(controller.headroom_bytes(), 100);
     }
 
     #[test]

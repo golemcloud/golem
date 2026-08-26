@@ -333,6 +333,12 @@ fn encode_type(
       encode_optional_type(e, inner)
       encode_metadata(e, ty.metadata)
     }
+    PermissionCard(spec) => {
+      e.array(3)
+      e.unsigned(37UL)
+      e.boolean(spec.polymorphic)
+      encode_metadata(e, ty.metadata)
+    }
   }
 }
 
@@ -626,6 +632,11 @@ fn CborEncoder::optional_uint(self : CborEncoder, value : UInt?) -> Unit {
     Some(value) => self.unsigned(value.to_uint64())
     None => self.null()
   }
+}
+
+///|
+fn CborEncoder::boolean(self : CborEncoder, value : Bool) -> Unit {
+  self.bytes.push(if value { 0xf5 } else { 0xf4 })
 }
 
 ///|

@@ -653,6 +653,26 @@ describe('tool runtime client', () => {
     ).resolves.toBe(raw);
   });
 
+  it('decodes an owned permission-card result exactly once', async () => {
+    const schema = s.permissionCard({ polymorphic: false });
+    const codec = compileSchema(schema);
+    const definition = toolDefinition('permission-card-result').body((body) =>
+      body.returns(schema),
+    );
+    const raw = { [Symbol.dispose]: vi.fn() } as never;
+
+    await expect(
+      client(definition, {
+        transport: new FakeTransport(() => ({
+          result: typedSchemaValueToWit({
+            graph: codec.graph,
+            value: codec.toValue(raw),
+          }),
+        })),
+      })['permission-card-result']({}),
+    ).resolves.toBe(raw);
+  });
+
   it('accepts allowed MIME metadata when projecting a binary result to Uint8Array', async () => {
     const schema = Bytes({ mimeTypes: ['application/octet-stream'] });
     const codec = compileSchema(schema);

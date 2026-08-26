@@ -632,6 +632,19 @@ impl InvocationSessionState {
             {
                 return Err("resume cursor names a stream absent from acceptance".to_string());
             }
+            let mapped_output_stream_ids = accepted
+                .stream_mappings
+                .iter()
+                .filter(|mapping| mapping.role() == StreamMappingRole::Output)
+                .map(mapping_stream_id)
+                .collect::<Result<HashSet<_>, _>>()?;
+            if self
+                .resume_cursors
+                .keys()
+                .any(|stream_id| !mapped_output_stream_ids.contains(stream_id))
+            {
+                return Err("resume cursor may only name an output stream".to_string());
+            }
             for mapping in &accepted.stream_mappings {
                 let durable_stream_id = mapping_stream_id(mapping)?;
                 match mapping.role() {
@@ -2761,6 +2774,47 @@ mod tests {
             InvocationSessionState::default()
                 .validate_public_request(&malformed)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn public_resume_cursor_cannot_control_input_guest_position() {
+        let resume = resume_attach(vec![StreamCursor {
+            stream_id: Some(uuid(107)),
+            last_observed_offset: Some(durable_offset(1)),
+        }]);
+        let mut state = InvocationSessionState::default();
+        state.validate_public_request(&resume).unwrap();
+
+        assert!(
+            state
+                .validate_response(&resumed_acceptance(vec![mapping(
+                    7,
+                    StreamMappingRole::Input,
+                )]))
+                .is_err(),
+            "an external input producer cannot supply the guest's input-consumption cursor"
+        );
+    }
+
+    #[test]
+    fn output_resume_cursor_remains_valid_when_handle_is_also_mapped_as_input() {
+        let resume = resume_attach(vec![StreamCursor {
+            stream_id: Some(uuid(107)),
+            last_observed_offset: Some(durable_offset(1)),
+        }]);
+        let mut state = InvocationSessionState::default();
+        state.validate_public_request(&resume).unwrap();
+
+        let input = mapping(7, StreamMappingRole::Input);
+        let mut output = mapping(8, StreamMappingRole::Output);
+        output.handle = input.handle.clone();
+
+        assert!(
+            state
+                .validate_response(&resumed_acceptance(vec![input, output]))
+                .is_ok(),
+            "a role-qualified output mapping must remain resumable when the same forwarded handle is also an input mapping"
         );
     }
 

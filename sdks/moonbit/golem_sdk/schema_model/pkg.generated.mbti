@@ -109,6 +109,14 @@ pub fn GraphEncoder::encode_type(Self, SchemaType) -> Int raise SchemaModelError
 pub fn GraphEncoder::finish(Self) -> @types.SchemaGraph raise SchemaModelError
 pub fn GraphEncoder::new(Array[SchemaTypeDef]) -> Self raise SchemaModelError
 
+pub(all) struct GuestPermissionCardHandle {
+  // private fields
+}
+pub fn GuestPermissionCardHandle::is_present(Self) -> Bool
+pub fn GuestPermissionCardHandle::new(@types.PermissionCard) -> Self
+pub fn GuestPermissionCardHandle::take(Self) -> @types.PermissionCard?
+pub fn[R] GuestPermissionCardHandle::with_handle(Self, (@types.PermissionCard) -> R) -> R?
+
 pub(all) struct GuestQuotaTokenHandle {
   // private fields
 }
@@ -212,6 +220,7 @@ pub(all) enum SchemaTypeBody {
   Union(Array[UnionBranch])
   Secret(SecretSpec)
   QuotaToken(@types.QuotaTokenSpec)
+  PermissionCard(@types.PermissionCardSpec)
   Future(SchemaType?)
   Stream(SchemaType?)
 } derive(Eq, Show)
@@ -258,6 +267,7 @@ pub(all) enum SchemaValue {
   Secret(GuestSecretHandle)
   QuotaToken(GuestQuotaTokenHandle)
   Stream(GuestSchemaValueStreamHandle)
+  PermissionCard(GuestPermissionCardHandle)
 } derive(Eq, Show)
 pub fn SchemaValue::release_resources(Self, SchemaValueResourceDrops) -> Unit
 

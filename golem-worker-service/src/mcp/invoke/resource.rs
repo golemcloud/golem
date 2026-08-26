@@ -110,6 +110,8 @@ pub async fn invoke_resource(
             Vec::new(),
             auth_ctx,
             proto_principal,
+            None,
+            None,
         )
         .await
         .map_err(|e| {

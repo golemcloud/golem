@@ -1901,6 +1901,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
             timestamp: timestamp(),
             invocation: method_invocation(),
+            wallet_pin: None,
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),

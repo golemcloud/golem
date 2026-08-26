@@ -5,14 +5,14 @@ use golem_common::model::AgentInvocationPayload;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
-    AgentError, AgentResourceId, OplogEntry, OplogPayload, UpdateDescription,
+    AgentError, AgentResourceId, OplogEntry, OplogPayload, QueuedCardEvent, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
     OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, RetryConfig, RetryPolicyState, SuccessfulUpdateRecord,
-    Timestamp,
+    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
+    RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
 };
 use golem_common::serialization::deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -273,6 +273,8 @@ pub fn update_status_with_new_entries(
         calculate_pending_invocations(last_known.pending_invocations, &new_entries);
     let pending_card_events =
         calculate_pending_card_events(last_known.pending_card_events, &new_entries);
+    let received_card_transfers =
+        calculate_received_card_transfers(last_known.received_card_transfers, &new_entries);
     let (
         pending_updates,
         failed_updates,
@@ -345,6 +347,7 @@ pub fn update_status_with_new_entries(
         failed_updates,
         successful_updates,
         invocation_results,
+        received_card_transfers,
         current_idempotency_key,
         component_revision,
         component_size,
@@ -408,22 +411,27 @@ fn calculate_latest_worker_status(
                 ..
             } = entry
         {
-            let count = current_retry_state
-                .get(retry_from)
-                .map(|s| s.retry_count())
-                .unwrap_or_default();
-            if is_worker_error_retriable(
-                current_retry_policy
-                    .as_ref()
-                    .unwrap_or(default_retry_policy),
-                error,
-                count,
-                *inside_atomic_region,
-                retry_policy_state.as_ref(),
-            ) {
-                current_status = AgentStatus::Retrying;
+            if matches!(error, AgentError::PermissionDenied(_)) {
+                current_status = AgentStatus::Idle;
+                current_retry_state.clear();
             } else {
-                current_status = AgentStatus::Failed;
+                let count = current_retry_state
+                    .get(retry_from)
+                    .map(|s| s.retry_count())
+                    .unwrap_or_default();
+                if is_worker_error_retriable(
+                    current_retry_policy
+                        .as_ref()
+                        .unwrap_or(default_retry_policy),
+                    error,
+                    count,
+                    *inside_atomic_region,
+                    retry_policy_state.as_ref(),
+                ) {
+                    current_status = AgentStatus::Retrying;
+                } else {
+                    current_status = AgentStatus::Failed;
+                }
             }
         }
 
@@ -440,7 +448,7 @@ fn calculate_latest_worker_status(
             OplogEntry::Cancelled { .. } => {
                 current_status = AgentStatus::Running;
             }
-            OplogEntry::CompletionDiscarded { .. } => {}
+            OplogEntry::CompletionDiscarded { .. } | OplogEntry::CompletionDelivered { .. } => {}
             OplogEntry::AgentInvocationStarted { .. } => {
                 current_status = AgentStatus::Running;
                 current_retry_state.clear();
@@ -527,6 +535,11 @@ fn calculate_latest_worker_status(
             OplogEntry::CardEventQueued { .. } => {}
             OplogEntry::CardInstalled { .. } => {}
             OplogEntry::CardInstallFailed { .. } => {}
+            OplogEntry::CardDerived { .. } => {}
+            OplogEntry::CardTransferStarted { .. } => {}
+            OplogEntry::CardTransferred { .. } => {}
+            OplogEntry::CardRevokedCascade { .. } => {}
+            OplogEntry::CardTransferConfirmed { .. } => {}
             OplogEntry::CardRevoked { .. } => {}
             OplogEntry::CardExpired { .. } => {}
             OplogEntry::HostStreamFrame { .. } => {}
@@ -548,8 +561,17 @@ fn calculate_revoked_cards(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> HashSet<golem_common::model::card::CardId> {
     for entry in entries.values() {
-        if let OplogEntry::CardRevoked { card_id, .. } = entry {
-            revoked_cards.insert(*card_id);
+        match entry {
+            OplogEntry::CardRevoked { card_id, .. } => {
+                revoked_cards.insert(*card_id);
+            }
+            OplogEntry::CardRevokedCascade {
+                revoked_card_ids, ..
+            } => revoked_cards.extend(revoked_card_ids.iter().copied()),
+            OplogEntry::CardInstalled { card, .. } => {
+                revoked_cards.remove(&card.card_id());
+            }
+            _ => {}
         }
     }
 
@@ -767,21 +789,142 @@ pub(crate) fn calculate_pending_card_events(
                 queued_event_index: Some(queued_event_index),
                 ..
             } => {
-                result.retain(|event| event.oplog_index != *queued_event_index);
+                result.retain(|event| {
+                    event.oplog_index != *queued_event_index
+                        || !matches!(event.event, QueuedCardEvent::Install(_))
+                });
             }
             OplogEntry::CardInstallFailed {
                 queued_event_index, ..
+            } => {
+                result.retain(|event| {
+                    event.oplog_index != *queued_event_index
+                        || !matches!(
+                            event.event,
+                            QueuedCardEvent::Install(_) | QueuedCardEvent::TransferReceived(_)
+                        )
+                });
             }
-            | OplogEntry::CardRevoked {
+            OplogEntry::CardRevoked {
                 queued_event_index, ..
             } => {
-                result.retain(|event| event.oplog_index != *queued_event_index);
+                result.retain(|event| {
+                    event.oplog_index != *queued_event_index
+                        || !matches!(event.event, QueuedCardEvent::Revoke(_))
+                });
+            }
+            OplogEntry::CardRevokedCascade {
+                revoked_card_ids, ..
+            } => {
+                result.retain(|event| {
+                    !matches!(
+                        &event.event,
+                        QueuedCardEvent::Revoke(revoke)
+                            if revoked_card_ids.contains(&revoke.card_id)
+                    )
+                });
+            }
+            OplogEntry::CardTransferConfirmed {
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                target_holder,
+                ..
+            } => {
+                result.retain(|event| {
+                    !matches!(
+                        &event.event,
+                        QueuedCardEvent::TransferStarted(transfer)
+                            if transfer.transfer_id == *transfer_id
+                                && transfer.card_id == *source_card_id
+                                && transfer.card.as_ref().is_some_and(|card| card.card_id() == *installed_card_id)
+                                && transfer.target_holder == *target_holder
+                    )
+                });
+            }
+            OplogEntry::CardTransferred {
+                transfer_id,
+                source_card_id,
+                installed_card_id,
+                card,
+                ..
+            } => {
+                result.retain(|event| {
+                    !matches!(
+                        &event.event,
+                        QueuedCardEvent::TransferReceived(receipt)
+                            if receipt.transfer_id == *transfer_id
+                                && receipt.source_card_id.is_none_or(|receipt_source_card_id| {
+                                    source_card_id.is_none_or(|source_card_id| {
+                                        receipt_source_card_id == source_card_id
+                                    })
+                                })
+                                && receipt.card_id == *installed_card_id
+                                && receipt.card.as_ref() == Some(card)
+                    )
+                });
             }
             _ => {}
         }
     }
 
     result
+}
+
+fn calculate_received_card_transfers(
+    mut transfers: ReceivedCardTransferIndex,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> ReceivedCardTransferIndex {
+    for entry in entries.values() {
+        let OplogEntry::CardEventQueued {
+            event: QueuedCardEvent::TransferReceived(receipt),
+            ..
+        } = entry
+        else {
+            continue;
+        };
+
+        let Some(card) = &receipt.card else {
+            transfers.insert(receipt.transfer_id, ReceivedCardTransferState::Conflict);
+            continue;
+        };
+
+        match transfers.get(&receipt.transfer_id) {
+            None => {
+                transfers.insert(
+                    receipt.transfer_id,
+                    ReceivedCardTransferState::Received {
+                        source_card_id: receipt.source_card_id,
+                        card: card.clone(),
+                    },
+                );
+            }
+            Some(ReceivedCardTransferState::Conflict) => {}
+            Some(ReceivedCardTransferState::Received {
+                source_card_id,
+                card: recorded_card,
+            }) => {
+                if recorded_card != card
+                    || matches!(
+                        (source_card_id, receipt.source_card_id),
+                        (Some(recorded), Some(received)) if *recorded != received
+                    )
+                {
+                    transfers.insert(receipt.transfer_id, ReceivedCardTransferState::Conflict);
+                } else if source_card_id.is_none() && receipt.source_card_id.is_some() {
+                    transfers.insert(
+                        receipt.transfer_id,
+                        ReceivedCardTransferState::Received {
+                            source_card_id: receipt.source_card_id,
+                            card: recorded_card.clone(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    transfers
 }
 
 #[allow(clippy::type_complexity)]
@@ -915,10 +1058,12 @@ fn calculate_invocation_results(
 ) -> (HashMap<IdempotencyKey, OplogIndex>, Option<IdempotencyKey>) {
     let mut invocation_results = invocation_results;
     let mut current_idempotency_key = current_idempotency_key;
+    let mut cancelled_idempotency_key = None;
 
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
         if deleted_regions.is_in_deleted_region(*oplog_idx) {
+            cancelled_idempotency_key = None;
             continue;
         }
 
@@ -926,25 +1071,46 @@ fn calculate_invocation_results(
             OplogEntry::AgentInvocationStarted {
                 idempotency_key, ..
             } => {
+                cancelled_idempotency_key = None;
                 current_idempotency_key = Some(idempotency_key.clone());
             }
             OplogEntry::AgentInvocationFinished { .. } => {
+                cancelled_idempotency_key = None;
                 if let Some(idempotency_key) = &current_idempotency_key {
                     invocation_results.insert(idempotency_key.clone(), *oplog_idx);
                 }
                 current_idempotency_key = None;
             }
+            OplogEntry::CancelPendingInvocation {
+                idempotency_key, ..
+            } => {
+                cancelled_idempotency_key = Some(idempotency_key.clone());
+            }
+            OplogEntry::Error {
+                error: AgentError::PermissionDenied(_),
+                ..
+            } => {
+                if let Some(idempotency_key) = cancelled_idempotency_key.take() {
+                    invocation_results.insert(idempotency_key, *oplog_idx);
+                } else if let Some(idempotency_key) = &current_idempotency_key {
+                    invocation_results.insert(idempotency_key.clone(), *oplog_idx);
+                }
+            }
             OplogEntry::Error { .. } => {
+                cancelled_idempotency_key = None;
                 if let Some(idempotency_key) = &current_idempotency_key {
                     invocation_results.insert(idempotency_key.clone(), *oplog_idx);
                 }
             }
             OplogEntry::Exited { .. } => {
+                cancelled_idempotency_key = None;
                 if let Some(idempotency_key) = &current_idempotency_key {
                     invocation_results.insert(idempotency_key.clone(), *oplog_idx);
                 }
             }
-            _ => {}
+            _ => {
+                cancelled_idempotency_key = None;
+            }
         }
     }
 
@@ -1212,6 +1378,7 @@ fn is_worker_error_retriable(
         AgentError::EphemeralFuelExhausted(_) => false,
         AgentError::EphemeralCannotSuspend(_) => false,
         AgentError::ReadOnlyViolation(_) => false,
+        AgentError::PermissionDenied(_) => false,
     }
 }
 
@@ -1247,8 +1414,8 @@ mod test {
         AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
         AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
         OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
-        PendingUpdateRef, RetryConfig, RetryPolicyState, ScanCursor, SuccessfulUpdateRecord,
-        Timestamp,
+        PendingUpdateRef, ReceivedCardTransferState, RetryConfig, RetryPolicyState, ScanCursor,
+        SuccessfulUpdateRecord, Timestamp,
     };
     use golem_common::read_only_lock;
     use golem_common::schema::IntoTypedSchemaValue;
@@ -1821,6 +1988,7 @@ mod test {
                 },
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
+                scope_card: None,
             })
             .agent_invocation_finished(
                 AgentInvocationResult::AgentInitialization,
@@ -1865,6 +2033,7 @@ mod test {
                 },
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
+                scope_card: None,
             })
             .pending_invocation(AgentInvocation::AgentMethod {
                 idempotency_key: k2.clone(),
@@ -1872,11 +2041,56 @@ mod test {
                 input: SchemaValue::Record { fields: vec![] },
                 invocation_context: InvocationContextStack::fresh(),
                 principal: Principal::anonymous(),
+                scope_card: None,
             })
             .cancel_pending_invocation(k1)
             .build();
 
         run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn permission_denied_rejection_survives_status_reconstruction() {
+        let idempotency_key = IdempotencyKey::fresh();
+        let test_case = TestCase::builder(0)
+            .pending_invocation(AgentInvocation::AgentMethod {
+                idempotency_key: idempotency_key.clone(),
+                method_name: "denied".to_string(),
+                input: SchemaValue::Record { fields: vec![] },
+                invocation_context: InvocationContextStack::fresh(),
+                principal: Principal::anonymous(),
+                scope_card: None,
+            })
+            .permission_denied_pending_invocation(idempotency_key.clone())
+            .build();
+        let expected = test_case.entries.last().unwrap().expected_status.clone();
+        let pending_baseline = test_case.entries[1].expected_status.clone();
+
+        let from_start = calculate_last_known_status(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            None,
+        )
+        .await
+        .unwrap();
+        let from_before_atomic_pair = calculate_last_known_status_for_existing_worker(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            Some(pending_baseline),
+        )
+        .await;
+
+        assert_eq!(from_start, expected);
+        assert_eq!(from_before_atomic_pair, expected);
+        assert_eq!(expected.status, AgentStatus::Idle);
+        assert!(expected.pending_invocations.is_empty());
+        assert_eq!(expected.current_idempotency_key, None);
+        assert_eq!(
+            expected.invocation_results.get(&idempotency_key),
+            Some(&expected.oplog_idx)
+        );
     }
 
     #[test]
@@ -2137,6 +2351,7 @@ mod test {
                 method_name: function_name.to_string(),
                 input: SchemaValue::Record { fields: request },
                 principal: Principal::anonymous(),
+                scope_card: None,
             };
             self.add(
                 OplogEntry::AgentInvocationStarted {
@@ -2146,6 +2361,7 @@ mod test {
                     trace_id: TraceId::generate(),
                     trace_states: vec![],
                     invocation_context: vec![],
+                    wallet_pin: None,
                 },
                 move |mut status| {
                     status.current_idempotency_key = Some(idempotency_key);
@@ -2252,6 +2468,7 @@ mod test {
                     data: OplogPayload::Inline(Box::new(vec![])),
                     mime_type: "application/octet-stream".to_string(),
                     active_cards: Vec::new(),
+                    wallet_generation: 0,
                 },
                 move |mut status| {
                     status.last_automatic_snapshot_index = Some(oplog_idx);
@@ -2355,6 +2572,25 @@ mod test {
                     .retain(|ti| ti.idempotency_key() != Some(&idempotency_key));
                 status
             })
+        }
+
+        pub fn permission_denied_pending_invocation(self, idempotency_key: IdempotencyKey) -> Self {
+            self.cancel_pending_invocation(idempotency_key.clone()).add(
+                OplogEntry::error(
+                    AgentError::PermissionDenied("permission denied".to_string()),
+                    OplogIndex::INITIAL,
+                    false,
+                    None,
+                ),
+                move |mut status| {
+                    status
+                        .invocation_results
+                        .insert(idempotency_key, status.oplog_idx);
+                    status.status = AgentStatus::Idle;
+                    status.current_retry_state.clear();
+                    status
+                },
+            )
         }
 
         pub fn pending_update(
@@ -3240,6 +3476,7 @@ mod test {
                 timestamp: Timestamp::now_utc(),
                 queued_event_index: OplogIndex::from_u64(1),
                 card_id,
+                wallet_generation: None,
             },
         )]);
 
@@ -3306,7 +3543,7 @@ mod test {
             ),
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::card_revoked(OplogIndex::from_u64(1), card_id),
+                OplogEntry::card_revoked(OplogIndex::from_u64(1), card_id, None),
             ),
         ]);
 
@@ -3323,6 +3560,832 @@ mod test {
     }
 
     #[test]
+    fn card_revoked_cascade_records_every_revoked_card() {
+        let first_card_id = golem_common::model::card::CardId::new();
+        let second_card_id = golem_common::model::card::CardId::new();
+        let entries = BTreeMap::from([(
+            OplogIndex::from_u64(1),
+            OplogEntry::CardRevokedCascade {
+                timestamp: Timestamp::now_utc(),
+                revoked_card_ids: vec![first_card_id, second_card_id],
+                affected_wallets: Vec::new(),
+                local_wallet_generation: None,
+            },
+        )]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(status.revoked_cards.contains(&first_card_id));
+        assert!(status.revoked_cards.contains(&second_card_id));
+    }
+
+    #[test]
+    fn installing_reused_card_id_clears_prior_revocation_status() {
+        let card_id = golem_common::model::card::CardId::new();
+        let revoked = BTreeMap::from([(
+            OplogIndex::from_u64(1),
+            OplogEntry::CardRevokedCascade {
+                timestamp: Timestamp::now_utc(),
+                revoked_card_ids: vec![card_id],
+                affected_wallets: Vec::new(),
+                local_wallet_generation: Some(1),
+            },
+        )]);
+        let status_after_revoke = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            revoked,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+        assert!(status_after_revoke.revoked_cards.contains(&card_id));
+
+        let installed = BTreeMap::from([(
+            OplogIndex::from_u64(2),
+            OplogEntry::card_installed(None, test_card(card_id).into(), Some(2)),
+        )]);
+        let status_after_install = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            status_after_revoke,
+            installed,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(
+            !status_after_install.revoked_cards.contains(&card_id),
+            "a successful installation of a new live card incarnation must permit a later revocation to be queued for that card ID"
+        );
+    }
+
+    #[test]
+    fn card_revoked_cascade_completes_every_matching_pending_revoke() {
+        let first_card_id = golem_common::model::card::CardId::new();
+        let second_card_id = golem_common::model::card::CardId::new();
+        let unrelated_card_id = golem_common::model::card::CardId::new();
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::revoke(first_card_id)),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_event_queued(QueuedCardEvent::revoke(second_card_id)),
+            ),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::card_event_queued(QueuedCardEvent::revoke(unrelated_card_id)),
+            ),
+            (
+                OplogIndex::from_u64(4),
+                OplogEntry::CardRevokedCascade {
+                    timestamp: Timestamp::now_utc(),
+                    revoked_card_ids: vec![first_card_id, second_card_id],
+                    affected_wallets: Vec::new(),
+                    local_wallet_generation: Some(1),
+                },
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.pending_card_events.len(), 1);
+        assert_eq!(
+            status.pending_card_events[0].event,
+            QueuedCardEvent::revoke(unrelated_card_id)
+        );
+        assert!(status.revoked_cards.contains(&first_card_id));
+        assert!(status.revoked_cards.contains(&second_card_id));
+    }
+
+    #[test]
+    fn reverted_card_revoked_cascade_still_records_revoked_cards() {
+        let card_id = golem_common::model::card::CardId::new();
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::CardRevokedCascade {
+                    timestamp: Timestamp::now_utc(),
+                    revoked_card_ids: vec![card_id],
+                    affected_wallets: Vec::new(),
+                    local_wallet_generation: None,
+                },
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::revert(OplogRegion {
+                    start: OplogIndex::from_u64(1),
+                    end: OplogIndex::from_u64(1),
+                }),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(status.revoked_cards.contains(&card_id));
+    }
+
+    #[test]
+    fn card_transfer_confirmed_removes_only_the_matching_pending_transfer() {
+        use golem_common::model::card::{AgentCardHolder, CardHolder};
+
+        let transferred_card = test_card(golem_common::model::card::CardId::new());
+        let pending_card = test_card(golem_common::model::card::CardId::new());
+        let completed_transfer_id = uuid::Uuid::new_v4();
+        let pending_transfer_id = uuid::Uuid::new_v4();
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: "card-transfer-target".to_string(),
+            },
+        });
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started(
+                    completed_transfer_id,
+                    transferred_card.clone(),
+                    target_holder.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started(
+                    pending_transfer_id,
+                    pending_card.clone(),
+                    target_holder.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::card_transfer_confirmed(
+                    completed_transfer_id,
+                    transferred_card.card_id,
+                    transferred_card.card_id,
+                    target_holder.clone(),
+                ),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.pending_card_events.len(), 1);
+        assert_eq!(
+            status.pending_card_events[0].oplog_index,
+            OplogIndex::from_u64(2)
+        );
+        assert!(matches!(
+            &status.pending_card_events[0].event,
+            QueuedCardEvent::TransferStarted(event)
+                if event.transfer_id == pending_transfer_id
+                    && event.card_id == pending_card.card_id
+                    && event.card.as_ref() == Some(&pending_card.clone().into())
+                    && event.target_holder == target_holder
+        ));
+    }
+
+    #[test]
+    fn polymorphic_transfer_confirmation_matches_source_and_installed_child_ids() {
+        use golem_common::model::card::{AgentCardHolder, CardHolder};
+
+        let source_card_id = golem_common::model::card::CardId::new();
+        let installed_child = test_card(golem_common::model::card::CardId::new());
+        let transfer_id = uuid::Uuid::new_v4();
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: "polymorphic-card-transfer-target".to_string(),
+            },
+        });
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
+                    transfer_id,
+                    source_card_id,
+                    installed_child.clone(),
+                    target_holder.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_transfer_confirmed(
+                    transfer_id,
+                    source_card_id,
+                    installed_child.card_id,
+                    target_holder,
+                ),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(status.pending_card_events.is_empty());
+    }
+
+    #[test]
+    fn polymorphic_transfer_confirmation_with_conflicting_source_keeps_pending_intent() {
+        use golem_common::model::card::{AgentCardHolder, CardHolder};
+
+        let source_card_id = golem_common::model::card::CardId::new();
+        let installed_child = test_card(golem_common::model::card::CardId::new());
+        let transfer_id = uuid::Uuid::new_v4();
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: "polymorphic-card-transfer-target".to_string(),
+            },
+        });
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started_with_source(
+                    transfer_id,
+                    source_card_id,
+                    installed_child.clone(),
+                    target_holder.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_transfer_confirmed(
+                    transfer_id,
+                    golem_common::model::card::CardId::new(),
+                    installed_child.card_id,
+                    target_holder,
+                ),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.pending_card_events.len(), 1);
+    }
+
+    #[test]
+    fn received_card_transfer_is_reconstructed_as_a_distinct_target_receipt() {
+        let card = test_card(golem_common::model::card::CardId::new());
+        let stored_card = golem_common::model::card::StoredCard::from(card.clone());
+        let transfer_id = uuid::Uuid::new_v4();
+        let source_card_id = golem_common::model::card::CardId::new();
+        let entries = BTreeMap::from([(
+            OplogIndex::from_u64(1),
+            OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                transfer_id,
+                source_card_id,
+                card.clone(),
+            )),
+        )]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.pending_card_events.len(), 1);
+        assert!(matches!(
+            &status.pending_card_events[0].event,
+            QueuedCardEvent::TransferReceived(receipt)
+                if receipt.transfer_id == transfer_id
+                    && receipt.source_card_id == Some(source_card_id)
+                    && receipt.card_id == card.card_id
+                    && receipt.card.as_ref() == Some(&stored_card)
+        ));
+        assert!(matches!(
+            status.received_card_transfers.get(&transfer_id),
+            Some(ReceivedCardTransferState::Received {
+                source_card_id: Some(recorded_source_card_id),
+                card: recorded_card,
+            }) if *recorded_source_card_id == source_card_id && recorded_card == &stored_card
+        ));
+    }
+
+    #[test]
+    fn received_card_transfer_index_refines_legacy_identity_and_detects_conflicts() {
+        use golem_common::base_model::oplog::QueuedCardEventTransferReceived;
+
+        let card = test_card(golem_common::model::card::CardId::new());
+        let stored_card = golem_common::model::card::StoredCard::from(card);
+        let transfer_id = uuid::Uuid::new_v4();
+        let source_card_id = golem_common::model::card::CardId::new();
+        let legacy_receipt = QueuedCardEvent::TransferReceived(QueuedCardEventTransferReceived {
+            transfer_id,
+            source_card_id: None,
+            card_id: stored_card.card_id(),
+            card: Some(stored_card.clone()),
+        });
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            BTreeMap::from([(
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(legacy_receipt),
+            )]),
+            &RetryConfig::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            status.received_card_transfers.get(&transfer_id),
+            Some(ReceivedCardTransferState::Received {
+                source_card_id: None,
+                card,
+            }) if card == &stored_card
+        ));
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            status,
+            BTreeMap::from([(
+                OplogIndex::from_u64(2),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                    transfer_id,
+                    source_card_id,
+                    stored_card.clone(),
+                )),
+            )]),
+            &RetryConfig::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            status.received_card_transfers.get(&transfer_id),
+            Some(ReceivedCardTransferState::Received {
+                source_card_id: Some(recorded_source_card_id),
+                card,
+            }) if *recorded_source_card_id == source_card_id && card == &stored_card
+        ));
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            status,
+            BTreeMap::from([(
+                OplogIndex::from_u64(3),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                    transfer_id,
+                    golem_common::model::card::CardId::new(),
+                    stored_card,
+                )),
+            )]),
+            &RetryConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            status.received_card_transfers.get(&transfer_id),
+            Some(&ReceivedCardTransferState::Conflict)
+        );
+    }
+
+    #[test]
+    fn received_card_transfer_index_is_sticky_across_skipped_and_deleted_regions() {
+        let card = test_card(golem_common::model::card::CardId::new());
+        let source_card_id = golem_common::model::card::CardId::new();
+        let skipped_transfer_id = uuid::Uuid::new_v4();
+        let deleted_transfer_id = uuid::Uuid::new_v4();
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                    skipped_transfer_id,
+                    source_card_id,
+                    card.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::jump(OplogRegion {
+                    start: OplogIndex::from_u64(1),
+                    end: OplogIndex::from_u64(1),
+                }),
+            ),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                    deleted_transfer_id,
+                    source_card_id,
+                    card.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(4),
+                OplogEntry::revert(OplogRegion {
+                    start: OplogIndex::from_u64(3),
+                    end: OplogIndex::from_u64(3),
+                }),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        for transfer_id in [skipped_transfer_id, deleted_transfer_id] {
+            assert!(matches!(
+                status.received_card_transfers.get(&transfer_id),
+                Some(ReceivedCardTransferState::Received {
+                    source_card_id: Some(recorded_source_card_id),
+                    card: recorded_card,
+                }) if *recorded_source_card_id == source_card_id
+                    && recorded_card == &card.clone().into()
+            ));
+        }
+    }
+
+    #[test]
+    fn target_card_transferred_clears_only_its_matching_receipt() {
+        use golem_common::model::card::{AgentCardHolder, CardHolder};
+
+        let card = test_card(golem_common::model::card::CardId::new());
+        let source_card_id = golem_common::model::card::CardId::new();
+        let transfer_id = uuid::Uuid::new_v4();
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: "card-transfer-target".to_string(),
+            },
+        });
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                    transfer_id,
+                    source_card_id,
+                    card.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_transferred(
+                    transfer_id,
+                    Some(source_card_id),
+                    card.card_id,
+                    target_holder,
+                    card.into(),
+                    Some(7),
+                ),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(status.pending_card_events.is_empty());
+    }
+
+    #[test]
+    fn legacy_target_card_transferred_clears_its_matching_receipt() {
+        use golem_common::model::card::{AgentCardHolder, CardHolder};
+
+        let card = test_card(golem_common::model::card::CardId::new());
+        let source_card_id = golem_common::model::card::CardId::new();
+        let transfer_id = uuid::Uuid::new_v4();
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: "card-transfer-target".to_string(),
+            },
+        });
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                    transfer_id,
+                    source_card_id,
+                    card.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_transferred(
+                    transfer_id,
+                    None,
+                    card.card_id,
+                    target_holder,
+                    card.into(),
+                    None,
+                ),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(status.pending_card_events.is_empty());
+    }
+
+    #[test]
+    fn target_card_transferred_with_conflicting_source_keeps_the_receipt() {
+        use golem_common::model::card::{AgentCardHolder, CardHolder};
+
+        let card = test_card(golem_common::model::card::CardId::new());
+        let source_card_id = golem_common::model::card::CardId::new();
+        let transfer_id = uuid::Uuid::new_v4();
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: "card-transfer-target".to_string(),
+            },
+        });
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_received(
+                    transfer_id,
+                    source_card_id,
+                    card.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_transferred(
+                    transfer_id,
+                    Some(golem_common::model::card::CardId::new()),
+                    card.card_id,
+                    target_holder,
+                    card.clone().into(),
+                    Some(7),
+                ),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.pending_card_events.len(), 1);
+        assert!(matches!(
+            &status.pending_card_events[0].event,
+            QueuedCardEvent::TransferReceived(receipt)
+                if receipt.transfer_id == transfer_id
+                    && receipt.source_card_id == Some(source_card_id)
+                    && receipt.card.as_ref() == Some(&card.into())
+        ));
+    }
+
+    #[test]
+    fn card_transfer_confirmed_with_conflicting_source_card_keeps_pending_transfer() {
+        use golem_common::model::card::{AgentCardHolder, CardHolder};
+
+        let pending_card = test_card(golem_common::model::card::CardId::new());
+        let conflicting_card = test_card(golem_common::model::card::CardId::new());
+        let transfer_id = uuid::Uuid::new_v4();
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: "card-transfer-target".to_string(),
+            },
+        });
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started(
+                    transfer_id,
+                    pending_card.clone(),
+                    target_holder.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_transfer_confirmed(
+                    transfer_id,
+                    conflicting_card.card_id,
+                    conflicting_card.card_id,
+                    target_holder,
+                ),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.pending_card_events.len(), 1);
+        assert!(matches!(
+            &status.pending_card_events[0].event,
+            QueuedCardEvent::TransferStarted(event)
+                if event.transfer_id == transfer_id
+                    && event.card_id == pending_card.card_id
+                    && event.card.as_ref() == Some(&pending_card.clone().into())
+        ));
+    }
+
+    #[test]
+    fn card_install_failure_does_not_clear_pending_transfer() {
+        use golem_common::model::card::{AgentCardHolder, CardHolder};
+
+        let card = test_card(golem_common::model::card::CardId::new());
+        let transfer_id = uuid::Uuid::new_v4();
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: "card-transfer-target".to_string(),
+            },
+        });
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started(
+                    transfer_id,
+                    card.clone(),
+                    target_holder.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_install_failed(
+                    OplogIndex::from_u64(1),
+                    card.card_id,
+                    golem_common::base_model::oplog::CardInstallFailure::NotFound,
+                ),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.pending_card_events.len(), 1);
+        assert_eq!(
+            status.pending_card_events[0].oplog_index,
+            OplogIndex::from_u64(1)
+        );
+        assert!(matches!(
+            &status.pending_card_events[0].event,
+            QueuedCardEvent::TransferStarted(event)
+                if event.transfer_id == transfer_id
+                    && event.card_id == card.card_id
+                    && event.card.as_ref() == Some(&card.clone().into())
+                    && event.target_holder == target_holder
+        ));
+    }
+
+    #[test]
+    fn target_card_transferred_does_not_clear_source_pending_transfer() {
+        use golem_common::model::card::{AgentCardHolder, CardHolder};
+
+        let card = test_card(golem_common::model::card::CardId::new());
+        let transfer_id = uuid::Uuid::new_v4();
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: "card-transfer-target".to_string(),
+            },
+        });
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started(
+                    transfer_id,
+                    card.clone(),
+                    target_holder.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_transferred(
+                    transfer_id,
+                    Some(card.card_id),
+                    card.card_id,
+                    target_holder,
+                    card.clone().into(),
+                    None,
+                ),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(status.pending_card_events.len(), 1);
+        assert!(matches!(
+            &status.pending_card_events[0].event,
+            QueuedCardEvent::TransferStarted(event)
+                if event.transfer_id == transfer_id
+                    && event.card_id == card.card_id
+                    && event.card.as_ref() == Some(&card.clone().into())
+        ));
+    }
+
+    #[test]
+    fn reverted_card_transfer_confirmation_still_closes_pending_transfer() {
+        use golem_common::model::card::{AgentCardHolder, CardHolder};
+
+        let card = test_card(golem_common::model::card::CardId::new());
+        let transfer_id = uuid::Uuid::new_v4();
+        let target_holder = CardHolder::Agent(AgentCardHolder {
+            agent_id: golem_common::model::AgentId {
+                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
+                agent_id: "card-transfer-target".to_string(),
+            },
+        });
+        let entries = BTreeMap::from([
+            (
+                OplogIndex::from_u64(1),
+                OplogEntry::card_event_queued(QueuedCardEvent::transfer_started(
+                    transfer_id,
+                    card.clone(),
+                    target_holder.clone(),
+                )),
+            ),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::card_transfer_confirmed(
+                    transfer_id,
+                    card.card_id,
+                    card.card_id,
+                    target_holder,
+                ),
+            ),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::revert(OplogRegion {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(2),
+                }),
+            ),
+        ]);
+
+        let status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap();
+
+        assert!(status.pending_card_events.is_empty());
+    }
+
+    #[test]
     fn card_revoked_removes_only_matching_pending_revoke_index() {
         let card_id = golem_common::model::card::CardId::new();
         let entries = BTreeMap::from([
@@ -3336,7 +4399,7 @@ mod test {
             ),
             (
                 OplogIndex::from_u64(3),
-                OplogEntry::card_revoked(OplogIndex::from_u64(1), card_id),
+                OplogEntry::card_revoked(OplogIndex::from_u64(1), card_id, None),
             ),
         ]);
 
@@ -3391,7 +4454,7 @@ mod test {
             ),
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::card_installed(Some(OplogIndex::from_u64(1)), card.into()),
+                OplogEntry::card_installed(Some(OplogIndex::from_u64(1)), card.into(), None),
             ),
         ]);
 
@@ -3475,7 +4538,7 @@ mod test {
             ),
             (
                 OplogIndex::from_u64(2),
-                OplogEntry::card_installed(Some(OplogIndex::from_u64(1)), card.into()),
+                OplogEntry::card_installed(Some(OplogIndex::from_u64(1)), card.into(), None),
             ),
             (
                 OplogIndex::from_u64(3),
@@ -3507,6 +4570,7 @@ mod test {
                     timestamp: Timestamp::now_utc(),
                     queued_event_index: OplogIndex::from_u64(1),
                     card_id,
+                    wallet_generation: None,
                 },
             ),
             (

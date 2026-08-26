@@ -116,6 +116,7 @@ pub fn value_kind(v : @model.SchemaValue) -> String {
     Secret(_) => "secret"
     QuotaToken(_) => "quota-token"
     Stream(_) => "stream"
+    PermissionCard(_) => "permission-card"
   }
 }
 

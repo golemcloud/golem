@@ -10,11 +10,9 @@ pub fn complete_promise(@types.PromiseId, FixedArray[Byte]) -> Bool
 
 pub fn create_promise() -> @types.PromiseId
 
-pub fn derive_card(Card) -> Result[Card, String]
+pub fn fork() -> Result[ForkResult, AgentOperationError]
 
-pub fn fork() -> ForkResult
-
-pub fn fork_agent(@types.AgentId, @types.AgentId, UInt64) -> Unit
+pub fn fork_agent(@types.AgentId, @types.AgentId, UInt64) -> Result[Unit, AgentOperationError]
 
 pub fn generate_idempotency_key() -> @types.Uuid
 
@@ -26,9 +24,7 @@ pub fn get_oplog_index() -> UInt64
 
 pub fn get_promise(@types.PromiseId) -> GetPromiseResult
 
-pub fn get_self_metadata() -> AgentMetadata
-
-pub fn install_card(Card) -> Result[Unit, CardInstallError]
+pub fn get_self_metadata() -> Result[AgentMetadata, AgentOperationError]
 
 pub fn mark_begin_operation() -> UInt64
 
@@ -42,9 +38,7 @@ pub fn resolve_agent_id_strict(String, String) -> @types.AgentId?
 
 pub fn resolve_component_id(String) -> @types.ComponentId?
 
-pub fn revert_agent(@types.AgentId, RevertAgentTarget) -> Unit
-
-pub fn self_card() -> Card?
+pub fn revert_agent(@types.AgentId, RevertAgentTarget) -> Result[Unit, AgentOperationError]
 
 pub fn set_idempotence_mode(Bool) -> Unit
 
@@ -52,16 +46,13 @@ pub fn set_oplog_index(UInt64) -> Unit
 
 pub fn trap(String) -> Unit
 
-pub fn update_agent(@types.AgentId, UInt64, UpdateMode) -> Unit
+pub fn update_agent(@types.AgentId, UInt64, UpdateMode) -> Result[Unit, AgentOperationError]
 
 // Errors
-pub(all) suberror CardInstallError {
-  REVOKED
-  NOT_FOUND
-  NOT_PERMITTED
+pub(all) suberror AgentOperationError {
+  PermissionDenied
+  BackendError(String)
 } derive(Eq, Show)
-pub fn CardInstallError::from(Int) -> Self
-pub fn CardInstallError::ordinal(Self) -> Int
 
 // Types and methods
 pub(all) struct AgentAllFilter {
@@ -136,10 +127,6 @@ pub(all) struct AgentVersionFilter {
   value : UInt64
 } derive(Eq, Show)
 
-pub(all) struct Card {
-  card_id : @types.CardId
-} derive(Eq, Show)
-
 pub(all) struct EnvironmentId {
   uuid : @types.Uuid
 } derive(Eq, Show)
@@ -167,7 +154,7 @@ pub(all) enum ForkResult {
 pub(all) struct GetAgents(Int) derive(Eq, Show)
 pub fn GetAgents::drop(Self) -> Unit
 pub fn GetAgents::get_agents(@types.ComponentId, AgentAnyFilter?, Bool) -> Self
-pub fn GetAgents::get_next(Self) -> Array[AgentMetadata]?
+pub fn GetAgents::get_next(Self) -> Result[Array[AgentMetadata]?, AgentOperationError]
 
 pub(all) struct GetPromiseResult(Int) derive(Eq, Show)
 pub fn GetPromiseResult::drop(Self) -> Unit
@@ -203,4 +190,3 @@ pub fn UpdateMode::ordinal(Self) -> Int
 // Type aliases
 
 // Traits
-

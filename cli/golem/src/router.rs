@@ -144,6 +144,10 @@ pub async fn start_router(
             "/v1/components/:component_id/workers/:agent_name/update",
             worker_service_api.clone(),
         )
+        .at(
+            "/v1/components/:component_id/workers/:agent_name/wallet",
+            worker_service_api.clone(),
+        )
         // Metrics
         .at("/metrics", metrics)
         // Everything else is routed to registry service

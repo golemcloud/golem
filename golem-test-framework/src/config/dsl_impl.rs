@@ -69,7 +69,6 @@ use tokio::fs::File;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::protocol::frame::Payload;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 use tracing::trace;
 use uuid::Uuid;
@@ -1114,7 +1113,7 @@ impl HttpWorkerLogEventStream {
             loop {
                 interval.tick().await;
                 match write
-                    .send(Message::Ping(Payload::from(PING_HELLO.as_bytes())))
+                    .send(Message::Ping(PING_HELLO.as_bytes().to_vec().into()))
                     .await
                 {
                     Ok(_) => {}
@@ -1142,7 +1141,7 @@ impl WorkerLogEventStream for HttpWorkerLogEventStream {
                     }
                     Message::Binary(payload) => {
                         return Ok(Some(
-                            serde_json::from_slice::<AgentEvent>(payload.as_slice())?
+                            serde_json::from_slice::<AgentEvent>(payload.as_ref())?
                                 .try_into()
                                 .map_err(|error: String| anyhow!(error))?,
                         ));

@@ -41,7 +41,6 @@ use golem_common::schema::agent::{
     AgentMethodSchema, AgentTypeSchema, OutputSchema, ParsedAgentId,
 };
 use golem_common::schema::{BinaryValuePayload, SchemaGraph, SchemaType, SchemaValue};
-use native_tls::TlsConnector;
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -50,9 +49,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
+use tokio_tungstenite::connect_async_tls_with_config;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{self, Message};
-use tokio_tungstenite::{Connector, connect_async_tls_with_config};
 use tokio_util::sync::CancellationToken;
 
 const PIPELINE_CAPACITY: usize = 16;
@@ -237,12 +236,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
 
     let request = websocket_request(&ctx).await?;
     let connector = if ctx.allow_insecure() {
-        Some(Connector::NativeTls(
-            TlsConnector::builder()
-                .danger_accept_invalid_certs(true)
-                .danger_accept_invalid_hostnames(true)
-                .build()?,
-        ))
+        Some(super::stream::insecure_connector()?)
     } else {
         None
     };
@@ -1480,7 +1474,7 @@ async fn receive_response(
     input_failed: &CancellationToken,
 ) -> anyhow::Result<Option<InvocationResponse>> {
     match frame {
-        Some(Ok(Message::Binary(bytes))) => Ok(Some(InvocationResponse::decode(bytes.as_slice())?)),
+        Some(Ok(Message::Binary(bytes))) => Ok(Some(InvocationResponse::decode(bytes)?)),
         Some(Ok(Message::Ping(payload))) => {
             send_active_message(wire_tx, Message::Pong(payload), interrupt, input_failed).await?;
             Ok(None)

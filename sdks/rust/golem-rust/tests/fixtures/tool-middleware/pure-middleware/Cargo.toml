@@ -1,0 +1,12 @@
+[package]
+name = "pure-middleware-component"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+middleware-definition = { path = "../definition" }
+sdk = { package = "golem-rust", path = "../../../..", features = ["export_golem_tool_middleware"] }

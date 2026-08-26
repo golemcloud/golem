@@ -91,6 +91,16 @@ object OplogApi {
     partial: Option[TypedSchemaValue]
   )
 
+  final case class CompletionDiscardedParameters(
+    timestamp: ContextApi.DateTime,
+    startIndex: OplogIndex
+  )
+
+  final case class CompletionDeliveredParameters(
+    timestamp: ContextApi.DateTime,
+    startIndex: OplogIndex
+  )
+
   final case class LocalSpanData(
     spanId: String,
     start: ContextApi.DateTime,
@@ -462,6 +472,12 @@ object OplogApi {
     final case class Cancelled(params: CancelledParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class CompletionDiscarded(params: CompletionDiscardedParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
+    final case class CompletionDelivered(params: CompletionDeliveredParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
 
     // --- Parsing ---
 
@@ -470,10 +486,18 @@ object OplogApi {
       val tag   = entry.tag
       def v     = entry.asInstanceOf[JsPublicOplogEntryWithValue].value
       tag match {
-        case "create"                                  => Create(parseCreateParameters(v.asInstanceOf[JsCreateParameters]))
-        case "start"                                   => Start(parseStartParameters(v.asInstanceOf[JsStartParameters]))
-        case "end"                                     => End(parseEndParameters(v.asInstanceOf[JsEndParameters]))
-        case "cancelled"                               => Cancelled(parseCancelledParameters(v.asInstanceOf[JsCancelledParameters]))
+        case "create"               => Create(parseCreateParameters(v.asInstanceOf[JsCreateParameters]))
+        case "start"                => Start(parseStartParameters(v.asInstanceOf[JsStartParameters]))
+        case "end"                  => End(parseEndParameters(v.asInstanceOf[JsEndParameters]))
+        case "cancelled"            => Cancelled(parseCancelledParameters(v.asInstanceOf[JsCancelledParameters]))
+        case "completion-discarded" =>
+          CompletionDiscarded(
+            parseCompletionDiscardedParameters(v.asInstanceOf[JsCompletionDiscardedParameters])
+          )
+        case "completion-delivered" =>
+          CompletionDelivered(
+            parseCompletionDeliveredParameters(v.asInstanceOf[JsCompletionDeliveredParameters])
+          )
         case "host-call" | "imported-function-invoked" =>
           HostCall(parseHostCallParameters(v.asInstanceOf[JsHostCallParameters]))
         case "agent-invocation-started" | "exported-function-invoked" =>
@@ -642,6 +666,22 @@ object OplogApi {
       timestamp = parseDateTime(raw.timestamp),
       startIndex = BigInt(raw.startIndex.toString),
       partial = raw.partial.toOption.map(typedFromJs)
+    )
+
+  private def parseCompletionDiscardedParameters(
+    raw: JsCompletionDiscardedParameters
+  ): CompletionDiscardedParameters =
+    CompletionDiscardedParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      startIndex = BigInt(raw.startIndex.toString)
+    )
+
+  private def parseCompletionDeliveredParameters(
+    raw: JsCompletionDeliveredParameters
+  ): CompletionDeliveredParameters =
+    CompletionDeliveredParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      startIndex = BigInt(raw.startIndex.toString)
     )
 
   private def parseSpanData(raw: JsSpanData): SpanData =

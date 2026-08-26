@@ -5300,7 +5300,8 @@ pub(crate) mod tests {
         StreamAttachmentControl, StreamAttachmentStateV1, StreamSegmentSource, registration_record,
     };
     use crate::services::oplog::{
-        CommitLevel, DurableStreamOplogRecord, Oplog, OrderedOplogStart, PendingUpload,
+        CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OrderedOplogStart,
+        PendingUpload,
     };
     use async_trait::async_trait;
     use golem_common::base_model::component::{ComponentId, ComponentRevision};
@@ -5385,6 +5386,16 @@ pub(crate) mod tests {
                 .map_or(OplogIndex::INITIAL, |(index, _)| index.next());
             state.entries.insert(index, entry);
             index
+        }
+
+        fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+            let mut state = self.state.lock().unwrap();
+            let index = state
+                .entries
+                .last_key_value()
+                .map_or(OplogIndex::INITIAL, |(index, _)| index.next());
+            state.entries.insert(index, entry);
+            Box::pin(async move { index })
         }
 
         async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {

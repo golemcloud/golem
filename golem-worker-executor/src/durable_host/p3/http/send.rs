@@ -18,9 +18,10 @@ use super::serialization::{
     serialize_error_code, serialize_method, serialize_request, serialize_response_headers,
 };
 use super::*;
+use crate::durable_host::authorization::targets::http_target;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallHandle, Cancellable, DeferredCallReplayOutcome, DropPolicy,
-    LeaveIncompleteOnDrop, finish_span_in_memory,
+    AccessClaimOptions, Cancellable, DeferredCallReplayOutcome, DropPolicy, DurableCallSession,
+    LeaveIncompleteOnDrop, authorize_live_permissions_at_serialized_access, finish_span_in_memory,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
@@ -113,6 +114,37 @@ where
     U: Send + 'static,
     P: DropPolicy,
 {
+    // Replay must claim and restore the recorded outcome without rebuilding a permission target.
+    // On the live path only the request head is inspected here; no body/resource ownership or
+    // transmission state is consumed before admission.
+    let live = store.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .state
+            .is_live()
+    });
+    let authorization_permits = if live {
+        match serialize_request::<Ctx, U>(store, borrow_resource(&req))
+            .ok()
+            .and_then(|request_head| {
+                http_target(&outgoing_http_request_uri(&request_head))
+                    .ok()
+                    .map(|target| target.permission)
+            }) {
+            Some(permission) => authorize_live_permissions_at_serialized_access(
+                store,
+                durable_worker_ctx::<Ctx, U>,
+                &[permission],
+            )
+            .await
+            .ok()
+            .and_then(Result::ok),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let authorization_denied = live && authorization_permits.is_none();
+
     // Detach the request's body-transmission wiring (installed by the durable
     // `request::new`) *before* anything else: the inner `WasiHttp::send` deletes
     // the request from the resource table at the start of the call, and reps are
@@ -136,16 +168,18 @@ where
 
     // Per-invocation HTTP call limit and monthly account-level HTTP call quota,
     // mirroring the P2 `http::outgoing_handler::handle` path. Both checks
-    // no-op during replay and run before any durability machinery so that a
-    // denied call writes no oplog entry.
-    store.with(|mut access| {
-        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        ctx.state
-            .check_and_increment_http_call_count()
-            .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
-        ctx.record_monthly_http_call()
-            .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))
-    })?;
+    // no-op during replay. Permission-denied calls are durably recorded below
+    // without consuming quota.
+    if !authorization_denied {
+        store.with(|mut access| {
+            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+            ctx.state
+                .check_and_increment_http_call_count()
+                .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
+            ctx.record_monthly_http_call()
+                .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))
+        })?;
+    }
 
     // The request head is serialized (and recorded) exactly as the guest built
     // it. The send's `outgoing-http-request` invocation-context span is
@@ -184,12 +218,13 @@ where
     let claim_options = AccessClaimOptions {
         scope_discriminator: Some(format!("req:{scope_discriminator}")),
         request_identity: Some(HostRequest::from(host_request.clone())),
+        parent_start_index: None,
         observational_owner: None,
     };
-    let mut handle = CallHandle::<P3HttpClientSend, P>::start_access_with_options(
+    let mut handle = DurableCallSession::<P3HttpClientSend, P>::start_access_with_options(
         store,
         durable_worker_ctx::<Ctx, U>,
-        function_type,
+        function_type.clone(),
         claim_options,
         async |_| Ok(host_request),
     )
@@ -226,7 +261,14 @@ where
         // `ReplayedRequestLeakGuard`. Both arms below hand request ownership
         // over (inline consume / live re-execution) and disarm it first.
         let (disarm_leak_guard_tx, disarm_leak_guard_rx) = oneshot::channel();
-        spawn_replayed_request_leak_guard::<Ctx, U>(store, req.rep(), disarm_leak_guard_rx);
+        let replay_scope = (handle.begin_index() != handle.start_index())
+            .then_some((function_type.clone(), handle.begin_index()));
+        spawn_replayed_request_leak_guard::<Ctx, U>(
+            store,
+            req.rep(),
+            replay_scope,
+            disarm_leak_guard_rx,
+        );
         match handle
             .replay_access_deferred(store, durable_worker_ctx::<Ctx, U>)
             .await
@@ -323,7 +365,10 @@ where
                             std::future::pending::<()>().await;
                             unreachable!("std::future::pending never completes")
                         }
-                        delivery.delivered();
+                        delivery
+                            .deliver_at_accessor_terminal(store)
+                            .await
+                            .map_err(HttpError::trap)?;
                         return Ok(response);
                     }
                     Err(error) => {
@@ -350,7 +395,10 @@ where
                             std::future::pending::<()>().await;
                             unreachable!("std::future::pending never completes")
                         }
-                        delivery.delivered();
+                        delivery
+                            .deliver_at_accessor_terminal(store)
+                            .await
+                            .map_err(HttpError::trap)?;
                         return Err(error);
                     }
                 }
@@ -360,6 +408,38 @@ where
                 handle = live_handle
             }
         }
+    }
+
+    if authorization_denied {
+        consume_replayed_request::<Ctx, U>(store, req, None).await?;
+        let error_code = ErrorCode::HttpRequestDenied;
+        let result =
+            SerializableP3HttpClientSendResult::HttpError(serialize_error_code(&error_code));
+        let (_, delivery) = handle
+            .complete_access_deferred(
+                store,
+                durable_worker_ctx::<Ctx, U>,
+                HostResponseP3HttpClientSendResult { result },
+                None,
+            )
+            .await
+            .map_err(HttpError::trap)?;
+        if delivery.is_live_armed() {
+            if let Err(error) = finish_p3_send_span_in_memory::<Ctx, U>(store, &span) {
+                delivery.suppress();
+                return Err(HttpError::trap(error));
+            }
+        } else {
+            finish_p3_send_span::<Ctx, U>(store, &span)
+                .await
+                .map_err(HttpError::trap)?;
+        }
+        start_transmission_recording::<Ctx, U>(store, pending_transmission, observational_owner);
+        delivery
+            .deliver_at_accessor_terminal(store)
+            .await
+            .map_err(HttpError::trap)?;
+        return Err(error_code.into());
     }
 
     // Inject the Golem-managed headers into the request resource before the
@@ -450,7 +530,10 @@ where
                 // The guest-visible error return below still crosses Wasmtime's lowering
                 // and terminal-consumption boundary: hand the token to the terminal
                 // observer instead of consuming it here.
-                delivery.deliver_at_accessor_terminal(store);
+                delivery
+                    .deliver_at_accessor_terminal(store)
+                    .await
+                    .map_err(HttpError::trap)?;
             } else {
                 // Unpersisted live call (snapshotting): the original span handling
                 // applies.
@@ -759,7 +842,10 @@ where
             // Everything since the `End` was synchronous, so no tear window remains between
             // here and handing the token to Wasmtime's terminal observer, which settles it
             // when the guest actually consumes (or discards) the lowered response.
-            delivery.deliver_at_accessor_terminal(store);
+            delivery
+                .deliver_at_accessor_terminal(store)
+                .await
+                .map_err(HttpError::trap)?;
             Ok(response)
         }
         Err(error_code) => {
@@ -847,7 +933,10 @@ where
             // The guest-visible error return below still crosses Wasmtime's lowering and
             // terminal-consumption boundary: hand the token to the terminal observer instead
             // of consuming it here.
-            delivery.deliver_at_accessor_terminal(store);
+            delivery
+                .deliver_at_accessor_terminal(store)
+                .await
+                .map_err(HttpError::trap)?;
             Err(error_code.into())
         }
     }

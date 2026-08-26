@@ -137,6 +137,8 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
     SecretType(WitSecretSpec(0, None)),
     QuotaTokenType(QuotaTokenSpec(Some("res"))),
     QuotaTokenType(QuotaTokenSpec(None)),
+    PermissionCardType(PermissionCardSpec(polymorphic = true)),
+    PermissionCardType(PermissionCardSpec(polymorphic = false)),
     FutureType(Some(11)),
     FutureType(None),
     StreamType(Some(12)),
@@ -394,6 +396,46 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
                       }
           } yield result
         }
+      },
+      test("permission-card handle moves to JS and lifts back into a fresh present handle") {
+        val raw    = js.Dynamic.literal(marker = 101).asInstanceOf[js.Any]
+        val handle = GuestPermissionCardHandle.fromRaw(raw)
+        val jsTree = SchemaWireInterop.valueTreeToJs(
+          WitSchemaValueTree(Vector(PermissionCardHandle(handle)), 0)
+        )
+        val jsNode  = jsTree.valueNodes(0)
+        val decoded = SchemaWireInterop.valueTreeFromJs(jsTree)
+
+        val lifted = decoded.valueNodes(0) match {
+          case PermissionCardHandle(card) =>
+            card.isPresent && card.take().exists(_.asInstanceOf[AnyRef] eq raw.asInstanceOf[AnyRef])
+          case _ => false
+        }
+        assertTrue(jsNode.tag == "permission-card-handle", !handle.isPresent, lifted)
+      },
+      test("permission-card encode is atomic when a sibling is invalid") {
+        val handle = GuestPermissionCardHandle.fromRaw(js.Dynamic.literal(marker = 102))
+        val tree   = WitSchemaValueTree(
+          Vector(
+            TupleValue(Vector(1, 2)),
+            PermissionCardHandle(handle),
+            DatetimeValue(Datetime(0L, -1))
+          ),
+          0
+        )
+
+        val result = scala.util.Try(SchemaWireInterop.valueTreeToJs(tree))
+        assertTrue(result.isFailure, handle.isPresent)
+      },
+      test("a malformed inbound tree clears an already-lifted permission card") {
+        val cardNode    = JsSchemaValueNode.permissionCardHandle(js.Dynamic.literal(marker = 103))
+        val invalidNode = js.Dynamic
+          .literal("tag" -> "unknown-value")
+          .asInstanceOf[JsSchemaValueNode]
+        val tree = JsSchemaValueTree(js.Array(cardNode, invalidNode), 0)
+
+        val result = scala.util.Try(SchemaWireInterop.valueTreeFromJs(tree))
+        assertTrue(result.isFailure, js.isUndefined(rawVal(cardNode)))
       },
       // The round-trip tests above only prove encode/decode self-consistency. These
       // smoke tests assert the *raw* emitted JS shape against the wasm-rquickjs d.ts

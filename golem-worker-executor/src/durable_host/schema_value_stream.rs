@@ -20,14 +20,16 @@ use crate::durable_host::stream_transport::{
     LiveInputProducer, LiveStreamEndpoint, output_stream_pair,
 };
 use crate::workerctx::WorkerCtx;
-use golem_schema::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
+use golem_schema::schema::schema_value::{
+    PermissionCardValuePayload, QuotaTokenValuePayload, SecretValuePayload,
+};
 use golem_schema::schema::wit::wire::{
     Host, HostQuotaToken, HostSchemaValueStream, HostSchemaValueStreamWithStore, HostSecret,
     HostWithStore, SchemaValueTree, Uuid,
 };
 use golem_schema::schema::wit::{
-    QuotaTokenHandleRep, QuotaTokenResolver, SchemaValueStreamResolver, SecretHandleRep,
-    SecretResolver,
+    PermissionCardHandleRep, PermissionCardResolver, QuotaTokenHandleRep, QuotaTokenResolver,
+    SchemaValueStreamResolver, SecretHandleRep, SecretResolver,
 };
 use golem_schema::schema::{SchemaValue, SchemaValueStream, SchemaValueStreamHandleRep};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -124,6 +126,37 @@ impl<Ctx: WorkerCtx> SecretResolver for StoreValueResolver<'_, '_, Ctx> {
             .data_mut()
             .durable_ctx_mut()
             .drop_secret_handle(handle)
+    }
+}
+
+impl<Ctx: WorkerCtx> PermissionCardResolver for StoreValueResolver<'_, '_, Ctx> {
+    type Error = WorkerExecutorError;
+
+    fn snapshot_permission_card_handle(
+        &mut self,
+        handle: Resource<PermissionCardHandleRep>,
+    ) -> Result<PermissionCardValuePayload, Self::Error> {
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .snapshot_permission_card_handle(handle)
+    }
+
+    fn permission_card_handle_from_snapshot(
+        &mut self,
+        snapshot: &PermissionCardValuePayload,
+    ) -> Result<Resource<PermissionCardHandleRep>, Self::Error> {
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .permission_card_handle_from_snapshot(snapshot)
+    }
+
+    fn drop_permission_card_handle(&mut self, handle: Resource<PermissionCardHandleRep>) {
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .drop_permission_card_handle(handle)
     }
 }
 
@@ -297,14 +330,17 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
 impl<T: WorkerCtx, Ctx: WorkerCtx> HostWithStore<T> for CoreTypesHost<Ctx> {
-    async fn parse_uuid(_accessor: &Accessor<T, Self>, uuid: String) -> Result<Uuid, String> {
-        uuid::Uuid::parse_str(&uuid)
+    async fn parse_uuid(
+        _accessor: &Accessor<T, Self>,
+        uuid: String,
+    ) -> anyhow::Result<Result<Uuid, String>> {
+        Ok(uuid::Uuid::parse_str(&uuid)
             .map(Into::into)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string()))
     }
 
-    async fn uuid_to_string(_accessor: &Accessor<T, Self>, uuid: Uuid) -> String {
+    async fn uuid_to_string(_accessor: &Accessor<T, Self>, uuid: Uuid) -> anyhow::Result<String> {
         let uuid: uuid::Uuid = uuid.into();
-        uuid.to_string()
+        Ok(uuid.to_string())
     }
 }

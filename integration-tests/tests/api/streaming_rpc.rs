@@ -89,7 +89,7 @@ async fn receive_public_response(
     loop {
         match socket.next().await {
             Some(Ok(Message::Binary(payload))) => {
-                return InvocationResponse::decode(payload.as_slice()).map_err(Into::into);
+                return InvocationResponse::decode(payload).map_err(Into::into);
             }
             Some(Ok(Message::Ping(payload))) => socket.send(Message::Pong(payload)).await?,
             Some(Ok(Message::Pong(_))) | Some(Ok(Message::Frame(_))) => {}
@@ -296,6 +296,7 @@ async fn invoke_agent_session(
             attempt_id: None,
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
+            scope_card: None,
         })),
     };
     let mut state = InvocationSessionState::default();

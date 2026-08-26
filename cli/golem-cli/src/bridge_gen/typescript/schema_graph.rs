@@ -203,6 +203,10 @@ fn emit_schema_type(typ: &SchemaType) -> String {
         QuotaToken { spec, .. } => {
             format!("{{ tag: 'quota-token', spec: {} }}", quota_token_spec(spec))
         }
+        PermissionCard { spec, .. } => format!(
+            "{{ tag: 'permission-card', spec: {{ polymorphic: {} }} }}",
+            spec.polymorphic
+        ),
         Future { inner, .. } => format!(
             "{{ tag: 'future', element: {} }}",
             optional_type(inner.as_deref())

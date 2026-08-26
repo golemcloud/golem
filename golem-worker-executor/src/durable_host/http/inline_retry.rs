@@ -876,7 +876,7 @@ pub(crate) async fn rebuild_streaming_request(
     connection_pool: Option<HttpConnectionPool>,
 ) -> Result<RebuiltStreamingRequest, anyhow::Error> {
     // 1. Reconstruct body chunks from oplog (lazy representation)
-    let body_chunks = reconstruct_outgoing_body_chunks(oplog, request_state.begin_index).await?;
+    let body_chunks = reconstruct_outgoing_body_chunks(oplog, request_state.begin_index()).await?;
 
     // 2. Create a fresh outgoing body with a streaming body pair
     let (mut new_outgoing_body, hyper_body) =
@@ -1271,7 +1271,7 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 runtime_retry_policy_mutations,
                 retry_properties,
                 exec_state.max_in_function_retry_delay,
-                request_state.begin_index,
+                request_state.begin_index(),
                 ctx.execution_status.clone(),
             );
             HostFutureIncomingResponse::pending(retry_handle)
@@ -1357,10 +1357,10 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
 
     // 3. Count bytes already delivered to the guest from the oplog
     let oplog = ctx.public_state.oplog();
-    let consumed_len = count_incoming_body_bytes(&oplog, request_state.begin_index).await?;
+    let consumed_len = count_incoming_body_bytes(&oplog, request_state.begin_index()).await?;
 
     // 4. Reconstruct the outgoing request body chunks from the oplog
-    let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index).await?;
+    let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index()).await?;
 
     // 5. Build the request, adding a Range header if bytes were already consumed.
     //    If the original request already has a Range header, response-body
@@ -1541,7 +1541,7 @@ pub(crate) enum StatusRetryOutcome {
     Exhausted,
     /// User-defined policy matched and signalled trap+replay (delay too large, etc.).
     /// Caller MUST escalate to the existing transient-host-failure trap path keyed on
-    /// `request_state.begin_index`.
+    /// `request_state.begin_index()`.
     FallBackToTrap,
 }
 
@@ -1700,7 +1700,8 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
     }
 
     // The retry decision must land error entries on the request's begin index.
-    ctx.state.set_ambient_retry_point(request_state.begin_index);
+    ctx.state
+        .set_ambient_retry_point(request_state.begin_index());
 
     // Drive the retry decision against the *exact* matched policy. We cannot call
     // `decide_retry_with_properties`, because that function re-resolves through
@@ -1737,7 +1738,7 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
             // Reconstruct the original outgoing body and request, then send.
             let oplog = ctx.public_state.oplog();
             let body_chunks =
-                reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index).await?;
+                reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index()).await?;
             let hyper_body = body_chunks_to_hyper_body(body_chunks);
             let http_request = reconstruct_http_request(&request_state.request, hyper_body, &[])?;
             let config = request_state.outgoing_request_config();
@@ -1804,7 +1805,7 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
     // Awaiting-response retry sends a fresh reconstructed request, so it must
     // replay the full captured body. Replaying only bytes written after an
     // earlier inline retry error would drop the already-replayed prefix.
-    let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index).await?;
+    let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index()).await?;
     let connection_pool = ctx.wasi_http.connection_pool.clone();
     send_with_interrupt_aware_retries(ctx, request_state, &body_chunks, &[], None, connection_pool)
         .await
@@ -1827,19 +1828,16 @@ mod tests {
     }
 
     fn make_request_state() -> HttpRequestState {
-        use crate::durable_host::HttpRequestCloseOwner;
-        use crate::durable_host::HttpRetryEligibility;
+        use crate::durable_host::{HttpRequestSession, HttpRetryEligibility};
         use golem_common::model::invocation_context::SpanId;
 
         HttpRequestState {
-            close_owner: HttpRequestCloseOwner::FutureIncomingResponseDrop,
-            begin_index: OplogIndex::INITIAL,
+            session: HttpRequestSession::new(OplogIndex::INITIAL, SpanId::generate(), None),
             request: HostRequestHttpRequest {
                 uri: "http://localhost:8080/".to_string(),
                 method: SerializableHttpMethod::Get,
                 headers: std::collections::HashMap::new(),
             },
-            span_id: SpanId::generate(),
             body_handle: None,
             response_status: Some(200),
             outgoing_body_rep: None,

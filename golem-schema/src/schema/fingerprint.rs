@@ -383,6 +383,12 @@ fn encode_type(
             encode_optional_type(encoder, inner.as_deref())?;
             encode_metadata(encoder, metadata)?;
         }
+        SchemaType::PermissionCard { spec, metadata } => {
+            encoder.array(3);
+            encoder.unsigned(37);
+            encoder.boolean(spec.polymorphic);
+            encode_metadata(encoder, metadata)?;
+        }
     }
     Ok(())
 }
@@ -701,6 +707,10 @@ impl CborEncoder {
         }
     }
 
+    fn boolean(&mut self, value: bool) {
+        self.bytes.push(if value { 0xf5 } else { 0xf4 });
+    }
+
     fn null(&mut self) {
         self.bytes.push(0xf6);
     }
@@ -730,8 +740,8 @@ impl CborEncoder {
 mod tests {
     use super::{SchemaFingerprintError, canonical_schema_bytes_v1, schema_fingerprint_v1};
     use crate::schema::{
-        MetadataEnvelope, NamedFieldType, Role, SchemaGraph, SchemaType, SchemaTypeDef,
-        TextRestrictions, TypeId,
+        MetadataEnvelope, NamedFieldType, PermissionCardSpec, Role, SchemaGraph, SchemaType,
+        SchemaTypeDef, TextRestrictions, TypeId,
     };
     use test_r::test;
 
@@ -830,6 +840,22 @@ mod tests {
         assert_eq!(
             blake3::hash(&constrained_bytes).to_hex().as_str(),
             "b985cdb5445862be90e8dca06bbfa9c46b50cf40edc84ed34205bb3a214c5bb0"
+        );
+
+        let permission_card = SchemaType::permission_card(PermissionCardSpec { polymorphic: true });
+        let permission_card_bytes =
+            canonical_schema_bytes_v1(&SchemaGraph::empty(), Some(&permission_card)).unwrap();
+        assert_eq!(
+            permission_card_bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+            "847818676f6c656d2d736368656d612d66696e6765727072696e7401831825f585f68080f6f680"
+        );
+        assert_eq!(permission_card_bytes.len(), 39);
+        assert_eq!(
+            blake3::hash(&permission_card_bytes).to_hex().as_str(),
+            "b7d3c09af5db4e56b527051f561689f451dfdb21213cd70aabd11618e244da8b"
         );
     }
 

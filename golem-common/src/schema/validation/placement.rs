@@ -70,6 +70,9 @@ pub enum PlacementError {
     /// A [`SchemaType::QuotaToken`] node appeared in a scope that forbids
     /// quota tokens (today: [`SchemaScope::Constructor`]).
     QuotaTokenNotAllowed { scope: SchemaScope },
+    /// A [`SchemaType::PermissionCard`] node appeared in a scope that forbids
+    /// permission cards (today: [`SchemaScope::Constructor`]).
+    PermissionCardNotAllowed { scope: SchemaScope },
     /// A field / definition annotated with [`Role::Multimodal`] whose body
     /// is `list<variant<…>>` appeared in [`SchemaScope::Constructor`].
     MultimodalListNotAllowedInConstructor,
@@ -88,6 +91,12 @@ impl Display for PlacementError {
             }
             PlacementError::QuotaTokenNotAllowed { scope } => {
                 write!(f, "quota-token values are not allowed in scope {scope:?}")
+            }
+            PlacementError::PermissionCardNotAllowed { scope } => {
+                write!(
+                    f,
+                    "permission-card values are not allowed in scope {scope:?}"
+                )
             }
             PlacementError::MultimodalListNotAllowedInConstructor => write!(
                 f,
@@ -194,6 +203,9 @@ fn walk_type<'a>(
             }
             Some(HostManagedKind::QuotaToken) => {
                 errors.push(PlacementError::QuotaTokenNotAllowed { scope });
+            }
+            Some(HostManagedKind::PermissionCard) => {
+                errors.push(PlacementError::PermissionCardNotAllowed { scope });
             }
             None => {}
         }

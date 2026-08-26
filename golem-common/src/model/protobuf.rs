@@ -97,7 +97,10 @@ impl TryFrom<golem::worker::AgentId> for AgentId {
 
     fn try_from(value: golem::worker::AgentId) -> Result<Self, Self::Error> {
         Ok(Self {
-            component_id: value.component_id.unwrap().try_into()?,
+            component_id: value
+                .component_id
+                .ok_or("Missing AgentId.component_id")?
+                .try_into()?,
             agent_id: value.name,
         })
     }

@@ -19,7 +19,9 @@ use axum::http::header;
 use golem_common::SafeDisplay;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
-use golem_common::model::card::{CardAlgebraError, EffectiveSurface, PermissionTarget};
+use golem_common::model::card::{
+    CardAlgebraError, DelegationSurface, EffectiveSurface, PermissionTarget,
+};
 use golem_common::model::plan::PlanId;
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
@@ -175,6 +177,7 @@ pub struct UserAuthCtx {
     pub account_plan_id: PlanId,
     pub account_roles: BTreeSet<AccountRole>,
     pub effective_surface: EffectiveSurface,
+    pub delegation_surface: Option<DelegationSurface>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -185,6 +188,7 @@ pub struct AgentAuthCtx {
     pub account_id: AccountId,
     pub account_email: AccountEmail,
     pub effective_surface: EffectiveSurface,
+    pub delegation_surface: Option<DelegationSurface>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -198,6 +202,7 @@ pub struct AdminImpersonationAuthCtx {
     pub target_account_roles: BTreeSet<AccountRole>,
     pub target_account_plan_id: PlanId,
     pub effective_surface: EffectiveSurface,
+    pub delegation_surface: Option<DelegationSurface>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -231,6 +236,21 @@ impl AuthCtx {
             account_id,
             account_email,
             effective_surface,
+            delegation_surface: None,
+        })
+    }
+
+    pub fn agent_with_permission_surfaces(
+        account_id: AccountId,
+        account_email: AccountEmail,
+        effective_surface: EffectiveSurface,
+        delegation_surface: DelegationSurface,
+    ) -> AuthCtx {
+        AuthCtx::Agent(AgentAuthCtx {
+            account_id,
+            account_email,
+            effective_surface,
+            delegation_surface: Some(delegation_surface),
         })
     }
 
@@ -249,6 +269,7 @@ impl AuthCtx {
             target_account_roles,
             target_account_plan_id,
             effective_surface,
+            delegation_surface: None,
         })
     }
 
@@ -337,16 +358,17 @@ impl AuthCtx {
         }
     }
 
-    pub fn effective_surface_for_card_derivation(
+    pub fn delegation_surface_for_card_derivation(
         &self,
         action: impl Into<String>,
-    ) -> Result<&EffectiveSurface, AuthorizationError> {
-        match self {
-            Self::System => Err(AuthorizationError::AuthContextHasNoCards(action.into())),
-            Self::User(user) => Ok(&user.effective_surface),
-            Self::Agent(agent) => Ok(&agent.effective_surface),
-            Self::AdminImpersonation(ctx) => Ok(&ctx.effective_surface),
-        }
+    ) -> Result<&DelegationSurface, AuthorizationError> {
+        let surface = match self {
+            Self::System => None,
+            Self::User(user) => user.delegation_surface.as_ref(),
+            Self::Agent(agent) => agent.delegation_surface.as_ref(),
+            Self::AdminImpersonation(ctx) => ctx.delegation_surface.as_ref(),
+        };
+        surface.ok_or_else(|| AuthorizationError::AuthContextHasNoCards(action.into()))
     }
 }
 
@@ -597,7 +619,9 @@ mod protobuf {
     use applying::Apply;
     use golem_common::model::account::AccountEmail;
     use golem_common::model::auth::AccountRole;
-    use golem_common::model::card::{CardId, EffectiveSurface, GrantSurface, PermissionTarget};
+    use golem_common::model::card::{
+        CardId, DelegationSurface, EffectiveSurface, GrantSurface, PermissionTarget,
+    };
 
     fn deserialize_effective_surface(
         value: golem_api_grpc::proto::golem::auth::AuthEffectiveSurface,
@@ -677,6 +701,24 @@ mod protobuf {
             .collect()
     }
 
+    fn deserialize_delegation_surface(
+        value: Option<Vec<u8>>,
+    ) -> Result<Option<DelegationSurface>, String> {
+        value
+            .map(|value| {
+                desert_rust::deserialize(&value)
+                    .map_err(|err| format!("invalid delegation surface: {err}"))
+            })
+            .transpose()
+    }
+
+    fn serialize_delegation_surface(value: Option<DelegationSurface>) -> Option<Vec<u8>> {
+        value.map(|value| {
+            desert_rust::serialize_to_byte_vec(&value)
+                .expect("DelegationSurface Desert serialization failed")
+        })
+    }
+
     impl TryFrom<golem_api_grpc::proto::golem::auth::UserAuthCtx> for UserAuthCtx {
         type Error = String;
         fn try_from(
@@ -697,6 +739,7 @@ mod protobuf {
                 account_email: AccountEmail::new(value.account_email),
                 account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
                 effective_surface,
+                delegation_surface: deserialize_delegation_surface(value.delegation_surface)?,
             })
         }
     }
@@ -713,6 +756,7 @@ mod protobuf {
                     .map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::from(ar).into())
                     .collect(),
                 effective_surface: Some(serialize_effective_surface(value.effective_surface)),
+                delegation_surface: serialize_delegation_surface(value.delegation_surface),
             }
         }
     }
@@ -729,6 +773,7 @@ mod protobuf {
                     .effective_surface
                     .ok_or("missing effective_surface")?
                     .apply(deserialize_effective_surface)?,
+                delegation_surface: deserialize_delegation_surface(value.delegation_surface)?,
             })
         }
     }
@@ -739,6 +784,7 @@ mod protobuf {
                 account_id: Some(value.account_id.into()),
                 account_email: value.account_email.into_inner(),
                 effective_surface: Some(serialize_effective_surface(value.effective_surface)),
+                delegation_surface: serialize_delegation_surface(value.delegation_surface),
             }
         }
     }
@@ -780,6 +826,7 @@ mod protobuf {
                     .ok_or("missing target_account_plan_id")?
                     .try_into()?,
                 effective_surface,
+                delegation_surface: deserialize_delegation_surface(value.delegation_surface)?,
             })
         }
     }
@@ -799,6 +846,7 @@ mod protobuf {
                     .collect(),
                 target_account_plan_id: Some(value.target_account_plan_id.into()),
                 effective_surface: Some(serialize_effective_surface(value.effective_surface)),
+                delegation_surface: serialize_delegation_surface(value.delegation_surface),
             }
         }
     }

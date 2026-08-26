@@ -13,6 +13,7 @@ import "golem/component/component_id.proto";
 import "golem/shardmanager/shard_id.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/cursor.proto";
+import "golem/worker/entity.proto";
 import "golem/worker/filesystem.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
@@ -22,6 +23,7 @@ import "golem/worker/oplog_cursor.proto";
 import "golem/worker/promise_id.proto";
 import "golem/worker/public_oplog.proto";
 import "golem/worker/raw_oplog.proto";
+import "golem/worker/scope_card.proto";
 import "golem/worker/update_mode.proto";
 import "golem/worker/v1/worker_execution_error.proto";
 import "golem/worker/worker_filter.proto";
@@ -47,6 +49,7 @@ service WorkerExecutor {
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
   rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
   rpc ForkWorker(ForkWorkerRequest) returns (ForkWorkerResponse);
+  rpc ResolveRevertLastInvocations(ResolveRevertLastInvocationsRequest) returns (ResolveRevertLastInvocationsResponse);
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
   rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
 
@@ -62,6 +65,7 @@ service WorkerExecutor {
   rpc ControlDurableStreamAttachment(DurableStreamAttachmentControlRequest) returns (DurableStreamAttachmentControlResponse);
   rpc ReadDurableStreamSegment(DurableStreamSegmentReadRequest) returns (DurableStreamSegmentReadResponse);
   rpc ProcessOplogEntries(ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
+  rpc DeliverCardTransfer(DeliverCardTransferRequest) returns (DeliverCardTransferResponse);
 }
 
 message ForkWorkerRequest {
@@ -442,6 +446,21 @@ message RevertWorkerRequest {
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
   optional golem.component.Principal principal = 5;
+  optional golem.common.ResolvedRevert resolved_revert = 6;
+}
+
+message ResolveRevertLastInvocationsRequest {
+  golem.worker.AgentId agent_id = 1;
+  uint64 number_of_invocations = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+}
+
+message ResolveRevertLastInvocationsResponse {
+  oneof result {
+    golem.common.ResolvedRevert success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
 }
 
 message RevertWorkerResponse {
@@ -514,6 +533,23 @@ message ProcessOplogEntriesRequest {
 }
 
 message ProcessOplogEntriesResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message DeliverCardTransferRequest {
+  golem.worker.AgentId target_agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.common.UUID transfer_id = 3;
+  // desert_rust BinaryCodec encoding of golem_common::model::card::StoredCard.
+  bytes card = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
+  golem.common.UUID source_card_id = 6;
+}
+
+message DeliverCardTransferResponse {
   oneof result {
     golem.common.Empty success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;

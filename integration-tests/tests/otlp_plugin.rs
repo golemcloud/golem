@@ -29,7 +29,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use reqwest::Client;
 use std::collections::{BTreeMap, HashSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use test_r::{inherit_test_dep, test, test_dep, timeout};
 use tracing::info;
 
@@ -139,9 +139,27 @@ async fn otlp_basic_trace_export(
     let jaeger_trace_id = format!("{trace_id}");
     info!("Waiting for trace {jaeger_trace_id} in Jaeger");
 
-    let trace = jaeger_client
-        .wait_for_trace_with_min_spans(&jaeger_trace_id, 5, Duration::from_secs(90))
-        .await?;
+    let parent_span_id_str = format!("{parent_span_id}");
+    let external_parents = HashSet::from([parent_span_id_str.as_str()]);
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut complete_span_count = None;
+    let trace = loop {
+        if let Some(trace) = jaeger_client.get_trace(&jaeger_trace_id).await? {
+            let span_count = trace.spans.len();
+            if span_count >= 5 && trace.disconnected_spans(&external_parents).is_empty() {
+                if complete_span_count == Some(span_count) {
+                    break trace;
+                }
+                complete_span_count = Some(span_count);
+            } else {
+                complete_span_count = None;
+            }
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("Timed out waiting for complete trace {jaeger_trace_id}");
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
 
     info!("Found trace with {} spans", trace.spans.len());
 
@@ -151,8 +169,6 @@ async fn otlp_basic_trace_export(
     );
     assert_eq!(trace.trace_id, jaeger_trace_id);
 
-    let parent_span_id_str = format!("{parent_span_id}");
-    let external_parents = HashSet::from([parent_span_id_str.as_str()]);
     trace.dump_spans(&external_parents);
 
     let unknown = trace.unknown_name_spans();

@@ -247,6 +247,7 @@ fn GraphEncoder::encode_body(
         category: spec.category,
       })
     QuotaToken(spec) => @types.QuotaTokenType(spec)
+    PermissionCard(spec) => @types.PermissionCardType(spec)
     Future(element) => @types.FutureType(self.encode_opt(element))
     Stream(element) => @types.StreamType(self.encode_opt(element))
   }
@@ -482,6 +483,7 @@ fn GraphDecoder::body_of(
     @types.SecretType(spec) =>
       Secret({ inner: self.type_at(spec.inner), category: spec.category })
     @types.QuotaTokenType(spec) => QuotaToken(spec)
+    @types.PermissionCardType(spec) => PermissionCard(spec)
     @types.FutureType(element) => Future(self.decode_opt(element))
     @types.StreamType(element) => Stream(self.decode_opt(element))
   }
@@ -636,6 +638,16 @@ fn ValueEncoder::emit_node(
             "schema-value-stream handle was already transferred; an owned stream can only be sent once",
           )
       }
+    PermissionCard(handle) =>
+      // Move the owned `permission-card` resource out exactly once after the
+      // full value tree has passed the affine-handle preflight.
+      match handle.take() {
+        Some(raw) => @types.PermissionCardHandle(raw)
+        None =>
+          raise EncodeError(
+            "permission-card handle was already transferred; an owned permission-card can only be sent once",
+          )
+      }
   }
 }
 
@@ -668,8 +680,9 @@ pub fn schema_value_to_wit(
 fn preflight_value(value : SchemaValue) -> Unit raise SchemaModelError {
   let seen_secrets : Array[@types.Secret] = []
   let seen_quota_tokens : Array[@types.QuotaToken] = []
+  let seen_permission_cards : Array[@types.PermissionCard] = []
   preflight_streams(value, [])
-  preflight_walk(value, seen_secrets, seen_quota_tokens)
+  preflight_walk(value, seen_secrets, seen_quota_tokens, seen_permission_cards)
 }
 
 ///|
@@ -751,6 +764,7 @@ fn preflight_walk(
   value : SchemaValue,
   seen_secrets : Array[@types.Secret],
   seen_quota_tokens : Array[@types.QuotaToken],
+  seen_permission_cards : Array[@types.PermissionCard],
 ) -> Unit raise SchemaModelError {
   match value {
     S8(i) =>
@@ -814,48 +828,98 @@ fn preflight_walk(
           "schema-value-stream handle was already transferred; an owned stream can only be sent once",
         )
       }
+    PermissionCard(handle) => {
+      let raw = match handle.with_handle(r => r) {
+        Some(raw) => raw
+        None =>
+          raise EncodeError(
+            "permission-card handle was already transferred; an owned permission-card can only be sent once",
+          )
+      }
+      for card in seen_permission_cards {
+        if card == raw {
+          raise EncodeError(
+            "the same permission-card handle appeared more than once in one value tree",
+          )
+        }
+      }
+      seen_permission_cards.push(raw)
+    }
     Record(fields) =>
       for f in fields {
-        preflight_walk(f, seen_secrets, seen_quota_tokens)
+        preflight_walk(
+          f, seen_secrets, seen_quota_tokens, seen_permission_cards,
+        )
       }
     Variant(_, payload) =>
       match payload {
-        Some(p) => preflight_walk(p, seen_secrets, seen_quota_tokens)
+        Some(p) =>
+          preflight_walk(
+            p, seen_secrets, seen_quota_tokens, seen_permission_cards,
+          )
         None => ()
       }
     Tuple(elements) =>
       for e in elements {
-        preflight_walk(e, seen_secrets, seen_quota_tokens)
+        preflight_walk(
+          e, seen_secrets, seen_quota_tokens, seen_permission_cards,
+        )
       }
     List(elements) =>
       for e in elements {
-        preflight_walk(e, seen_secrets, seen_quota_tokens)
+        preflight_walk(
+          e, seen_secrets, seen_quota_tokens, seen_permission_cards,
+        )
       }
     FixedList(elements) =>
       for e in elements {
-        preflight_walk(e, seen_secrets, seen_quota_tokens)
+        preflight_walk(
+          e, seen_secrets, seen_quota_tokens, seen_permission_cards,
+        )
       }
     Map(entries) =>
       for e in entries {
-        preflight_walk(e.key, seen_secrets, seen_quota_tokens)
-        preflight_walk(e.value, seen_secrets, seen_quota_tokens)
+        preflight_walk(
+          e.key,
+          seen_secrets,
+          seen_quota_tokens,
+          seen_permission_cards,
+        )
+        preflight_walk(
+          e.value,
+          seen_secrets,
+          seen_quota_tokens,
+          seen_permission_cards,
+        )
       }
     Option(o) =>
       match o {
-        Some(x) => preflight_walk(x, seen_secrets, seen_quota_tokens)
+        Some(x) =>
+          preflight_walk(
+            x, seen_secrets, seen_quota_tokens, seen_permission_cards,
+          )
         None => ()
       }
     ResultOk(o) =>
       match o {
-        Some(x) => preflight_walk(x, seen_secrets, seen_quota_tokens)
+        Some(x) =>
+          preflight_walk(
+            x, seen_secrets, seen_quota_tokens, seen_permission_cards,
+          )
         None => ()
       }
     ResultErr(o) =>
       match o {
-        Some(x) => preflight_walk(x, seen_secrets, seen_quota_tokens)
+        Some(x) =>
+          preflight_walk(
+            x, seen_secrets, seen_quota_tokens, seen_permission_cards,
+          )
         None => ()
       }
-    Union(_, body) => preflight_walk(body, seen_secrets, seen_quota_tokens)
+    Union(_, body) =>
+      preflight_walk(
+        body, seen_secrets, seen_quota_tokens, seen_permission_cards,
+      )
     _ => ()
   }
 }
@@ -872,6 +936,7 @@ priv struct ValuePreflight {
   seen_secrets : Array[@types.Secret]
   seen_quota_tokens : Array[@types.QuotaToken]
   seen_streams : Array[@types.SchemaValueStream]
+  seen_permission_cards : Array[@types.PermissionCard]
 }
 
 ///|
@@ -883,6 +948,7 @@ fn ValuePreflight::new(nodes : Array[@types.SchemaValueNode]) -> ValuePreflight 
     seen_secrets: [],
     seen_quota_tokens: [],
     seen_streams: [],
+    seen_permission_cards: [],
   }
 }
 
@@ -987,6 +1053,8 @@ fn ValuePreflight::visit_node(
       self.claim_handle(idx, raw, self.seen_quota_tokens, "quota-token")
     @types.StreamValue(raw) =>
       self.claim_handle(idx, raw, self.seen_streams, "schema-value-stream")
+    @types.PermissionCardHandle(raw) =>
+      self.claim_handle(idx, raw, self.seen_permission_cards, "permission-card")
     _ => ()
   }
 }
@@ -997,7 +1065,8 @@ fn ValuePreflight::first_unreferenced_handle(self : ValuePreflight) -> Int? {
     match self.nodes[i] {
       @types.SecretValue(_)
       | @types.QuotaTokenHandle(_)
-      | @types.StreamValue(_) =>
+      | @types.StreamValue(_)
+      | @types.PermissionCardHandle(_) =>
         if !self.referenced_handles[i] {
           return Some(i)
         }
@@ -1018,11 +1087,13 @@ priv struct ValueDecoder {
   lifted_secrets : Array[Bool]
   lifted_quota_tokens : Array[Bool]
   lifted_streams : Array[Bool]
+  lifted_permission_cards : Array[Bool]
   // Underlying owned resources already lifted, so a malformed tree that carries
   // the same raw resource in two *different* handle nodes is also rejected.
   lifted_secret_raws : Array[@types.Secret]
   lifted_quota_token_raws : Array[@types.QuotaToken]
   lifted_stream_raws : Array[@types.SchemaValueStream]
+  lifted_permission_card_raws : Array[@types.PermissionCard]
 }
 
 ///|
@@ -1033,9 +1104,11 @@ fn ValueDecoder::new(nodes : Array[@types.SchemaValueNode]) -> ValueDecoder {
     lifted_secrets: Array::make(nodes.length(), false),
     lifted_quota_tokens: Array::make(nodes.length(), false),
     lifted_streams: Array::make(nodes.length(), false),
+    lifted_permission_cards: Array::make(nodes.length(), false),
     lifted_secret_raws: [],
     lifted_quota_token_raws: [],
     lifted_stream_raws: [],
+    lifted_permission_card_raws: [],
   }
 }
 
@@ -1229,6 +1302,25 @@ fn ValueDecoder::from_node(
       self.lifted_streams[idx] = true
       self.lifted_stream_raws.push(raw)
       Stream(GuestSchemaValueStreamHandle::from_wrapped(raw))
+    }
+    @types.PermissionCardHandle(raw) => {
+      // The generated resource wrapper is copyable, so enforce affine
+      // ownership when lifting it into the recursive schema value.
+      guard not(self.lifted_permission_cards[idx]) else {
+        raise DecodeError(
+          "permission-card handle node referenced more than once at index \{idx}; an owned permission-card can only be lifted once",
+        )
+      }
+      for card in self.lifted_permission_card_raws {
+        if card == raw {
+          raise DecodeError(
+            "the same owned permission-card resource appeared in more than one handle node",
+          )
+        }
+      }
+      self.lifted_permission_cards[idx] = true
+      self.lifted_permission_card_raws.push(raw)
+      PermissionCard(GuestPermissionCardHandle::new(raw))
     }
   }
 }

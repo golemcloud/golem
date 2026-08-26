@@ -23,23 +23,26 @@ use golem_api_grpc::proto::golem::common::Empty;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     AgentError as GrpcAgentError, CancelInvocationRequest, CancelInvocationResponse,
-    CompletePromiseRequest, CompletePromiseResponse, DurableStreamAttachmentControlRequest,
+    CompletePromiseRequest, CompletePromiseResponse, DeliverCardTransferRequest,
+    DeliverCardTransferResponse, DurableStreamAttachmentControlRequest,
     DurableStreamAttachmentControlResponse, DurableStreamSegmentReadRequest,
     DurableStreamSegmentReadResponse, ForkWorkerRequest, ForkWorkerResponse, InvokeAgentRequest,
     InvokeAgentResponse, InvokeAgentSuccess, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
     LaunchNewWorkerSuccessResponse, ProcessOplogEntriesRequest, ProcessOplogEntriesResponse,
     ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
     UpdateWorkerRequest, UpdateWorkerResponse, cancel_invocation_response,
-    complete_promise_response, durable_stream_attachment_control_response,
-    durable_stream_segment_read_response, fork_worker_response, invoke_agent_response,
-    launch_new_worker_response, process_oplog_entries_response, resume_worker_response,
-    revert_worker_response, update_worker_response,
+    complete_promise_response, deliver_card_transfer_response,
+    durable_stream_attachment_control_response, durable_stream_segment_read_response,
+    fork_worker_response, invoke_agent_response, launch_new_worker_response,
+    process_oplog_entries_response, resume_worker_response, revert_worker_response,
+    update_worker_response,
 };
 use golem_api_grpc::proto::golem::worker::{
     InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationResponse,
     invocation_request, invocation_response,
 };
 use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -672,6 +675,33 @@ impl GrpcWorkerService for WorkerGrpcApi {
             result: Some(response),
         }))
     }
+
+    async fn deliver_card_transfer(
+        &self,
+        request: Request<DeliverCardTransferRequest>,
+    ) -> Result<Response<DeliverCardTransferResponse>, Status> {
+        let (_, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "deliver_card_transfer",
+            agent_id = proto_agent_id_string(&request.target_agent_id),
+        );
+
+        let response = match self
+            .deliver_card_transfer_inner(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(()) => record.succeed(deliver_card_transfer_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                deliver_card_transfer_response::Result::Error(error.clone()),
+                &mut WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(DeliverCardTransferResponse {
+            result: Some(response),
+        }))
+    }
 }
 
 impl WorkerGrpcApi {
@@ -706,18 +736,33 @@ impl WorkerGrpcApi {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| bad_request_error(format!("failed converting config: {e}")))?;
 
-        let (latest_component_revision, fingerprint) = self
-            .worker_service
-            .create(
-                &agent_id,
-                request.env,
-                config,
-                request.ignore_already_existing,
-                auth,
-                request.context,
-                request.principal,
-            )
-            .await?;
+        let (latest_component_revision, fingerprint) =
+            if let Some(method_name) = request.method_name {
+                self.worker_service
+                    .create_for_invocation(
+                        &agent_id,
+                        method_name,
+                        request.env,
+                        config,
+                        request.ignore_already_existing,
+                        auth,
+                        request.context,
+                        request.principal,
+                    )
+                    .await?
+            } else {
+                self.worker_service
+                    .create(
+                        &agent_id,
+                        request.env,
+                        config,
+                        request.ignore_already_existing,
+                        auth,
+                        request.context,
+                        request.principal,
+                    )
+                    .await?
+            };
 
         Ok((agent_id, latest_component_revision, fingerprint))
     }
@@ -819,8 +864,16 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(|err| bad_request_error(format!("Invalid target {err}")))?;
 
+        let resolved_revert =
+            request
+                .resolved_revert
+                .map(|resolved| golem_common::model::worker::ResolvedRevert {
+                    last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
+                    observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
+                });
+
         self.worker_service
-            .revert_worker(&agent_id, target, auth)
+            .revert_worker_prepared(&agent_id, target, resolved_revert, auth)
             .await?;
 
         Ok(())
@@ -837,8 +890,8 @@ impl WorkerGrpcApi {
             .map(|entry| entry.try_into().map_err(WorkerServiceError::TypeChecker))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let is_lookup =
-            request.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
+        let mode = request.mode();
+        let is_lookup = mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
 
         let auth: AuthCtx = request
             .auth_ctx
@@ -846,6 +899,18 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let trusted_internal_caller = matches!(&auth, AuthCtx::System | AuthCtx::Agent(_));
+        if request.scope_card.is_some() && !trusted_internal_caller {
+            return Err(bad_request_error(
+                "scope cards are accepted only from trusted internal callers",
+            ));
+        }
+        if request.scope_card.is_some()
+            && mode != golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await
+        {
+            return Err(bad_request_error(
+                "scope cards are supported only for invoke-and-await",
+            ));
+        }
         let freshness_disposition = sanitize_invocation_freshness_disposition(
             request.freshness_disposition,
             trusted_internal_caller,
@@ -870,6 +935,12 @@ impl WorkerGrpcApi {
             .principal
             .unwrap_or_else(|| golem_common::model::agent::Principal::anonymous().into());
 
+        let environment_id = request
+            .environment_id
+            .map(|id| id.try_into())
+            .transpose()
+            .map_err(|e| bad_request_error(format!("invalid environment_id: {e}")))?;
+
         let output = self
             .worker_service
             .invoke_agent(
@@ -885,6 +956,8 @@ impl WorkerGrpcApi {
                 config,
                 auth,
                 principal,
+                environment_id,
+                request.scope_card,
             )
             .await?;
 
@@ -922,6 +995,7 @@ impl WorkerGrpcApi {
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+        auth.authorize_system_only("process oplog entries")?;
 
         let agent_id = validate_protobuf_agent_id(request.agent_id)?;
 
@@ -962,6 +1036,50 @@ impl WorkerGrpcApi {
                 metadata,
                 OplogIndex::from_u64(request.first_entry_index),
                 request.entries,
+                auth,
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn deliver_card_transfer_inner(
+        &self,
+        request: DeliverCardTransferRequest,
+    ) -> Result<(), GrpcAgentError> {
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|error| bad_request_error(format!("failed converting auth_ctx: {error}")))?;
+        auth.authorize_system_only("deliver permission card transfer")?;
+
+        let target_agent_id = validate_protobuf_agent_id(request.target_agent_id)?;
+        let environment_id = request
+            .environment_id
+            .ok_or_else(|| bad_request_error("Missing environment_id"))?
+            .try_into()
+            .map_err(|error| bad_request_error(format!("invalid environment_id: {error}")))?;
+        let transfer_id = request
+            .transfer_id
+            .ok_or_else(|| bad_request_error("Missing transfer_id"))?
+            .into();
+        let source_card_id = CardId(
+            request
+                .source_card_id
+                .ok_or_else(|| bad_request_error("Missing source_card_id"))?
+                .into(),
+        );
+        let card: StoredCard = desert_rust::deserialize(&request.card)
+            .map_err(|error| bad_request_error(format!("invalid card: {error}")))?;
+
+        self.worker_service
+            .deliver_card_transfer(
+                &target_agent_id,
+                environment_id,
+                transfer_id,
+                source_card_id,
+                card,
                 auth,
             )
             .await?;

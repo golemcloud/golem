@@ -1377,6 +1377,7 @@ async fn open_invocation_session(
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
+            scope_card: None,
         })),
     };
     let mut state = InvocationSessionState::default();

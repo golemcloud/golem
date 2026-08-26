@@ -327,6 +327,12 @@ function encodeType(encoder: CborEncoder, type: SchemaType): void {
       encoder.optionalText(body.spec.resourceName);
       encodeMetadata(encoder, type.metadata);
       break;
+    case 'permission-card':
+      encoder.array(3);
+      encoder.unsigned(37n);
+      encoder.boolean(body.spec.polymorphic);
+      encodeMetadata(encoder, type.metadata);
+      break;
     case 'future':
     case 'stream':
       encoder.array(3);
@@ -506,6 +512,9 @@ class CborEncoder {
   optionalUnsigned(value?: number): void {
     if (value === undefined) this.null();
     else this.unsigned(BigInt(value));
+  }
+  boolean(value: boolean): void {
+    this.bytes.push(value ? 0xf5 : 0xf4);
   }
   null(): void {
     this.bytes.push(0xf6);

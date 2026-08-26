@@ -40,7 +40,7 @@ pub struct ToolInvocationPattern {
 pub struct ToolIdentifier(pub String);
 
 impl ToolIdentifier {
-    fn parse(value: &str) -> Result<Self, String> {
+    pub fn parse(value: &str) -> Result<Self, String> {
         let mut chars = value.chars();
         if chars
             .next()
@@ -51,6 +51,56 @@ impl ToolIdentifier {
         } else {
             Err(value.to_string())
         }
+    }
+}
+
+impl ToolInvocationPattern {
+    pub fn from_command_and_args(command_path: &[&str], args: &[&str]) -> Result<Self, String> {
+        let command_path = if command_path.is_empty() {
+            None
+        } else {
+            Some(
+                command_path
+                    .iter()
+                    .map(|segment| ToolIdentifier::parse(segment))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        };
+        let args = args
+            .iter()
+            .map(|arg| {
+                if let Some(long) = arg.strip_prefix("--") {
+                    let (name, value) = match long.split_once('=') {
+                        Some((name, value)) => (
+                            name,
+                            Some(ToolValuePattern::Literal(ToolValueLiteral(
+                                value.to_string(),
+                            ))),
+                        ),
+                        None => (long, None),
+                    };
+                    Ok(ToolArgPattern::LongFlag {
+                        name: ToolIdentifier::parse(name)?,
+                        value,
+                    })
+                } else if let Some(short) = arg.strip_prefix('-') {
+                    if short.is_empty() || !short.chars().all(|c| c.is_ascii_alphabetic()) {
+                        return Err((*arg).to_string());
+                    }
+                    Ok(ToolArgPattern::ShortFlags {
+                        flags: short.chars().collect(),
+                        value: None,
+                    })
+                } else if arg.is_empty() {
+                    Err((*arg).to_string())
+                } else {
+                    Ok(ToolArgPattern::Positional(ToolValuePattern::Literal(
+                        ToolValueLiteral((*arg).to_string()),
+                    )))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { command_path, args })
     }
 }
 

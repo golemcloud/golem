@@ -72,7 +72,7 @@ pub struct GolemConfig {
     pub shard_manager: GrpcShardManagerConfig,
     pub oplog: OplogConfig,
     pub suspend: SuspendConfig,
-    pub active_workers: ActiveWorkersConfig,
+    pub active_agents: ActiveAgentsConfig,
     #[serde(default)]
     pub agent_status_flush: AgentStatusFlushConfig,
     #[serde(default)]
@@ -203,11 +203,11 @@ impl SafeDisplay for GolemConfig {
         let _ = writeln!(&mut result, "{}", self.oplog.to_safe_string_indented());
         let _ = writeln!(&mut result, "suspend:");
         let _ = writeln!(&mut result, "{}", self.suspend.to_safe_string_indented());
-        let _ = writeln!(&mut result, "active_workers:");
+        let _ = writeln!(&mut result, "active_agents:");
         let _ = writeln!(
             &mut result,
             "{}",
-            self.active_workers.to_safe_string_indented()
+            self.active_agents.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "agent_status_flush:");
         let _ = writeln!(
@@ -345,7 +345,7 @@ impl Default for GolemConfig {
             oplog: OplogConfig::default(),
             suspend: SuspendConfig::default(),
             scheduler: SchedulerConfig::default(),
-            active_workers: ActiveWorkersConfig::default(),
+            active_agents: ActiveAgentsConfig::default(),
             agent_status_flush: AgentStatusFlushConfig::default(),
             agent_status_checkpoint: AgentStatusCheckpointConfig::default(),
             public_worker_api: WorkerServiceGrpcConfig::default(),
@@ -383,7 +383,7 @@ impl Default for GolemConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Limits {
-    pub max_active_workers: usize,
+    pub max_active_agents: usize,
     pub invocation_result_broadcast_capacity: usize,
     pub live_stream_event_broadcast_capacity: NonZeroUsize,
     pub max_concurrent_streams: u32,
@@ -410,11 +410,7 @@ impl SafeDisplay for Limits {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
 
-        let _ = writeln!(
-            &mut result,
-            "max active workers: {}",
-            self.max_active_workers
-        );
+        let _ = writeln!(&mut result, "max active agents: {}", self.max_active_agents);
         let _ = writeln!(
             &mut result,
             "invocation result broadcast capacity: {}",
@@ -708,13 +704,13 @@ impl SafeDisplay for SuspendConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ActiveWorkersConfig {
+pub struct ActiveAgentsConfig {
     pub drop_when_full: f64,
     #[serde(with = "humantime_serde")]
     pub ttl: Duration,
 }
 
-impl SafeDisplay for ActiveWorkersConfig {
+impl SafeDisplay for ActiveAgentsConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "drop when full: {}", self.drop_when_full);
@@ -1275,8 +1271,8 @@ impl MemoryConfig {
     /// host keeps the remainder).
     pub(crate) fn admission_policy(
         &self,
-    ) -> crate::services::active_workers::admission::AdmissionPolicy {
-        crate::services::active_workers::admission::AdmissionPolicy {
+    ) -> crate::services::active_agents::admission::AdmissionPolicy {
+        crate::services::active_agents::admission::AdmissionPolicy {
             usable_ratio: self.worker_memory_ratio,
         }
     }
@@ -1775,7 +1771,7 @@ impl HasConfigExamples<GolemConfig> for GolemConfig {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            max_active_workers: 1024,
+            max_active_agents: 1024,
             invocation_result_broadcast_capacity: 100000,
             live_stream_event_broadcast_capacity: NonZeroUsize::new(32).unwrap(),
             max_concurrent_streams: 1024,
@@ -1823,7 +1819,7 @@ impl Default for SuspendConfig {
     }
 }
 
-impl Default for ActiveWorkersConfig {
+impl Default for ActiveAgentsConfig {
     fn default() -> Self {
         Self {
             drop_when_full: 0.25,

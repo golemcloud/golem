@@ -17,6 +17,7 @@ mod invocation_session;
 
 pub(crate) use invocation_session::build_durable_streaming_request;
 
+use crate::durable_host::agent_monomorphization_context;
 use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
@@ -29,11 +30,14 @@ use crate::services::worker_activator::{
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
+    All, HasActiveAgents, HasAll, HasComponentService, HasEvents, HasOplogService,
     HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
-use crate::worker::Worker;
+pub use crate::worker::{
+    PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
+};
+use crate::worker::{Worker, WorkerUpdateMode};
 use crate::workerctx::WorkerCtx;
 use futures::Stream;
 use futures::StreamExt;
@@ -43,16 +47,19 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::Wo
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, ActivatePluginResponse, CancelInvocationRequest,
     CancelInvocationResponse, ConnectWorkerRequest, DeactivatePluginRequest,
-    DeactivatePluginResponse, DeleteWorkerRequest, DurableStreamAttachmentControlRequest,
+    DeactivatePluginResponse, DeleteWorkerRequest, DeliverCardTransferRequest,
+    DeliverCardTransferResponse, DurableStreamAttachmentControlRequest,
     DurableStreamAttachmentControlResponse, DurableStreamSegmentReadRequest,
     DurableStreamSegmentReadResponse, ForkWorkerRequest, ForkWorkerResponse, GetAgentWalletRequest,
     GetAgentWalletResponse, GetAgentWalletSuccess, GetFileContentsRequest, GetFileContentsResponse,
     GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
     GetWorkersMetadataResponse, ProcessOplogEntriesRequest, ProcessOplogEntriesResponse,
-    RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse, durable_stream_attachment_control_response,
-    durable_stream_segment_read_response, process_oplog_entries_response,
+    ResolveRevertLastInvocationsRequest, ResolveRevertLastInvocationsResponse, RevertWorkerRequest,
+    RevertWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse, deliver_card_transfer_response,
+    durable_stream_attachment_control_response, durable_stream_segment_read_response,
+    process_oplog_entries_response, resolve_revert_last_invocations_response,
 };
 use golem_common::base_model::durable_stream::{
     AttachedStreamSegmentRequestV1, StreamAttachmentControlRequestV1,
@@ -62,16 +69,19 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal,
 };
+use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
-use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
-use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAgentConfigEntry};
+use golem_common::model::worker::{
+    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, TypedAgentConfigEntry,
+};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata,
-    AgentStatus, IdempotencyKey, OwnedAgentId, PendingUpdateKind, ScanCursor, ShardId, Timestamp,
+    AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardId, Timestamp,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -90,7 +100,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::info_span;
-use tracing::{Instrument, debug, info, warn};
+use tracing::{Instrument, info};
 use wasmtime::Error;
 
 /// This is the implementation of the Worker Executor gRPC API
@@ -334,7 +344,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })?;
 
         if !request.ignore_already_existing {
-            if let Some(existing) = self.active_workers().try_get(&owned_agent_id).await {
+            if let Some(existing) = self.active_agents().try_get(&owned_agent_id).await {
                 if !Self::is_same_worker_creation_request(
                     &existing.get_initial_worker_metadata(),
                     &env,
@@ -450,34 +460,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let principal = extract_principal(&request.principal);
 
-        Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
-            .ok_or(WorkerExecutorError::worker_not_found(
-                owned_agent_id.agent_id(),
-            ))?;
-
-        let worker = Worker::get_or_create_suspended(
-            self,
-            &owned_agent_id,
-            None,
-            Vec::new(),
-            None,
-            None,
-            &InvocationContextStack::fresh(),
-            principal,
-        )
-        .await?;
-
-        info!("Marking worker for deletion");
-        worker.start_deleting().await?;
-
-        self.worker_service().remove(&owned_agent_id).await;
-        self.active_workers().remove(&owned_agent_id.agent_id).await;
-
-        // ensure we are holding the worker while we are doing cleanup.
-        drop(worker);
-
-        Ok(())
+        Worker::<Ctx>::delete(self, &owned_agent_id, principal).await
     }
 
     async fn control_durable_stream_attachment_internal(
@@ -708,6 +691,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let principal = extract_principal(&request.principal);
 
+        let resolved_revert = request.resolved_revert.map(|resolved| ResolvedRevert {
+            last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
+            observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
+        });
+
         let target = request
             .target
             .ok_or(WorkerExecutorError::invalid_request("target not found"))?;
@@ -716,28 +704,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let metadata = self.worker_service().get(&owned_agent_id).await;
+        Worker::<Ctx>::revert(self, &owned_agent_id, target, resolved_revert, principal).await
+    }
 
-        match metadata {
-            Some(_) => {
-                let worker = Worker::get_or_create_suspended(
-                    self,
-                    &owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    principal,
-                )
-                .await?;
-                worker.revert(target).await?;
-                Ok(())
-            }
-            None => Err(WorkerExecutorError::worker_not_found(
-                owned_agent_id.agent_id(),
-            )),
-        }
+    async fn resolve_revert_last_invocations_internal(
+        &self,
+        request: ResolveRevertLastInvocationsRequest,
+    ) -> Result<ResolvedRevert, WorkerExecutorError> {
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        Self::validate_auth_ctx(&request.auth_ctx)?;
+
+        Worker::<Ctx>::resolve_revert_last_invocations(
+            self,
+            &owned_agent_id,
+            request.number_of_invocations,
+        )
+        .await
     }
 
     async fn cancel_invocation_internal(
@@ -807,95 +792,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let principal = extract_principal(&request.principal);
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id).await;
-
-        if let Some(metadata) = metadata {
-            match &metadata.last_known_status.status {
-                AgentStatus::Exited => {
-                    warn!("Attempted interrupting worker which already exited")
-                }
-                AgentStatus::Idle => {
-                    warn!("Attempted interrupting worker which is idle")
-                }
-                AgentStatus::Failed => {
-                    warn!("Attempted interrupting worker which is failed")
-                }
-                AgentStatus::Interrupted => {
-                    warn!("Attempted interrupting worker which is already interrupted")
-                }
-                AgentStatus::Suspended => {
-                    debug!("Marking suspended worker as interrupted");
-                    let worker = Worker::get_or_create_suspended(
-                        self,
-                        &owned_agent_id,
-                        None,
-                        Vec::new(),
-                        None,
-                        None,
-                        &InvocationContextStack::fresh(),
-                        principal.clone(),
-                    )
-                    .await?;
-                    if let Some(mut await_interruption) = worker
-                        .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-                        .await
-                    {
-                        await_interruption.recv().await.unwrap();
-                    };
-                    // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_agent_id.agent_id).await;
-                }
-                AgentStatus::Retrying => {
-                    debug!("Marking worker scheduled to be retried as interrupted");
-                    let worker = Worker::get_or_create_suspended(
-                        self,
-                        &owned_agent_id,
-                        None,
-                        Vec::new(),
-                        None,
-                        None,
-                        &InvocationContextStack::fresh(),
-                        principal.clone(),
-                    )
-                    .await?;
-                    if let Some(mut await_interruption) = worker
-                        .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-                        .await
-                    {
-                        await_interruption.recv().await.unwrap();
-                    };
-                    // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_agent_id.agent_id).await;
-                }
-                AgentStatus::Running => {
-                    let worker = Worker::get_or_create_suspended(
-                        self,
-                        &owned_agent_id,
-                        None,
-                        Vec::new(),
-                        None,
-                        None,
-                        &InvocationContextStack::fresh(),
-                        principal,
-                    )
-                    .await?;
-                    if let Some(mut await_interruption) = worker
-                        .set_interrupting(if request.recover_immediately {
-                            InterruptKind::Restart
-                        } else {
-                            InterruptKind::Interrupt(Timestamp::now_utc())
-                        })
-                        .await
-                    {
-                        await_interruption.recv().await.unwrap();
-                    };
-
-                    // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_agent_id.agent_id).await;
-                }
-            }
-        }
-        Ok(())
+        Worker::<Ctx>::interrupt(
+            self,
+            &owned_agent_id,
+            request.recover_immediately,
+            principal,
+        )
+        .await
     }
 
     async fn resume_worker_internal(
@@ -912,57 +815,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let force_resume = request.force.unwrap_or(false);
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
-            .ok_or(WorkerExecutorError::worker_not_found(
-                owned_agent_id.agent_id(),
-            ))?;
-
-        self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, &metadata)
-            .await?;
-
-        match &metadata.last_known_status.status {
-            AgentStatus::Suspended | AgentStatus::Interrupted | AgentStatus::Idle => {
-                info!(
-                    "Activating {:?} worker {owned_agent_id} due to explicit resume request",
-                    metadata.last_known_status.status
-                );
-                let _ = Worker::get_or_create_running(
-                    &self.services,
-                    &owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    principal.clone(),
-                )
-                .await?;
-                Ok(())
-            }
-            _ if force_resume => {
-                info!(
-                    "Force activating {:?} worker {owned_agent_id} due to explicit resume request",
-                    metadata.last_known_status.status
-                );
-                let _ = Worker::get_or_create_running(
-                    &self.services,
-                    &owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    principal,
-                )
-                .await?;
-                Ok(())
-            }
-            _ => Err(WorkerExecutorError::invalid_request(format!(
-                "Worker {agent_id} is not suspended, interrupted or idle",
-                agent_id = owned_agent_id.agent_id
-            ))),
-        }
+        Worker::<Ctx>::resume(self, &owned_agent_id, force_resume, principal).await
     }
 
     async fn get_or_create<Req: CanStartWorker>(
@@ -1098,7 +951,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.shard_service().revoke_shards(&shard_ids)?;
 
-        for (agent_id, worker_details) in self.active_workers().snapshot().await {
+        for (agent_id, worker_details) in self.active_agents().snapshot().await {
             if self.shard_service().check_worker(&agent_id).is_err()
                 && let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)
@@ -1138,7 +991,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.shard_service()
             .set_shard_assignment(number_of_shards, &shard_ids)?;
 
-        for (agent_id, worker_details) in self.active_workers().snapshot().await {
+        for (agent_id, worker_details) in self.active_agents().snapshot().await {
             if self.shard_service().check_worker(&agent_id).is_err()
                 && let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)
@@ -1286,196 +1139,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
-            .ok_or(WorkerExecutorError::worker_not_found(
-                owned_agent_id.agent_id(),
-            ))?;
+        let mode = match request.mode() {
+            UpdateMode::Automatic => WorkerUpdateMode::Automatic,
+            UpdateMode::Manual => WorkerUpdateMode::Manual,
+        };
 
-        if metadata.last_known_status.component_revision == target_revision {
-            return Err(WorkerExecutorError::invalid_request(
-                "Worker is already at the target version",
-            ));
-        }
-
-        let component_metadata = self
-            .component_service()
-            .get_metadata(
-                owned_agent_id.agent_id.component_id,
-                Some(metadata.last_known_status.component_revision),
-            )
-            .await?;
-
-        if let Ok(agent_id) = ParsedAgentId::parse(
-            &owned_agent_id.agent_id.agent_id,
-            &component_metadata.metadata,
-        ) && let Some(agent_type) = component_metadata
-            .metadata
-            .find_agent_type_by_name_ref(&agent_id.agent_type)
-            && agent_type.mode == AgentMode::Ephemeral
-        {
-            return Err(WorkerExecutorError::invalid_request(
-                "Ephemeral workers cannot be updated",
-            ));
-        }
-
-        // Reject mode-changing updates: the target component revision must keep the worker's
-        // agent type at the same `agent_mode` that the worker was created with. Changing the
-        // mode would route subsequent oplog reads/writes to a different namespace and silently
-        // lose the worker's history.
-        //
-        // If the target revision cannot be resolved (e.g. it does not exist yet), we skip the
-        // check and let the update be queued; the worker's update loop is the canonical place
-        // that records a FailedUpdate for unknown revisions, and we must not bypass that path
-        // by failing synchronously here.
-        if let Ok(target_component_metadata) = self
-            .component_service()
-            .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
-            .await
-            && let Ok(agent_id) = ParsedAgentId::parse(
-                &owned_agent_id.agent_id.agent_id,
-                &target_component_metadata.metadata,
-            )
-            && let Some(target_agent_type) = target_component_metadata
-                .metadata
-                .find_agent_type_by_name_ref(&agent_id.agent_type)
-        {
-            let persisted_mode = metadata.agent_mode;
-            if target_agent_type.mode != persisted_mode {
-                return Err(WorkerExecutorError::invalid_request(format!(
-                    "Cannot update worker {} from {:?} to component revision {}: the agent type \
-                     '{}' has mode {:?} in the target revision but the worker was created with \
-                     mode {:?}. Changing an agent type's mode across revisions is not supported.",
-                    owned_agent_id,
-                    persisted_mode,
-                    target_revision,
-                    agent_id.agent_type,
-                    target_agent_type.mode,
-                    persisted_mode,
-                )));
-            }
-        }
-
-        let disable_wakeup = request.disable_wakeup;
-
-        match request.mode() {
-            UpdateMode::Automatic => {
-                let update_description = UpdateDescription::Automatic { target_revision };
-
-                if metadata
-                    .last_known_status
-                    .pending_updates
-                    .iter()
-                    .any(|update| {
-                        update.kind == PendingUpdateKind::Automatic
-                            && update.target_revision == target_revision
-                    })
-                {
-                    return Err(WorkerExecutorError::invalid_request(
-                        "The same update is already in progress",
-                    ));
-                }
-
-                match &metadata.last_known_status.status {
-                    AgentStatus::Exited => {
-                        warn!("Attempted updating worker which already exited")
-                    }
-                    AgentStatus::Interrupted
-                    | AgentStatus::Suspended
-                    | AgentStatus::Retrying
-                    | AgentStatus::Failed => {
-                        // The worker is not active.
-
-                        debug!("Activating worker for update",);
-                        let worker = Worker::get_or_create_suspended(
-                            self,
-                            &owned_agent_id,
-                            None,
-                            Vec::new(),
-                            Some(metadata.last_known_status.component_revision),
-                            None,
-                            &InvocationContextStack::fresh(),
-                            principal.clone(),
-                        )
-                        .await?;
-
-                        debug!("Enqueuing update");
-                        worker.enqueue_update(update_description.clone()).await;
-
-                        if disable_wakeup {
-                            debug!("Skipping worker activation due to disable_wakeup flag");
-                        } else {
-                            debug!("Resuming initialization to perform the update",);
-                            Worker::start_if_needed(worker.clone()).await?;
-                        }
-                    }
-                    AgentStatus::Running | AgentStatus::Idle => {
-                        // If the worker is already running we need to write to its oplog the
-                        // update attempt, and then interrupt it and have it immediately restarting
-                        // to begin the update.
-                        let worker = Worker::get_or_create_suspended(
-                            self,
-                            &owned_agent_id,
-                            None,
-                            Vec::new(),
-                            None,
-                            None,
-                            &InvocationContextStack::fresh(),
-                            principal.clone(),
-                        )
-                        .await?;
-
-                        worker.enqueue_update(update_description.clone()).await;
-
-                        debug!("Enqueued update for running worker");
-
-                        worker.set_interrupting(InterruptKind::Restart).await;
-
-                        debug!("Interrupted running worker for update");
-                    }
-                }
-            }
-
-            UpdateMode::Manual => {
-                if metadata
-                    .last_known_status
-                    .pending_invocations
-                    .iter()
-                    .any(|invocation| {
-                        invocation.manual_update_target_revision == Some(target_revision)
-                    })
-                {
-                    return Err(WorkerExecutorError::invalid_request(
-                        "The same update is already in progress",
-                    ));
-                }
-
-                // For manual update we need to invoke the worker to save the custom snapshot.
-                // This is in a race condition with other worker invocations, so the whole update
-                // process need to be initiated through the worker's invocation queue.
-
-                let worker = Worker::get_or_create_suspended(
-                    self,
-                    &owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    principal,
-                )
-                .await?;
-                worker.enqueue_manual_update(target_revision).await?;
-
-                if disable_wakeup {
-                    debug!("Skipping worker activation due to disable_wakeup flag");
-                } else {
-                    Worker::start_if_needed(worker.clone()).await?;
-                }
-            }
-        }
-
-        Ok(())
+        Worker::<Ctx>::update(
+            self,
+            &owned_agent_id,
+            mode,
+            target_revision,
+            request.disable_wakeup,
+            principal,
+        )
+        .await
     }
 
     async fn connect_worker_internal(
@@ -1905,61 +1582,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let plugin_priority: PluginPriority = PluginPriority(request.plugin_priority);
 
-        let metadata = Worker::get_latest_metadata(&self.services, &owned_agent_id).await;
-
-        match metadata {
-            Some(metadata) => {
-                let component_metadata = self
-                    .component_service()
-                    .get_metadata(
-                        owned_agent_id.agent_id.component_id,
-                        Some(metadata.last_known_status.component_revision),
-                    )
-                    .await?;
-
-                let agent_type =
-                    ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
-
-                let installation = agent_type
-                    .as_ref()
-                    .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
-                    .and_then(|plugins| plugins.iter().find(|p| p.priority == plugin_priority));
-
-                match installation {
-                    Some(installation) => {
-                        let grant_id = installation.environment_plugin_grant_id;
-                        if metadata
-                            .last_known_status
-                            .active_plugins
-                            .contains(&grant_id)
-                        {
-                            warn!("Plugin is already activated");
-                            Ok(())
-                        } else {
-                            let worker = Worker::get_or_create_suspended(
-                                self,
-                                &owned_agent_id,
-                                None,
-                                Vec::new(),
-                                None,
-                                None,
-                                &InvocationContextStack::fresh(),
-                                principal,
-                            )
-                            .await?;
-                            worker.activate_plugin(grant_id).await?;
-                            Ok(())
-                        }
-                    }
-                    None => Err(WorkerExecutorError::invalid_request(
-                        "Plugin installation does not belong to this worker's component",
-                    )),
-                }
-            }
-            None => Err(WorkerExecutorError::worker_not_found(
-                owned_agent_id.agent_id(),
-            )),
-        }
+        Worker::<Ctx>::activate_plugin(self, &owned_agent_id, plugin_priority, principal).await
     }
 
     async fn deactivate_plugin_internal(
@@ -1975,58 +1598,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let plugin_priority = PluginPriority(request.plugin_priority);
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
-            .ok_or(WorkerExecutorError::worker_not_found(
-                owned_agent_id.agent_id(),
-            ))?;
-
-        let component_metadata = self
-            .component_service()
-            .get_metadata(
-                owned_agent_id.agent_id.component_id,
-                Some(metadata.last_known_status.component_revision),
-            )
-            .await?;
-
-        let agent_type =
-            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
-        let installation = agent_type
-            .as_ref()
-            .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
-            .and_then(|plugins| plugins.iter().find(|p| p.priority == plugin_priority))
-            .cloned();
-
-        match installation {
-            Some(installation) => {
-                let grant_id = installation.environment_plugin_grant_id;
-                if !metadata
-                    .last_known_status
-                    .active_plugins
-                    .contains(&grant_id)
-                {
-                    warn!("Plugin is already deactivated");
-                    Ok(())
-                } else {
-                    let worker = Worker::get_or_create_suspended(
-                        self,
-                        &owned_agent_id,
-                        None,
-                        Vec::new(),
-                        None,
-                        None,
-                        &InvocationContextStack::fresh(),
-                        principal,
-                    )
-                    .await?;
-                    worker.deactivate_plugin(grant_id).await?;
-                    Ok(())
-                }
-            }
-            None => Err(WorkerExecutorError::invalid_request(
-                "Plugin installation does not belong to this worker's component",
-            )),
-        }
+        Worker::<Ctx>::deactivate_plugin(self, &owned_agent_id, plugin_priority, principal).await
     }
 
     async fn process_oplog_entries_internal(
@@ -2037,7 +1609,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
-        Self::validate_auth_ctx(&request.auth_ctx)?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {error}"))
+            })?;
+        auth_ctx
+            .authorize_system_only("process oplog entries")
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
 
         let component_revision: golem_common::model::component::ComponentRevision =
             request.component_revision.try_into().map_err(|e| {
@@ -2113,6 +1695,82 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
 
         Ok(())
+    }
+
+    async fn deliver_card_transfer_internal(
+        &self,
+        request: DeliverCardTransferRequest,
+    ) -> Result<(), WorkerExecutorError> {
+        let owned_agent_id = extract_owned_agent_id(
+            &request,
+            |request| &request.target_agent_id,
+            |request| &request.environment_id,
+        )?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {error}"))
+            })?;
+        auth_ctx
+            .authorize_system_only("deliver permission card transfer")
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+
+        let transfer_id: uuid::Uuid = request
+            .transfer_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "transfer_id not found",
+            ))?
+            .into();
+        let source_card_id = CardId(
+            request
+                .source_card_id
+                .ok_or(WorkerExecutorError::invalid_request(
+                    "source_card_id not found",
+                ))?
+                .into(),
+        );
+        let card: StoredCard = std::panic::catch_unwind(|| desert_rust::deserialize(&request.card))
+            .map_err(|_| WorkerExecutorError::invalid_request("invalid card: malformed payload"))?
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("invalid card: {error}"))
+            })?;
+
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        if Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
+            .await
+            .is_none()
+        {
+            let component = self
+                .component_service()
+                .get_metadata(owned_agent_id.agent_id.component_id, None)
+                .await?;
+            let parsed_agent_id =
+                ParsedAgentId::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
+                    .map_err(|error| {
+                        WorkerExecutorError::invalid_request(format!("Invalid agent id: {error}"))
+                    })?;
+            let target_context =
+                agent_monomorphization_context(&component, &owned_agent_id, &parsed_agent_id);
+            if !card_matches_agent_recipient(&card, &target_context) {
+                return Err(WorkerExecutorError::invalid_request(
+                    PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH,
+                ));
+            }
+        }
+
+        let worker = self
+            .get_or_create_pending_with_freshness(
+                &request,
+                InvocationFreshnessDisposition::MayExist,
+            )
+            .await?;
+        worker
+            .receive_card_transfer(transfer_id, source_card_id, card)
+            .await
     }
 
     fn create_proto_metadata(
@@ -2860,6 +2518,44 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    async fn resolve_revert_last_invocations(
+        &self,
+        request: Request<ResolveRevertLastInvocationsRequest>,
+    ) -> Result<Response<ResolveRevertLastInvocationsResponse>, Status> {
+        let request = request.into_inner();
+
+        let record = recorded_grpc_api_request!(
+            "resolve_revert_last_invocations",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+
+        let result = self
+            .resolve_revert_last_invocations_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(resolved) => {
+                record.succeed(Ok(Response::new(ResolveRevertLastInvocationsResponse {
+                    result: Some(resolve_revert_last_invocations_response::Result::Success(
+                        golem::common::ResolvedRevert {
+                            last_oplog_index: resolved.last_oplog_index.as_u64(),
+                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
+                        },
+                    )),
+                })))
+            }
+            Err(mut err) => record.fail(
+                Ok(Response::new(ResolveRevertLastInvocationsResponse {
+                    result: Some(resolve_revert_last_invocations_response::Result::Failure(
+                        err.clone().into(),
+                    )),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
     async fn cancel_invocation(
         &self,
         request: Request<CancelInvocationRequest>,
@@ -3169,6 +2865,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     )),
                 })),
                 &mut err,
+            ),
+        }
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        request: Request<DeliverCardTransferRequest>,
+    ) -> ResponseResult<DeliverCardTransferResponse> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "deliver_card_transfer",
+            agent_id = proto_agent_id_string(&request.target_agent_id),
+        );
+
+        let result = self
+            .deliver_card_transfer_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(()) => record.succeed(Ok(Response::new(DeliverCardTransferResponse {
+                result: Some(deliver_card_transfer_response::Result::Success(
+                    golem::common::Empty {},
+                )),
+            }))),
+            Err(mut error) => record.fail(
+                Ok(Response::new(DeliverCardTransferResponse {
+                    result: Some(deliver_card_transfer_response::Result::Failure(
+                        error.clone().into(),
+                    )),
+                })),
+                &mut error,
             ),
         }
     }

@@ -16,8 +16,8 @@ use crate::debug_session::{DebugSessionId, DebugSessions};
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_worker_executor::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OrderedOplogStart,
-    PendingUpload,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
+    OrderedOplogStart, PendingUpload,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
@@ -91,6 +91,10 @@ impl Oplog for DebugOplog {
             .into_iter()
             .map(|record| (OplogIndex::NONE, record.into_inline_entry()))
             .collect())
+    }
+
+    fn enqueue_add(&self, _entry: OplogEntry) -> OplogAddReceipt {
+        Box::pin(async { OplogIndex::NONE })
     }
 
     // Mirrors `add`: a debugging session never writes to the oplog, so both entries are built (to

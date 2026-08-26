@@ -36,15 +36,15 @@ use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
-    CreateWorkerRequest, DeactivatePluginRequest, DurableStreamAttachmentControlRequest,
-    DurableStreamSegmentReadRequest, ForkWorkerRequest, InterruptWorkerRequest,
-    ProcessOplogEntriesRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse,
-    UpdateWorkerRequest,
+    CreateWorkerRequest, DeactivatePluginRequest, DeliverCardTransferRequest,
+    DurableStreamAttachmentControlRequest, DurableStreamSegmentReadRequest, ForkWorkerRequest,
+    InterruptWorkerRequest, ProcessOplogEntriesRequest, ResolveRevertLastInvocationsRequest,
+    ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::card::StoredCard;
+use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
@@ -53,7 +53,7 @@ use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
+use golem_common::model::worker::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentStatus, FilterComparator, IdempotencyKey,
     PromiseId, ScanCursor,
@@ -444,9 +444,18 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         target: RevertWorkerTarget,
+        resolved_revert: Option<ResolvedRevert>,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
+
+    async fn resolve_revert_last_invocations(
+        &self,
+        agent_id: &AgentId,
+        number_of_invocations: u64,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<ResolvedRevert>;
 
     async fn cancel_invocation(
         &self,
@@ -471,6 +480,7 @@ pub trait WorkerClient: Send + Sync {
         account_id: AccountId,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
+        scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput>;
 
     async fn invoke_agent_session(
@@ -512,6 +522,15 @@ pub trait WorkerClient: Send + Sync {
             "durable stream segment reads are not supported by this worker client".to_string(),
         ))
     }
+    async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: StoredCard,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()>;
 
     async fn process_oplog_entries(
         &self,
@@ -1548,6 +1567,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         target: RevertWorkerTarget,
+        resolved_revert: Option<ResolvedRevert>,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
@@ -1558,12 +1578,19 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             move |worker_executor_client| {
                 let agent_id = agent_id.clone();
                 let target = target.clone();
+                let resolved_revert = resolved_revert.clone();
                 Box::pin(worker_executor_client.revert_worker(RevertWorkerRequest {
                     agent_id: Some(agent_id.into()),
                     target: Some(target.into()),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: None,
+                    resolved_revert: resolved_revert.map(|resolved| {
+                        golem_api_grpc::proto::golem::common::ResolvedRevert {
+                            last_oplog_index: resolved.last_oplog_index.as_u64(),
+                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
+                        }
+                    }),
                 }))
             },
             |response| match response.into_inner() {
@@ -1579,6 +1606,57 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         )
         .await?;
         Ok(())
+    }
+
+    async fn resolve_revert_last_invocations(
+        &self,
+        agent_id: &AgentId,
+        number_of_invocations: u64,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<ResolvedRevert> {
+        let agent_id = agent_id.clone();
+        self.call_worker_executor(
+            agent_id.clone(),
+            "resolve_revert_last_invocations",
+            move |worker_executor_client| {
+                let agent_id = agent_id.clone();
+                Box::pin(worker_executor_client.resolve_revert_last_invocations(
+                    ResolveRevertLastInvocationsRequest {
+                        agent_id: Some(agent_id.into()),
+                        number_of_invocations,
+                        environment_id: Some(environment_id.into()),
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::ResolveRevertLastInvocationsResponse {
+                    result:
+                        Some(
+                            workerexecutor::v1::resolve_revert_last_invocations_response::Result::Success(
+                                resolved,
+                            ),
+                        ),
+                } => Ok(ResolvedRevert {
+                    last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
+                    observed_oplog_index: OplogIndex::from_u64(resolved.observed_oplog_index),
+                }),
+                workerexecutor::v1::ResolveRevertLastInvocationsResponse {
+                    result:
+                        Some(
+                            workerexecutor::v1::resolve_revert_last_invocations_response::Result::Failure(
+                                err,
+                            ),
+                        ),
+                } => Err(err.into()),
+                workerexecutor::v1::ResolveRevertLastInvocationsResponse { .. } => {
+                    Err("Empty response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
     }
 
     async fn cancel_invocation(
@@ -1634,6 +1712,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         account_id: AccountId,
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
+        scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
         let agent_id = agent_id.clone();
         let agent_id_clone = agent_id.clone();
@@ -1673,6 +1752,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         attempt_id: Some(attempt_id.into()),
                         expected_callee_fingerprint: None,
                         durable_input_mappings: Vec::new(),
+                        scope_card: scope_card.clone(),
                     };
                     Box::pin(run_one_shot_invocation_session(
                         worker_executor_client,
@@ -1842,6 +1922,63 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             WorkerServiceError::InternalCallError,
         )
         .await
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: StoredCard,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()> {
+        let target_agent_id = target_agent_id.clone();
+        let card = desert_rust::serialize_to_byte_vec(&card)
+            .map_err(|error| WorkerServiceError::Internal(error.to_string()))?;
+
+        self.call_worker_executor(
+            target_agent_id.clone(),
+            "deliver_card_transfer",
+            move |worker_executor_client| {
+                let target_agent_id = target_agent_id.clone();
+                let card = card.clone();
+                let auth_ctx = auth_ctx.clone();
+                Box::pin(
+                    worker_executor_client.deliver_card_transfer(DeliverCardTransferRequest {
+                        target_agent_id: Some(target_agent_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        transfer_id: Some(transfer_id.into()),
+                        card,
+                        auth_ctx: Some(auth_ctx.into()),
+                        source_card_id: Some(source_card_id.0.into()),
+                    }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::DeliverCardTransferResponse {
+                    result:
+                        Some(
+                            workerexecutor::v1::deliver_card_transfer_response::Result::Success(_),
+                        ),
+                } => Ok(()),
+                workerexecutor::v1::DeliverCardTransferResponse {
+                    result:
+                        Some(
+                            workerexecutor::v1::deliver_card_transfer_response::Result::Failure(
+                                error,
+                            ),
+                        ),
+                } => Err(error.into()),
+                workerexecutor::v1::DeliverCardTransferResponse { .. } => {
+                    Err("Empty response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await?;
+
+        Ok(())
     }
 
     async fn process_oplog_entries(
@@ -2408,6 +2545,11 @@ mod rejection_mapping_tests {
         unimplemented_unary!(fork_worker, ForkWorkerRequest, ForkWorkerResponse);
         unimplemented_unary!(revert_worker, RevertWorkerRequest, RevertWorkerResponse);
         unimplemented_unary!(
+            resolve_revert_last_invocations,
+            ResolveRevertLastInvocationsRequest,
+            ResolveRevertLastInvocationsResponse
+        );
+        unimplemented_unary!(
             cancel_invocation,
             CancelInvocationRequest,
             CancelInvocationResponse
@@ -2446,6 +2588,11 @@ mod rejection_mapping_tests {
             process_oplog_entries,
             ProcessOplogEntriesRequest,
             ProcessOplogEntriesResponse
+        );
+        unimplemented_unary!(
+            deliver_card_transfer,
+            DeliverCardTransferRequest,
+            DeliverCardTransferResponse
         );
 
         async fn connect_worker(
@@ -2560,6 +2707,7 @@ mod rejection_mapping_tests {
                 AccountId::new(),
                 AuthCtx::System,
                 Principal::anonymous().into(),
+                None,
             )
             .await
             .unwrap_err();

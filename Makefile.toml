@@ -261,6 +261,12 @@ private = true
 condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-registry-service"] }]
 
+[tasks.build-shard-manager-kubernetes]
+private = true
+dependencies = ["build-bins-non-ci"]
+command = "cargo"
+args = ["build", "-p", "golem-shard-manager", "--features", "kubernetes"]
+
 [tasks.build-release-full]
 dependencies = [
     "wit",
@@ -273,6 +279,8 @@ args = [
     "--release",
     "--exclude",
     "integration-tests",
+    "--features",
+    "golem-shard-manager/kubernetes",
 ]
 
 [tasks.build-release]
@@ -302,6 +310,8 @@ args = [
     "integration-tests",
     "--exclude",
     "golem",
+    "--features",
+    "golem-shard-manager/kubernetes",
 ]
 
 [tasks.build-release-override-linux-amd64]
@@ -318,6 +328,8 @@ args = [
     "integration-tests",
     "--exclude",
     "golem",
+    "--features",
+    "golem-shard-manager/kubernetes",
 ]
 
 [tasks.build-release-override-linux-arm64]
@@ -335,6 +347,8 @@ args = [
     "integration-tests",
     "--exclude",
     "golem",
+    "--features",
+    "golem-shard-manager/kubernetes",
 ]
 
 [tasks.build-sdk-ts]
@@ -572,6 +586,7 @@ description = "Runs worker executor tests only (group 1/3)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
 cargo-test-r run --package golem-worker-executor --test integration :tag:group1 -- --report-time --nocapture $WORKER_TEST_THREAD_OPTS $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --test integration :tag:in_function_retry -- --report-time --nocapture $WORKER_TEST_THREAD_OPTS $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group2]
@@ -1124,7 +1139,7 @@ script = { file = "./local-run/start.sh" }
 
 [tasks.generate-configs]
 description = "Generates default and example config files"
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-shard-manager-kubernetes"]
 
 script = '''
 export RUST_BACKTRACE=1
@@ -1516,7 +1531,7 @@ rm -rf build-out
 '''
 
 [tasks.build-benchmark-components]
-description = "Builds only the benchmark test WASM components"
+description = "Rebuilds only the benchmark test WASM components"
 dependencies = ["wit", "build-sdk-ts"]
 script_runner = "@duckscript"
 script = '''
@@ -1528,7 +1543,7 @@ if ${golem_cli_empty}
     set_env GOLEM_CLI ${golem_cli}
 end
 cd test-components
-exec --fail-on-error ./build-components.sh benchmarks
+exec --fail-on-error ./build-components.sh benchmarks rebuild
 '''
 
 [tasks.run-benchmark-suite-orb]
@@ -1555,8 +1570,40 @@ if ${registry_http_port_empty}
     registry_http_port = set "18081"
 end
 
-exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- --primary-only suite --save-to-json ${results} integration-tests/benchmark_suites/ci.yaml spawned --registry-service-http-port ${registry_http_port}
+runner_id = get_env GOLEM_BENCHMARK_RUNNER_ID
+runner_id_empty = is_empty ${runner_id}
+if ${runner_id_empty}
+    runner_id = set "amp-orb-a1.xxlarge"
+end
+
+runner_label = get_env GOLEM_BENCHMARK_RUNNER_LABEL
+runner_label_empty = is_empty ${runner_label}
+if ${runner_label_empty}
+    runner_label = set "Amp orb (a1.xxlarge)"
+end
+
+source_commit_result = exec git rev-parse HEAD
+source_commit_ok = eq ${source_commit_result.code} 0
+if not ${source_commit_ok}
+    echo ${source_commit_result.stderr}
+    trigger_error "Failed to determine source commit"
+end
+source_commit = trim ${source_commit_result.stdout}
+
+source_ref_result = exec git rev-parse --symbolic-full-name HEAD
+source_ref_ok = eq ${source_ref_result.code} 0
+if not ${source_ref_ok}
+    echo ${source_ref_result.stderr}
+    trigger_error "Failed to determine source ref"
+end
+source_ref = trim ${source_ref_result.stdout}
+
+exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- --primary-only suite --save-to-json ${results} --runner-id ${runner_id} --runner-label ${runner_label} --source-repository golemcloud/golem --source-commit-sha ${source_commit} --source-ref ${source_ref} integration-tests/benchmark_suites/ci.yaml spawned --registry-service-http-port ${registry_http_port}
 '''
+
+[tasks.run-and-publish-benchmark-suite-orb]
+description = "Runs and publishes the nightly Amp orb benchmark suite"
+command = "./integration-tests/benchmark_suites/run_orb_nightly.sh"
 
 [tasks.clean-test-components]
 description = "Cleans all test WASM components"
