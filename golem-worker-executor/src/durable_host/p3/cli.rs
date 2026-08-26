@@ -333,18 +333,26 @@ async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     event: InternalWorkerEvent,
 ) {
-    let (has_oplog_processor, owned_agent_id, public_state, replay_state, oplog, is_live) =
-        accessor.with(|mut access| {
-            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-            (
-                ctx.state.component_metadata.metadata.has_oplog_processor(),
-                ctx.owned_agent_id.clone(),
-                ctx.public_state.clone(),
-                ctx.state.replay_state.clone(),
-                ctx.state.oplog.clone(),
-                ctx.state.is_live(),
-            )
-        });
+    let (
+        has_oplog_processor,
+        owned_agent_id,
+        public_state,
+        replay_state,
+        oplog,
+        is_live,
+        parent_start_index,
+    ) = accessor.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        (
+            ctx.state.component_metadata.metadata.has_oplog_processor(),
+            ctx.owned_agent_id.clone(),
+            ctx.public_state.clone(),
+            ctx.state.replay_state.clone(),
+            ctx.state.oplog.clone(),
+            ctx.state.is_live(),
+            ctx.entity_parent_start_index(),
+        )
+    });
 
     logging_policy::emit_log_event_with_state::<Ctx>(
         event,
@@ -354,6 +362,7 @@ async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
         &replay_state,
         &oplog,
         is_live,
+        parent_start_index,
     )
     .await;
 }
@@ -386,9 +395,8 @@ where
 }
 
 impl<Ctx: WorkerCtx> environment::Host for DurableP3View<'_, Ctx> {
-    fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
-        observe_function_call(&*self.0, "cli::environment", "get-environment");
-        self.0.durable_ctx().build_enriched_environment()
+    async fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
+        self.0.durable_ctx_mut().get_durable_environment().await
     }
 
     fn get_arguments(&mut self) -> wasmtime::Result<Vec<String>> {

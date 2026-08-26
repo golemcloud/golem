@@ -11,7 +11,7 @@ use golem_service_base::service::compiled_component::DefaultCompiledComponentSer
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::Bootstrap;
 use golem_worker_executor::services::All;
-use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::active_agents::ActiveAgents;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
@@ -150,7 +150,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
-        active_workers: Arc<ActiveWorkers<DebugContext>>,
+        active_agents: Arc<ActiveAgents<DebugContext>>,
         engine: Arc<Engine>,
         linker: Arc<Linker<DebugContext>>,
         runtime: Handle,
@@ -186,7 +186,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
     ) -> anyhow::Result<All<DebugContext>> {
         create_debugging_service_services(
             direct_invocation_auth_service,
-            active_workers,
+            active_agents,
             engine,
             linker,
             runtime,

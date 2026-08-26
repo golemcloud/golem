@@ -251,6 +251,9 @@ pub fn error_to_status(error: AgentError) -> Status {
                 worker_execution_error::Error::InvocationFailed(_) => {
                     "Invocation Failed".to_string()
                 }
+                worker_execution_error::Error::PermissionDenied(err) => {
+                    format!("Permission Denied: {}", err.details)
+                }
             };
             Status::internal(message)
         }

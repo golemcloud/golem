@@ -23,7 +23,11 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
-pub type ToolInvokeFuture = Pin<Box<dyn Future<Output = Result<InvocationResult, ToolError>>>>;
+pub type ToolInvokeFuture =
+    Pin<Box<dyn Future<Output = Result<InvocationResult, ToolError>> + 'static>>;
+
+pub type ToolInvokeFutureFor<'a> =
+    Pin<Box<dyn Future<Output = Result<InvocationResult, ToolError>> + 'a>>;
 
 pub type ToolInvoker =
     fn(Vec<String>, TypedSchemaValue, Option<InputStream>, Principal) -> ToolInvokeFuture;

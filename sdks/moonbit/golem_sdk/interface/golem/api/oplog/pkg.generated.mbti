@@ -13,6 +13,11 @@ import {
 pub fn enrich_oplog_entries(@host.EnvironmentId, @types.AgentId, Array[(UInt64, OplogEntry)], UInt64) -> Result[Array[PublicOplogEntry], String]
 
 // Errors
+pub(all) suberror OplogReadError {
+  PermissionDenied
+  InternalError(String)
+} derive(Eq, Show)
+
 pub(all) suberror WorkerError {
   Unknown(String)
   InvalidRequest(String)
@@ -165,9 +170,9 @@ pub(all) struct CardRevokedParameters {
   card_id : @types.CardId
 } derive(Eq, Show)
 
-pub(all) struct ChangePersistenceLevelParameters {
+pub(all) struct CompletionDeliveredParameters {
   timestamp : @system-clock.Instant
-  persistence_level : @host.PersistenceLevel
+  start_index : UInt64
 } derive(Eq, Show)
 
 pub(all) struct CompletionDiscardedParameters {
@@ -279,7 +284,7 @@ pub(all) struct FinishSpanParameters {
 
 pub(all) struct GetOplog(Int) derive(Eq, Show)
 pub fn GetOplog::drop(Self) -> Unit
-pub fn GetOplog::get_next(Self) -> Array[PublicOplogEntry]?
+pub fn GetOplog::get_next(Self) -> Result[Array[PublicOplogEntry]?, OplogReadError]
 pub fn GetOplog::get_oplog(@types.AgentId, UInt64) -> Self
 
 pub(all) struct GrowMemoryParameters {
@@ -379,7 +384,6 @@ pub(all) enum OplogEntry {
   StartSpan(StartSpanParameters)
   FinishSpan(FinishSpanParameters)
   SetSpanAttribute(SetSpanAttributeParameters)
-  ChangePersistenceLevel(ChangePersistenceLevelParameters)
   BeginRemoteTransaction(RawBeginRemoteTransactionParameters)
   PreCommitRemoteTransaction(RemoteTransactionParameters)
   PreRollbackRemoteTransaction(RemoteTransactionParameters)
@@ -396,6 +400,7 @@ pub(all) enum OplogEntry {
   CardExpired(CardExpiredParameters)
   HostStreamFrame(RawHostStreamFrameParameters)
   CompletionDiscarded(RawCompletionDiscardedParameters)
+  CompletionDelivered(RawCompletionDeliveredParameters)
 } derive(Eq, Show)
 
 pub(all) struct OplogExternalPayload {
@@ -482,7 +487,6 @@ pub(all) enum PublicOplogEntry {
   StartSpan(StartSpanParameters)
   FinishSpan(FinishSpanParameters)
   SetSpanAttribute(SetSpanAttributeParameters)
-  ChangePersistenceLevel(ChangePersistenceLevelParameters)
   BeginRemoteTransaction(BeginRemoteTransactionParameters)
   PreCommitRemoteTransaction(RemoteTransactionParameters)
   PreRollbackRemoteTransaction(RemoteTransactionParameters)
@@ -499,6 +503,7 @@ pub(all) enum PublicOplogEntry {
   CardExpired(CardExpiredParameters)
   HostStreamFrame(HostStreamFrameParameters)
   CompletionDiscarded(CompletionDiscardedParameters)
+  CompletionDelivered(CompletionDeliveredParameters)
 } derive(Eq, Show)
 
 pub(all) enum QueuedCardEvent {
@@ -552,6 +557,11 @@ pub(all) struct RawCardInstalledParameters {
   timestamp : @system-clock.Instant
   queued_event_index : UInt64?
   card : FixedArray[Byte]
+} derive(Eq, Show)
+
+pub(all) struct RawCompletionDeliveredParameters {
+  timestamp : @system-clock.Instant
+  start_index : UInt64
 } derive(Eq, Show)
 
 pub(all) struct RawCompletionDiscardedParameters {
@@ -659,6 +669,8 @@ pub(all) struct RawStartParameters {
   timestamp : @system-clock.Instant
   parent_start_index : UInt64?
   function_name : String
+  invocation_id : @types.Uuid?
+  observational_owner : UInt64?
   request : OplogPayload?
   durable_function_type : WrappedFunctionType
 } derive(Eq, Show)
@@ -710,7 +722,7 @@ pub(all) struct SaveSnapshotResultParameters {
 
 pub(all) struct SearchOplog(Int) derive(Eq, Show)
 pub fn SearchOplog::drop(Self) -> Unit
-pub fn SearchOplog::get_next(Self) -> Array[(UInt64, PublicOplogEntry)]?
+pub fn SearchOplog::get_next(Self) -> Result[Array[(UInt64, PublicOplogEntry)]?, OplogReadError]
 pub fn SearchOplog::search_oplog(@types.AgentId, String) -> Self
 
 pub(all) struct SetRetryPolicyParameters {
@@ -744,6 +756,8 @@ pub(all) struct StartParameters {
   timestamp : @system-clock.Instant
   parent_start_index : UInt64?
   function_name : String
+  invocation_id : @types.Uuid?
+  observational_owner : UInt64?
   request : @types.TypedSchemaValue?
   durable_function_type : WrappedFunctionType
 } derive(Eq, Show)
@@ -793,4 +807,3 @@ pub(all) enum WrappedFunctionType {
 // Type aliases
 
 // Traits
-

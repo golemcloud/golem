@@ -30,17 +30,17 @@ When `golem new` creates a project, it embeds the `common/` skills plus the lang
 
 ## Rebuilding After Skill Changes
 
-**Skills are embedded in the `golem` / `golem-cli` binaries.** If you add or modify a skill under `golem-skills/skills/`, you **must** recompile the binaries before the changes take effect — including before running the skill test harness.
+Skills are embedded by the `golem-cli` library build script and consumed by the `golem` binary. If you add or modify a skill under `golem-skills/skills/`, rebuild `golem` before running a scenario that installs or exercises that skill:
 
 ```shell
-cargo make build-release-full
+cargo build -p golem
 ```
 
-Without this step, `golem new` will still emit the old skill content, and the harness will test against stale skills.
+Release mode is not required. However, the harness prefers `target/release/golem` when it already exists and otherwise uses `target/debug/golem`. Rebuild the profile the harness will select, or remove/rename a stale local release binary before using the debug build. Without this step, `golem new` can emit stale skill content.
 
 ### Also regenerate the public How-To Guides
 
-Each `SKILL.md` is also republished as a How-To Guide on [learn.golem.cloud](https://learn.golem.cloud) under `docs/src/content/how-to-guides/`. After adding or editing a skill, regenerate those MDX pages:
+Each `SKILL.md` is also republished as a How-To Guide on [learn.golem.cloud](https://learn.golem.cloud) under `docs/src/content/next/how-to-guides/`. After adding or editing a skill, regenerate those MDX pages:
 
 ```shell
 cargo make generate-docs-skills
@@ -57,7 +57,7 @@ CI's `check-docs-skills` task will fail any PR that changes `golem-skills/skills
 - **Filesystem watcher**: `fswatch` on macOS, `inotify-tools` on Linux
 - **GOLEM_PATH** env var set to the golem repo root. If not set, the harness auto-detects it by walking up from `cwd` looking for `sdks/rust/golem-rust` and `sdks/ts/packages` directories (same markers as `golem-cli`). If auto-detection also fails, the harness exits with an error. The resolved target directory (`target/release` or `target/debug`) is prepended to `PATH` so all spawned processes — including agent drivers — use the correct `golem` and `golem-cli` binaries.
 - For Rust skills: `cargo-component` and `wasm32-wasip2` target
-- For TS skills: `pnpm`, `wasm-rquickjs-cli`, TS SDK built (`cargo make build-sdk-ts`)
+- For TS skills: `pnpm`, `wasm-rquickjs-cli`, and fresh TS SDK/template artifacts. `cargo make build-sdk-ts` creates missing outputs; after TS source changes, run `npx pnpm run build && npx pnpm run build-agent-template` in `sdks/ts/` because that cargo-make task skips existing outputs.
 - For MoonBit skills: `moon` (MoonBit toolchain), `wasm-tools`
 
 ## Install and Build
@@ -86,7 +86,7 @@ npm run format:check    # Check formatting without changing files
 npm run format          # Auto-format all source files
 ```
 
-**Always run `npm run lint:fix` and `npm run format` before committing harness changes.** CI enforces both lint (via `npm run build`) and formatting (via `npm run format:check`).
+When harness TypeScript changes, run `npm run build`, `npm run format:check`, and affected unit tests. Use `npm run lint:fix` or `npm run format` only when fixes are needed, then inspect the diff. Skill-definition or scenario-only changes do not require reformatting or testing unrelated harness TypeScript.
 
 ## Running Unit Tests (harness self-tests)
 
@@ -219,8 +219,10 @@ cargo test -p golem-cli --lib -- agent_help_hints
 After creating or modifying a skill, recompile so the changes are embedded:
 
 ```shell
-cargo make build-release-full
+cargo build -p golem
 ```
+
+If `target/release/golem` already exists, rebuild with `cargo build -p golem --release` or ensure the harness uses the fresh debug binary; it prefers release when both profiles exist.
 
 ### 4. Write a scenario YAML
 

@@ -14,11 +14,9 @@
 
 use crate::debug_session::{DebugSessionId, DebugSessions};
 use async_trait::async_trait;
-use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
-};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_worker_executor::services::oplog::{
-    CommitLevel, Oplog, OrderedOplogStart, PendingUpload,
+    CommitLevel, Oplog, OplogAddReceipt, OrderedOplogStart, PendingUpload,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
@@ -82,6 +80,10 @@ impl Oplog for DebugOplog {
     // `Start`/`End` pair is ever created against a `NONE` index during replay.
     async fn add(&self, _entry: OplogEntry) -> OplogIndex {
         OplogIndex::NONE
+    }
+
+    fn enqueue_add(&self, _entry: OplogEntry) -> OplogAddReceipt {
+        Box::pin(async { OplogIndex::NONE })
     }
 
     // Mirrors `add`: a debugging session never writes to the oplog, so both entries are built (to
@@ -235,10 +237,6 @@ impl Oplog for DebugOplog {
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.inner.download_raw_payload(payload_id, md5_hash).await
-    }
-
-    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
-        self.inner.switch_persistence_level(mode).await
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {

@@ -70,6 +70,10 @@ The benchmarks binary is at `integration-tests/src/benchmarks/all.rs` and is bui
 one crate and `debug` widens everything. The filter in force is logged at startup as
 `otlp_filter`. See the `investigating-executor-performance` skill for the target names.
 
+This traces internal Golem service operations. It does not enable or inspect the Golem OTLP
+exporter plugin, which exports agent/runtime telemetry through the separate
+`docker-examples/otlp-collector` stack.
+
 ### Running a single benchmark
 
 The CLI takes the benchmark name as a positional argument, followed by the `spawned` subcommand (which tells it to spawn services locally). The `--build-target` defaults to `target/release` which is the correct path for the service binaries.
@@ -258,28 +262,37 @@ for size, count in sorted(sizes.items()):
 "
 ```
 
-#### Detect single-span orphan traces
+#### Inspect single-span traces
 
-Single-span traces often indicate missing context propagation — the span was created but not linked to a parent trace.
+Handed-off work starts a new root trace linked to its producer, so a single-span trace is
+normally expected rather than an orphan. In particular, invocation execution is intentionally
+separate from the request trace: it is linked to the producing `enqueue_invocation` span, and
+both sides carry the same `idempotency_key`. Use the OpenTelemetry link and
+`idempotency_key` to correlate them; do not expect a parent-child relationship across the
+hand-off.
+
+Investigate a single-span trace only when it has neither an expected link nor a connected
+parent. That is a context-propagation gap.
 
 ```python
 python3 -c "
 import json
 from collections import Counter
 data = json.load(open('tmp/traces.json'))
-orphans = Counter()
+single_spans = Counter()
 for t in data['data']:
     if len(t['spans']) == 1:
-        orphans[t['spans'][0]['operationName']] += 1
-print(f'Total single-span orphan traces: {sum(orphans.values())}')
-for op, count in orphans.most_common(15):
+        single_spans[t['spans'][0]['operationName']] += 1
+print(f'Total single-span traces: {sum(single_spans.values())}')
+for op, count in single_spans.most_common(15):
     print(f'{count:4d}  {op}')
 "
 ```
 
 #### Identify background noise traces
 
-Long-lived spans from background loops can dominate the trace data. Filter them out for focused analysis:
+Background operations are bounded to one tick or operation, but their frequency can dominate
+trace volume. Filter them out for focused analysis:
 
 ```python
 python3 -c "
@@ -298,9 +311,9 @@ print(f'Total: {len(data[\"data\"])}, After filtering noise: {len(clean)}')
 ## Known Caveats
 
 - **Multiple services**: Unlike worker-executor tests (which run in-process), benchmarks spawn separate Golem services. The `--otlp` flag configures all spawned services to export traces. Look for multiple service names in Jaeger.
-- **Trace context propagation**: gRPC calls between services propagate trace context via `traceparent` headers. If you see disconnected traces, verify the monitoring stack is running before starting the benchmark.
-- **Span queue size (`OTEL_BSP_MAX_QUEUE_SIZE`)**: The `BatchSpanProcessor` has a default queue size of 2048 spans. Under high-throughput benchmarks this queue can overflow, causing spans to be silently dropped (logged as `BatchSpanProcessor dropped a Span due to queue full`). The test framework automatically sets `OTEL_BSP_MAX_QUEUE_SIZE=65536` for all spawned services when `--otlp` is enabled. For the benchmark runner process itself, set it manually if needed: `OTEL_BSP_MAX_QUEUE_SIZE=65536 ./target/benchmarks/benchmarks --otlp ...`.
-- **Background loop noise**: Long-lived background tasks create traces spanning the entire benchmark duration. These are not performance issues but can obscure real benchmark traces.
+- **Trace context propagation**: gRPC calls within a request path propagate context via `traceparent` headers. Handed-off work is intentionally a separate linked root; correlate an invocation's producer and execution with its OpenTelemetry link and shared `idempotency_key`. If a trace has neither a normal parent nor a link, verify the monitoring stack was running before the benchmark.
+- **Span queue size (`OTEL_BSP_MAX_QUEUE_SIZE`)**: The `BatchSpanProcessor` has a default queue size of 2048 spans. Under high-throughput benchmarks this queue can overflow, causing spans to be silently dropped (logged as `BatchSpanProcessor dropped a Span due to queue full`). The test framework sets `OTEL_BSP_MAX_QUEUE_SIZE=262144` for spawned services when `--otlp` is enabled. Set the same value for the benchmark runner if it emits spans: `OTEL_BSP_MAX_QUEUE_SIZE=262144 ./target/benchmarks/benchmarks --otlp ...`.
+- **Background loop noise**: Background spans close after each tick or operation; they are not benchmark-long spans. Their volume can still obscure benchmark traces.
 - **Fresh Jaeger**: Always restart Jaeger with `docker compose down && docker compose up -d` before a new investigation to avoid mixing traces from different runs.
 - **Build time**: Service binaries must be built with `--release`. The benchmark runner binary must be built with `--profile benchmarks`. After any code change, rebuild the affected service binary with `cargo build --release -p <crate>` before re-running the benchmark.
 

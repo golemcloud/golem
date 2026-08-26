@@ -275,6 +275,8 @@ async fn component_update_removes_provision_configs_for_removed_agent_types(
                         ..Default::default()
                     },
                 )])),
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
             None::<File>,
@@ -335,6 +337,8 @@ async fn component_update_rejects_new_agent_type_without_initial_permissions(
                     AgentTypeName("OtherAgent".to_string()),
                     AgentTypeProvisionConfigUpdate::default(),
                 )])),
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
             None::<File>,
@@ -389,6 +393,8 @@ async fn component_update_preserves_existing_provision_config_when_omitted(
                         ..Default::default()
                     },
                 )])),
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
             None::<File>,
@@ -441,6 +447,8 @@ async fn component_update_with_wrong_revision_is_rejected(
                 current_revision: component.revision.next()?,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
             None::<File>,
@@ -492,6 +500,8 @@ async fn component_update_rejects_reset_override_when_compatibility_check_enable
                 current_revision: component.revision,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: true,
             },
             None::<File>,
@@ -543,6 +553,8 @@ async fn component_update_allows_reset_override_when_compatibility_check_disable
                 current_revision: component.revision,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: true,
             },
             None::<File>,
@@ -684,6 +696,8 @@ async fn create_component_with_plugins_and_update_installations(
                         ..Default::default()
                     },
                 )])),
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
@@ -720,6 +734,8 @@ async fn create_component_with_plugins_and_update_installations(
                         ..Default::default()
                     },
                 )])),
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
@@ -800,6 +816,8 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
                         ..Default::default()
                     },
                 )])),
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
@@ -939,6 +957,8 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                     agent_type_schema.type_name.clone(),
                     default_agent_type_provision_config_creation(user.account_email.clone()),
                 )]),
+                tools: Vec::new(),
+                tool_deployment_configs: BTreeMap::new(),
             },
             tokio::fs::File::open(
                 deps.component_directory()
@@ -1076,6 +1096,8 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
                 .into_iter()
                 .map(|(k, v)| (AgentTypeName(k), v))
                 .collect(),
+                tools: Vec::new(),
+                tool_deployment_configs: BTreeMap::new(),
             },
             tokio::fs::File::open(
                 deps.component_directory()
@@ -1168,6 +1190,8 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
                 .into_iter()
                 .map(|(k, v)| (AgentTypeName(k), v))
                 .collect(),
+                tools: Vec::new(),
+                tool_deployment_configs: BTreeMap::new(),
             },
             tokio::fs::File::open(
                 deps.component_directory()
@@ -1283,6 +1307,8 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
                         ..Default::default()
                     },
                 )])),
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
             None::<Vec<u8>>,
@@ -1369,6 +1395,8 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
                         ..Default::default()
                     },
                 )])),
+                tools: None,
+                tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
             None::<Vec<u8>>,

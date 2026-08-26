@@ -63,10 +63,14 @@ final class HostApiExplorerImpl(@unused private val name: String) extends HostAp
   }
 
   private def exploreDurabilitySync(): String = {
-    val sb    = new StringBuilder
-    val state = golem.host.DurabilityApi.currentDurableExecutionState()
-    sb.append(s"DurabilityApi.currentDurableExecutionState() = $state\n")
-    sb.append(s"  isLive=${state.isLive}, persistenceLevel=${state.persistenceLevel}\n")
+    val sb     = new StringBuilder
+    val result = golem.host.DurabilityApi.durable(
+      "host-api-explorer",
+      "durability",
+      golem.host.DurabilityApi.DurableFunctionType.ReadLocal,
+      ()
+    )("durable-result")
+    sb.append(s"DurabilityApi.durable() = $result\n")
     sb.toString()
   }
 
@@ -160,11 +164,15 @@ final class HostApiExplorerImpl(@unused private val name: String) extends HostAp
   private def exploreRdbmsSync(): String = {
     val sb = new StringBuilder
 
-    val pgResult = golem.host.Rdbms.Postgres.open("postgresql://invalid:5432/test")
-    sb.append(s"Rdbms.Postgres.open() = ${pgResult.left.map(_.getClass.getSimpleName)}\n")
+    val pgResult = golem.host.Rdbms.Postgres
+      .open("postgresql://invalid:5432/test")
+      .flatMap(_.query("SELECT 1"))
+    sb.append(s"Rdbms.Postgres.query() = ${pgResult.left.map(_.getClass.getSimpleName)}\n")
 
-    val myResult = golem.host.Rdbms.Mysql.open("mysql://invalid:3306/test")
-    sb.append(s"Rdbms.Mysql.open() = ${myResult.left.map(_.getClass.getSimpleName)}\n")
+    val myResult = golem.host.Rdbms.Mysql
+      .open("mysql://invalid:3306/test")
+      .flatMap(_.query("SELECT 1"))
+    sb.append(s"Rdbms.Mysql.query() = ${myResult.left.map(_.getClass.getSimpleName)}\n")
 
     sb.toString()
   }

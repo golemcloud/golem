@@ -18,6 +18,8 @@ use crate::app::build::check::{
 use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
 use crate::app::template::AppTemplateName;
+use crate::app::template::TemplateDescription;
+use crate::app::template::TemplateListView;
 use crate::command::builtin_exec_subcommands;
 use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
@@ -34,13 +36,15 @@ use crate::context::Context;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::fs;
-use crate::fuzzy::{Error, FuzzySearch};
+use crate::fuzzy::{Error, FuzzySearch, Match};
 use crate::log::{
     LogColorize, LogIndent, LogOutput, Output, log_action, log_error, log_failed_to,
     log_finished_ok, log_finished_up_to_date, log_preformatted, log_skipping_up_to_date, log_warn,
     log_warn_action, logged_failed_to, logged_finished_or_failed_to, logln,
 };
-use crate::model::agent::view::AgentTypeView;
+use crate::model::agent::AgentTypeListView;
+use crate::model::agent::AgentTypeView;
+use crate::model::agent::AgentUpdateMode;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
     WithSource,
@@ -51,15 +55,12 @@ use crate::model::deploy::{
     PostDeployResult, PostDeploySummary, UpdateStagedComponentError, build_environment_setup_plan,
     preferred_source_language_for_setup,
 };
+use crate::model::deploy::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
+use crate::model::deploy::{DeploymentListView, DeploymentNewView};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
-use crate::model::text::agent::AgentTypeListView;
-use crate::model::text::deployment::{DeploymentListView, DeploymentNewView};
-use crate::model::text::diff::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
-use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
-use crate::model::text::help::AvailableComponentNamesHelp;
-use crate::model::text::template::TemplateListView;
-use crate::model::worker::AgentUpdateMode;
-use crate::model::{GuestLanguage, TemplateDescription};
+use crate::model::help::AvailableComponentNamesHelp;
+use crate::model::language::GuestLanguage;
+use crate::model::text_format::{log_fuzzy_matches, log_text_view};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};
@@ -161,7 +162,7 @@ impl AppCommandHandler {
         if outcome.is_ok() {
             self.ctx
                 .log_handler()
-                .log_output(crate::model::text::action_result::BuildResult { built: true })?;
+                .log_output(crate::model::app::BuildResult { built: true })?;
         }
         outcome
     }
@@ -179,7 +180,7 @@ impl AppCommandHandler {
         if outcome.is_ok() {
             self.ctx
                 .log_handler()
-                .log_output(crate::model::text::action_result::CleanResult { cleaned: true })?;
+                .log_output(crate::model::app::CleanResult { cleaned: true })?;
         }
         outcome
     }
@@ -363,9 +364,9 @@ impl AppCommandHandler {
             },
         };
         if outcome.is_ok() {
-            self.ctx.log_handler().log_output(
-                crate::model::text::action_result::DeployResultView { deployed: true },
-            )?;
+            self.ctx
+                .log_handler()
+                .log_output(crate::model::deploy::DeployResultView { deployed: true })?;
         }
         outcome
     }
@@ -421,7 +422,7 @@ impl AppCommandHandler {
         Ok(())
     }
 
-    pub async fn cmd_update_workers(
+    pub async fn cmd_update_agents(
         &self,
         component_names: Vec<ComponentName>,
         update_mode: AgentUpdateMode,
@@ -434,13 +435,13 @@ impl AppCommandHandler {
         let components = self.components_for_deploy_args().await?;
         self.ctx
             .component_handler()
-            .update_workers_by_components(&components, update_mode, await_update, disable_wakeup)
+            .update_agents_by_components(&components, update_mode, await_update, disable_wakeup)
             .await?;
 
         Ok(())
     }
 
-    pub async fn cmd_redeploy_workers(
+    pub async fn cmd_redeploy_agents(
         &self,
         component_names: Vec<ComponentName>,
     ) -> anyhow::Result<()> {
@@ -450,7 +451,7 @@ impl AppCommandHandler {
         let components = self.components_for_deploy_args().await?;
         self.ctx
             .component_handler()
-            .redeploy_workers_by_components(&components)
+            .redeploy_agents_by_components(&components)
             .await?;
 
         Ok(())
@@ -478,7 +479,7 @@ impl AppCommandHandler {
         let templates: Vec<TemplateDescription> = templates
             .into_values()
             .flat_map(|templates| templates.into_values())
-            .map(|template| TemplateDescription::from_template(&template.0))
+            .map(|template| template.0.to_description())
             .collect();
 
         self.ctx
@@ -1046,7 +1047,7 @@ impl AppCommandHandler {
         let deployable_manifest_components = self
             .ctx
             .component_handler()
-            .deployable_manifest_components()
+            .deployable_manifest_components(&environment)
             .await?;
 
         let deployable_manifest_http_api_deployments = self
@@ -1923,16 +1924,17 @@ impl AppCommandHandler {
         let http_api_deployment_handler = self.ctx.api_deployment_handler();
         let interactive_handler = self.ctx.interactive_handler();
 
-        let approve = || {
-            if approve_staging_steps && !interactive_handler.confirm_staging_next_step()? {
+        let approve = |operation: &str, name: &str| {
+            if approve_staging_steps
+                && !interactive_handler.confirm_staging_next_step(operation, name)?
+            {
                 bail!("Aborted staging");
             }
             Ok(())
         };
 
-        // TODO
         for (component_name, component_diff) in &diff_stage.components {
-            approve()?;
+            approve(staging_operation(component_diff), component_name)?;
 
             let component_name = ComponentName(component_name.to_string());
 
@@ -2004,7 +2006,7 @@ impl AppCommandHandler {
         }
 
         for (domain, http_api_deployment_diff) in &diff_stage.http_api_deployments {
-            approve()?;
+            approve(staging_operation(http_api_deployment_diff), domain)?;
 
             let domain = Domain(domain.to_string());
 
@@ -2038,7 +2040,7 @@ impl AppCommandHandler {
         }
 
         for (domain, mcp_deployment_diff) in &diff_stage.mcp_deployments {
-            approve()?;
+            approve(staging_operation(mcp_deployment_diff), domain)?;
 
             let domain = Domain(domain.to_string());
 
@@ -2285,21 +2287,21 @@ impl AppCommandHandler {
         if let Some(update_mode) = post_deploy_args.update_agents_mode(env_deploy_args) {
             self.ctx
                 .component_handler()
-                .update_workers_by_components(&components, update_mode, true, false)
+                .update_agents_by_components(&components, update_mode, true, false)
                 .await
                 .map(|()| PostDeploySummary::AgentUpdateOk)
                 .map_err(PostDeployError::AgentUpdateError)
         } else if post_deploy_args.redeploy_agents(env_deploy_args) {
             self.ctx
                 .component_handler()
-                .redeploy_workers_by_components(&components)
+                .redeploy_agents_by_components(&components)
                 .await
                 .map(|()| PostDeploySummary::AgentRedeployOk)
                 .map_err(PostDeployError::AgentRedeployError)
         } else if post_deploy_args.delete_agents(env_deploy_args) {
             self.ctx
                 .component_handler()
-                .delete_workers(&components)
+                .delete_agents(&components)
                 .await
                 .map(|()| PostDeploySummary::AgentDeleteOk)
                 .map_err(PostDeployError::AgentDeleteError)
@@ -2589,7 +2591,6 @@ impl AppCommandHandler {
             .await
     }
 
-    // TODO: forbid matching the same component multiple times
     // Returns false if there is no app
     async fn opt_select_components_internal(
         &self,
@@ -2651,6 +2652,32 @@ impl AppCommandHandler {
                 log_text_view(&AvailableComponentNamesHelp(
                     app_ctx.application().component_names().cloned().collect(),
                 ));
+
+                bail!(NonSuccessfulExit);
+            }
+
+            // Forbid distinct patterns from resolving to the same component, which would
+            // otherwise select (build/deploy) that component more than once.
+            let collisions = duplicate_component_matches(&found);
+            if !collisions.is_empty() {
+                logln("");
+                log_error(format!(
+                    "The following component names were matched by multiple patterns:\n{}",
+                    collisions
+                        .iter()
+                        .map(|(option, patterns)| {
+                            format!(
+                                "  - {} matched by {}",
+                                option.bold(),
+                                patterns
+                                    .iter()
+                                    .map(|p| p.as_str().bold().to_string())
+                                    .join(", ")
+                            )
+                        })
+                        .join("\n")
+                ));
+                logln("");
 
                 bail!(NonSuccessfulExit);
             }
@@ -2836,4 +2863,75 @@ fn materialize_agent_secret_defaults(
     unused_paths.dedup();
 
     (materialized_defaults, unused_paths)
+}
+
+/// The staging operation verb for a diff entry, used to add context to staging approval prompts.
+fn staging_operation<D>(diff: &diff::BTreeMapDiffValue<D>) -> &'static str {
+    match diff {
+        diff::BTreeMapDiffValue::Create => "create",
+        diff::BTreeMapDiffValue::Delete => "delete",
+        diff::BTreeMapDiffValue::Update(_) => "update",
+    }
+}
+
+/// Returns the components (sorted) that were matched by more than one fuzzy pattern,
+/// each paired with the patterns that matched it. Empty when there are no collisions.
+fn duplicate_component_matches(found: &[Match]) -> Vec<(String, Vec<String>)> {
+    let mut duplicate_options = found
+        .iter()
+        .map(|m| m.option.as_str())
+        .counts()
+        .into_iter()
+        .filter(|&(_, count)| count > 1)
+        .map(|(option, _)| option.to_string())
+        .collect::<Vec<_>>();
+    duplicate_options.sort();
+
+    duplicate_options
+        .into_iter()
+        .map(|option| {
+            let patterns = found
+                .iter()
+                .filter(|m| m.option == option)
+                .map(|m| m.pattern.clone())
+                .collect::<Vec<_>>();
+            (option, patterns)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::duplicate_component_matches;
+    use crate::fuzzy::Match;
+    use test_r::test;
+
+    fn matched(option: &str, pattern: &str) -> Match {
+        Match {
+            option: option.to_string(),
+            pattern: pattern.to_string(),
+            exact_match: option == pattern,
+        }
+    }
+
+    #[test]
+    fn detects_two_patterns_matching_the_same_component() {
+        let found = vec![
+            matched("payment-service", "payment-service"),
+            matched("payment-service", "payment"),
+        ];
+        assert_eq!(
+            duplicate_component_matches(&found),
+            vec![(
+                "payment-service".to_string(),
+                vec!["payment-service".to_string(), "payment".to_string()]
+            )]
+        );
+    }
+
+    #[test]
+    fn no_collision_for_distinct_components() {
+        let found = vec![matched("a", "a"), matched("b", "b")];
+        assert!(duplicate_component_matches(&found).is_empty());
+    }
 }

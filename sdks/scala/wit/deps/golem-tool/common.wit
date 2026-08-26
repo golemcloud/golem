@@ -45,10 +45,15 @@ package golem:tool@0.1.0;
 ///     `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`.
 ///   • Subcommand names + aliases are pairwise unique among siblings.
 ///   • Within a `command-body`: option long-names + flag long-names +
-///     positional names + aliases + short forms are pairwise unique,
-///     AND unique against globals inherited from any ancestor command.
-///   • Constraint `ref` names resolve against body-declared options /
-///     flags / positionals AND globals inherited from any ancestor.
+///     positional names + aliases are pairwise unique, AND unique against
+///     the long-names + aliases of globals inherited from any ancestor.
+///   • Option and flag short forms occupy a separate `char` namespace:
+///     they are pairwise unique with other short forms in the body and with
+///     inherited global short forms. A string name or alias such as `"f"`
+///     does not collide with the short form `'f'`.
+///   • Constraint `ref` string names resolve against body-declared long-names,
+///     positional names, aliases, and globals inherited from any ancestor;
+///     short forms do not participate in constraint resolution.
 ///   • For `ref::value-is(name, lit)`, the literal must be a valid value
 ///     for the declared type node of `name` in `tool.schema`.
 ///   • `default-formatter` resolves to a name in `formatters`.
@@ -91,6 +96,23 @@ interface common {
     /// placeholder and is not the semantic root of the tool (mirrors
     /// `golem:agent/common`'s `agent-type.schema`).
     schema:   schema-graph,
+  }
+
+  record tool-middleware {
+    name:    string,
+    aliases: list<string>,
+    doc:     doc,
+    scope:   tool-middleware-scope,
+  }
+
+  variant tool-middleware-scope {
+    monomorphic(monomorphic-scope),
+    universal,
+  }
+
+  record monomorphic-scope {
+    presented: tool,
+    expected:  option<tool>,
   }
 
   // Command tree
@@ -375,5 +397,15 @@ interface common {
   record invocation-result {
     %result: option<typed-schema-value>,
     stdout:  option<stream<u8>>,
+  }
+
+  /// Invocation-scoped access to exactly the next inner layer in a tool
+  /// middleware chain. The runtime creates this resource; guests cannot.
+  resource underlying-tool {
+    invoke: async func(
+      command-path: list<string>,
+      input:        typed-schema-value,
+      stdin:        option<stream<u8>>,
+    ) -> result<invocation-result, tool-error>;
   }
 }

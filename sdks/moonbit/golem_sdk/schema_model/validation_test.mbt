@@ -568,7 +568,7 @@ test "ambiguity: empty contains (same constructor)" {
   inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=empty contains substring matches every string)]
+      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=contains `` and contains `x` overlap)]
     ),
   )
 }
@@ -660,7 +660,7 @@ test "ambiguity: field-absent same field" {
   inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=two field-absent rules share field `x`)]
+      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=field-absent on `x` and `x` can match the same object)]
     ),
   )
 }
@@ -679,7 +679,7 @@ test "ambiguity: mixed empty prefix vs suffix (fallthrough)" {
   inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=empty prefix matches every string)]
+      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=prefix `` and suffix `` overlap)]
     ),
   )
 }
@@ -698,7 +698,7 @@ test "ambiguity: mixed empty suffix vs contains (fallthrough)" {
   inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=empty suffix matches every string)]
+      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=suffix `` and contains `` overlap)]
     ),
   )
 }
@@ -717,7 +717,7 @@ test "ambiguity: mixed empty contains vs regex (fallthrough)" {
   inspect(
     validate_graph(g),
     content=(
-      #|[UnionAmbiguousDiscriminators(tag_a=a, tag_b=b, reason=empty contains substring matches every string)]
+      #|[]
     ),
   )
 }
@@ -738,6 +738,66 @@ test "no ambiguity: distinct non-empty rules of different kinds" {
     ),
   }
   inspect(validate_graph(g).length(), content="0")
+}
+
+///|
+fn field_equals_rule(
+  field_name : String,
+  literal : String?,
+) -> @types.DiscriminatorRule {
+  @types.FieldEquals({ field_name, literal })
+}
+
+///|
+test "union classifier integration rejects only Reject" {
+  let graph_for = (left, right) => {
+    (
+      {
+        defs: [],
+        root: schema_type(
+          Union([branch("a", vstr(), left), branch("b", vstr(), right)]),
+        ),
+      } : SchemaGraph)
+  }
+  assert_true(
+    validate_graph(graph_for(@types.Prefix("a"), @types.Suffix("b"))).length() >
+    0,
+  )
+  assert_eq(
+    validate_graph(graph_for(@types.Prefix("a"), @types.Prefix("b"))).length(),
+    0,
+  )
+  assert_eq(
+    validate_graph(graph_for(@types.Regex("a.*"), @types.Regex(".*a"))).length(),
+    0,
+  )
+}
+
+///|
+test "text is not a union string discriminator body" {
+  let text = schema_type(
+    Text({ languages: None, min_length: None, max_length: None, regex: None }),
+  )
+  let body_graph : SchemaGraph = {
+    defs: [],
+    root: schema_type(Union([branch("t", text, @types.Prefix("a"))])),
+  }
+  let field_graph : SchemaGraph = {
+    defs: [],
+    root: schema_type(
+      Union([
+        branch("t", rec1("kind", text), field_equals_rule("kind", Some("a"))),
+      ]),
+    ),
+  }
+  inspect(
+    validate_graph(body_graph),
+    content="[UnionStringRuleOnNonStringBody(tag=t)]",
+  )
+  inspect(
+    validate_graph(field_graph),
+    content="[UnionFieldEqualsLiteralOnNonStringField(tag=t, field_name=kind)]",
+  )
 }
 
 // ============================================================

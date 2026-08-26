@@ -17,7 +17,7 @@ use crate::app::context::BuildContext;
 use crate::app::edit;
 use crate::app::template::AppTemplateRepo;
 use crate::fs;
-use crate::model::GuestLanguage;
+use crate::model::language::GuestLanguage;
 use anyhow::anyhow;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -97,7 +97,7 @@ mod tests {
     use super::managed_guide_differs;
     use crate::app::edit::agents_md;
     use crate::app::template::AppTemplateRepo;
-    use crate::model::GuestLanguage;
+    use crate::model::language::GuestLanguage;
     use std::path::Path;
     use test_r::test;
 

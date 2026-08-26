@@ -46,20 +46,114 @@ impl ReplayState {
         &self,
         outcome: ResolutionOutcome,
     ) -> Result<ResolutionOutcome, WorkerExecutorError> {
-        if let ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded {
-            end_idx,
-            marker_idx,
-            ..
-        }) = &outcome
-        {
+        let marker = match &outcome {
+            ResolutionOutcome::Resolved(Resolution::Completed {
+                end_idx,
+                delivery_marker: Some(marker_idx),
+                ..
+            }) => Some((*end_idx, *marker_idx, "CompletionDelivered")),
+            ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded {
+                end_idx,
+                marker_idx,
+                ..
+            }) => Some((*end_idx, *marker_idx, "CompletionDiscarded")),
+            _ => None,
+        };
+        if let Some((end_idx, marker_idx, marker_name)) = marker {
             let target = self.replay_target();
-            if *marker_idx > target {
+            if marker_idx > target {
                 return Err(WorkerExecutorError::invalid_request(format!(
-                    "invalid replay target {target}: it lies between a durable call's successful End at {end_idx} and its CompletionDiscarded marker at {marker_idx}, so the delivery status of the completion is undecidable at this target"
+                    "invalid replay target {target}: it lies between a durable call's successful End at {end_idx} and its {marker_name} marker at {marker_idx}, so the delivery status of the completion is undecidable at this target"
                 )));
             }
         }
         Ok(outcome)
+    }
+
+    /// Waits until the exact recorded successful-delivery marker reaches the cursor head, commits
+    /// it, and transfers the global cursor-advance gate to the caller. Host-side continuation may
+    /// consume entries between `End` and this marker before calling this method; after it returns,
+    /// no later entry can replay until the actual guest-delivery boundary acknowledges the guard.
+    pub(in crate::durable_host) async fn await_completion_delivery(
+        &self,
+        start_index: OplogIndex,
+        marker_index: OplogIndex,
+    ) -> Result<ReplayDeliveryBarrier, WorkerExecutorError> {
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+
+            let gate = self
+                .run_owned_cursor_op(move |state| async move {
+                    state
+                        .with_tx(async |tx| {
+                            tx.consume_completion_delivered(start_index, marker_index)
+                                .await
+                        })
+                        .await
+                })
+                .await?;
+            if let Some(gate) = gate {
+                return Ok(ReplayDeliveryBarrier::new(
+                    self.clone(),
+                    start_index,
+                    marker_index,
+                    gate,
+                ));
+            }
+
+            if self.is_live() {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    format!(
+                        "CompletionDelivered {{ start_index: {start_index} }} at {marker_index}"
+                    ),
+                    format!(
+                        "end of replay at {}; the recorded delivery marker was not consumed",
+                        self.last_replayed_index()
+                    ),
+                ));
+            }
+
+            progress.await;
+        }
+    }
+
+    /// Waits until the recorded replay tail is naturally exhausted and the cursor is live.
+    ///
+    /// Used to withhold the completion of a markerless successful durable call (its recorded run
+    /// crashed after the `End` became durable but before the completion crossed to the guest): no
+    /// recorded tail entry can depend on that delivery (a `CompletionDelivered` marker would
+    /// precede any dependent entry), so parking the delivery until the tail exhausts cannot
+    /// deadlock, while delivering earlier could make the replayed guest skip recorded entries.
+    ///
+    /// Each round drains whatever the cursor can consume without a positional owner (awaited and
+    /// orphan terminals, scan-ahead-claimed `Start`s, trailing hints) so a tail whose remaining
+    /// entries have no active reader still exhausts, then parks on cursor progress while a real
+    /// entry (or a reserved delivery marker owned by another token) sits at the head.
+    pub(in crate::durable_host) async fn await_natural_tail_end(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+
+            self.run_owned_cursor_op(move |state| async move {
+                state
+                    .with_tx(async |tx| {
+                        tx.try_get_oplog_entry(|_| false).await?;
+                        Ok(())
+                    })
+                    .await
+            })
+            .await?;
+            if self.is_live() {
+                return Ok(());
+            }
+
+            progress.await;
+        }
     }
 
     /// Awaits the resolution of the call identified by `handle`, treating end-of-replay as a hard

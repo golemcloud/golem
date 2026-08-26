@@ -149,7 +149,12 @@ async fn append_worker(
     archive
         .append(vec![(
             OplogIndex::INITIAL,
-            OplogEntry::log(LogLevel::Debug, "test".to_string(), "test".to_string()),
+            OplogEntry::log(
+                None,
+                LogLevel::Debug,
+                "test".to_string(),
+                "test".to_string(),
+            ),
         )])
         .await;
 }

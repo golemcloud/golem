@@ -12,17 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{CallHandle, CallReplayOutcome, NotCancellable};
+use crate::durable_host::authorization::targets::{RdbmsEngine, rdbms_sql_targets, rdbms_target};
+use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::durability::{HostFailureKind, InFunctionRetryHost};
+use crate::durable_host::keyvalue::environment_owner;
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::{
-    DurabilityHost, DurableWorkerCtx, InternalRetryResult, RemoteTransactionHandler,
+    DurabilityHost, DurableWorkerCtx, InternalRetryResult, LiveAuthorizationPermit,
+    RemoteTransactionHandler,
 };
 use crate::services::rdbms::{DbResult, DbRow, RdbmsType};
 use crate::services::rdbms::{RdbmsError, RdbmsService, RdbmsTransactionStatus, RdbmsTypeService};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use golem_common::model::card::RdbmsVerb;
 use golem_common::model::oplog::HostPayloadPair;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemRdbmsRequest, HostRequestNoInput,
@@ -68,6 +72,8 @@ fn rdbms_retry_properties<Ctx: WorkerCtx>(
 
 // Trait to map RdbmsType to the correct HostPayloadPair types for durability
 pub trait RdbmsDurabilityPairs {
+    const ENGINE: RdbmsEngine;
+    type ConnBeginTransaction: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRowCount>;
     type ConnExecute: HostPayloadPair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsRowCount>;
     type ConnQuery: HostPayloadPair<Req = HostRequestGolemRdbmsRequest, Resp = HostResponseGolemRdbmsResult>;
     type ConnQueryStream: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRequest>;
@@ -76,6 +82,98 @@ pub trait RdbmsDurabilityPairs {
     type TxnQueryStream: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsRequest>;
     type StreamGetColumns: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsColumns>;
     type StreamGetNext: HostPayloadPair<Req = HostRequestNoInput, Resp = HostResponseGolemRdbmsResultChunk>;
+}
+
+const RDBMS_PERMISSION_DENIED: &str = "RDBMS permission denied";
+
+fn database_and_schema(engine: RdbmsEngine, pool_key: &RdbmsPoolKey) -> (String, String) {
+    match engine {
+        RdbmsEngine::Mysql => {
+            let database = pool_key.address.path().trim_start_matches('/').to_string();
+            (database.clone(), database)
+        }
+        RdbmsEngine::Postgres => (
+            pool_key.address.path().trim_start_matches('/').to_string(),
+            "public".to_string(),
+        ),
+        // Ignite's thin-client URL has no database path. Its SQL namespace starts at PUBLIC.
+        RdbmsEngine::Ignite => ("default".to_string(), "PUBLIC".to_string()),
+    }
+}
+
+async fn authorize_sql<Ctx, T>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    pool_key: &RdbmsPoolKey,
+    statement: &str,
+) -> anyhow::Result<Result<LiveAuthorizationPermit, RdbmsError>>
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + RdbmsDurabilityPairs + 'static,
+{
+    let (database, schema) = database_and_schema(T::ENGINE, pool_key);
+    let targets = match rdbms_sql_targets(
+        environment_owner(ctx),
+        T::ENGINE,
+        &database,
+        &schema,
+        statement,
+    ) {
+        Ok(targets) => targets,
+        Err(error) => {
+            return Ok(Err(RdbmsError::QueryExecutionFailure(format!(
+                "{RDBMS_PERMISSION_DENIED}: cannot safely determine SQL targets: {error}"
+            ))));
+        }
+    };
+    Ok(ctx
+        .authorize_live_permissions(&targets)
+        .await?
+        .map_err(|error| {
+            RdbmsError::QueryExecutionFailure(format!("{RDBMS_PERMISSION_DENIED}: {error}"))
+        }))
+}
+
+async fn authorize_transaction<Ctx, T>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    pool_key: &RdbmsPoolKey,
+) -> anyhow::Result<Result<LiveAuthorizationPermit, RdbmsError>>
+where
+    Ctx: WorkerCtx,
+    T: RdbmsType + RdbmsDurabilityPairs + 'static,
+{
+    let (database, _) = database_and_schema(T::ENGINE, pool_key);
+    let targets = [
+        rdbms_target(
+            environment_owner(ctx),
+            RdbmsVerb::Query,
+            &database,
+            "*",
+            "*",
+        ),
+        rdbms_target(
+            environment_owner(ctx),
+            RdbmsVerb::Mutate,
+            &database,
+            "*",
+            "*",
+        ),
+    ]
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>();
+    let targets = match targets {
+        Ok(targets) => targets,
+        Err(error) => {
+            return Ok(Err(RdbmsError::QueryExecutionFailure(format!(
+                "{RDBMS_PERMISSION_DENIED}: cannot construct database wildcard: {error}"
+            ))));
+        }
+    };
+    Ok(ctx
+        .authorize_live_permissions(&targets)
+        .await?
+        .map_err(|error| {
+            RdbmsError::QueryExecutionFailure(format!("{RDBMS_PERMISSION_DENIED}: {error}"))
+        }))
 }
 
 /// A transaction request prepared up front (before its side effect): the pool key, the open
@@ -101,13 +199,10 @@ where
 {
     ctx.observe_function_call(T::durability_connection_interface(), "open");
 
-    let agent_id = ctx.state.owned_agent_id.agent_id.clone();
-    let result = ctx
-        .state
-        .rdbms_service
-        .rdbms_type_service()
-        .create(&address, &agent_id)
-        .await;
+    // Opening is deliberately parse-only. The service (and therefore a socket/pool/client) is
+    // created after the first statement has been extracted and admitted. Transactions require an
+    // admitted wildcard statement set at begin time; ordinary connections remain fully lazy.
+    let result = RdbmsPoolKey::from(&address).map_err(RdbmsError::ConnectionFailure);
 
     match result {
         Ok(key) => {
@@ -125,18 +220,66 @@ async fn begin_db_transaction<Ctx, T, E>(
 ) -> anyhow::Result<Result<Resource<RdbmsTransactionEntry<T>>, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + Send + Sync + 'static,
+    T: RdbmsType + RdbmsDurabilityPairs + Send + Sync + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     E: From<RdbmsError>,
 {
-    ctx.observe_function_call(T::durability_connection_interface(), "begin-transaction");
+    let begun = DurableCallSession::<T::ConnBeginTransaction, NotCancellable>::begin(
+        ctx,
+        DurableFunctionType::ReadLocal,
+    )
+    .await?;
+    let (mut handle, mut pool_key, authorization) = if begun.is_live() {
+        let pool_key = ctx
+            .as_wasi_view()
+            .table()
+            .get::<RdbmsConnection<T>>(entry)?
+            .pool_key
+            .clone();
+        let authorization = authorize_transaction::<Ctx, T>(ctx, &pool_key).await?;
+        let handle = begun.start_live(ctx, HostRequestNoInput {}).await?;
+        (handle, Some(pool_key), Some(authorization))
+    } else {
+        (
+            begun.start_replay(ctx).await?,
+            None,
+            None::<Result<LiveAuthorizationPermit, RdbmsError>>,
+        )
+    };
 
-    let pool_key = ctx
-        .as_wasi_view()
-        .table()
-        .get::<RdbmsConnection<T>>(entry)?
-        .pool_key
-        .clone();
+    let admission = if !handle.is_live() {
+        match handle.replay(ctx).await? {
+            CallReplayOutcome::Replayed(response) => response,
+            CallReplayOutcome::Incomplete(live) => {
+                handle = live;
+                handle
+                    .complete(ctx, HostResponseGolemRdbmsRowCount { result: Ok(0) })
+                    .await?
+            }
+        }
+    } else {
+        let result = match authorization.as_ref() {
+            Some(Ok(_)) => Ok(0),
+            Some(Err(error)) => Err(error.clone().into()),
+            None => Ok(0),
+        };
+        handle
+            .complete(ctx, HostResponseGolemRdbmsRowCount { result })
+            .await?
+    };
+    if let Err(error) = admission.result {
+        return Ok(Err(RdbmsError::from(error).into()));
+    }
+    let _authorization_permit = authorization.and_then(Result::ok);
+    let pool_key = match pool_key.take() {
+        Some(pool_key) => pool_key,
+        None => ctx
+            .as_wasi_view()
+            .table()
+            .get::<RdbmsConnection<T>>(entry)?
+            .pool_key
+            .clone(),
+    };
 
     let result = ctx
         .begin_transaction_function(RdbmsRemoteTransactionHandler::<T>::new(
@@ -148,6 +291,12 @@ where
 
     match result {
         Ok((begin_oplog_idx, transaction_state)) => {
+            if ctx.state.is_live() {
+                ctx.as_wasi_view()
+                    .table()
+                    .get_mut::<RdbmsConnection<T>>(entry)?
+                    .initialized = true;
+            }
             let entry = RdbmsTransactionEntry::new(pool_key, transaction_state, begin_oplog_idx);
             let resource = ctx.as_wasi_view().table().push(entry)?;
             Ok(Ok(resource))
@@ -195,7 +344,16 @@ where
         }),
     };
 
-    let mut handle = CallHandle::<T::ConnExecute, NotCancellable>::start(
+    let authorization = if ctx.state.is_live() {
+        match prepared.as_ref() {
+            Ok((pool_key, _)) => Some(authorize_sql::<Ctx, T>(ctx, pool_key, &statement).await?),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let mut handle = DurableCallSession::<T::ConnExecute, NotCancellable>::start(
         ctx,
         request,
         DurableFunctionType::WriteRemote,
@@ -210,28 +368,54 @@ where
             }
         }
 
+        if let Some(Err(error)) = authorization {
+            break 'result handle
+                .complete(
+                    ctx,
+                    HostResponseGolemRdbmsRowCount {
+                        result: Err(error.into()),
+                    },
+                )
+                .await?;
+        }
+
         let result = match &prepared {
             Ok((pool_key, db_params)) => {
-                let properties = rdbms_retry_properties(ctx, "execute", pool_key);
-                loop {
-                    let result = ctx
-                        .state
-                        .rdbms_service
-                        .deref()
-                        .rdbms_type_service()
-                        .execute(pool_key, &agent_id, &statement, db_params.clone())
-                        .await;
-                    match handle
-                        .try_trigger_retry_or_loop_with_properties(
-                            ctx,
-                            &result,
-                            classify_rdbms_error,
-                            properties.clone(),
-                        )
-                        .await?
-                    {
-                        InternalRetryResult::Persist => break result,
-                        InternalRetryResult::RetryInternally => continue,
+                let connection = ctx
+                    .state
+                    .rdbms_service
+                    .rdbms_type_service()
+                    .create(pool_key.address.as_str(), &agent_id)
+                    .await;
+                match connection {
+                    Err(error) => Err(error),
+                    Ok(_) => {
+                        ctx.as_wasi_view()
+                            .table()
+                            .get_mut::<RdbmsConnection<T>>(entry)?
+                            .initialized = true;
+                        let properties = rdbms_retry_properties(ctx, "execute", pool_key);
+                        loop {
+                            let result = ctx
+                                .state
+                                .rdbms_service
+                                .deref()
+                                .rdbms_type_service()
+                                .execute(pool_key, &agent_id, &statement, db_params.clone())
+                                .await;
+                            match handle
+                                .try_trigger_retry_or_loop_with_properties(
+                                    ctx,
+                                    &result,
+                                    classify_rdbms_error,
+                                    properties.clone(),
+                                )
+                                .await?
+                            {
+                                InternalRetryResult::Persist => break result,
+                                InternalRetryResult::RetryInternally => continue,
+                            }
+                        }
                     }
                 }
             }
@@ -286,7 +470,16 @@ where
         }),
     };
 
-    let mut handle = CallHandle::<T::ConnQuery, NotCancellable>::start(
+    let authorization = if ctx.state.is_live() {
+        match prepared.as_ref() {
+            Ok((pool_key, _)) => Some(authorize_sql::<Ctx, T>(ctx, pool_key, &statement).await?),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let mut handle = DurableCallSession::<T::ConnQuery, NotCancellable>::start(
         ctx,
         request,
         DurableFunctionType::WriteRemote,
@@ -301,28 +494,54 @@ where
             }
         }
 
+        if let Some(Err(error)) = authorization {
+            break 'result handle
+                .complete(
+                    ctx,
+                    HostResponseGolemRdbmsResult {
+                        result: Err(error.into()),
+                    },
+                )
+                .await?;
+        }
+
         let result = match &prepared {
             Ok((pool_key, db_params)) => {
-                let properties = rdbms_retry_properties(ctx, "query", pool_key);
-                loop {
-                    let result = ctx
-                        .state
-                        .rdbms_service
-                        .deref()
-                        .rdbms_type_service()
-                        .query(pool_key, &agent_id, &statement, db_params.clone())
-                        .await;
-                    match handle
-                        .try_trigger_retry_or_loop_with_properties(
-                            ctx,
-                            &result,
-                            classify_rdbms_error,
-                            properties.clone(),
-                        )
-                        .await?
-                    {
-                        InternalRetryResult::Persist => break result,
-                        InternalRetryResult::RetryInternally => continue,
+                let connection = ctx
+                    .state
+                    .rdbms_service
+                    .rdbms_type_service()
+                    .create(pool_key.address.as_str(), &agent_id)
+                    .await;
+                match connection {
+                    Err(error) => Err(error),
+                    Ok(_) => {
+                        ctx.as_wasi_view()
+                            .table()
+                            .get_mut::<RdbmsConnection<T>>(entry)?
+                            .initialized = true;
+                        let properties = rdbms_retry_properties(ctx, "query", pool_key);
+                        loop {
+                            let result = ctx
+                                .state
+                                .rdbms_service
+                                .deref()
+                                .rdbms_type_service()
+                                .query(pool_key, &agent_id, &statement, db_params.clone())
+                                .await;
+                            match handle
+                                .try_trigger_retry_or_loop_with_properties(
+                                    ctx,
+                                    &result,
+                                    classify_rdbms_error,
+                                    properties.clone(),
+                                )
+                                .await?
+                            {
+                                InternalRetryResult::Persist => break result,
+                                InternalRetryResult::RetryInternally => continue,
+                            }
+                        }
                     }
                 }
             }
@@ -357,16 +576,26 @@ async fn db_connection_durable_query_stream<Ctx, T, P, E>(
 where
     Ctx: WorkerCtx,
     T: RdbmsType + RdbmsDurabilityPairs + 'static,
+    dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
+    let prepared = db_connection_query_stream(statement.clone(), params, ctx, entry);
+    let authorization = if ctx.state.is_live() {
+        match prepared.as_ref() {
+            Ok(request) => Some(authorize_sql::<Ctx, T>(ctx, &request.pool_key, &statement).await?),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
     let begin_index = ctx
         .begin_durable_function(
             &DurableFunctionType::WriteRemoteBatched(None),
             "golem::rdbms::db-connection::query-stream",
         )
         .await?;
-    let mut handle = CallHandle::<T::ConnQueryStream, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::ConnQueryStream, NotCancellable>::start(
         ctx,
         HostRequestNoInput {},
         DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
@@ -378,17 +607,48 @@ where
             break 'result handle.replay_expecting_completion(ctx).await?;
         }
 
-        let conn_pool_key = ctx
-            .as_wasi_view()
-            .table()
-            .get::<RdbmsConnection<T>>(entry)
-            .map(|v| v.pool_key.clone());
-        let result = db_connection_query_stream(statement, params, ctx, entry);
+        if let Some(Err(error)) = authorization {
+            break 'result handle
+                .complete(
+                    ctx,
+                    HostResponseGolemRdbmsRequest {
+                        request: Err(error.into()),
+                    },
+                )
+                .await?;
+        }
+
+        let result = match &prepared {
+            Ok(request) => match <dyn RdbmsService as RdbmsTypeService<T>>::rdbms_type_service(
+                ctx.state.rdbms_service.deref(),
+            )
+            .create(
+                request.pool_key.address.as_str(),
+                &ctx.state.owned_agent_id.agent_id,
+            )
+            .await
+            {
+                Ok(_) => {
+                    ctx.as_wasi_view()
+                        .table()
+                        .get_mut::<RdbmsConnection<T>>(entry)?
+                        .initialized = true;
+                    Ok(request.clone())
+                }
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error.clone()),
+        };
         let pool_key_for_props = result
             .as_ref()
             .map(|r| r.pool_key.clone())
             .ok()
-            .or_else(|| conn_pool_key.ok());
+            .or_else(|| {
+                prepared
+                    .as_ref()
+                    .ok()
+                    .map(|request| request.pool_key.clone())
+            });
         if let Some(pool_key) = pool_key_for_props.as_ref() {
             let properties = rdbms_retry_properties(ctx, "query-stream", pool_key);
             handle
@@ -442,19 +702,20 @@ where
 {
     ctx.observe_function_call(T::durability_connection_interface(), "drop");
     let agent_id = ctx.state.owned_agent_id.agent_id.clone();
-    let pool_key = ctx
+    let (pool_key, initialized) = ctx
         .as_wasi_view()
         .table()
-        .get::<RdbmsConnection<T>>(&entry)?
-        .pool_key
-        .clone();
+        .get::<RdbmsConnection<T>>(&entry)
+        .map(|connection| (connection.pool_key.clone(), connection.initialized))?;
 
-    let _ = ctx
-        .state
-        .rdbms_service
-        .rdbms_type_service()
-        .remove(&pool_key, &agent_id)
-        .await;
+    if initialized {
+        let _ = ctx
+            .state
+            .rdbms_service
+            .rdbms_type_service()
+            .remove(&pool_key, &agent_id)
+            .await;
+    }
 
     ctx.as_wasi_view()
         .table()
@@ -480,7 +741,7 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx))
     };
 
-    let mut handle = CallHandle::<T::StreamGetColumns, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::StreamGetColumns, NotCancellable>::start(
         ctx,
         HostRequestNoInput {},
         durable_function_type,
@@ -557,7 +818,7 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx))
     };
 
-    let mut handle = CallHandle::<T::StreamGetNext, NotCancellable>::start(
+    let mut handle = DurableCallSession::<T::StreamGetNext, NotCancellable>::start(
         ctx,
         HostRequestNoInput {},
         durable_function_type,
@@ -708,7 +969,16 @@ where
             }),
     };
 
-    let mut handle = CallHandle::<T::TxnQuery, NotCancellable>::start(
+    let authorization = if ctx.state.is_live() {
+        match prepared.as_ref() {
+            Ok((pool_key, _, _)) => Some(authorize_sql::<Ctx, T>(ctx, pool_key, &statement).await?),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let mut handle = DurableCallSession::<T::TxnQuery, NotCancellable>::start(
         ctx,
         request,
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
@@ -718,6 +988,17 @@ where
     let result = 'result: {
         if !handle.is_live() {
             break 'result handle.replay_expecting_completion(ctx).await?;
+        }
+
+        if let Some(Err(error)) = authorization {
+            break 'result handle
+                .complete(
+                    ctx,
+                    HostResponseGolemRdbmsResult {
+                        result: Err(error.into()),
+                    },
+                )
+                .await?;
         }
 
         let result = match &prepared {
@@ -809,7 +1090,16 @@ where
             }),
     };
 
-    let mut handle = CallHandle::<T::TxnExecute, NotCancellable>::start(
+    let authorization = if ctx.state.is_live() {
+        match prepared.as_ref() {
+            Ok((pool_key, _, _)) => Some(authorize_sql::<Ctx, T>(ctx, pool_key, &statement).await?),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let mut handle = DurableCallSession::<T::TxnExecute, NotCancellable>::start(
         ctx,
         request,
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
@@ -819,6 +1109,17 @@ where
     let result = 'result: {
         if !handle.is_live() {
             break 'result handle.replay_expecting_completion(ctx).await?;
+        }
+
+        if let Some(Err(error)) = authorization {
+            break 'result handle
+                .complete(
+                    ctx,
+                    HostResponseGolemRdbmsRowCount {
+                        result: Err(error.into()),
+                    },
+                )
+                .await?;
         }
 
         let result = match &prepared {
@@ -866,7 +1167,16 @@ where
 {
     let entry_rep = entry.rep();
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
-    let mut handle = CallHandle::<T::TxnQueryStream, NotCancellable>::start(
+    let prepared = db_transaction_query_stream(statement.clone(), params, ctx, entry);
+    let authorization = if ctx.state.is_live() {
+        match prepared.as_ref() {
+            Ok(request) => Some(authorize_sql::<Ctx, T>(ctx, &request.pool_key, &statement).await?),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    let mut handle = DurableCallSession::<T::TxnQueryStream, NotCancellable>::start(
         ctx,
         HostRequestNoInput {},
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
@@ -878,17 +1188,28 @@ where
             break 'result handle.replay_expecting_completion(ctx).await?;
         }
 
-        let txn_pool_key = ctx
-            .as_wasi_view()
-            .table()
-            .get::<RdbmsTransactionEntry<T>>(entry)
-            .map(|v| v.pool_key.clone());
-        let result = db_transaction_query_stream(statement, params, ctx, entry);
+        if let Some(Err(error)) = authorization {
+            break 'result handle
+                .complete(
+                    ctx,
+                    HostResponseGolemRdbmsRequest {
+                        request: Err(error.into()),
+                    },
+                )
+                .await?;
+        }
+
+        let result = prepared.clone();
         let pool_key_for_props = result
             .as_ref()
             .map(|r| r.pool_key.clone())
             .ok()
-            .or_else(|| txn_pool_key.ok());
+            .or_else(|| {
+                prepared
+                    .as_ref()
+                    .ok()
+                    .map(|request| request.pool_key.clone())
+            });
         if let Some(pool_key) = pool_key_for_props.as_ref() {
             let properties = rdbms_retry_properties(ctx, "query-stream", pool_key);
             handle
@@ -1092,6 +1413,7 @@ where
 
 pub struct RdbmsConnection<T: RdbmsType> {
     pool_key: RdbmsPoolKey,
+    initialized: bool,
     _owner: PhantomData<T>,
 }
 
@@ -1099,6 +1421,7 @@ impl<T: RdbmsType> RdbmsConnection<T> {
     fn new(pool_key: RdbmsPoolKey) -> Self {
         Self {
             pool_key,
+            initialized: false,
             _owner: PhantomData,
         }
     }

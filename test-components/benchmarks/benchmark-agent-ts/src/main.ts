@@ -24,7 +24,7 @@ export const BenchmarkAgent = defineAgent({
             http: http.post('/cpu-intensive'),
         }),
         oplogHeavy: method({
-            input: { length: z.number(), persistenceOn: z.boolean() },
+            input: { length: z.number() },
             returns: z.number(),
         }),
     },
@@ -42,8 +42,8 @@ export const BenchmarkAgentImpl = BenchmarkAgent.implement({
         cpuIntensive({ length }) {
             return common.cpuIntensive(length);
         },
-        oplogHeavy({ length, persistenceOn }) {
-            return common.oplogHeavy(length, persistenceOn);
+        oplogHeavy({ length }) {
+            return common.oplogHeavy(length);
         },
     },
 });
@@ -57,7 +57,7 @@ export const RpcBenchmarkAgent = defineAgent({
         echo: method({ input: { message: z.string() }, returns: z.string() }),
         largeInput: method({ input: { input: s.uint8Array() }, returns: z.number() }),
         cpuIntensive: method({ input: { length: z.number() }, returns: z.number() }),
-        oplogHeavy: method({ input: { length: z.number(), persistenceOn: z.boolean() }, returns: z.number() }),
+        oplogHeavy: method({ input: { length: z.number() }, returns: z.number() }),
     },
 });
 
@@ -73,8 +73,8 @@ export const RpcBenchmarkAgentImpl = RpcBenchmarkAgent.implement({
         async cpuIntensive({ length }) {
             return await benchmarkClient({ name: this.name }).cpuIntensive({ length });
         },
-        async oplogHeavy({ length, persistenceOn }) {
-            return await benchmarkClient({ name: this.name }).oplogHeavy({ length, persistenceOn });
+        async oplogHeavy({ length }) {
+            return await benchmarkClient({ name: this.name }).oplogHeavy({ length });
         },
     },
 });

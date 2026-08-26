@@ -26,7 +26,7 @@ use golem_cli::bridge_gen::typescript::{
 use golem_cli::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::language::GuestLanguage;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, PathDirection, PathKind, PathSpec, ResultSpec,
@@ -266,6 +266,39 @@ fn guest_agent_runtime_import_alias_does_not_collide_with_agent_class() {
         Utf8Path::from_path(dir.path()).unwrap(),
         TypeScriptBridgeMode::GuestWasmRpc,
     );
+}
+
+#[test]
+fn guest_schema_graph_registry_does_not_collide_with_agent_class() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut agent_type = agent(
+        "__golemSchemaGraphs",
+        "typescript",
+        vec![],
+        vec![],
+        vec![],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(vec!["region"], SchemaType::string())];
+    let source_name = format!(
+        "{}.ts",
+        bridge_client_directory_name(&agent_type.type_name, BridgeMode::Guest)
+    );
+    let mut generator = TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        target,
+        true,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+
+    let source = std::fs::read_to_string(target.join(source_name)).unwrap();
+    assert!(source.contains("export class __golemSchemaGraphs"));
+    assert!(source.contains("const __golemSchemaGraphs1 = {"));
+    assert!(source.contains("graph: __golemSchemaGraphs1.graph0()"));
+    install_and_build(target);
 }
 
 #[test]
@@ -537,9 +570,13 @@ fn guest_durable_generation_uses_sdk_runtime_surface() {
     assert!(source.contains("invokeAndAwait("));
     assert!(source.contains("abortable(signal: AbortSignal"));
     assert!(source.contains("this.resolved.invoke("));
-    assert!(source.contains("this.resolved.schedule("));
+    assert!(!source.contains("this.resolved.schedule("));
+    assert!(source.contains("return this.resolved.scheduleCancelable("));
     assert!(source.contains("this.resolved.scheduleCancelable("));
-    assert!(source.contains("base.typedSchemaValueFromJson("));
+    assert!(source.contains("const __golemSchemaGraphs = {"));
+    assert!(source.contains("graph: __golemSchemaGraphs.graph0()"));
+    assert!(!source.contains("typedSchemaValueFromJson"));
+    assert!(!source.contains("schemaGraphFromJson"));
     assert!(source.contains("reachable-config"));
     assert!(source.contains("18446744073709551615"));
     assert!(source.contains("requests"));
@@ -757,7 +794,7 @@ fn guest_ephemeral_generation_uses_metadata_runtime_calls() {
     assert!(!source.contains("static getPhantom("));
     assert!(source.contains("invokeAndAwaitWithMetadata("));
     assert!(source.contains("invokeWithMetadata("));
-    assert!(source.contains("scheduleWithMetadata("));
+    assert!(!source.contains("scheduleWithMetadata("));
     assert!(source.contains("scheduleCancelableWithMetadata("));
     assert!(source.contains("const phantomId = undefined;"));
     assert!(!source.contains("base.Uuid.generate()"));
@@ -849,7 +886,10 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     assert!(source.contains("invokeAndAwait([\"replace\"], typedInput, undefined)"));
     assert!(source.contains("[...this.inherited"));
     assert!(source.contains("{ tag: 'record', fields }"));
-    assert!(source.contains("base.typedSchemaValueFromJson("));
+    assert!(source.contains("const __golemSchemaGraphs = {"));
+    assert!(source.contains("typedInput = { graph: __golemSchemaGraphs.graph"));
+    assert!(!source.contains("typedSchemaValueFromJson"));
+    assert!(!source.contains("schemaGraphFromJson"));
     assert!(source.contains("base.splitToolRpcError(error, decodeGrepError)"));
     assert!(
         source.contains("base.typedSchemaValueConforms(expectedResultGraph, invocation.result)")
@@ -891,7 +931,7 @@ fn guest_tool_with_unstructured_result_compiles() {
 }
 
 #[test]
-fn guest_tool_generation_escapes_identifiers_and_normalizes_precision() {
+fn guest_tool_generation_escapes_identifiers_and_emits_exact_bigints() {
     let mut tool = grep_tool();
     tool.commands.nodes[0].name = "constructor".to_string();
     tool.commands.nodes[0].globals.options[0].long = "encodeColorMode".to_string();
@@ -922,7 +962,9 @@ fn guest_tool_generation_escapes_identifiers_and_normalizes_precision() {
     assert!(source.contains("decodeConstructorError1: number"));
     assert!(source.contains("await_: number"));
     assert!(source.contains("encodeColorMode1: ColorMode"));
-    assert!(source.contains("\\\"18446744073709551615\\\""));
+    assert!(source.contains("{ tag: 'unsigned', val: 18446744073709551615n }"));
+    assert!(!source.contains("schemaGraphFromJson"));
+    assert!(!source.contains("typedSchemaValueFromJson"));
     install_and_build(&package_dir);
 }
 

@@ -45,6 +45,9 @@ impl From<CardRepoError> for PermissionShareRepoError {
     fn from(value: CardRepoError) -> Self {
         match value {
             CardRepoError::ParentNotFound(card_id) => Self::ParentCardNotFound(card_id),
+            CardRepoError::CardAlreadyExists(_) | CardRepoError::RuntimeCardRevoked(_) => {
+                Self::ConcurrentModification
+            }
             CardRepoError::CardTreeChangedDuringDelete => Self::CardTreeChangedDuringDelete,
             CardRepoError::ConcurrentModification => Self::ConcurrentModification,
             CardRepoError::InternalError(err) => Self::InternalError(err),

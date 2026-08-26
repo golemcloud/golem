@@ -43,34 +43,23 @@ fn tail_collected_graph(tail : TailPositionalDef) -> @model.SchemaGraph {
 }
 
 ///|
-fn surface_names(
-  name : String,
-  aliases : Array[String],
-  short : Char?,
-) -> Array[String] {
+fn identity_names(name : String, aliases : Array[String]) -> Array[String] {
   let names = [name]
   for surface_alias in aliases {
     names.push(surface_alias)
-  }
-  if short is Some(short) {
-    names.push(short.to_string())
   }
   names
 }
 
 ///|
-fn surfaces_overlap(
+fn identities_overlap(
   left_name : String,
   left_aliases : Array[String],
-  left_short : Char?,
   right_name : String,
   right_aliases : Array[String],
-  right_short : Char?,
 ) -> Bool {
-  let right = surface_names(right_name, right_aliases, right_short)
-  surface_names(left_name, left_aliases, left_short).any(name => {
-    right.contains(name)
-  })
+  let right = identity_names(right_name, right_aliases)
+  identity_names(left_name, left_aliases).any(name => right.contains(name))
 }
 
 ///|
@@ -78,27 +67,31 @@ fn inherited_matches(
   inherited : EffectiveGlobal,
   name : String,
   aliases : Array[String],
-  short : Char?,
 ) -> Bool {
   match inherited {
     Option(option) =>
-      surfaces_overlap(
-        option.long,
-        option.aliases,
-        option.short,
-        name,
-        aliases,
-        short,
-      )
-    Flag(flag) =>
-      surfaces_overlap(
-        flag.long,
-        flag.aliases,
-        flag.short,
-        name,
-        aliases,
-        short,
-      )
+      identities_overlap(option.long, option.aliases, name, aliases)
+    Flag(flag) => identities_overlap(flag.long, flag.aliases, name, aliases)
+  }
+}
+
+///|
+fn inherited_short(inherited : EffectiveGlobal) -> Char? {
+  match inherited {
+    Option(option) => option.short
+    Flag(flag) => flag.short
+  }
+}
+
+///|
+fn inherited_short_collides(
+  inherited : Array[EffectiveGlobal],
+  short : Char?,
+) -> Bool {
+  match short {
+    Some(short) =>
+      inherited.any(global => inherited_short(global) == Some(short))
+    None => false
   }
 }
 
@@ -132,9 +125,8 @@ fn matching_inherited(
   inherited : Array[EffectiveGlobal],
   name : String,
   aliases : Array[String],
-  short : Char?,
 ) -> Array[EffectiveGlobal] {
-  inherited.filter(global => inherited_matches(global, name, aliases, short))
+  inherited.filter(global => inherited_matches(global, name, aliases))
 }
 
 ///|
@@ -150,24 +142,33 @@ fn reconcile_globals(
 ) -> GlobalsDef raise ToolBuildError {
   let options : Array[OptionSpecDef] = []
   for option in globals.options {
-    match
-      matching_inherited(inherited, option.long, option.aliases, option.short) {
+    match matching_inherited(inherited, option.long, option.aliases) {
       [global] =>
         if !compatible_option(global, option_collected_graph(option)) {
           conflict(option.long, command)
         }
-      [] => options.push(option)
+      [] => {
+        if inherited_short_collides(inherited, option.short) {
+          conflict(option.short.unwrap().to_string(), command)
+        }
+        options.push(option)
+      }
       _ => conflict(option.long, command)
     }
   }
   let flags : Array[@toolCommon.FlagSpec] = []
   for flag in globals.flags {
-    match matching_inherited(inherited, flag.long, flag.aliases, flag.short) {
+    match matching_inherited(inherited, flag.long, flag.aliases) {
       [global] =>
         if !compatible_flag(global, flag) {
           conflict(flag.long, command)
         }
-      [] => flags.push(flag)
+      [] => {
+        if inherited_short_collides(inherited, flag.short) {
+          conflict(flag.short.unwrap().to_string(), command)
+        }
+        flags.push(flag)
+      }
       _ => conflict(flag.long, command)
     }
   }
@@ -182,7 +183,7 @@ fn reconcile_body(
 ) -> CommandBodyDef raise ToolBuildError {
   let fixed : Array[PositionalDef] = []
   for positional in body.positionals.fixed {
-    match matching_inherited(inherited, positional.name, [], None) {
+    match matching_inherited(inherited, positional.name, []) {
       [global] =>
         if !compatible_option(global, positional.type_) {
           conflict(positional.name, command)
@@ -193,7 +194,7 @@ fn reconcile_body(
   }
   let tail = match body.positionals.tail {
     Some(tail) =>
-      match matching_inherited(inherited, tail.name, [], None) {
+      match matching_inherited(inherited, tail.name, []) {
         [global] => {
           if !compatible_option(global, tail_collected_graph(tail)) {
             conflict(tail.name, command)
@@ -210,24 +211,33 @@ fn reconcile_body(
   }
   let options : Array[OptionSpecDef] = []
   for option in body.options {
-    match
-      matching_inherited(inherited, option.long, option.aliases, option.short) {
+    match matching_inherited(inherited, option.long, option.aliases) {
       [global] =>
         if !compatible_option(global, option_collected_graph(option)) {
           conflict(option.long, command)
         }
-      [] => options.push(option)
+      [] => {
+        if inherited_short_collides(inherited, option.short) {
+          conflict(option.short.unwrap().to_string(), command)
+        }
+        options.push(option)
+      }
       _ => conflict(option.long, command)
     }
   }
   let flags : Array[@toolCommon.FlagSpec] = []
   for flag in body.flags {
-    match matching_inherited(inherited, flag.long, flag.aliases, flag.short) {
+    match matching_inherited(inherited, flag.long, flag.aliases) {
       [global] =>
         if !compatible_flag(global, flag) {
           conflict(flag.long, command)
         }
-      [] => flags.push(flag)
+      [] => {
+        if inherited_short_collides(inherited, flag.short) {
+          conflict(flag.short.unwrap().to_string(), command)
+        }
+        flags.push(flag)
+      }
       _ => conflict(flag.long, command)
     }
   }
@@ -247,19 +257,15 @@ fn globals_as_effective(globals : GlobalsDef) -> Array[EffectiveGlobal] {
 }
 
 ///|
-fn register_value_is_surface(
+fn register_value_is_names(
   scope : Map[String, ValueIsComparand],
   name : String,
   aliases : Array[String],
-  short : Char?,
   comparand : ValueIsComparand,
 ) -> Unit {
   scope[name] = comparand
   for surface_alias in aliases {
     scope[surface_alias] = comparand
-  }
-  if short is Some(short) {
-    scope[short.to_string()] = comparand
   }
 }
 
@@ -270,21 +276,13 @@ fn register_value_is_global(
 ) -> Unit {
   match global {
     Option(option) =>
-      register_value_is_surface(
+      register_value_is_names(
         scope,
         option.long,
         option.aliases,
-        option.short,
         Typed(option.long, option_collected_graph(option)),
       )
-    Flag(flag) =>
-      register_value_is_surface(
-        scope,
-        flag.long,
-        flag.aliases,
-        flag.short,
-        Flag,
-      )
+    Flag(flag) => register_value_is_names(scope, flag.long, flag.aliases, Flag)
   }
 }
 
@@ -302,34 +300,31 @@ fn value_is_scope(
     register_value_is_global(scope, global)
   }
   for positional in body.positionals.fixed {
-    register_value_is_surface(
+    register_value_is_names(
       scope,
       positional.name,
       [],
-      None,
       Typed(positional.name, positional.type_),
     )
   }
   if body.positionals.tail is Some(tail) {
-    register_value_is_surface(
+    register_value_is_names(
       scope,
       tail.name,
       [],
-      None,
       Typed(tail.name, tail_collected_graph(tail)),
     )
   }
   for option in body.options {
-    register_value_is_surface(
+    register_value_is_names(
       scope,
       option.long,
       option.aliases,
-      option.short,
       Typed(option.long, option_collected_graph(option)),
     )
   }
   for flag in body.flags {
-    register_value_is_surface(scope, flag.long, flag.aliases, flag.short, Flag)
+    register_value_is_names(scope, flag.long, flag.aliases, Flag)
   }
   scope
 }
@@ -479,7 +474,14 @@ pub fn ToolDef::graft_subtree(
     raise SubtreeRootNameMismatch(expected_name, child_root.name)
   }
   let graft_name = override_name.unwrap_or(child_root.name)
-  let inherited = globals_as_effective(parent_globals)
+  let strict_ancestors = globals_as_effective(self.commands[0].globals)
+  let parent_globals = reconcile_globals(
+    parent_globals, strict_ancestors, graft_name,
+  )
+  let inherited = strict_ancestors.copy()
+  for global in globals_as_effective(parent_globals) {
+    inherited.push(global)
+  }
   let child_globals = reconcile_globals(
     child_root.globals,
     inherited,

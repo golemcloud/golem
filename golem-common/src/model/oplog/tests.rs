@@ -13,37 +13,45 @@
 // limitations under the License.
 
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::model::card::{Card, CardId};
+use crate::model::agent::Principal;
+use crate::model::card::{
+    AccountCardHolder, AgentCardHolder, ApplicationCardHolder, Card, CardHolder, CardId,
+    InvocationWalletPin, PublicInvocationWalletPin, WalletVersionToken,
+};
 use crate::model::component::PluginPriority;
-use crate::model::invocation_context::{SpanId, TraceId};
+use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::lucene::Query;
+use crate::model::oplog::host_functions::HostFunctionName;
 use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
 use crate::model::oplog::payload::{HostRequestSecretReveal, HostResponseSecretRevealed};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
-    CancelledParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams, CreateParams,
-    CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams,
-    EndParams, ErrorParams, ExitedParams, FailedUpdateParams, FinishSpanParams, GrowMemoryParams,
-    InterruptedParams, JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams,
-    PendingUpdateParams, PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams,
-    RemoveRetryPolicyParams, RestartParams, RevertParams, RolledBackRemoteTransactionParams,
-    SetRetryPolicyParams, SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams,
-    SuccessfulUpdateParams, SuspendParams,
+    CancelledParams, CardDerivedParams, CardExpiredParams, CardInstalledParams,
+    CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
+    CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
+    EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
+    FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
+    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, AgentResourceId, JsonSnapshotData, LogLevel,
-    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogPayload,
-    PersistenceLevel, PluginInstallationDescription, PublicAgentInvocation,
+    AgentMethodInvocationParameters, AgentResourceId, AttributeMap, DurableFunctionType,
+    JsonSnapshotData, LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart,
+    OplogEntry, OplogPayload, PluginInstallationDescription, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
-    PublicLocalSpanData, PublicOplogEntry, PublicSnapshotData, PublicSpanData,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
-    SnapshotBasedUpdateParameters, StringAttributeValue,
+    PublicLocalSpanData, PublicOplogEntry, PublicQueuedCardEvent, PublicSnapshotData,
+    PublicSpanData, PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent,
+    RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp, TransactionId,
+    AccountId, AgentId, AgentInvocationPayload, ComponentId, Empty, IdempotencyKey, OplogIndex,
+    Timestamp, TransactionId,
 };
 use crate::schema::IntoTypedSchemaValue;
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
@@ -51,9 +59,87 @@ use crate::schema::schema_type::{NamedFieldType, ResultSpec, SchemaType, Variant
 use crate::schema::schema_value::{ResultValuePayload, SchemaValue, VariantValuePayload};
 use poem_openapi::types::ToJSON;
 use pretty_assertions::assert_eq;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use test_r::test;
 use uuid::Uuid;
+
+#[test]
+fn start_desert_roundtrip() {
+    let entry = OplogEntry::Start {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: Some(OplogIndex::from_u64(7)),
+        function_name: HostFunctionName::Custom("operation".to_string()),
+        invocation_id: Some(Uuid::new_v4()),
+        observational_owner: Some(OplogIndex::from_u64(6)),
+        request: None,
+        durable_function_type: DurableFunctionType::WriteRemote,
+    };
+
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, entry);
+}
+
+#[test]
+fn observational_start_public_protobuf_roundtrip() {
+    let owner = OplogIndex::from_u64(12);
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: Some(OplogIndex::from_u64(13)),
+        function_name: "wasi:http/outgoing-handler::handle".to_string(),
+        invocation_id: None,
+        observational_owner: Some(owner),
+        request: None,
+        durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
+    });
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), entry);
+}
+
+#[test]
+fn entity_attribution_raw_protobuf_roundtrip() {
+    let parent_start_index = Some(OplogIndex::from_u64(17));
+    let span_id = SpanId::generate();
+    let entries = vec![
+        OplogEntry::Log {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index,
+            level: LogLevel::Info,
+            context: "entity".to_string(),
+            message: "message".to_string(),
+        },
+        OplogEntry::StartSpan {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index,
+            span_id: span_id.clone(),
+            parent: None,
+            linked_context_id: None,
+            attributes: AttributeMap(HashMap::from([(
+                "key".to_string(),
+                AttributeValue::String("value".to_string()),
+            )])),
+        },
+        OplogEntry::SetSpanAttribute {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index,
+            span_id: span_id.clone(),
+            key: "other".to_string(),
+            value: AttributeValue::String("value".to_string()),
+        },
+        OplogEntry::FinishSpan {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index,
+            span_id,
+        },
+    ];
+
+    for entry in entries {
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            entry.clone().try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
+    }
+}
 
 /// Build a single-root [`TypedSchemaValue`] fixture from an anonymous schema
 /// root and a value tree.
@@ -70,6 +156,23 @@ fn test_card(card_id: CardId) -> Card {
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
         created_at: chrono::Utc::now(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    }
+}
+
+fn phase_four_fixture_card() -> Card {
+    Card {
+        card_id: CardId(Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap()),
+        parent_ids: Vec::new(),
+        lower_positive: Vec::new(),
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: Vec::new(),
+        created_at: chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+            .unwrap()
+            .to_utc(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -145,6 +248,8 @@ fn start_serialization_poem_serde_equivalence() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: None,
         function_name: "test".to_string(),
+        invocation_id: None,
+        observational_owner: Some(OplogIndex::from_u64(7)),
         request: Some(typed(
             SchemaType::string(),
             SchemaValue::String("test".to_string()),
@@ -180,6 +285,8 @@ fn start_with_handle_serialization_poem_serde_equivalence() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: Some(crate::base_model::OplogIndex::from_u64(3)),
         function_name: "golem:rpc/wasm-rpc.{invoke-and-await}".to_string(),
+        invocation_id: None,
+        observational_owner: None,
         request: Some(typed(
             SchemaType::record(vec![
                 nf("uri", SchemaType::string()),
@@ -205,6 +312,8 @@ fn start_with_complex_values_serialization_poem_serde_equivalence() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: None,
         function_name: "wasi:keyvalue/store.{get}".to_string(),
+        invocation_id: None,
+        observational_owner: None,
         request: Some(typed(
             SchemaType::record(vec![
                 nf("name", SchemaType::string()),
@@ -283,6 +392,8 @@ fn matcher_matches_payload_less_variant_case_name() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: None,
         function_name: "test".to_string(),
+        invocation_id: None,
+        observational_owner: None,
         request: Some(typed(
             SchemaType::variant(vec![vc("none", None), vc("some", Some(SchemaType::u32()))]),
             SchemaValue::Variant(VariantValuePayload {
@@ -303,6 +414,8 @@ fn matcher_matches_variant_payload_under_case_path() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: None,
         function_name: "test".to_string(),
+        invocation_id: None,
+        observational_owner: None,
         request: Some(typed(
             SchemaType::variant(vec![vc("none", None), vc("some", Some(SchemaType::u32()))]),
             SchemaValue::Variant(VariantValuePayload {
@@ -331,6 +444,8 @@ fn matcher_matches_secret_reveal_request_payload() {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: None,
         function_name: "golem::secrets::reveal".to_string(),
+        invocation_id: None,
+        observational_owner: None,
         request: Some(request),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
     });
@@ -429,6 +544,7 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
                 inherited: true,
             })]],
         }),
+        wallet_pin: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -572,6 +688,7 @@ fn agent_invocation_started_with_initialization_serialization_poem_serde_equival
                 inherited: false,
             })]],
         }),
+        wallet_pin: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -900,17 +1017,6 @@ fn set_span_attribute_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn change_persistence_level_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ChangePersistenceLevel(ChangePersistenceLevelParams {
-        timestamp: Timestamp::now_utc().rounded(),
-        persistence_level: PersistenceLevel::Smart,
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
 fn begin_remote_transaction_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
         timestamp: Timestamp::now_utc().rounded(),
@@ -989,17 +1095,378 @@ fn raw_snapshot_protobuf_roundtrip_preserves_active_cards() {
         data: OplogPayload::Inline(Box::new(vec![1, 2, 3, 4])),
         mime_type: "application/octet-stream".to_string(),
         active_cards,
+        wallet_generation: 73,
     };
 
     let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
         entry.clone().try_into().unwrap();
     let decoded = OplogEntry::try_from(proto).unwrap();
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    let binary_decoded = crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap();
+    match binary_decoded {
+        OplogEntry::Snapshot {
+            active_cards,
+            wallet_generation,
+            ..
+        } => {
+            assert_eq!(active_cards, vec![card.clone().into()]);
+            assert_eq!(wallet_generation, 73);
+        }
+        other => panic!("expected binary snapshot entry, got {other:?}"),
+    }
 
     match decoded {
-        OplogEntry::Snapshot { active_cards, .. } => {
+        OplogEntry::Snapshot {
+            active_cards,
+            wallet_generation,
+            ..
+        } => {
             assert_eq!(active_cards, vec![card.into()]);
+            assert_eq!(wallet_generation, 73);
         }
         other => panic!("expected snapshot entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn invocation_wallet_pin_protobuf_roundtrip_and_legacy_defaults() {
+    let pinned_card_ids = vec![CardId::new(), CardId::new()];
+    let scope_card_id = CardId::new();
+    let wallet_token = WalletVersionToken {
+        wallet_id_hash: [0x42; 32],
+        generation: 73,
+    };
+    let raw_entry = OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::now_utc().rounded(),
+        idempotency_key: IdempotencyKey::new("wallet-pin".to_string()),
+        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+            method_name: "test".to_string(),
+            input: SchemaValue::Record { fields: Vec::new() },
+            principal: Principal::anonymous(),
+            scope_card: None,
+        })),
+        trace_id: TraceId::generate(),
+        trace_states: Vec::new(),
+        invocation_context: Vec::new(),
+        wallet_pin: Some(InvocationWalletPin {
+            wallet_token: wallet_token.clone(),
+            pinned_card_ids: pinned_card_ids.clone(),
+            scope_card_id: Some(scope_card_id),
+        }),
+    };
+
+    let mut raw_proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        raw_entry.clone().try_into().unwrap();
+    match OplogEntry::try_from(raw_proto.clone()).unwrap() {
+        OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
+            assert_eq!(
+                wallet_pin,
+                Some(InvocationWalletPin {
+                    wallet_token: wallet_token.clone(),
+                    pinned_card_ids: pinned_card_ids.clone(),
+                    scope_card_id: Some(scope_card_id),
+                })
+            );
+        }
+        other => panic!("expected raw invocation-started entry, got {other:?}"),
+    }
+    if let Some(
+        golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::AgentInvocationStarted(
+            params,
+        ),
+    ) = &mut raw_proto.entry
+    {
+        params.wallet_pin = None;
+    } else {
+        panic!("expected raw invocation-started protobuf entry");
+    }
+    match OplogEntry::try_from(raw_proto).unwrap() {
+        OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
+            assert_eq!(wallet_pin, None);
+        }
+        other => panic!("expected raw invocation-started entry, got {other:?}"),
+    }
+
+    let public_entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+        wallet_pin: Some(PublicInvocationWalletPin {
+            wallet_token,
+            scope_card_id: Some(scope_card_id),
+        }),
+    });
+    let mut public_proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+        public_entry.clone().try_into().unwrap();
+    assert_eq!(
+        PublicOplogEntry::try_from(public_proto.clone()).unwrap(),
+        public_entry
+    );
+    if let Some(golem_api_grpc::proto::golem::worker::oplog_entry::Entry::AgentInvocationStarted(
+        params,
+    )) = &mut public_proto.entry
+    {
+        params.wallet_pin = None;
+    } else {
+        panic!("expected public invocation-started protobuf entry");
+    }
+    match PublicOplogEntry::try_from(public_proto).unwrap() {
+        PublicOplogEntry::AgentInvocationStarted(params) => {
+            assert_eq!(params.wallet_pin, None);
+        }
+        other => panic!("expected public invocation-started entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn phase_four_queued_card_event_binary_fixtures_remain_decodable() {
+    let card = phase_four_fixture_card();
+    let card_id = card.card_id;
+    let fixtures = [
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/queued_card_event_install.bin"
+            )
+            .as_slice(),
+            QueuedCardEvent::install(card),
+        ),
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/queued_card_event_revoke.bin"
+            )
+            .as_slice(),
+            QueuedCardEvent::revoke(card_id),
+        ),
+    ];
+
+    for (bytes, expected) in fixtures {
+        assert_eq!(
+            crate::serialization::deserialize::<QueuedCardEvent>(bytes).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn phase_four_public_queued_card_event_binary_fixtures_remain_decodable() {
+    let card_id = phase_four_fixture_card().card_id;
+    let fixtures = [
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/public_queued_card_event_install.bin"
+            )
+            .as_slice(),
+            PublicQueuedCardEvent::Install(crate::model::oplog::PublicQueuedCardEventCard {
+                card_id,
+            }),
+        ),
+        (
+            include_bytes!(
+                "../../../tests/fixtures/permission-cards/phase4/public_queued_card_event_revoke.bin"
+            )
+            .as_slice(),
+            PublicQueuedCardEvent::Revoke(crate::model::oplog::PublicQueuedCardEventCard {
+                card_id,
+            }),
+        ),
+    ];
+
+    for (bytes, expected) in fixtures {
+        assert_eq!(
+            crate::serialization::deserialize::<PublicQueuedCardEvent>(bytes).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn phase_five_raw_card_oplog_entries_protobuf_roundtrip() {
+    let source_card_id = CardId::new();
+    let installed_card_id = CardId::new();
+    let source_card = test_card(source_card_id);
+    let installed_card = test_card(installed_card_id);
+    let transfer_id = Uuid::new_v4();
+    let source_holder = CardHolder::Account(AccountCardHolder {
+        account_id: Uuid::new_v4(),
+    });
+    let target_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "phase-five-target".to_string(),
+        },
+    });
+    let application_holder = CardHolder::Application(ApplicationCardHolder {
+        application_id: Uuid::new_v4(),
+    });
+    let timestamp = Timestamp::now_utc().rounded();
+    let entries = vec![
+        OplogEntry::CardInstalled {
+            timestamp,
+            queued_event_index: None,
+            card: source_card.clone().into(),
+            wallet_generation: Some(1),
+        },
+        OplogEntry::CardDerived {
+            timestamp,
+            card: source_card.clone().into(),
+            wallet_generation: Some(3),
+        },
+        OplogEntry::CardRevoked {
+            timestamp,
+            queued_event_index: OplogIndex::from_u64(1),
+            card_id: source_card_id,
+            wallet_generation: Some(4),
+        },
+        OplogEntry::CardExpired {
+            timestamp,
+            card_id: installed_card_id,
+            wallet_generation: Some(5),
+        },
+        OplogEntry::CardTransferStarted {
+            timestamp,
+            transfer_id,
+            card_id: source_card_id,
+            source_holder: Some(source_holder.clone()),
+            target_holder: target_holder.clone(),
+            source_wallet_generation: Some(4),
+        },
+        OplogEntry::CardTransferred {
+            timestamp,
+            transfer_id,
+            source_card_id: Some(source_card_id),
+            installed_card_id,
+            target_holder: target_holder.clone(),
+            card: installed_card.into(),
+            target_wallet_generation: Some(7),
+        },
+        OplogEntry::CardRevokedCascade {
+            timestamp,
+            revoked_card_ids: vec![source_card_id, installed_card_id],
+            affected_wallets: vec![source_holder.clone(), target_holder.clone()],
+            local_wallet_generation: Some(8),
+        },
+        OplogEntry::CardTransferConfirmed {
+            timestamp,
+            transfer_id,
+            source_card_id,
+            installed_card_id,
+            target_holder: target_holder.clone(),
+        },
+        OplogEntry::CardEventQueued {
+            timestamp,
+            event: QueuedCardEvent::transfer_started(transfer_id, source_card, application_holder),
+        },
+        OplogEntry::CardTransferStarted {
+            timestamp,
+            transfer_id: Uuid::new_v4(),
+            card_id: installed_card_id,
+            source_holder: None,
+            target_holder,
+            source_wallet_generation: None,
+        },
+    ];
+
+    for entry in entries {
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            entry.clone().try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
+
+        let bytes = crate::serialization::serialize(&entry).unwrap();
+        assert_eq!(
+            crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap(),
+            entry
+        );
+    }
+}
+
+#[test]
+fn phase_five_public_card_oplog_entries_protobuf_roundtrip() {
+    let card_id = CardId::new();
+    let installed_card_id = CardId::new();
+    let transfer_id = Uuid::new_v4();
+    let target_holder = CardHolder::Agent(AgentCardHolder {
+        agent_id: AgentId {
+            component_id: ComponentId(Uuid::new_v4()),
+            agent_id: "phase-five-public-target".to_string(),
+        },
+    });
+    let timestamp = Timestamp::now_utc().rounded();
+    let entries = vec![
+        PublicOplogEntry::CardInstalled(CardInstalledParams {
+            timestamp,
+            queued_event_index: None,
+            card_id,
+            wallet_generation: Some(1),
+        }),
+        PublicOplogEntry::CardDerived(CardDerivedParams {
+            timestamp,
+            card_id,
+            parent_ids: vec![CardId::new(), CardId::new()],
+            wallet_generation: Some(3),
+        }),
+        PublicOplogEntry::CardRevoked(CardRevokedParams {
+            timestamp,
+            queued_event_index: OplogIndex::from_u64(1),
+            card_id,
+            wallet_generation: Some(4),
+        }),
+        PublicOplogEntry::CardExpired(CardExpiredParams {
+            timestamp,
+            card_id: installed_card_id,
+            wallet_generation: Some(5),
+        }),
+        PublicOplogEntry::CardTransferStarted(CardTransferStartedParams {
+            timestamp,
+            transfer_id,
+            card_id,
+            target_holder: target_holder.clone(),
+            source_wallet_generation: Some(4),
+        }),
+        PublicOplogEntry::CardTransferred(CardTransferredParams {
+            timestamp,
+            transfer_id,
+            source_card_id: Some(card_id),
+            installed_card_id,
+            target_holder: target_holder.clone(),
+            target_wallet_generation: Some(7),
+        }),
+        PublicOplogEntry::CardRevokedCascade(CardRevokedCascadeParams {
+            timestamp,
+            revoked_card_ids: vec![card_id, installed_card_id],
+            local_wallet_generation: Some(8),
+        }),
+        PublicOplogEntry::CardTransferConfirmed(CardTransferConfirmedParams {
+            timestamp,
+            transfer_id,
+            source_card_id: card_id,
+            installed_card_id,
+            target_holder,
+        }),
+        PublicOplogEntry::CardEventQueued(
+            crate::model::oplog::public_oplog_entry::CardEventQueuedParams {
+                timestamp,
+                event: PublicQueuedCardEvent::TransferStarted(
+                    crate::model::oplog::PublicQueuedCardEventTransfer {
+                        transfer_id,
+                        card_id,
+                        target_holder: CardHolder::Application(ApplicationCardHolder {
+                            application_id: Uuid::new_v4(),
+                        }),
+                    },
+                ),
+            },
+        ),
+    ];
+
+    for entry in entries {
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            entry.clone().try_into().unwrap();
+        assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), entry);
+
+        let json = serde_json::to_string(&entry).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PublicOplogEntry>(&json).unwrap(),
+            entry
+        );
     }
 }
 
@@ -1087,9 +1554,17 @@ fn remove_retry_policy_serialization_poem_serde_equivalence() {
 }
 
 mod scope_scan {
+    use crate::model::invocation_context::SpanId;
     use crate::model::oplog::host_functions::HostFunctionName;
-    use crate::model::oplog::{DurableFunctionType, OplogEntry, OplogPayload, ScopeScanState};
-    use crate::model::{AgentInvocationResult, ComponentRevision, OplogIndex, Timestamp};
+    use crate::model::oplog::{
+        AttributeMap, DurableFunctionType, LogLevel, OplogEntry, OplogPayload,
+        OplogScopeProjection, ScopeScanState,
+    };
+    use crate::model::regions::OplogRegion;
+    use crate::model::{
+        AgentInvocationResult, ComponentRevision, OplogIndex, Timestamp, TransactionId,
+    };
+    use std::collections::HashMap;
     use test_r::test;
 
     fn idx(i: u64) -> OplogIndex {
@@ -1101,6 +1576,8 @@ mod scope_scan {
             timestamp: Timestamp::now_utc(),
             parent_start_index: parent.map(idx),
             function_name: HostFunctionName::Custom("test".to_string()),
+            invocation_id: None,
+            observational_owner: None,
             request: None,
             durable_function_type,
         }
@@ -1109,12 +1586,8 @@ mod scope_scan {
     /// Replays the forward scan that `lookup_oplog_entry_with_condition_and_state` performs,
     /// returning `true` if no entry between the scope `Start` (`root`) and its `End` is a foreign
     /// concurrent side effect (i.e. `for_all_intermediate` holds for all of `entries`).
-    fn scan(
-        root: u64,
-        entries: &[(u64, OplogEntry)],
-        persistence_level: crate::model::oplog::PersistenceLevel,
-    ) -> bool {
-        let mut state = ScopeScanState::new(idx(root), persistence_level);
+    fn scan(root: u64, entries: &[(u64, OplogEntry)]) -> bool {
+        let mut state = ScopeScanState::new(idx(root));
         let mut ok = true;
         for (i, entry) in entries {
             entry.track_scope_membership(idx(*i), &mut state);
@@ -1123,10 +1596,6 @@ mod scope_scan {
             }
         }
         ok
-    }
-
-    fn persist_all() -> crate::model::oplog::PersistenceLevel {
-        crate::model::oplog::PersistenceLevel::Smart
     }
 
     fn invocation_finished() -> OplogEntry {
@@ -1139,6 +1608,198 @@ mod scope_scan {
         }
     }
 
+    fn end(start: u64) -> OplogEntry {
+        OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: idx(start),
+            response: None,
+            forced_commit: false,
+        }
+    }
+
+    #[test]
+    fn scope_projection_selects_only_transitive_call_tree_entries() {
+        let entries = vec![
+            (10, start(None, DurableFunctionType::WriteLocal)),
+            (11, start(None, DurableFunctionType::WriteLocal)),
+            (12, start(Some(10), DurableFunctionType::ReadLocal)),
+            (13, start(Some(12), DurableFunctionType::ReadLocal)),
+            (14, start(Some(11), DurableFunctionType::ReadLocal)),
+            (15, end(13)),
+            (16, end(14)),
+            (17, end(12)),
+            (18, end(10)),
+        ];
+        let mut projection = OplogScopeProjection::new(idx(10));
+
+        let projected = entries
+            .iter()
+            .filter_map(|(index, entry)| projection.includes(idx(*index), entry).then_some(*index))
+            .collect::<Vec<_>>();
+
+        assert_eq!(projected, vec![10, 12, 13, 15, 17, 18]);
+    }
+
+    #[test]
+    fn scope_projection_includes_attributed_logs_spans_and_transaction_markers() {
+        let span_id = SpanId::generate();
+        let entries = vec![
+            (10, start(None, DurableFunctionType::WriteLocal)),
+            (
+                11,
+                OplogEntry::Log {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: Some(idx(10)),
+                    level: LogLevel::Info,
+                    context: "entity".to_string(),
+                    message: "included".to_string(),
+                },
+            ),
+            (
+                12,
+                OplogEntry::Log {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
+                    level: LogLevel::Info,
+                    context: "owner".to_string(),
+                    message: "excluded".to_string(),
+                },
+            ),
+            (
+                13,
+                OplogEntry::StartSpan {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: Some(idx(10)),
+                    span_id: span_id.clone(),
+                    parent: None,
+                    linked_context_id: None,
+                    attributes: AttributeMap(HashMap::new()),
+                },
+            ),
+            (
+                14,
+                OplogEntry::FinishSpan {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: Some(idx(10)),
+                    span_id,
+                },
+            ),
+            (
+                15,
+                start(Some(10), DurableFunctionType::WriteRemoteTransaction(None)),
+            ),
+            (
+                16,
+                OplogEntry::BeginRemoteTransaction {
+                    timestamp: Timestamp::now_utc(),
+                    transaction_id: TransactionId::new("entity-tx".to_string()),
+                    original_begin_index: None,
+                },
+            ),
+            (
+                17,
+                OplogEntry::PreCommitRemoteTransaction {
+                    timestamp: Timestamp::now_utc(),
+                    begin_index: idx(15),
+                },
+            ),
+            (
+                18,
+                OplogEntry::CommittedRemoteTransaction {
+                    timestamp: Timestamp::now_utc(),
+                    begin_index: idx(15),
+                },
+            ),
+            (19, end(15)),
+            (
+                20,
+                OplogEntry::CompletionDiscarded {
+                    timestamp: Timestamp::now_utc(),
+                    start_index: idx(10),
+                },
+            ),
+        ];
+        let mut projection = OplogScopeProjection::new(idx(10));
+
+        let projected = entries
+            .iter()
+            .filter_map(|(index, entry)| projection.includes(idx(*index), entry).then_some(*index))
+            .collect::<Vec<_>>();
+
+        assert_eq!(projected, vec![10, 11, 13, 14, 15, 16, 17, 18, 19, 20]);
+    }
+
+    #[test]
+    fn scope_projection_includes_retried_transaction_begin_marker() {
+        let entries = [
+            (
+                10,
+                start(None, DurableFunctionType::WriteRemoteTransaction(None)),
+            ),
+            (
+                11,
+                OplogEntry::BeginRemoteTransaction {
+                    timestamp: Timestamp::now_utc(),
+                    transaction_id: TransactionId::new("initial".to_string()),
+                    original_begin_index: None,
+                },
+            ),
+            (
+                12,
+                OplogEntry::Jump {
+                    timestamp: Timestamp::now_utc(),
+                    jump: OplogRegion {
+                        start: idx(11),
+                        end: idx(12),
+                    },
+                },
+            ),
+            (
+                13,
+                OplogEntry::BeginRemoteTransaction {
+                    timestamp: Timestamp::now_utc(),
+                    transaction_id: TransactionId::new("retry".to_string()),
+                    original_begin_index: Some(idx(10)),
+                },
+            ),
+        ];
+        let mut projection = OplogScopeProjection::new(idx(10));
+
+        let projected = entries
+            .iter()
+            .filter_map(|(index, entry)| projection.includes(idx(*index), entry).then_some(*index))
+            .collect::<Vec<_>>();
+
+        assert_eq!(projected, vec![10, 11, 13]);
+    }
+
+    #[test]
+    fn scope_projection_excludes_adjacent_foreign_retried_transaction_begin_marker() {
+        let entries = [
+            (10, start(None, DurableFunctionType::WriteLocal)),
+            (
+                11,
+                start(Some(10), DurableFunctionType::WriteRemoteTransaction(None)),
+            ),
+            (
+                12,
+                OplogEntry::BeginRemoteTransaction {
+                    timestamp: Timestamp::now_utc(),
+                    transaction_id: TransactionId::new("foreign-retry".to_string()),
+                    original_begin_index: Some(idx(20)),
+                },
+            ),
+        ];
+        let mut projection = OplogScopeProjection::new(idx(10));
+
+        let projected = entries
+            .iter()
+            .filter_map(|(index, entry)| projection.includes(idx(*index), entry).then_some(*index))
+            .collect::<Vec<_>>();
+
+        assert_eq!(projected, vec![10, 11]);
+    }
+
     #[test]
     fn direct_child_scope_is_allowed() {
         // An HTTP call inside a batched-write scope writes a `Start` whose parent is the scope root.
@@ -1149,7 +1810,7 @@ mod scope_scan {
                 DurableFunctionType::WriteRemoteBatched(Some(idx(10))),
             ),
         )];
-        assert!(scan(10, &entries, persist_all()));
+        assert!(scan(10, &entries));
     }
 
     #[test]
@@ -1163,19 +1824,19 @@ mod scope_scan {
             ),
             (12, start(Some(11), DurableFunctionType::WriteRemote)),
         ];
-        assert!(scan(10, &entries, persist_all()));
+        assert!(scan(10, &entries));
     }
 
     #[test]
     fn foreign_read_remote_is_allowed() {
         let entries = vec![(11, start(None, DurableFunctionType::ReadRemote))];
-        assert!(scan(10, &entries, persist_all()));
+        assert!(scan(10, &entries));
     }
 
     #[test]
     fn foreign_write_remote_is_rejected() {
         let entries = vec![(11, start(None, DurableFunctionType::WriteRemote))];
-        assert!(!scan(10, &entries, persist_all()));
+        assert!(!scan(10, &entries));
     }
 
     #[test]
@@ -1184,7 +1845,7 @@ mod scope_scan {
             11,
             start(None, DurableFunctionType::WriteRemoteBatched(None)),
         )];
-        assert!(!scan(10, &entries, persist_all()));
+        assert!(!scan(10, &entries));
     }
 
     #[test]
@@ -1198,17 +1859,7 @@ mod scope_scan {
             ),
             (12, start(Some(11), DurableFunctionType::WriteRemote)),
         ];
-        assert!(!scan(10, &entries, persist_all()));
-    }
-
-    #[test]
-    fn persist_nothing_ignores_foreign_side_effects() {
-        let entries = vec![(11, start(None, DurableFunctionType::WriteRemote))];
-        assert!(scan(
-            10,
-            &entries,
-            crate::model::oplog::PersistenceLevel::PersistNothing
-        ));
+        assert!(!scan(10, &entries));
     }
 
     #[test]
@@ -1229,7 +1880,7 @@ mod scope_scan {
             (12, end),
             (13, cancelled),
         ];
-        assert!(scan(10, &entries, persist_all()));
+        assert!(scan(10, &entries));
     }
 
     #[test]
@@ -1244,6 +1895,6 @@ mod scope_scan {
             ),
             (12, invocation_finished()),
         ];
-        assert!(scan(10, &entries, persist_all()));
+        assert!(scan(10, &entries));
     }
 }

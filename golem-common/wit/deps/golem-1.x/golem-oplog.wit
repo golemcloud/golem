@@ -5,7 +5,7 @@ interface oplog {
     use wasi:clocks/system-clock@0.3.0.{instant as datetime};
     use golem:core/types@2.0.0.{account-id, card-id, schema-value-tree, typed-schema-value};
 
-    use host.{component-revision, oplog-index, persistence-level, environment-id, uuid, agent-id, snapshot};
+    use host.{component-revision, oplog-index, environment-id, uuid, agent-id, snapshot};
     use wasi:clocks/types@0.3.0.{duration};
 
     /// Whether an agent is durable (persistent oplog) or ephemeral.
@@ -131,6 +131,8 @@ interface oplog {
         timestamp: datetime,
         parent-start-index: option<oplog-index>,
         function-name: string,
+        invocation-id: option<uuid>,
+        observational-owner: option<oplog-index>,
         request: option<typed-schema-value>,
         durable-function-type: wrapped-function-type,
     }
@@ -159,6 +161,15 @@ interface oplog {
     /// was never delivered to the agent, because the agent dropped the call's completion
     /// future after the `end` was already recorded.
     record completion-discarded-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
+    /// Parameters of a `completion-delivered` entry: the successful result of the durable host
+    /// call started at `start-index` was handed to the agent at this point in the recorded
+    /// execution. Replay may prepare the recorded host result earlier, but does not hand it to the
+    /// agent until this marker and prevents later oplog entries from advancing until that handoff.
+    record completion-delivered-parameters {
         timestamp: datetime,
         start-index: oplog-index,
     }
@@ -483,11 +494,6 @@ interface oplog {
         value: attribute-value
     }
 
-    record change-persistence-level-parameters {
-        timestamp: datetime,
-        persistence-level: persistence-level
-    }
-
     record begin-remote-transaction-parameters {
         timestamp: datetime,
         transaction-id: string
@@ -599,6 +605,8 @@ interface oplog {
         timestamp: datetime,
         parent-start-index: option<oplog-index>,
         function-name: string,
+        invocation-id: option<uuid>,
+        observational-owner: option<oplog-index>,
         request: option<oplog-payload>,
         durable-function-type: wrapped-function-type,
     }
@@ -617,6 +625,11 @@ interface oplog {
     }
 
     record raw-completion-discarded-parameters {
+        timestamp: datetime,
+        start-index: oplog-index,
+    }
+
+    record raw-completion-delivered-parameters {
         timestamp: datetime,
         start-index: oplog-index,
     }
@@ -811,8 +824,6 @@ interface oplog {
         finish-span(finish-span-parameters),
         /// Set an attribute on an open span in the invocation context
         set-span-attribute(set-span-attribute-parameters),
-        /// Change the current persistence level
-        change-persistence-level(change-persistence-level-parameters),
         /// Begins a transaction operation
         begin-remote-transaction(raw-begin-remote-transaction-parameters),
         /// Pre-Commit of the transaction, indicating that the transaction will be committed
@@ -847,7 +858,10 @@ interface oplog {
         /// The successful completion of the durable host call started by the matching `start`
         /// was persisted, but its response was never delivered to the agent (the agent dropped
         /// the completion future after the `end` was recorded)
-        completion-discarded(raw-completion-discarded-parameters)
+        completion-discarded(raw-completion-discarded-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was delivered to the agent at this point in the recorded execution
+        completion-delivered(raw-completion-delivered-parameters)
     }
 
     variant public-oplog-entry {
@@ -922,8 +936,6 @@ interface oplog {
         finish-span(finish-span-parameters),
         /// Set an attribute on an open span in the invocation context
         set-span-attribute(set-span-attribute-parameters),
-        /// Change the current persistence level
-        change-persistence-level(change-persistence-level-parameters),
         /// Begins a transaction operation
         begin-remote-transaction(begin-remote-transaction-parameters),
         /// Pre-Commit of the transaction, indicating that the transaction will be committed
@@ -958,20 +970,28 @@ interface oplog {
         /// The successful completion of the durable host call started by the matching `start`
         /// was persisted, but its response was never delivered to the agent (the agent dropped
         /// the completion future after the `end` was recorded)
-        completion-discarded(completion-discarded-parameters)
+        completion-discarded(completion-discarded-parameters),
+        /// The successful completion of the durable host call started by the matching `start`
+        /// was delivered to the agent at this point in the recorded execution
+        completion-delivered(completion-delivered-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads
     /// and augmenting entries with component metadata.
     enrich-oplog-entries: func(environment-id: environment-id, agent-id: agent-id, entries: list<tuple<oplog-index, oplog-entry>>, component-revision: component-revision) -> result<list<public-oplog-entry>, string>;
 
+    variant oplog-read-error {
+        permission-denied,
+        internal-error(string),
+    }
+
     resource get-oplog {
         constructor(agent-id: agent-id, start: oplog-index);
-        get-next: func() -> option<list<public-oplog-entry>>;
+        get-next: func() -> result<option<list<public-oplog-entry>>, oplog-read-error>;
     }
 
     resource search-oplog {
         constructor(agent-id: agent-id, text: string);
-        get-next: func() -> option<list<tuple<oplog-index, public-oplog-entry>>>;
+        get-next: func() -> result<option<list<tuple<oplog-index, public-oplog-entry>>>, oplog-read-error>;
     }
 }

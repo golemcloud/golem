@@ -294,6 +294,26 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_WORKER_CEILING",
+            "20000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_WORKER_USER_CONFIGURABLE",
+            "true".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_MEMORY_GB_SECONDS",
+            "30".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_MEMORY_GB_SECONDS_CEILING",
+            "60".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_MEMORY_GB_SECONDS_USER_CONFIGURABLE",
+            "true".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_DISK_SPACE_PER_WORKER",
             "5".to_string(), // 5 bytes — "hello world" (11 bytes) exceeds this
         )

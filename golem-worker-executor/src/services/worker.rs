@@ -28,7 +28,8 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, FailedUpdateRecord,
-    IdempotencyKey, OwnedAgentId, ShardId, SuccessfulUpdateRecord,
+    IdempotencyKey, OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState, ShardId,
+    SuccessfulUpdateRecord,
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -46,9 +47,15 @@ const STATUS_REGIONS_FIELD: &str = "regions";
 const STATUS_UPDATES_FIELD: &str = "updates";
 /// Prefix for per-idempotency-key invocation result fields (`ir:{idempotency_key}` -> `OplogIndex`).
 const STATUS_INVOCATION_RESULT_PREFIX: &str = "ir:";
+/// Prefix for per-transfer target receipt fields (`tr:{transfer_id}` -> receipt identity).
+const STATUS_RECEIVED_CARD_TRANSFER_PREFIX: &str = "tr:";
 
 fn status_invocation_result_field(key: &IdempotencyKey) -> String {
     format!("{STATUS_INVOCATION_RESULT_PREFIX}{}", key.value)
+}
+
+fn status_received_card_transfer_field(transfer_id: &uuid::Uuid) -> String {
+    format!("{STATUS_RECEIVED_CARD_TRANSFER_PREFIX}{transfer_id}")
 }
 
 /// The result of computing a status cache write: `(fields_to_set, field_names_to_delete)`.
@@ -59,6 +66,7 @@ type StatusFieldWrites = (Vec<(String, Vec<u8>)>, Vec<String>);
 /// fields.
 struct SplitStatusParts {
     invocation_results: HashMap<IdempotencyKey, OplogIndex>,
+    received_card_transfers: ReceivedCardTransferIndex,
     failed_updates: Vec<FailedUpdateRecord>,
     successful_updates: Vec<SuccessfulUpdateRecord>,
     skipped_regions: DeletedRegions,
@@ -71,6 +79,7 @@ struct SplitStatusParts {
 fn split_status(status: &mut AgentStatusRecord) -> SplitStatusParts {
     SplitStatusParts {
         invocation_results: std::mem::take(&mut status.invocation_results),
+        received_card_transfers: std::mem::take(&mut status.received_card_transfers),
         failed_updates: std::mem::take(&mut status.failed_updates),
         successful_updates: std::mem::take(&mut status.successful_updates),
         skipped_regions: std::mem::replace(&mut status.skipped_regions, DeletedRegions::new()),
@@ -84,14 +93,14 @@ fn split_status(status: &mut AgentStatusRecord) -> SplitStatusParts {
 /// `core` must be the already-split (emptied) record. When `previous` is `Some`, the result is a
 /// delta against it (this is the hot path; invocation results only ever grow there, so `dels` is
 /// usually empty). When `previous` is `None` (cold path: create / cache-miss recompute / detach
-/// reload), every part is written and `existing_invocation_result_fields` is used to delete stale
-/// `ir:` fields that are no longer present (e.g. after a revert removed results).
+/// reload), every part is written and `existing_split_fields` is used to delete stale `ir:` and
+/// `tr:` fields that are no longer present.
 ///
 /// `core` is always part of `sets` (it carries the `oplog_idx` marker), so the marker and every
 /// written part advance together in one atomic `set_many` by the caller.
 fn compute_status_field_writes(
     previous: Option<&AgentStatusRecord>,
-    existing_invocation_result_fields: &[String],
+    existing_split_fields: &[String],
     core: &AgentStatusRecord,
     parts: &SplitStatusParts,
 ) -> Result<StatusFieldWrites, String> {
@@ -140,6 +149,17 @@ fn compute_status_field_writes(
                     dels.push(status_invocation_result_field(key));
                 }
             }
+
+            for (transfer_id, state) in parts
+                .received_card_transfers
+                .changes_from(&previous.received_card_transfers)
+            {
+                let field = status_received_card_transfer_field(&transfer_id);
+                match state {
+                    Some(state) => sets.push((field, serialize(state)?)),
+                    None => dels.push(field),
+                }
+            }
         }
         None => {
             let new_fields: HashSet<String> = parts
@@ -150,8 +170,24 @@ fn compute_status_field_writes(
             for (key, oplog_idx) in &parts.invocation_results {
                 sets.push((status_invocation_result_field(key), serialize(oplog_idx)?));
             }
-            for field in existing_invocation_result_fields {
-                if field.starts_with(STATUS_INVOCATION_RESULT_PREFIX) && !new_fields.contains(field)
+
+            let new_transfer_fields: HashSet<String> = parts
+                .received_card_transfers
+                .iter()
+                .map(|(transfer_id, _)| status_received_card_transfer_field(transfer_id))
+                .collect();
+            for (transfer_id, state) in parts.received_card_transfers.iter() {
+                sets.push((
+                    status_received_card_transfer_field(transfer_id),
+                    serialize(state)?,
+                ));
+            }
+
+            for field in existing_split_fields {
+                if (field.starts_with(STATUS_INVOCATION_RESULT_PREFIX)
+                    && !new_fields.contains(field))
+                    || (field.starts_with(STATUS_RECEIVED_CARD_TRANSFER_PREFIX)
+                        && !new_transfer_fields.contains(field))
                 {
                     dels.push(field.clone());
                 }
@@ -173,6 +209,7 @@ fn reassemble_cached_status(
     let mut regions: Option<(DeletedRegions, DeletedRegions)> = None;
     let mut updates: Option<(Vec<FailedUpdateRecord>, Vec<SuccessfulUpdateRecord>)> = None;
     let mut invocation_results: HashMap<IdempotencyKey, OplogIndex> = HashMap::new();
+    let mut received_card_transfers = ReceivedCardTransferIndex::default();
 
     for (name, bytes) in fields {
         if name == STATUS_CORE_FIELD {
@@ -187,6 +224,10 @@ fn reassemble_cached_status(
         } else if let Some(key) = name.strip_prefix(STATUS_INVOCATION_RESULT_PREFIX) {
             let oplog_idx = deserialize::<OplogIndex>(&bytes).ok()?;
             invocation_results.insert(IdempotencyKey::new(key.to_string()), oplog_idx);
+        } else if let Some(transfer_id) = name.strip_prefix(STATUS_RECEIVED_CARD_TRANSFER_PREFIX) {
+            let transfer_id = uuid::Uuid::parse_str(transfer_id).ok()?;
+            let state = deserialize::<ReceivedCardTransferState>(&bytes).ok()?;
+            received_card_transfers.insert(transfer_id, state);
         }
         // Unknown fields are ignored.
     }
@@ -201,6 +242,7 @@ fn reassemble_cached_status(
         status.successful_updates = successful_updates;
     }
     status.invocation_results = invocation_results;
+    status.received_card_transfers = received_card_transfers;
     Some(status)
 }
 
@@ -402,9 +444,9 @@ impl DefaultWorkerService {
     }
 
     /// Reads the cached `AgentStatusRecord` for `owned_agent_id`, if any, reassembling it from the
-    /// split hash fields (`core`, `regions`, `updates`, `ir:{key}`). Returns `None` if the `core`
-    /// field is missing (cache miss) or any field cannot be deserialized in the current format
-    /// (treated as a cache miss).
+    /// split hash fields (`core`, `regions`, `updates`, `ir:{key}`, `tr:{transfer_id}`). Returns
+    /// `None` if the `core` field is missing (cache miss) or any field cannot be deserialized in
+    /// the current format (treated as a cache miss).
     ///
     /// `agent_mode` is `#[transient]` and not part of `core`, so the returned record carries the
     /// `Durable` deserialization default; callers must restore it from the authoritative source.
@@ -417,8 +459,9 @@ impl DefaultWorkerService {
     }
 
     /// Reads a split status record (live cache or checkpoint) from `namespace`, reassembling it
-    /// from the `core` / `regions` / `updates` / `ir:{key}` fields. Returns `None` if `core` is
-    /// missing (cache miss / torn write) or any field cannot be deserialized in the current format.
+    /// from the `core` / `regions` / `updates` / `ir:{key}` / `tr:{transfer_id}` fields. Returns
+    /// `None` if `core` is missing (cache miss / torn write) or any field cannot be deserialized in
+    /// the current format.
     ///
     /// `agent_mode` is `#[transient]` and not part of `core`, so the returned record carries the
     /// `Durable` deserialization default; callers must restore it from the authoritative source.
@@ -428,13 +471,13 @@ impl DefaultWorkerService {
         namespace: KeyValueStorageNamespace,
     ) -> Option<AgentStatusRecord> {
         // Single atomic read of every field of the per-agent status hash (`core`, `regions`,
-        // `updates`, `ir:{key}`). This is one round-trip (Redis `HGETALL`, a single
+        // `updates`, `ir:{key}`, `tr:{transfer_id}`). This is one round-trip (Redis `HGETALL`, a single
         // `SELECT ... WHERE namespace`, or one locked scan in memory) that observes a consistent
-        // snapshot, so it cannot reassemble a torn, mixed-generation record. (A naive
-        // `keys` + `get_many` would be two round-trips, leaving a window where a concurrent writer
-        // — the background status flusher for the live cache, or the clean-checkpoint writer for
-        // the checkpoint namespace — could add a new `ir:{key}` field the earlier `keys` did not
-        // list, yielding a record at the newer `core.oplog_idx` missing an invocation result.)
+        // snapshot, so it cannot reassemble a torn, mixed-generation record. (A naive `keys` +
+        // `get_many` would be two round-trips, leaving a window where a concurrent writer — the
+        // background status flusher for the live cache, or the clean-checkpoint writer for the
+        // checkpoint namespace — could add a new split field that the earlier `keys` did not list,
+        // yielding a record at the newer `core.oplog_idx` missing derived status.)
         let fields = self
             .key_value_storage
             .with_entity("worker", "read_cached_status", "agent_status")
@@ -456,7 +499,7 @@ impl DefaultWorkerService {
     ///
     /// `core` is always written (it carries the `oplog_idx` marker that versions the whole record).
     /// `regions`/`updates` are written only when they differ from `previous_status`, and invocation
-    /// results are written per idempotency key (only newly added/changed keys).
+    /// results and received card transfers are written per key (only newly added/changed keys).
     ///
     /// Atomicity: the marker (in `core`) and every field written in the same call advance together
     /// in a single atomic `set_many` (one `HMSET` on Redis, one transaction on SQL). This preserves
@@ -476,8 +519,7 @@ impl DefaultWorkerService {
         core: &AgentStatusRecord,
         parts: &SplitStatusParts,
     ) -> Result<(), String> {
-        // On the cold path (no in-memory previous) we reconcile invocation-result fields against
-        // what is currently stored, so that results removed by a revert are deleted.
+        // On the cold path (no in-memory previous) reconcile split fields against what is stored.
         let existing_fields = if previous_status.is_none() {
             self.key_value_storage
                 .with("worker", "update_status")
@@ -557,6 +599,7 @@ impl DefaultWorkerService {
         reassembled.failed_updates = parts.failed_updates;
         reassembled.successful_updates = parts.successful_updates;
         reassembled.invocation_results = parts.invocation_results;
+        reassembled.received_card_transfers = parts.received_card_transfers;
         Ok(reassembled)
     }
 
@@ -993,6 +1036,7 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use golem_common::model::Timestamp;
+    use golem_common::model::card::{Card, CardId, StoredCard};
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{PendingInvocationRef, PendingUpdateKind, PendingUpdateRef};
@@ -1001,6 +1045,25 @@ mod tests {
 
     fn idempotency_key(value: &str) -> IdempotencyKey {
         IdempotencyKey::new(value.to_string())
+    }
+
+    fn transfer_id(value: u128) -> uuid::Uuid {
+        uuid::Uuid::from_u128(value)
+    }
+
+    fn stored_card(card_id: CardId) -> StoredCard {
+        StoredCard::Concrete(Card {
+            card_id,
+            parent_ids: Vec::new(),
+            lower_positive: Vec::new(),
+            lower_negative: Vec::new(),
+            upper_positive: Vec::new(),
+            upper_negative: Vec::new(),
+            created_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            expires_at: None,
+            system_card: false,
+            managed_by: None,
+        })
     }
 
     fn sample_status() -> AgentStatusRecord {
@@ -1016,6 +1079,13 @@ mod tests {
         status
             .invocation_results
             .insert(idempotency_key("k2"), OplogIndex::from_u64(20));
+        status.received_card_transfers.insert(
+            transfer_id(1),
+            ReceivedCardTransferState::Received {
+                source_card_id: Some(CardId::new()),
+                card: stored_card(CardId::new()),
+            },
+        );
         status.skipped_regions = DeletedRegions::from_regions([OplogRegion::from_index_range(
             OplogIndex::from_u64(2)..=OplogIndex::from_u64(5),
         )]);
@@ -1121,10 +1191,36 @@ mod tests {
         assert!(!written.contains(STATUS_REGIONS_FIELD));
         assert!(!written.contains(STATUS_UPDATES_FIELD));
         assert!(!written.contains(status_invocation_result_field(&idempotency_key("k1")).as_str()));
+        assert!(!written.contains(status_received_card_transfer_field(&transfer_id(1)).as_str()));
         assert!(dels.is_empty());
 
         let reassembled = apply_and_reassemble(&mut store, sets, dels).unwrap();
         assert_eq!(reassembled, new);
+    }
+
+    #[test]
+    fn hot_delta_only_writes_changed_transfer_fields() {
+        let previous = sample_status();
+        let mut new = previous.clone();
+        new.oplog_idx = OplogIndex::from_u64(50);
+        new.received_card_transfers.insert(
+            transfer_id(2),
+            ReceivedCardTransferState::Received {
+                source_card_id: Some(CardId::new()),
+                card: stored_card(CardId::new()),
+            },
+        );
+
+        let mut core = new;
+        let parts = split_status(&mut core);
+        let (sets, dels) =
+            compute_status_field_writes(Some(&previous), &[], &core, &parts).unwrap();
+
+        let written: HashSet<&str> = sets.iter().map(|(field, _)| field.as_str()).collect();
+        assert_eq!(written.len(), 2);
+        assert!(written.contains(STATUS_CORE_FIELD));
+        assert!(written.contains(status_received_card_transfer_field(&transfer_id(2)).as_str()));
+        assert!(dels.is_empty());
     }
 
     #[test]
@@ -1179,6 +1275,26 @@ mod tests {
         assert_eq!(
             dels,
             vec![status_invocation_result_field(&idempotency_key("k2"))]
+        );
+    }
+
+    #[test]
+    fn cold_reconcile_deletes_stale_transfer_fields() {
+        let stale_transfer_id = transfer_id(2);
+        let existing_fields = vec![
+            STATUS_CORE_FIELD.to_string(),
+            status_received_card_transfer_field(&transfer_id(1)),
+            status_received_card_transfer_field(&stale_transfer_id),
+        ];
+        let new = sample_status();
+
+        let mut core = new;
+        let parts = split_status(&mut core);
+        let (_, dels) = compute_status_field_writes(None, &existing_fields, &core, &parts).unwrap();
+
+        assert_eq!(
+            dels,
+            vec![status_received_card_transfer_field(&stale_transfer_id)]
         );
     }
 

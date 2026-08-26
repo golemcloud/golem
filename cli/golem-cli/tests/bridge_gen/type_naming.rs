@@ -17,7 +17,7 @@ pub use golem_cli::bridge_gen::type_naming::*;
 use crate::bridge_gen::fixtures::code_first_snippets_agent_type;
 use crate::bridge_gen::type_naming::{TypeName, TypeNaming};
 use golem_cli::bridge_gen::rust::RustTypeName;
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::language::GuestLanguage;
 use test_r::test;
 
 pub(crate) fn test_type_naming<TN: TypeName>(language: GuestLanguage, agent_name: &str) {

@@ -12,7 +12,6 @@ use tokio::net::TcpStream;
 use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::protocol::frame::Utf8Payload;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 pub type DebugServiceClient = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -55,9 +54,7 @@ impl DebugWorkerExecutorClient {
         let id = Id::Str(uuid.to_string());
 
         self.write_msg
-            .send(Message::Text(Utf8Payload::from(serde_json::to_string(
-                &jrpc_request,
-            )?)))
+            .send(Message::Text(serde_json::to_string(&jrpc_request)?.into()))
             .await?;
 
         Ok(id)

@@ -261,6 +261,12 @@ private = true
 condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-registry-service"] }]
 
+[tasks.build-shard-manager-kubernetes]
+private = true
+dependencies = ["build-bins-non-ci"]
+command = "cargo"
+args = ["build", "-p", "golem-shard-manager", "--features", "kubernetes"]
+
 [tasks.build-release-full]
 dependencies = [
     "wit",
@@ -273,6 +279,8 @@ args = [
     "--release",
     "--exclude",
     "integration-tests",
+    "--features",
+    "golem-shard-manager/kubernetes",
 ]
 
 [tasks.build-release]
@@ -302,6 +310,8 @@ args = [
     "integration-tests",
     "--exclude",
     "golem",
+    "--features",
+    "golem-shard-manager/kubernetes",
 ]
 
 [tasks.build-release-override-linux-amd64]
@@ -318,6 +328,8 @@ args = [
     "integration-tests",
     "--exclude",
     "golem",
+    "--features",
+    "golem-shard-manager/kubernetes",
 ]
 
 [tasks.build-release-override-linux-arm64]
@@ -335,6 +347,8 @@ args = [
     "integration-tests",
     "--exclude",
     "golem",
+    "--features",
+    "golem-shard-manager/kubernetes",
 ]
 
 [tasks.build-sdk-ts]
@@ -572,6 +586,7 @@ description = "Runs worker executor tests only (group 1/3)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
 cargo-test-r run --package golem-worker-executor --test integration :tag:group1 -- --report-time --nocapture $WORKER_TEST_THREAD_OPTS $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --test integration :tag:in_function_retry -- --report-time --nocapture $WORKER_TEST_THREAD_OPTS $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group2]
@@ -712,11 +727,12 @@ cargo-test-r run --package integration-tests --test integration ':tag:group12&db
 '''
 
 [tasks.integration-tests-group13]
-description = "Runs integration tests (group 13/13 - agent_config with sqlite)"
+description = "Runs integration tests (group 13/13 - agent_config with sqlite, memory billing)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package integration-tests --test integration ':tag:group12&db_sqlite' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test memory-billing -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.cli-integration-tests]
@@ -732,6 +748,34 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration -- 
 description = "Runs all CLI integration tests with dev-release golem and golem-cli binaries"
 env = { "GOLEM_CLI_TEST_BIN_PROFILE" = "dev-release" }
 run_task = "cli-integration-tests"
+
+# it-cli CI shards, split by module-level test-r tag (see the it-cli matrix in ci.yaml).
+[tasks.cli-integration-tests-agents]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'agents' shard (app::agents)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-bridge]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'bridge' shard (bridge_gen)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:bridge_gen" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-core]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
+description = "Runs the it-cli 'core' shard (everything not tagged agents/bridge_gen)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
 
 [tasks.cli-integration-tests-update-golden-files]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts"]
@@ -1095,7 +1139,7 @@ script = { file = "./local-run/start.sh" }
 
 [tasks.generate-configs]
 description = "Generates default and example config files"
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-shard-manager-kubernetes"]
 
 script = '''
 export RUST_BACKTRACE=1
@@ -1516,12 +1560,79 @@ rm -rf build-out
 '''
 
 [tasks.build-benchmark-components]
-description = "Builds only the benchmark test WASM components"
-dependencies = ["build", "build-sdk-ts"]
+description = "Rebuilds only the benchmark test WASM components"
+dependencies = ["wit", "build-sdk-ts"]
+script_runner = "@duckscript"
 script = '''
+golem_cli = get_env GOLEM_CLI
+golem_cli_empty = is_empty ${golem_cli}
+if ${golem_cli_empty}
+    exec --fail-on-error cargo build --release -p golem-cli --bin golem-cli
+    golem_cli = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/release/golem-cli"
+    set_env GOLEM_CLI ${golem_cli}
+end
 cd test-components
-./build-components.sh benchmarks
+exec --fail-on-error ./build-components.sh benchmarks rebuild
 '''
+
+[tasks.run-benchmark-suite-orb]
+description = "Builds and runs the nightly spawned benchmark suite in an Amp orb"
+script_runner = "@duckscript"
+env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.4.1" }
+script = '''
+exec --fail-on-error docker info
+exec --fail-on-error cargo make --profile ci build-release
+golem_cli = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/release/golem-cli"
+set_env GOLEM_CLI ${golem_cli}
+exec --fail-on-error cargo make build-benchmark-components
+
+results = get_env GOLEM_BENCHMARK_RESULTS_PATH
+results_empty = is_empty ${results}
+if ${results_empty}
+    mkdir tmp
+    results = set "tmp/orb-benchmark-results.json"
+end
+
+registry_http_port = get_env GOLEM_BENCHMARK_REGISTRY_HTTP_PORT
+registry_http_port_empty = is_empty ${registry_http_port}
+if ${registry_http_port_empty}
+    registry_http_port = set "18081"
+end
+
+runner_id = get_env GOLEM_BENCHMARK_RUNNER_ID
+runner_id_empty = is_empty ${runner_id}
+if ${runner_id_empty}
+    runner_id = set "amp-orb-a1.xxlarge"
+end
+
+runner_label = get_env GOLEM_BENCHMARK_RUNNER_LABEL
+runner_label_empty = is_empty ${runner_label}
+if ${runner_label_empty}
+    runner_label = set "Amp orb (a1.xxlarge)"
+end
+
+source_commit_result = exec git rev-parse HEAD
+source_commit_ok = eq ${source_commit_result.code} 0
+if not ${source_commit_ok}
+    echo ${source_commit_result.stderr}
+    trigger_error "Failed to determine source commit"
+end
+source_commit = trim ${source_commit_result.stdout}
+
+source_ref_result = exec git rev-parse --symbolic-full-name HEAD
+source_ref_ok = eq ${source_ref_result.code} 0
+if not ${source_ref_ok}
+    echo ${source_ref_result.stderr}
+    trigger_error "Failed to determine source ref"
+end
+source_ref = trim ${source_ref_result.stdout}
+
+exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- --primary-only suite --save-to-json ${results} --runner-id ${runner_id} --runner-label ${runner_label} --source-repository golemcloud/golem --source-commit-sha ${source_commit} --source-ref ${source_ref} integration-tests/benchmark_suites/ci.yaml spawned --registry-service-http-port ${registry_http_port}
+'''
+
+[tasks.run-and-publish-benchmark-suite-orb]
+description = "Runs and publishes the nightly Amp orb benchmark suite"
+command = "./integration-tests/benchmark_suites/run_orb_nightly.sh"
 
 [tasks.clean-test-components]
 description = "Cleans all test WASM components"

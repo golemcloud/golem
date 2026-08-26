@@ -3,7 +3,7 @@
 // Mirrors the Rust SDK's `agentic::agent_config` (`Config<T>`, `Secret<T>`,
 // `ConfigSchema`) and `extended_agent_type` config handling:
 //   * runtime loading uses the new host import
-//     `get_config_value(key, expected : @types.SchemaGraph) -> @types.SchemaValueTree`,
+//     `get_config_value(key, expected : @types.SchemaGraph) -> result<@types.SchemaValueTree, config-value-error>`,
 //     decoded via `FromSchema` (build the expected graph from `IntoSchema`,
 //     encode it to the wire form, call the host, decode the returned value).
 //   * config *declarations* are produced in the pre-encoding form
@@ -66,7 +66,11 @@ pub fn[T : @schema.IntoSchema + @schema.FromSchema] load_config_value(
   let wire_graph = @model.schema_graph_to_wit(graph) catch {
     e => raise @common.AgentError::InvalidInput(e.to_string())
   }
-  let wire_value = @host.get_config_value(key, wire_graph)
+  let wire_value = match @host.get_config_value(key, wire_graph) {
+    Ok(value) => value
+    Err(@host.ConfigValueError::PermissionDenied) =>
+      raise @common.AgentError::InvalidInput("config access denied")
+  }
   let model_value = @model.schema_value_from_wit(wire_value) catch {
     e => raise @common.AgentError::InvalidInput(e.to_string())
   }
@@ -87,7 +91,12 @@ pub fn[T : @schema.IntoSchema + @schema.FromSchema] Secret::get(
   let secret_wire_graph = @model.schema_graph_to_wit(secret_graph) catch {
     e => raise @common.AgentError::InvalidInput(e.to_string())
   }
-  let secret_wire_value = @host.get_config_value(self.key, secret_wire_graph)
+  let secret_wire_value = match
+    @host.get_config_value(self.key, secret_wire_graph) {
+    Ok(value) => value
+    Err(@host.ConfigValueError::PermissionDenied) =>
+      raise @common.AgentError::InvalidInput("config access denied")
+  }
   let secret_model_value = @model.schema_value_from_wit(secret_wire_value) catch {
     e => raise @common.AgentError::InvalidInput(e.to_string())
   }

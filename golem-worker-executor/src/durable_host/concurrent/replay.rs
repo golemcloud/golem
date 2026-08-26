@@ -15,7 +15,7 @@
 use super::*;
 
 /// Replayable single-shot channel used to deliver a call's [`Resolution`] from the replay cursor
-/// to the awaiting [`CallHandle`].
+/// to the awaiting [`DurableCallSession`].
 ///
 /// `tokio::sync::oneshot` already supports send-before-await, which is all this currently needs.
 /// The only "resolve happened before the awaiter registered" case is handled by the resolver's
@@ -33,6 +33,10 @@ pub enum Resolution {
     Completed {
         end_idx: OplogIndex,
         response: Option<OplogPayload<HostResponse>>,
+        /// The physical guest-delivery boundary for oplogs recorded with completion markers.
+        /// Host-side replay continues after `End`, but the result may not cross to the guest until
+        /// the matching token positionally consumes this marker.
+        delivery_marker: Option<OplogIndex>,
         #[expect(
             dead_code,
             reason = "preserved for the concurrent-durability replay model"
@@ -50,7 +54,7 @@ pub enum Resolution {
     /// Replay must not deliver the response to the *guest* either — the replaying guest parks
     /// (at the recorded delivery boundary) until it drops the future at the same point it did
     /// live. The recorded response payload is still carried: deferred-delivery replay sites
-    /// ([`CallHandle::replay_access_deferred`]) must decode it to reconstruct deterministic
+    /// ([`DurableCallSession::replay_access_deferred`]) must decode it to reconstruct deterministic
     /// host-side state (span finishes, terminal-child bookkeeping) executed between the `End`
     /// and the point where delivery would have happened.
     CompletedButDiscarded {
@@ -75,7 +79,7 @@ pub enum ResolutionOutcome {
     Incomplete,
 }
 
-/// The result of [`CallHandle::replay`].
+/// The result of [`DurableCallSession::replay`].
 ///
 /// Transient: callers destructure it immediately, so the size difference between the variants
 /// never lives beyond the replay call itself.
@@ -85,12 +89,22 @@ pub enum CallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     Replayed(Pair::Resp),
     /// The call's `Start` was committed but its `End` never was. The returned handle has been
     /// switched to live completion of that existing `Start`: the caller must re-run the side effect
-    /// and call [`CallHandle::complete`] (which appends the missing `End`). Only produced for
+    /// and call [`DurableCallSession::complete`] (which appends the missing `End`). Only produced for
     /// function types that are safe to re-execute.
-    Incomplete(CallHandle<Pair, P>),
+    Incomplete(DurableCallSession<Pair, P>),
 }
 
-/// The result of [`CallHandle::replay_access_deferred`]: like [`CallReplayOutcome`], but each
+/// Replay outcome used by executor-owned entity reconstruction tasks. Cancellation is observable
+/// here because the executor, rather than a deterministic guest future, owns and fences the
+/// transient body task.
+#[allow(clippy::large_enum_variant)]
+pub enum ReconstructionReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
+    Replayed(Pair::Resp),
+    Cancelled,
+    Incomplete(DurableCallSession<Pair, P>),
+}
+
+/// The result of [`DurableCallSession::replay_access_deferred`]: like [`CallReplayOutcome`], but each
 /// replayed response carries the [`CompletionDelivery`] token describing the recorded delivery
 /// status the caller must mirror.
 #[allow(clippy::large_enum_variant)]
@@ -101,11 +115,11 @@ pub enum DeferredCallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
     /// its deterministic post-`End` continuation.
     Replayed(Pair::Resp, CompletionDelivery),
     /// See [`CallReplayOutcome::Incomplete`]; the caller re-runs the side effect and completes
-    /// via [`CallHandle::complete_access_deferred`].
-    Incomplete(CallHandle<Pair, P>),
+    /// via [`DurableCallSession::complete_access_deferred`].
+    Incomplete(DurableCallSession<Pair, P>),
 }
 
-/// Matches replayed `End`/`Cancelled` entries back to the [`CallHandle`]s awaiting them, keyed by
+/// Matches replayed `End`/`Cancelled` entries back to the [`DurableCallSession`]s awaiting them, keyed by
 /// the `OplogIndex` of the call's `Start`.
 ///
 /// Lives inside the replay state behind its lock. It is fed **only** from the committed-consume
@@ -115,6 +129,10 @@ pub enum DeferredCallReplayOutcome<Pair: HostPayloadPair, P: DropPolicy> {
 pub struct ConcurrentReplayResolver {
     /// Awaiters that have registered but whose resolution has not been observed yet.
     pending: HashMap<OplogIndex, ReplayableOneshot<ResolutionOutcome>>,
+    /// Marked successful completions whose payload has been read ahead and delivered to their host
+    /// continuation without advancing the positional cursor. The matching terminal still has to
+    /// be auto-drained when the cursor reaches its recorded index.
+    prefetched_terminals: HashMap<OplogIndex, OplogIndex>,
     /// Resolutions observed before their awaiter registered. The await-resolution guard
     /// guarantees a call's `Start` is claimed before its `End`/`Cancelled` is consumed, so on the
     /// replay path this stays empty; it covers the resolver's own unit tests and any future entry
@@ -167,13 +185,38 @@ impl ConcurrentReplayResolver {
     /// for a call nobody is awaiting — e.g. the guest-facing manual durability pair written by
     /// `persist_durable_function_invocation`, which is consumed through the same cursor but never
     /// registers an awaiter — is silently ignored rather than buffered forever.
-    pub fn resolve_if_pending(&mut self, start_idx: OplogIndex, resolution: Resolution) -> bool {
+    pub fn resolve_if_pending(
+        &mut self,
+        start_idx: OplogIndex,
+        terminal_idx: OplogIndex,
+        resolution: Resolution,
+    ) -> bool {
         if let Some(tx) = self.pending.remove(&start_idx) {
             let _ = tx.send(ResolutionOutcome::Resolved(resolution));
+            true
+        } else if self.prefetched_terminals.get(&start_idx) == Some(&terminal_idx) {
+            self.prefetched_terminals.remove(&start_idx);
             true
         } else {
             false
         }
+    }
+
+    /// Resolves an already-registered marked completion from a non-consuming oplog lookahead.
+    /// The terminal index remains registered so the positional cursor auto-drains that exact entry
+    /// later instead of exposing it to another reader.
+    pub fn resolve_prefetched(
+        &mut self,
+        start_idx: OplogIndex,
+        terminal_idx: OplogIndex,
+        resolution: Resolution,
+    ) {
+        let tx = self
+            .pending
+            .remove(&start_idx)
+            .expect("a completion is prefetched only while registering its claimed Start");
+        self.prefetched_terminals.insert(start_idx, terminal_idx);
+        let _ = tx.send(ResolutionOutcome::Resolved(resolution));
     }
 
     /// Resolves every still-registered awaiter as [`ResolutionOutcome::Incomplete`].
@@ -188,6 +231,7 @@ impl ConcurrentReplayResolver {
         for (_start_idx, tx) in self.pending.drain() {
             let _ = tx.send(ResolutionOutcome::Incomplete);
         }
+        self.prefetched_terminals.clear();
     }
 
     /// Removes a registered awaiter without resolving it. Used when a claimed call turns out to be
@@ -197,14 +241,35 @@ impl ConcurrentReplayResolver {
         self.pending.remove(&start_idx);
     }
 
-    /// Returns whether an awaiter is currently registered for `start_idx`.
+    /// Returns whether the terminal at `terminal_idx` belongs to an active resolver claim. This is
+    /// true both for an unresolved awaiter and for a marked completion that was prefetched without
+    /// consuming its terminal.
     ///
     /// The replay cursor uses this to decide which `End`/`Cancelled` entries are *awaited
     /// terminals* it may auto-drain (and route back to their awaiter) versus the ones it must leave
     /// for their own positional consumer: scope `End`s, unclaimed `Start`s, and deterministic
     /// markers.
+    pub fn owns_terminal(&self, start_idx: OplogIndex, terminal_idx: OplogIndex) -> bool {
+        self.pending.contains_key(&start_idx)
+            || self.prefetched_terminals.get(&start_idx) == Some(&terminal_idx)
+    }
+
+    #[cfg(test)]
     pub fn is_pending(&self, start_idx: OplogIndex) -> bool {
         self.pending.contains_key(&start_idx)
+    }
+
+    pub fn has_claim(&self, start_idx: OplogIndex) -> bool {
+        self.pending.contains_key(&start_idx) || self.prefetched_terminals.contains_key(&start_idx)
+    }
+
+    /// Returns whether the registered resolution receiver is still alive. A dropped replay handle
+    /// remains pending so its eventual terminal can be drained, but it cannot make further body
+    /// progress and therefore is not an active consumer for structural-divergence detection.
+    pub fn is_awaited(&self, start_idx: OplogIndex) -> bool {
+        self.pending
+            .get(&start_idx)
+            .is_some_and(|sender| !sender.is_closed())
     }
 }
 

@@ -10,6 +10,8 @@ pub trait RawWasiHttp {
     async fn run_with_interrupt(&self) -> String;
     async fn send_request(&mut self);
     fn process_response(&mut self) -> String;
+    fn probe_p2(&self, operation: String, authority: String) -> Result<(), String>;
+    async fn dispatch_result(&self, authority: String) -> Result<u16, String>;
 }
 
 pub struct RawWasiHttpImpl {
@@ -55,12 +57,65 @@ impl RawWasiHttp for RawWasiHttpImpl {
         let (body, status) = self.stored_response.take().unwrap();
         format!("{} {}", status, String::from_utf8(body).unwrap())
     }
+
+    fn probe_p2(&self, operation: String, authority: String) -> Result<(), String> {
+        use wasi::http::{outgoing_handler, types as p2_types};
+
+        if operation != "outgoing-handler-handle" {
+            return Err(format!("unknown P2 HTTP operation: {operation}"));
+        }
+        let headers = p2_types::Fields::new();
+        let request = p2_types::OutgoingRequest::new(headers);
+        request
+            .set_method(&p2_types::Method::Get)
+            .map_err(|_| "failed to set method".to_string())?;
+        request
+            .set_path_with_query(Some("/"))
+            .map_err(|_| "failed to set path".to_string())?;
+        request
+            .set_scheme(Some(&p2_types::Scheme::Http))
+            .map_err(|_| "failed to set scheme".to_string())?;
+        request
+            .set_authority(Some(&authority))
+            .map_err(|_| "failed to set authority".to_string())?;
+        outgoing_handler::handle(request, None)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    async fn dispatch_result(&self, authority: String) -> Result<u16, String> {
+        let headers = types::Fields::from_list(&[]).map_err(|error| format!("{error:?}"))?;
+        let (trailers_writer, trailers_reader) =
+            wit_future::new::<Result<Option<types::Fields>, types::ErrorCode>>(|| Ok(None));
+        let (request, transmitted) = types::Request::new(headers, None, trailers_reader, None);
+        request
+            .set_method(&types::Method::Get)
+            .map_err(|error| format!("{error:?}"))?;
+        request
+            .set_path_with_query(Some("/"))
+            .map_err(|error| format!("{error:?}"))?;
+        request
+            .set_scheme(Some(&types::Scheme::Http))
+            .map_err(|error| format!("{error:?}"))?;
+        request
+            .set_authority(Some(&authority))
+            .map_err(|error| format!("{error:?}"))?;
+        let finish_trailers = async move {
+            let _ = trailers_writer.write(Ok(None)).await;
+        };
+        let (response, transmitted, ()) = (client::send(request), transmitted, finish_trailers)
+            .join()
+            .await;
+        let response = response.map_err(|error| format!("{error:?}"))?;
+        transmitted.map_err(|error| format!("{error:?}"))?;
+        Ok(response.get_status_code())
+    }
 }
 
 /// Sends a POST request with a small body through the raw P3 `wasi:http`
 /// bindings: the body is streamed through a `wit_stream` concurrently with the
 /// send, and the trailers future is completed after the body stream is closed.
-async fn send_http_request(path: &str) -> types::Response {
+pub(crate) async fn send_http_request(path: &str) -> types::Response {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
 
     let headers =
@@ -110,7 +165,7 @@ async fn send_http_request(path: &str) -> types::Response {
 }
 
 /// Reads the full body of an incoming response through the raw P3 body stream.
-async fn read_body(response: types::Response) -> Vec<u8> {
+pub(crate) async fn read_body(response: types::Response) -> Vec<u8> {
     let (result_writer, result_reader) = wit_future::new::<Result<(), types::ErrorCode>>(|| Ok(()));
     let (body_stream, trailers) = types::Response::consume_body(response, result_reader);
     let body = body_stream.collect().await;

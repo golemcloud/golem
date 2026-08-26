@@ -10,7 +10,7 @@ use anyhow::Context;
 
 use goldenfile::Mint;
 use golem_cli::fs;
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::language::GuestLanguage;
 use golem_cli::versions;
 use indoc::{formatdoc, indoc};
 use std::io::Write;
@@ -621,7 +621,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "fun_enum_with_only_literals", &["A"]).await;
 
-    // TODO: Re-enable once CLI WAVE argument parsing supports multimodal/unstructured types
+    // TODO: Re-enable once the CLI's argument parsing supports multimodal/unstructured types
     // run_and_assert(
     //     &ctx,
     //     "fun_multi_modal",
@@ -684,13 +684,12 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 /// (the provider exports no agents).
 ///
 /// The invocation currently asserts the worker executor's `golem:tool/host`
-/// stub error: through a real deployed invocation, the generated client is
-/// proven to reach the executor's `tool-rpc.new` host function (execution
-/// stops there today, before `invoke-and-await`). Once the tool runtime is
-/// implemented in the worker executor, the invocation is expected to succeed
-/// and return `ok:echo:hello`; flip the trailing assertions accordingly —
-/// only then does this test validate the generated command path and input
-/// encoding against the provider.
+/// sidecar-backend error: through a real deployed invocation, the generated
+/// client is proven to reach the executor's tool invocation host function.
+/// Once the tool runtime is implemented in the worker executor, the invocation
+/// is expected to succeed and return `ok:echo:hello`; flip the trailing
+/// assertions accordingly — only then does this test validate the generated
+/// command path and input encoding against the provider.
 #[test]
 #[timeout("15 minutes")]
 async fn test_rust_tool_guest_bridge_e2e() {
@@ -744,6 +743,14 @@ async fn test_rust_tool_guest_bridge_e2e() {
                 dependencies:
                   tools:
                     - tool-bridge:provider/echo
+
+            tools:
+              echo: {{}}
+
+            agents:
+              EchoConsumerAgent:
+                tools:
+                  echo: {{}}
 
             bridge:
               rust:
@@ -868,15 +875,15 @@ async fn test_rust_tool_guest_bridge_e2e() {
         ])
         .await;
 
-    // The worker executor's `golem:tool/host` is not implemented yet:
-    // `tool-rpc.new` traps (before `invoke-and-await` is ever reached), so the
-    // invocation must fail with the stub error, proving the generated client
-    // reaches the executor's tool host. Once the tool runtime lands, replace
+    // The worker executor's `golem:tool/host` invocation requires a sidecar
+    // backend that this test server does not configure, so the agent method must
+    // return that error, proving the generated client reaches the executor's tool
+    // host. Once the tool runtime lands, replace
     // this with:
     //     assert!(outputs.success_or_dump());
     //     assert!(outputs.stdout_contains("ok:echo:hello"));
-    let invocation_reached_tool_host_stub =
-        !outputs.success() && outputs.stderr_contains("golem:tool/host is not yet implemented");
+    let invocation_reached_tool_host_stub = outputs
+        .stdout_contains("golem:tool/host tool invocation requires the sidecar invocation backend");
     if !invocation_reached_tool_host_stub {
         outputs.dump();
     }
@@ -884,6 +891,111 @@ async fn test_rust_tool_guest_bridge_e2e() {
         invocation_reached_tool_host_stub,
         "expected the tool invocation to fail with the executor's golem:tool/host stub error"
     );
+}
+
+/// Deploys a single component whose discovered metadata contains both an agent
+/// type and a tool definition. Runtime tool discovery and invocation are
+/// intentionally outside this test's scope.
+#[test]
+#[timeout("15 minutes")]
+async fn test_mixed_agent_and_tool_component_deployment_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "mixed-agent-tool-deployment";
+
+    ctx.start_server().await;
+
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "mixed-agent-tool-deployment:provider",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: mixed-agent-tool-deployment
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              mixed-agent-tool-deployment:provider:
+                dir: .
+                templates: rust
+
+            agents:
+              MixedAgent: {{}}
+
+            tools:
+              echo: {{}}
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        indoc! { r#"
+            use golem_rust::{
+                agent_definition, agent_implementation, tool_definition, tool_implementation,
+            };
+
+            #[agent_definition]
+            pub trait MixedAgent {
+                fn new(name: String) -> Self;
+                fn name(&self) -> String;
+            }
+
+            struct MixedAgentImpl {
+                name: String,
+            }
+
+            #[agent_implementation]
+            impl MixedAgent for MixedAgentImpl {
+                fn new(name: String) -> Self {
+                    Self { name }
+                }
+
+                fn name(&self) -> String {
+                    self.name.clone()
+                }
+            }
+
+            #[tool_definition(version = "1.0.0")]
+            pub trait Echo {
+                fn echo(&self, message: String) -> String;
+            }
+
+            struct EchoImpl;
+
+            #[tool_implementation]
+            impl Echo for EchoImpl {
+                fn echo(&self, message: String) -> String {
+                    format!("echo:{message}")
+                }
+            }
+        "# },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
 }
 
 /// End-to-end test for the Rust guest agent bridge: a provider component
@@ -1250,6 +1362,14 @@ async fn test_ts_tool_guest_bridge_e2e() {
                   tools:
                     - ts-tool-bridge:provider/echo
 
+            tools:
+              echo: {{}}
+
+            agents:
+              EchoConsumerAgent:
+                tools:
+                  echo: {{}}
+
             bridge:
               ts:
                 internal:
@@ -1278,8 +1398,23 @@ async fn test_ts_tool_guest_bridge_e2e() {
               init: () => ({}),
               methods: {
                 async callEcho({ message }) {
-                  const value = await EchoClient.newClient().echo(message);
-                  return `ok:${value}`;
+                  try {
+                    const value = await EchoClient.newClient().echo(message);
+                    return `ok:${value}`;
+                  } catch (error) {
+                    const toolError = error as {
+                      tag?: string;
+                      error?: { tag?: string; val?: unknown };
+                    };
+                    if (
+                      toolError.tag === 'rpc' &&
+                      toolError.error?.tag === 'remote-internal-error' &&
+                      typeof toolError.error.val === 'string'
+                    ) {
+                      return toolError.error.val;
+                    }
+                    throw error;
+                  }
                 },
               },
             });
@@ -1309,8 +1444,8 @@ async fn test_ts_tool_guest_bridge_e2e() {
             "\"hello\"",
         ])
         .await;
-    let reached_tool_host_stub =
-        !outputs.success() && outputs.stderr_contains("golem:tool/host is not yet implemented");
+    let reached_tool_host_stub = outputs
+        .stdout_contains("golem:tool/host tool invocation requires the sidecar invocation backend");
     if !reached_tool_host_stub {
         outputs.dump();
     }
@@ -1528,6 +1663,14 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
                   tools:
                     - moonbit-tool-bridge:provider/echo
 
+            tools:
+              echo: {{}}
+
+            agents:
+              EchoConsumerAgent:
+                tools:
+                  echo: {{}}
+
             bridge:
               moonbit:
                 internal:
@@ -1555,7 +1698,7 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
         &consumer_pkg_path,
         consumer_pkg.replace(
             "import {",
-            "import {\n  \"echo-tool-guest-client/client\" @echoClient,",
+            "import {\n  \"echo-tool-guest-client/client\" @echoClient,\n  \"golemcloud/golem_sdk/tool\" @tool,",
         ),
     )
     .unwrap();
@@ -1577,7 +1720,8 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
               client.drop()
               match result {
                 Ok(value) => "ok:" + value
-                Err(_) => "err"
+                Err(@tool.ToolError::Rpc(@tool.RpcError::RemoteInternal(message))) => message
+                Err(_) => "unexpected tool error"
               }
             }
 
@@ -1627,8 +1771,10 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
             "\"hello\"",
         ])
         .await;
-    let reached_tool_host_stub =
-        !outputs.success() && outputs.stderr_contains("golem:tool/host is not yet implemented");
+    let reached_tool_host_stub = outputs.success()
+        && outputs.stdout_contains(
+            "golem:tool/host tool invocation requires the sidecar invocation backend",
+        );
     if !reached_tool_host_stub {
         outputs.dump();
     }
@@ -1718,10 +1864,8 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
             environments:
               local:
                 server: local
-                componentPresets: debug
               cloud:
                 server: cloud
-                componentPresets: release
 
             components:
               long-agent-id-rejected:ts-main:
@@ -1861,10 +2005,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             environments:
               local:
                 server: local
-                componentPresets: debug
               cloud:
                 server: cloud
-                componentPresets: release
 
             components:
               ts-code-first:ts-main:
@@ -1989,7 +2131,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // Union that has only literals
     run_and_assert(&ctx, "funUnionWithOnlyLiterals", &[r#""foo""#]).await;
 
-    // TODO: Re-enable once CLI WAVE argument parsing supports multimodal/unstructured types
+    // TODO: Re-enable once the CLI's argument parsing supports multimodal/unstructured types
     // // Unstructured text type
     // run_and_assert(&ctx, "funUnstructuredText", &["url(\"foo\")"]).await;
     //
@@ -2435,7 +2577,7 @@ async fn list_agent_names(ctx: &TestContext, mode: &str) -> Vec<String> {
         .into_iter()
         .next()
         .unwrap_or_else(|| panic!("`agent list --mode {mode}` produced no JSON output"));
-    response.agents.into_iter().map(|a| a.agent_name).collect()
+    response.agents.into_iter().map(|a| a.agent_id).collect()
 }
 
 // Scaffolds a fresh Rust app with two agent types: `DurableListAgent` (durable
@@ -2759,7 +2901,7 @@ async fn test_agent_list_mode_filter_in_ts_repl() {
 }
 
 // JSON view of the `agent list` structured output. We only need the `agents`
-// array and the rendered `agentName` field; serde ignores the `outputType`
+// array and the rendered `agentId` field; serde ignores the `outputType`
 // discriminator injected by the CLI's structured-output wrapper.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2770,7 +2912,7 @@ struct AgentListResponseView {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentListView {
-    agent_name: String,
+    agent_id: String,
 }
 
 // Use UPDATE_GOLDENFILES=1 or `cargo make cli-integration-tests-update-golden-files` to update files

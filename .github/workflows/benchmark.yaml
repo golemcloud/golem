@@ -51,7 +51,18 @@ jobs:
           path: benchmark-results
 
       - name: Run benchmark suite
-        run: cargo run --profile benchmarks -p integration-tests --bin benchmarks '--' --primary-only suite --add-to-json benchmark-results/results/results.json integration-tests/benchmark_suites/ci.yaml spawned
+        run: |
+          cargo run --profile benchmarks -p integration-tests --bin benchmarks '--' \
+            --primary-only \
+            suite \
+            --add-to-json benchmark-results/results/results.json \
+            --runner-id github-actions-blacksmith-32vcpu \
+            --runner-label "GitHub Actions (Blacksmith 32 vCPU)" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --source-commit-sha "$GITHUB_SHA" \
+            --source-ref "$GITHUB_REF" \
+            integration-tests/benchmark_suites/ci.yaml \
+            spawned
 
       - name: Commit results
         run: |

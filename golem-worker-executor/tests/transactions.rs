@@ -488,52 +488,6 @@ async fn golem_rust_idempotence_off(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn golem_rust_persist_nothing(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let http_server = TestHttpServer::start(2).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), http_server.port().to_string());
-
-    let agent_id = agent_id!("GolemHostApi", "persist-nothing");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "persist_nothing", data_value!())
-        .await;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    drop(executor);
-    http_server.abort();
-
-    let events = http_server.get_events();
-    info!("events:\n - {}", events.join("\n - "));
-    info!("result: {:?}", result);
-
-    assert_eq!(events, vec!["1", "2", "3"]);
-    assert!(result.is_err());
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
 async fn golem_rust_fallible_transaction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -713,57 +667,6 @@ async fn golem_rust_atomic_region_async(
         events,
         vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]
     );
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn golem_rust_persist_nothing_async(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let http_server = TestHttpServer::start(2).await;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), http_server.port().to_string());
-
-    let agent_id = agent_id!("GolemHostApi", "persist-nothing-async");
-    let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
-        .await?;
-
-    let result = executor
-        .invoke_and_await_agent(
-            &component,
-            &agent_id,
-            "persist_nothing_async",
-            data_value!(),
-        )
-        .await;
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    drop(executor);
-    http_server.abort();
-
-    let events = http_server.get_events();
-    info!("events:\n - {}", events.join("\n - "));
-    info!("result: {:?}", result);
-
-    assert_eq!(events, vec!["1", "2", "3"]);
-    assert!(result.is_err());
 
     Ok(())
 }

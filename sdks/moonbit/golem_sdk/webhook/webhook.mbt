@@ -31,7 +31,13 @@ pub(all) struct WebhookRequestPayload {
 /// - Only the agent type that created the promise may register a webhook for it.
 pub fn create() -> WebhookHandler {
   let promise_id = @api.create_promise()
-  let url = @agent_host.create_webhook(promise_id)
+  let url = match @agent_host.create_webhook(promise_id) {
+    Ok(url) => url
+    Err(@agent_host.WebhookError::PermissionDenied) =>
+      abort("webhook creation denied")
+    Err(@agent_host.WebhookError::InternalError(message)) =>
+      abort("webhook creation failed: " + message)
+  }
   { url, promise_id }
 }
 

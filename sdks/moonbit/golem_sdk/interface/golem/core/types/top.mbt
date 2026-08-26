@@ -94,6 +94,25 @@ pub fn Secret::drop(self : Secret) -> Unit {
 }
 
 ///|
+/// An unforgeable handle to a permission card held by the runtime. The
+/// handle is opaque to guests: components can hold, pass, derive, install,
+/// and revoke cards only through the `golem:permissions` interfaces. When
+/// carried in a `schema-value-tree` (see
+/// `schema-value-node::permission-card-handle`) the handle is transferred
+/// by ownership; the host converts it to/from its internal trusted
+/// card-store representation at the boundary. The wire form is the card-id
+/// (UUID) alone — no grants, parents, or metadata cross the wire as
+/// authority.
+pub(all) struct PermissionCard(Int) derive(Show, Eq)
+
+///|
+/// Drops a resource handle.
+pub fn PermissionCard::drop(self : PermissionCard) -> Unit {
+  let PermissionCard(resource) = self
+  wasmImportResourceDropPermissionCard(resource)
+}
+
+///|
 /// A named type definition inside a `schema-graph`.
 ///
 /// The def itself does not carry metadata; metadata lives on the
@@ -317,18 +336,41 @@ pub(all) struct UnionBranch {
 /// Inferred-tag sum. Each branch declares a rule that the decoder uses to
 /// identify values belonging to that branch from the raw underlying value.
 ///
-/// Rules enforced at schema-construction time:
+/// Portable schema-construction contract:
 ///   - branch `tag`s are unique within the union,
 ///   - string-pattern discriminators (`prefix` / `suffix` / `contains` /
-///     `regex`) require a string-shaped branch body (`string-type`,
-///     `text-type`, `url-type`, `path-type`, or a `ref` resolving to one),
-///   - record-shaped discriminators (`field-equals` / `field-absent`)
-///     require a record-shaped branch body that declares the referenced
-///     field (with the matching literal type, if any),
-///   - the discriminator set must be unambiguous: no value matches more
-///     than one branch. Overlap is checked structurally where decidable
-///     (e.g., `prefix("a")` and `prefix("ab")` overlap) and best-effort
-///     for `regex`.
+///     `regex`) require a branch body whose canonical raw JSON
+///     representation is a string (`string-type`, `url-type`, `path-type`,
+///     or a `ref` resolving to one),
+///   - `field-equals` requires a record-shaped branch body that declares
+///     the referenced field; a literal additionally requires that field to
+///     have a canonical raw JSON string representation,
+///   - `field-absent` requires a record-shaped branch body that does not
+///     declare the referenced field,
+///   - byte-identical regex text is rejected first as duplicate syntax,
+///     without making a semantic claim about the regex language,
+///   - every remaining pair of discriminator rules is classified as
+///     overlapping, disjoint, or indeterminate. Overlapping pairs are rejected;
+///     disjoint and indeterminate pairs are accepted. Runtime decoders
+///     still reject a raw value that matches multiple accepted branches.
+///
+/// The canonical pair classification is symmetric and based only on the
+/// raw discriminator rules; branch body schemas do not refine it:
+///   - two prefixes overlap exactly when either prefixes the other,
+///   - two suffixes overlap exactly when either suffixes the other,
+///   - every prefix/suffix, prefix/contains, suffix/contains, and
+///     contains/contains pair overlaps,
+///   - a string-pattern rule and a record-shaped rule are disjoint because
+///     a raw JSON value cannot be both a string and an object,
+///   - field-equals rules on different fields overlap; on the same field
+///     they are disjoint only when both literals are present and differ,
+///   - every pair of field-absent rules overlaps,
+///   - field-equals and field-absent are disjoint on the same field and
+///     overlap on different fields,
+///   - after the duplicate-syntax check above, every pair containing a
+///     regex and another string-pattern rule is indeterminate and accepted.
+///     No portable semantic regex-overlap analysis is attempted because SDK
+///     regex dialects differ.
 pub(all) struct UnionSpec {
   branches : Array[UnionBranch]
 } derive(Show, Eq)
@@ -343,6 +385,11 @@ pub(all) struct SecretSpec {
 ///|
 pub(all) struct QuotaTokenSpec {
   resource_name : String?
+} derive(Show, Eq)
+
+///|
+pub(all) struct PermissionCardSpec {
+  polymorphic : Bool
 } derive(Show, Eq)
 
 ///|
@@ -400,6 +447,7 @@ pub(all) enum SchemaTypeBody {
   UnionType(UnionSpec)
   SecretType(SecretSpec)
   QuotaTokenType(QuotaTokenSpec)
+  PermissionCardType(PermissionCardSpec)
   FutureType(Int?)
   StreamType(Int?)
 } derive(Show, Eq)
@@ -511,6 +559,7 @@ pub(all) enum SchemaValueNode {
   UnionValue(UnionValuePayload)
   SecretValue(Secret)
   QuotaTokenHandle(QuotaToken)
+  PermissionCardHandle(PermissionCard)
 } derive(Show, Eq)
 
 ///|

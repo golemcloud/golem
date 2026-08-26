@@ -1,13 +1,13 @@
 ---
 name: golem-atomic-block-scala
-description: "Using atomic blocks, persistence control, idempotency, checkpoints, and oplog management in a Scala Golem project. Use when the user asks about atomically, persistence levels, idempotence mode, oplog commit, checkpoints, or idempotency keys."
+description: "Using atomic blocks, idempotency, checkpoints, and oplog management in a Scala Golem project. Use when the user asks about atomically, idempotence mode, oplog commit, checkpoints, or idempotency keys."
 ---
 
 # Atomic Blocks and Durability Controls (Scala)
 
 ## Overview
 
-Golem provides **automatic durable execution** — all agents are durable by default. These APIs are **advanced controls** that most agents will never need. Only use them when you have specific requirements around persistence granularity, idempotency, or atomicity.
+Golem provides **automatic durable execution** — all agents are durable by default. These APIs are **advanced controls** that most agents will never need. Only use them when you have specific requirements around idempotency or atomicity.
 
 All guard and checkpoint APIs are `Future`-based — blocks must return `Future[A]`.
 
@@ -17,7 +17,7 @@ Group **external, observable side effects** (HTTP calls, calls to other agents, 
 
 > **What this is NOT.** `atomically` is **not** an STM/transaction primitive and **not** for grouping in-memory state mutations. Golem agents are single-threaded, and in-memory state is automatically rebuilt by oplog replay on recovery, so wrapping plain in-memory updates in `atomically` does nothing useful. The terminology overlaps with Haskell STM, Scala STM, database transactions, and `synchronized` blocks, but the semantics are different: this is purely about how durable, externally-observable effects are re-executed across a crash boundary.
 >
-> **It is also NOT how you reduce oplog size or speed up recovery.** Despite the description's mention of "oplog management", "persistence control", and "checkpoints", `atomically`/persistence-level/idempotency-mode/checkpoint APIs do not shrink the oplog or skip replay. If your concern is that the oplog is growing too large or recovery/replay is becoming slow (long-running agents, heartbeats, polling, recurring tasks), use **snapshot-based recovery** instead — see [`golem-custom-snapshot-scala`](../golem-custom-snapshot-scala/SKILL.md). You cannot opt out of oplog writes for a durable agent.
+> **It is also NOT how you reduce oplog size or speed up recovery.** `atomically`, idempotency-mode, and checkpoint APIs do not shrink the oplog or skip replay. If your concern is that the oplog is growing too large or recovery/replay is becoming slow (long-running agents, heartbeats, polling, recurring tasks), use **snapshot-based recovery** instead — see [`golem-custom-snapshot-scala`](../golem-custom-snapshot-scala/SKILL.md). You cannot opt out of oplog writes for a durable agent.
 >
 > Use it only when you have **two or more external side effects** that must not be left in a "first one happened, second one didn't" state across a recovery.
 
@@ -49,27 +49,11 @@ Guards.atomically {
 }
 ```
 
-## Persistence Level Control
+## Custom Durability for Libraries
 
-Adjust how the oplog is interpreted for a section of code. Setting the level to `PersistNothing` does **not** disable oplog recording — entries are still written, but they are treated only as an observable log and are **not used for replay**. On recovery, the side effects are **not** re-executed and **not** replayed; if the block naively runs the same side effects during replay, recovery will fail.
+The low-level `golem:durability@1.6.0` interface is intended for SDK and library authors, not as an application tuning knob. It lets a library represent several raw host effects as one custom durable invocation. `DurabilityApi.durable` and `DurabilityApi.durableAsync` own the live invocation resource: they evaluate the body only on the live path, finish and persist its typed result, or return the recorded result on replay.
 
-This is **not** a knob for application code. Its primary use case is **authoring Golem-specific libraries** that implement their own custom durability on top of raw side effects. Code inside such a block must:
-
-1. Explicitly check whether the agent is in live or replay mode (via the durability API).
-2. Skip the raw side effects during replay.
-3. Use the durability APIs to record/recover state in a custom way.
-
-```scala
-import golem.{Guards, HostApi}
-import scala.concurrent.Future
-
-val result: Future[Unit] = Guards.withPersistenceLevel(HostApi.PersistenceLevel.PersistNothing) {
-  // Oplog entries here are observable only, never used for replay.
-  // The block MUST check live vs replay mode and use custom durability
-  // primitives — naively running side effects will break recovery.
-  Future.successful(())
-}
-```
+A returned `Left` is a normal typed result: the combinator finishes the invocation, persists the error, and returns the same error on replay. A thrown exception, failed `Future`, trap, or cancellation before `finish` instead drops the unfinished resource without recording an `End`, so recovery retries the whole custom operation. Library authors must make repeated attempts safe with the correct operation classification, external idempotency keys, or transactions.
 
 ## Idempotence Mode
 
@@ -176,16 +160,4 @@ val result: Future[Int] = Checkpoint.withCheckpointTry { cp =>
 val result: Future[Int] = Checkpoint.withCheckpoint { cp =>
   Future.successful(Right(42))
 }
-```
-
-## Resource-style Guards
-
-For manual control, use the `use*` / `markAtomicOperation` methods which return a guard. Call `drop()` or `close()` when done:
-
-```scala
-import golem.Guards
-
-val guard = Guards.usePersistenceLevel(HostApi.PersistenceLevel.PersistNothing)
-// ... do work ...
-guard.drop()
 ```

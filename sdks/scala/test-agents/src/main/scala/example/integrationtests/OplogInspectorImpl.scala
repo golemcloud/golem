@@ -73,6 +73,21 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
       case OplogApi.OplogEntry.Create(p) =>
         s"CREATE @ $ts revision=${p.componentRevision}"
 
+      case OplogApi.OplogEntry.Start(p) =>
+        s"START @ $ts func=${p.functionName} type=${p.wrappedFunctionType.tag}"
+
+      case OplogApi.OplogEntry.End(p) =>
+        s"END @ $ts start=${p.startIndex} forced=${p.forcedCommit}"
+
+      case OplogApi.OplogEntry.Cancelled(p) =>
+        s"CANCELLED @ $ts start=${p.startIndex}"
+
+      case OplogApi.OplogEntry.CompletionDiscarded(p) =>
+        s"COMPLETION_DISCARDED @ $ts start=${p.startIndex}"
+
+      case OplogApi.OplogEntry.CompletionDelivered(p) =>
+        s"COMPLETION_DELIVERED @ $ts start=${p.startIndex}"
+
       case OplogApi.OplogEntry.HostCall(p) =>
         val reqSummary = summarizeTyped(p.request)
         val resSummary = summarizeTyped(p.response)
@@ -86,19 +101,20 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
         val resp = p.response.map(summarizeTyped).getOrElse("void")
         s"COMPLETED @ $ts response=$resp fuel=${p.consumedFuel}"
 
-      case OplogApi.OplogEntry.Suspend(t)                => s"SUSPEND @ ${t.seconds}s"
-      case OplogApi.OplogEntry.Error(p)                  => s"ERROR @ $ts '${p.error}' retryFrom=${p.retryFrom}"
-      case OplogApi.OplogEntry.NoOp(t)                   => s"NOOP @ ${t.seconds}s"
-      case OplogApi.OplogEntry.Jump(p)                   => s"JUMP @ $ts range=[${p.jump.start},${p.jump.end}]"
-      case OplogApi.OplogEntry.Interrupted(t)            => s"INTERRUPTED @ ${t.seconds}s"
-      case OplogApi.OplogEntry.Exited(t)                 => s"EXITED @ ${t.seconds}s"
-      case OplogApi.OplogEntry.SetRetryPolicy(p)         => s"SET_RETRY_POLICY @ $ts name=${p.name}"
-      case OplogApi.OplogEntry.RemoveRetryPolicy(p)      => s"REMOVE_RETRY_POLICY @ $ts name=${p.name}"
-      case OplogApi.OplogEntry.BeginAtomicRegion(t)      => s"BEGIN_ATOMIC @ ${t.seconds}s"
-      case OplogApi.OplogEntry.EndAtomicRegion(p)        => s"END_ATOMIC @ $ts begin=${p.beginIndex}"
-      case OplogApi.OplogEntry.BeginRemoteWrite(t)       => s"BEGIN_REMOTE_WRITE @ ${t.seconds}s"
-      case OplogApi.OplogEntry.EndRemoteWrite(p)         => s"END_REMOTE_WRITE @ $ts begin=${p.beginIndex}"
-      case OplogApi.OplogEntry.PendingAgentInvocation(p) =>
+      case OplogApi.OplogEntry.Suspend(t)                      => s"SUSPEND @ ${t.seconds}s"
+      case OplogApi.OplogEntry.Error(p)                        => s"ERROR @ $ts '${p.error}' retryFrom=${p.retryFrom}"
+      case OplogApi.OplogEntry.NoOp(t)                         => s"NOOP @ ${t.seconds}s"
+      case OplogApi.OplogEntry.Jump(p)                         => s"JUMP @ $ts range=[${p.jump.start},${p.jump.end}]"
+      case OplogApi.OplogEntry.Interrupted(t)                  => s"INTERRUPTED @ ${t.seconds}s"
+      case OplogApi.OplogEntry.Exited(t)                       => s"EXITED @ ${t.seconds}s"
+      case OplogApi.OplogEntry.SetRetryPolicy(p)               => s"SET_RETRY_POLICY @ $ts name=${p.name}"
+      case OplogApi.OplogEntry.RemoveRetryPolicy(p)            => s"REMOVE_RETRY_POLICY @ $ts name=${p.name}"
+      case OplogApi.OplogEntry.FilesystemStorageUsageUpdate(p) => s"FS_USAGE @ $ts delta=${p.delta}"
+      case OplogApi.OplogEntry.BeginAtomicRegion(t)            => s"BEGIN_ATOMIC @ ${t.seconds}s"
+      case OplogApi.OplogEntry.EndAtomicRegion(p)              => s"END_ATOMIC @ $ts begin=${p.beginIndex}"
+      case OplogApi.OplogEntry.BeginRemoteWrite(t)             => s"BEGIN_REMOTE_WRITE @ ${t.seconds}s"
+      case OplogApi.OplogEntry.EndRemoteWrite(p)               => s"END_REMOTE_WRITE @ $ts begin=${p.beginIndex}"
+      case OplogApi.OplogEntry.PendingAgentInvocation(p)       =>
         val invDesc = p.invocation match {
           case OplogApi.AgentInvocation.ExportedFunction(params) => s"func(${params.functionName})"
           case OplogApi.AgentInvocation.AgentInitialization(key) => s"agent-init(key=$key)"
@@ -140,10 +156,8 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
       case OplogApi.OplogEntry.CancelPendingInvocation(p) => s"CANCEL @ $ts idem=${p.idempotencyKey}"
       case OplogApi.OplogEntry.StartSpan(p)               =>
         s"START_SPAN @ $ts id=${p.spanId} parent=${p.parent.getOrElse("none")} attrs=${p.attributes.size}"
-      case OplogApi.OplogEntry.FinishSpan(p)             => s"FINISH_SPAN @ $ts id=${p.spanId}"
-      case OplogApi.OplogEntry.SetSpanAttribute(p)       => s"SET_SPAN_ATTR @ $ts span=${p.spanId} key=${p.key}"
-      case OplogApi.OplogEntry.ChangePersistenceLevel(p) =>
-        s"CHANGE_PL @ $ts level=${p.persistenceLevel.tag}"
+      case OplogApi.OplogEntry.FinishSpan(p)                   => s"FINISH_SPAN @ $ts id=${p.spanId}"
+      case OplogApi.OplogEntry.SetSpanAttribute(p)             => s"SET_SPAN_ATTR @ $ts span=${p.spanId} key=${p.key}"
       case OplogApi.OplogEntry.BeginRemoteTransaction(p)       => s"BEGIN_TX @ $ts id=${p.transactionId}"
       case OplogApi.OplogEntry.PreCommitRemoteTransaction(p)   => s"PRE_COMMIT_TX @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.PreRollbackRemoteTransaction(p) => s"PRE_ROLLBACK_TX @ $ts begin=${p.beginIndex}"

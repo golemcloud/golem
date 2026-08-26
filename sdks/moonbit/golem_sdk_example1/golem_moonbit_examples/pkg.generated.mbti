@@ -2,6 +2,7 @@
 package "golemcloud/golem_sdk_example1/golem_moonbit_examples"
 
 import {
+  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/config",
   "golemcloud/golem_sdk/interface/golem/agent/common",
   "golemcloud/golem_sdk/interface/golem/agent/host",
@@ -11,6 +12,7 @@ import {
   "golemcloud/golem_sdk/rpc",
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model",
+  "golemcloud/golem_sdk/tool",
   "moonbitlang/core/json",
 }
 
@@ -23,7 +25,9 @@ pub fn collect_database_config_overrides(DatabaseConfigOverride, Array[String]) 
 
 pub fn wasmExportAsyncInitialize(Int, Int, Int) -> Int
 
-pub fn wasmExportAsyncInvoke(Int, Int, Int) -> Int
+pub fn wasmExportAsyncInvokeGolemAgentGuest(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInvokeGolemToolGuest(Int, Int, Int) -> Int
 
 pub fn wasmExportAsyncLoad(Int, Int, Int) -> Int
 
@@ -33,13 +37,23 @@ pub fn wasmExportDiscoverAgentTypes() -> Int
 
 pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
 
+pub fn wasmExportDiscoverTools() -> Int
+
+pub fn wasmExportDiscoverToolsPostReturn(Int) -> Unit
+
 pub fn wasmExportGetDefinition() -> Int
 
 pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
 
+pub fn wasmExportGetTool(Int, Int) -> Int
+
+pub fn wasmExportGetToolPostReturn(Int) -> Unit
+
 pub fn wasmExportInitialize(Int) -> Int
 
-pub fn wasmExportInvoke(Int) -> Int
+pub fn wasmExportInvokeGolemAgentGuest(Int) -> Int
+
+pub fn wasmExportInvokeGolemToolGuest(Int) -> Int
 
 pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
 
@@ -91,6 +105,132 @@ pub async fn[T] AuditLogClient::scoped_new_phantom(String, async (Self) -> T) ->
 pub fn AuditLogClient::trigger_add_entry(Self, String) -> Unit raise @common.AgentError
 pub fn AuditLogClient::trigger_get_creator(Self) -> Unit raise @common.AgentError
 pub fn AuditLogClient::trigger_get_entries(Self) -> Unit raise @common.AgentError
+
+type CanonicalBigBound
+pub fn CanonicalBigBound::canonical_big_bound(UInt64?) -> Result[Unit, CanonicalGrepError]
+
+pub(all) struct CanonicalBigBoundClient {
+  client : @tool.ToolClient
+}
+pub async fn CanonicalBigBoundClient::canonical_big_bound(Self, UInt64?) -> Result[Unit, @tool.ToolError[CanonicalGrepError]]
+pub fn CanonicalBigBoundClient::drop(Self) -> Unit
+pub fn CanonicalBigBoundClient::new() -> Self
+
+type CanonicalCommitError
+pub impl @tool.ToolErrorSchema for CanonicalCommitError
+
+pub(all) struct CanonicalCommitResult {
+  hash : String
+  files_changed : UInt
+  insertions : UInt
+  deletions : UInt
+}
+pub impl @schema.FromSchema for CanonicalCommitResult
+pub impl @schema.IntoSchema for CanonicalCommitResult
+
+type CanonicalGit
+pub fn CanonicalGit::commit(UInt, @schema.Path, Bool, Map[String, String], String, String?, Bool, Bool, Bool, CanonicalGitOutputMode) -> Result[CanonicalCommitResult, CanonicalCommitError]
+pub fn CanonicalGit::log(Int64?, @types.Datetime?, @types.Datetime?, Array[String], Array[String], Bool, Bool, Bool, Bool, Array[@schema.Path]) -> Result[Array[CanonicalLogEntry], CanonicalLogError]
+pub fn CanonicalGit::remote(UInt, @schema.Path, Bool, Map[String, String]) -> Unit
+pub fn CanonicalGit::stash(UInt, @schema.Path) -> Unit
+
+pub(all) struct CanonicalGitClient {
+  client : @tool.ToolClient
+}
+pub async fn CanonicalGitClient::commit(Self, UInt, @schema.Path, Bool, Map[String, String], String, String?, Bool, Bool, Bool, CanonicalGitOutputMode) -> Result[CanonicalCommitResult, @tool.ToolError[CanonicalCommitError]]
+pub fn CanonicalGitClient::drop(Self) -> Unit
+pub async fn CanonicalGitClient::log(Self, Int64?, @types.Datetime?, @types.Datetime?, Array[String], Array[String], Bool, Bool, Bool, Bool, Array[@schema.Path]) -> Result[Array[CanonicalLogEntry], @tool.ToolError[CanonicalLogError]]
+pub fn CanonicalGitClient::new() -> Self
+pub fn CanonicalGitClient::remote(Self, UInt, @schema.Path, Bool, Map[String, String]) -> CanonicalGitRemoteClient
+pub fn CanonicalGitClient::stash(Self, UInt, @schema.Path) -> CanonicalGitStashClient
+
+pub(all) enum CanonicalGitOutputMode {
+  Human
+  Porcelain
+  Json
+} derive(Eq)
+pub impl @schema.FromSchema for CanonicalGitOutputMode
+pub impl @schema.IntoSchema for CanonicalGitOutputMode
+
+pub(all) struct CanonicalGitRemoteClient {
+  client : @tool.ToolClient
+  prefix : Array[(String, @schema_model.SchemaValue)]
+}
+pub async fn CanonicalGitRemoteClient::add(Self, String, @schema.Url, Array[String], String?, Bool, Bool) -> Result[Unit, @tool.ToolError[CanonicalRemoteError]]
+pub fn CanonicalGitRemoteClient::drop(Self) -> Unit
+pub async fn CanonicalGitRemoteClient::remove(Self, String) -> Result[Unit, @tool.ToolError[CanonicalRemoteError]]
+pub async fn CanonicalGitRemoteClient::set_url(Self, String, @schema.Url, @schema.Url?, Bool, Bool, Bool) -> Result[Unit, @tool.ToolError[CanonicalSetUrlError]]
+
+pub(all) struct CanonicalGitStashClient {
+  client : @tool.ToolClient
+  prefix : Array[(String, @schema_model.SchemaValue)]
+}
+pub async fn CanonicalGitStashClient::apply(Self, String?, UInt?) -> Result[Unit, @tool.ToolError[CanonicalStashError]]
+pub fn CanonicalGitStashClient::drop(Self) -> Unit
+pub async fn CanonicalGitStashClient::pop(Self, String?, UInt?) -> Result[Unit, @tool.ToolError[CanonicalStashError]]
+pub async fn CanonicalGitStashClient::stash(Self, String, Bool) -> Result[Unit, @tool.ToolError[CanonicalStashError]]
+
+type CanonicalGrep
+pub fn CanonicalGrep::canonical_grep(Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte], @async-core.Sink[Byte]) -> Result[Array[CanonicalGrepHit], CanonicalGrepError]
+pub fn CanonicalGrep::replace(Bool, CanonicalGrepColorMode, String, String, Array[@schema.Path]) -> Result[UInt64, CanonicalGrepError]
+
+pub(all) struct CanonicalGrepClient {
+  client : @tool.ToolClient
+}
+pub async fn CanonicalGrepClient::canonical_grep(Self, Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte]) -> Result[(Array[CanonicalGrepHit], @async-core.Stream[Byte]), @tool.ToolError[CanonicalGrepError]]
+pub fn CanonicalGrepClient::drop(Self) -> Unit
+pub fn CanonicalGrepClient::new() -> Self
+pub async fn CanonicalGrepClient::replace(Self, Bool, CanonicalGrepColorMode, String, String, Array[@schema.Path]) -> Result[UInt64, @tool.ToolError[CanonicalGrepError]]
+
+pub(all) enum CanonicalGrepColorMode {
+  Always
+  Never
+  Auto
+} derive(Eq)
+pub impl @schema.FromSchema for CanonicalGrepColorMode
+pub impl @schema.IntoSchema for CanonicalGrepColorMode
+
+type CanonicalGrepError
+pub impl @tool.ToolErrorSchema for CanonicalGrepError
+
+pub(all) struct CanonicalGrepHit {
+  file : @schema.Path
+  line : UInt
+  text : String
+}
+pub impl @schema.FromSchema for CanonicalGrepHit
+pub impl @schema.IntoSchema for CanonicalGrepHit
+
+pub(all) struct CanonicalLogEntry {
+  hash : String
+  author : String
+  date : @types.Datetime
+  message : String
+}
+pub impl @schema.FromSchema for CanonicalLogEntry
+pub impl @schema.IntoSchema for CanonicalLogEntry
+
+type CanonicalLogError
+pub impl @tool.ToolErrorSchema for CanonicalLogError
+
+type CanonicalRemote
+pub fn CanonicalRemote::add(UInt, String, @schema.Url, Array[String], String?, Bool, Bool) -> Result[Unit, CanonicalRemoteError]
+pub fn CanonicalRemote::remove(String) -> Result[Unit, CanonicalRemoteError]
+pub fn CanonicalRemote::set_url(String, @schema.Url, @schema.Url?, Bool, Bool, Bool) -> Result[Unit, CanonicalSetUrlError]
+
+type CanonicalRemoteError
+pub impl @tool.ToolErrorSchema for CanonicalRemoteError
+
+type CanonicalSetUrlError
+pub impl @tool.ToolErrorSchema for CanonicalSetUrlError
+
+type CanonicalStash
+pub fn CanonicalStash::apply(String?, UInt?) -> Result[Unit, CanonicalStashError]
+pub fn CanonicalStash::pop(String?, UInt?) -> Result[Unit, CanonicalStashError]
+pub fn CanonicalStash::stash(UInt, String, Bool) -> Result[Unit, CanonicalStashError]
+
+type CanonicalStashError
+pub impl @tool.ToolErrorSchema for CanonicalStashError
 
 type ConfiguredAgent
 pub fn ConfiguredAgent::get_request_count(Self) -> UInt64

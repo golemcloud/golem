@@ -17,10 +17,11 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub enum OptionalFieldUpdate<T> {
     Set(T),
     Unset,
+    #[default]
     NoChange,
 }
 

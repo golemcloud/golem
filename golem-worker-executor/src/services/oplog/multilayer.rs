@@ -22,8 +22,8 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
 use crate::services::oplog::{
-    CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, OrderedOplogStart,
-    downcast_oplog, scan_modes,
+    CommitLevel, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor, OplogService,
+    OrderedOplogStart, downcast_oplog, scan_modes,
 };
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
@@ -31,7 +31,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
-    AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
+    AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, RawOplogPayload,
 };
 use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
@@ -1134,10 +1134,14 @@ impl Debug for MultiLayerOplog {
 
 #[async_trait]
 impl Oplog for MultiLayerOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        let result = self.primary.add(entry).await;
-        self.last_oplog_index.set(result);
-        result
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        let pending = self.primary.enqueue_add(entry);
+        let last_oplog_index = self.last_oplog_index.clone();
+        Box::pin(async move {
+            let result = pending.await;
+            last_oplog_index.set(result);
+            result
+        })
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -1252,10 +1256,6 @@ impl Oplog for MultiLayerOplog {
         self.primary
             .download_raw_payload(payload_id, md5_hash)
             .await
-    }
-
-    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
-        self.primary.switch_persistence_level(mode).await;
     }
 
     async fn add_pair(

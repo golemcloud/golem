@@ -19,7 +19,7 @@ use golem_client::api::{
 };
 use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::account_usage::{
-    BYTE_SECONDS_PER_GB_MONTH, SetStorageLimit, StorageLimit,
+    BYTE_SECONDS_PER_GB_MONTH, MemoryLimit, SetMemoryLimit, SetStorageLimit, StorageLimit,
 };
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService as _, ResourceUsageUpdate,
@@ -58,6 +58,7 @@ async fn account_storage_usage_accumulates_grpc_updates(
                     rpc_call_count_delta: 0,
                     durable_storage_byte_seconds_delta,
                     ephemeral_storage_byte_seconds_delta,
+                    memory_gb_seconds_delta: 7,
                 },
             )]))
             .await?;
@@ -71,6 +72,7 @@ async fn account_storage_usage_accumulates_grpc_updates(
 
     assert_eq!(usage.account_id, user.account_id);
     assert_eq!(usage.usage.compute_gcu, 0.0);
+    assert_eq!(usage.usage.memory_gb_seconds, 14);
     assert_eq!(
         usage.usage.durable_storage_gb_month,
         140.0 / BYTE_SECONDS_PER_GB_MONTH
@@ -197,6 +199,69 @@ async fn account_storage_override_endpoints_resolve_set_expire_and_clear(
             )
             .await?,
         expected_override
+    );
+
+    let expected_max_memory = MemoryLimit {
+        effective_value: 10_000_000_000_000_000,
+        plan_default: 10_000_000_000_000_000,
+        override_value: None,
+        ceiling: 20_000_000_000_000_000,
+        user_configurable: true,
+    };
+    assert_eq!(
+        client
+            .get_account_max_memory_override(&user.account_id.0)
+            .await?,
+        expected_max_memory
+    );
+    let max_memory_override = client
+        .set_account_max_memory_override(
+            &user.account_id.0,
+            &SetMemoryLimit {
+                value: 12_000_000_000_000_000,
+                expires_at: None,
+            },
+        )
+        .await?;
+    assert_eq!(
+        max_memory_override.override_value,
+        Some(12_000_000_000_000_000)
+    );
+    assert_eq!(
+        client
+            .clear_account_max_memory_override(&user.account_id.0)
+            .await?,
+        expected_max_memory
+    );
+
+    let expected_monthly_memory = MemoryLimit {
+        effective_value: 30,
+        plan_default: 30,
+        override_value: None,
+        ceiling: 60,
+        user_configurable: true,
+    };
+    assert_eq!(
+        client
+            .get_account_monthly_memory_override(&user.account_id.0)
+            .await?,
+        expected_monthly_memory
+    );
+    let monthly_override = client
+        .set_account_monthly_memory_override(
+            &user.account_id.0,
+            &SetMemoryLimit {
+                value: 45,
+                expires_at: None,
+            },
+        )
+        .await?;
+    assert_eq!(monthly_override.override_value, Some(45));
+    assert_eq!(
+        client
+            .clear_account_monthly_memory_override(&user.account_id.0)
+            .await?,
+        expected_monthly_memory
     );
     assert_eq!(
         client

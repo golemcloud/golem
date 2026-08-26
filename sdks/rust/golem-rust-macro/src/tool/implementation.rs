@@ -22,9 +22,13 @@
 use proc_macro::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use std::hash::{Hash, Hasher};
-use syn::{ImplItem, ItemImpl};
+use syn::{Ident, ImplItem, ItemImpl};
 
-pub fn tool_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
+pub fn tool_implementation_impl(
+    _attrs: TokenStream,
+    item: TokenStream,
+    golem_rust: &Ident,
+) -> TokenStream {
     let mut item_impl = syn::parse_macro_input!(item as ItemImpl);
 
     let trait_path = match &item_impl.trait_ {
@@ -59,9 +63,9 @@ pub fn tool_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Token
     quote! {
         #item_impl
 
-        ::golem_rust::ctor::__support::ctor_parse!(
+        #golem_rust::ctor::__support::ctor_parse!(
             #[ctor] fn #register_fn_name() {
-                golem_rust::agentic::register_tool_invoker(
+                #golem_rust::agentic::register_tool_invoker(
                     <#self_ty as #trait_path>::__tool_descriptor(),
                     <#self_ty as #trait_path>::__tool_invoke,
                 );

@@ -20,7 +20,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{AgentId, AgentStatus};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::golem_config::OplogConfig;
+use golem_worker_executor::services::golem_config::{MemoryConfig, OplogConfig};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
     start_customized, start_with_redis_oplog_config,
@@ -426,6 +426,9 @@ async fn interrupt_wins_over_dynamic_memory_permit_reacquisition(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     const MEMORY_LIMIT: u64 = 768 * 1024 * 1024;
+    const PRESSURE_MARGIN: u64 = 16 * 1024 * 1024;
+    let usable_memory_limit =
+        (MEMORY_LIMIT as f64 * MemoryConfig::default().worker_memory_ratio) as u64;
 
     let context = TestContext::new(last_unique_id);
     let executor = start_customized(
@@ -481,7 +484,7 @@ async fn interrupt_wins_over_dynamic_memory_permit_reacquisition(
             }
         }
 
-        if unfinished_memory > MEMORY_LIMIT {
+        if unfinished_memory >= usable_memory_limit - PRESSURE_MARGIN {
             break;
         }
         if invocations
@@ -489,12 +492,12 @@ async fn interrupt_wins_over_dynamic_memory_permit_reacquisition(
             .all(|invocation| invocation.is_finished())
         {
             anyhow::bail!(
-                "all invocations completed before their aggregate linear memory exceeded the configured limit"
+                "all invocations completed before their aggregate linear memory approached the usable limit"
             );
         }
         if tokio::time::Instant::now() >= pressure_deadline {
             anyhow::bail!(
-                "timed out waiting for unfinished invocations to exceed the configured memory limit (last aggregate: {unfinished_memory})"
+                "timed out waiting for unfinished invocations to approach the usable memory limit (last aggregate: {unfinished_memory})"
             );
         }
         tokio::time::sleep(Duration::from_millis(25)).await;

@@ -39,6 +39,7 @@ use syn::{
 /// serde container-level attributes relevant to the schema shape.
 #[derive(Default)]
 struct SerdeTypeAttrs {
+    rename: Option<String>,
     tag: Option<String>,
     content: Option<String>,
     rename_all: Option<RenameRule>,
@@ -70,11 +71,12 @@ pub fn expand_poem_schema(input: &DeriveInput) -> syn::Result<TokenStream> {
 
     let ident = &input.ident;
     let serde = parse_serde_type_attrs(&input.attrs)?;
-    let name = ident.to_string();
+    let default_name = ident.to_string();
+    let name = serde.rename.as_deref().unwrap_or(&default_name);
 
     match &input.data {
-        Data::Struct(data) => expand_struct(ident, &name, &serde, data),
-        Data::Enum(data) => expand_enum(ident, &name, &serde, data),
+        Data::Struct(data) => expand_struct(ident, name, &serde, data),
+        Data::Enum(data) => expand_enum(ident, name, &serde, data),
         Data::Union(_) => Err(syn::Error::new_spanned(
             ident,
             "PoemSchema does not support `union` types",
@@ -871,6 +873,15 @@ fn parse_serde_type_attrs(attrs: &[Attribute]) -> syn::Result<SerdeTypeAttrs> {
                 "rename_all" => {
                     let lit: LitStr = meta.value()?.parse()?;
                     out.rename_all = Some(RenameRule::from_str(&lit.value(), lit.span())?);
+                }
+                "rename" => {
+                    if !meta.input.peek(syn::Token![=]) {
+                        return Err(meta.error(
+                            "PoemSchema does not support split `#[serde(rename(serialize = ..., \
+                             deserialize = ...))]`",
+                        ));
+                    }
+                    out.rename = Some(meta.value()?.parse::<LitStr>()?.value());
                 }
                 "transparent" => out.transparent = true,
                 // Affects only the deserializer error message, not the shape.

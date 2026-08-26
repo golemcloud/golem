@@ -27,6 +27,15 @@ macro_rules! define_permission_pattern {
 
 card_permission_classes!(define_permission_pattern);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RenderedPermissionFields {
+    pub class: &'static str,
+    pub owner: String,
+    pub recipient: String,
+    pub verb: String,
+    pub resource: String,
+}
+
 macro_rules! define_permission_target {
     ($($variant:ident: $class:ty,)+) => {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -185,6 +194,10 @@ impl PermissionPattern {
         super::rendering::render_permission(self)
     }
 
+    pub fn render_fields(&self) -> Result<RenderedPermissionFields, String> {
+        super::rendering::render_permission_fields(self)
+    }
+
     pub(crate) fn to_target(&self) -> PermissionTarget {
         permission_pattern_to_target_match!(self)
     }
@@ -201,6 +214,10 @@ impl PolymorphicPermissionPattern {
 
     pub fn render(&self) -> Result<String, String> {
         super::rendering::render_polymorphic_permission(self)
+    }
+
+    pub fn render_fields(&self) -> Result<RenderedPermissionFields, String> {
+        super::rendering::render_polymorphic_permission_fields(self)
     }
 }
 

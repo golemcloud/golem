@@ -125,6 +125,17 @@ interface types {
     /// and reveal it only through capability-gated host interfaces.
     resource secret;
 
+    /// An unforgeable handle to a permission card held by the runtime. The
+    /// handle is opaque to guests: components can hold, pass, derive, install,
+    /// and revoke cards only through the `golem:permissions` interfaces. When
+    /// carried in a `schema-value-tree` (see
+    /// `schema-value-node::permission-card-handle`) the handle is transferred
+    /// by ownership; the host converts it to/from its internal trusted
+    /// card-store representation at the boundary. The wire form is the card-id
+    /// (UUID) alone — no grants, parents, or metadata cross the wire as
+    /// authority.
+    resource permission-card;
+
     // ============================================================
     // Schema graph (self-contained type carrier)
     // ============================================================
@@ -266,6 +277,7 @@ interface types {
         // --- Capability nodes ---
         secret-type(secret-spec),
         quota-token-type(quota-token-spec),
+        permission-card-type(permission-card-spec),
 
         // --- WASI P3 stubs (parseable only; no semantics yet) ---
         future-type(option<type-node-index>),
@@ -393,18 +405,41 @@ interface types {
     // Inferred-tag sum. Each branch declares a rule that the decoder uses to
     // identify values belonging to that branch from the raw underlying value.
     //
-    // Rules enforced at schema-construction time:
+    // Portable schema-construction contract:
     //   - branch `tag`s are unique within the union,
     //   - string-pattern discriminators (`prefix` / `suffix` / `contains` /
-    //     `regex`) require a string-shaped branch body (`string-type`,
-    //     `text-type`, `url-type`, `path-type`, or a `ref` resolving to one),
-    //   - record-shaped discriminators (`field-equals` / `field-absent`)
-    //     require a record-shaped branch body that declares the referenced
-    //     field (with the matching literal type, if any),
-    //   - the discriminator set must be unambiguous: no value matches more
-    //     than one branch. Overlap is checked structurally where decidable
-    //     (e.g., `prefix("a")` and `prefix("ab")` overlap) and best-effort
-    //     for `regex`.
+    //     `regex`) require a branch body whose canonical raw JSON
+    //     representation is a string (`string-type`, `url-type`, `path-type`,
+    //     or a `ref` resolving to one),
+    //   - `field-equals` requires a record-shaped branch body that declares
+    //     the referenced field; a literal additionally requires that field to
+    //     have a canonical raw JSON string representation,
+    //   - `field-absent` requires a record-shaped branch body that does not
+    //     declare the referenced field,
+    //   - byte-identical regex text is rejected first as duplicate syntax,
+    //     without making a semantic claim about the regex language,
+    //   - every remaining pair of discriminator rules is classified as
+    //     overlapping, disjoint, or indeterminate. Overlapping pairs are rejected;
+    //     disjoint and indeterminate pairs are accepted. Runtime decoders
+    //     still reject a raw value that matches multiple accepted branches.
+    //
+    // The canonical pair classification is symmetric and based only on the
+    // raw discriminator rules; branch body schemas do not refine it:
+    //   - two prefixes overlap exactly when either prefixes the other,
+    //   - two suffixes overlap exactly when either suffixes the other,
+    //   - every prefix/suffix, prefix/contains, suffix/contains, and
+    //     contains/contains pair overlaps,
+    //   - a string-pattern rule and a record-shaped rule are disjoint because
+    //     a raw JSON value cannot be both a string and an object,
+    //   - field-equals rules on different fields overlap; on the same field
+    //     they are disjoint only when both literals are present and differ,
+    //   - every pair of field-absent rules overlaps,
+    //   - field-equals and field-absent are disjoint on the same field and
+    //     overlap on different fields,
+    //   - after the duplicate-syntax check above, every pair containing a
+    //     regex and another string-pattern rule is indeterminate and accepted.
+    //     No portable semantic regex-overlap analysis is attempted because SDK
+    //     regex dialects differ.
 
     record union-spec {
         branches: list<union-branch>,
@@ -430,7 +465,9 @@ interface types {
         suffix(string),
         /// String value contains this substring.
         contains(string),
-        /// String value matches this anchored regex.
+        /// String value has a match for this regex in the implementation's
+        /// regex dialect. The pattern must include anchors when whole-string
+        /// matching is required.
         regex(string),
         /// Record-shaped value where the named field is present, and — if
         /// `literal` is set — has the given literal string value. The common
@@ -460,6 +497,13 @@ interface types {
         /// Resource name this token covers (e.g., declared in the agent manifest).
         /// `none` = any resource permitted.
         resource-name: option<string>,
+    }
+
+    record permission-card-spec {
+        /// `true` = polymorphic (carries slot variables in owner / resource-id),
+        /// `false` = monomorphic. Structural metadata only; authority lives in
+        /// the card store, not in the schema spec.
+        polymorphic: bool,
     }
 
     // ============================================================
@@ -524,6 +568,7 @@ interface types {
         // Capability nodes
         secret-value(own<secret>),
         quota-token-handle(own<quota-token>),
+        permission-card-handle(own<permission-card>),
 
         // WASI P3 stubs (parseable only in the schema; no constructible values).
     }

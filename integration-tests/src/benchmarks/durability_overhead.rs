@@ -40,7 +40,6 @@ pub struct DurabilityOverheadIterationContext {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
     durable_persistent_agent_ids: Vec<ParsedAgentId>,
-    durable_nonpersistent_agent_ids: Vec<ParsedAgentId>,
     ephemeral_agent_ids: Vec<ParsedAgentId>,
     durable_persistent_commit_agent_ids: Vec<ParsedAgentId>,
     env_id: EnvironmentId,
@@ -65,10 +64,10 @@ impl Benchmark for DurabilityOverhead {
     fn description() -> &'static str {
         indoc! {
             "Invokes oplog-heavy functions in parallel on `size` number of workers,
-            using ephemeral components, and durable components with persistence on and off. There's
-            also a variant of persistent run where after each operation we force oplog
-            commit. The invoked function gets the `length` parameter to control the length of its inner loop.
-            The benchmark can be used to compare the overhead caused by of persistence (using a low
+            using ephemeral and durable components. There's also a durable variant where after
+            each operation we force an oplog commit. The invoked function gets the `length`
+            parameter to control the length of its inner loop.
+            The benchmark can be used to compare the overhead caused by persistence (using a low
             `size`) and also the effect of heavy persistence load caused by parallel running workers
             (using high `size`).
             "
@@ -110,7 +109,6 @@ impl Benchmark for DurabilityOverhead {
         let (_, env) = user.app_and_env().await.unwrap();
 
         let mut durable_persistent_agent_ids = vec![];
-        let mut durable_nonpersistent_agent_ids = vec![];
         let mut ephemeral_agent_ids = vec![];
         let mut durable_persistent_commit_agent_ids = vec![];
 
@@ -127,10 +125,6 @@ impl Benchmark for DurabilityOverhead {
                 "RustBenchmarkAgent",
                 format!("test-{n}-persistent")
             ));
-            durable_nonpersistent_agent_ids.push(agent_id!(
-                "RustBenchmarkAgent",
-                format!("test-{n}-nonpersistent")
-            ));
             ephemeral_agent_ids.push(agent_id!(
                 "RustEphemeralBenchmarkAgent",
                 format!("test-{n}-ephemeral")
@@ -145,7 +139,6 @@ impl Benchmark for DurabilityOverhead {
             user,
             component: durable_component,
             durable_persistent_agent_ids,
-            durable_nonpersistent_agent_ids,
             ephemeral_agent_ids,
             durable_persistent_commit_agent_ids,
             env_id: env.id,
@@ -186,13 +179,6 @@ impl Benchmark for DurabilityOverhead {
         )
         .instrument(tracing::info_span!("warmup_durable_persistent"))
         .await;
-        warmup_group(
-            &context.user,
-            &context.component,
-            &context.durable_nonpersistent_agent_ids,
-        )
-        .instrument(tracing::info_span!("warmup_durable_nonpersistent"))
-        .await;
     }
 
     async fn run(
@@ -214,7 +200,7 @@ impl Benchmark for DurabilityOverhead {
                         &context.component,
                         agent_id,
                         "oplog_heavy",
-                        data_value!(length, true, false),
+                        data_value!(length, false),
                     )
                     .await
                 })
@@ -229,34 +215,6 @@ impl Benchmark for DurabilityOverhead {
 
         async {
             let result_futures = context
-                .durable_nonpersistent_agent_ids
-                .iter()
-                .map(move |agent_id| async move {
-                    let user_clone = context.user.clone();
-                    invoke_and_await_agent(
-                        &user_clone,
-                        &context.component,
-                        agent_id,
-                        "oplog_heavy",
-                        data_value!(length, false, false),
-                    )
-                    .await
-                })
-                .collect::<Vec<_>>();
-            let results = result_futures.join().await;
-            for (idx, result) in results.iter().enumerate() {
-                result.record(
-                    &recorder,
-                    "durable-non-persistent-",
-                    idx.to_string().as_str(),
-                );
-            }
-        }
-        .instrument(tracing::info_span!("measure_durable_nonpersistent"))
-        .await;
-
-        async {
-            let result_futures = context
                 .ephemeral_agent_ids
                 .iter()
                 .map(move |agent_id| async move {
@@ -266,7 +224,7 @@ impl Benchmark for DurabilityOverhead {
                         &context.component,
                         agent_id,
                         "oplog_heavy",
-                        data_value!(length, false, false),
+                        data_value!(length, false),
                     )
                     .await
                 })
@@ -290,7 +248,7 @@ impl Benchmark for DurabilityOverhead {
                         &context.component,
                         agent_id,
                         "oplog_heavy",
-                        data_value!(length, true, true),
+                        data_value!(length, true),
                     )
                     .await
                 })
@@ -316,14 +274,6 @@ impl Benchmark for DurabilityOverhead {
         delete_workers(
             &context.user,
             &agent_ids_to_agent_ids(context.component.id, &context.durable_persistent_agent_ids),
-        )
-        .await;
-        delete_workers(
-            &context.user,
-            &agent_ids_to_agent_ids(
-                context.component.id,
-                &context.durable_nonpersistent_agent_ids,
-            ),
         )
         .await;
         delete_workers(

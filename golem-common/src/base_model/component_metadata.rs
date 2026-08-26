@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
+use crate::base_model::tool::{ToolDeploymentMetadata, ToolName};
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
 use crate::model::card::PolymorphicCard;
@@ -89,6 +90,10 @@ pub struct KnownExports {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub oplog_processor_interface: Option<String>,
+    /// Exact exported interface name for `golem:tool/guest`, e.g. `golem:tool/guest@0.1.0`
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub tool_guest_interface: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,7 +101,6 @@ pub struct KnownExports {
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
 )]
-#[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct LinearMemory {
@@ -104,6 +108,10 @@ pub struct LinearMemory {
     pub initial: u64,
     /// Optional maximal size of the linear memory in bytes
     pub maximum: Option<u64>,
+    /// Whether the linear memory is shared between WebAssembly threads
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub shared: bool,
 }
 
 impl LinearMemory {
@@ -132,6 +140,7 @@ impl Debug for ComponentMetadata {
                 "agent_type_provision_configs",
                 &self.data.agent_type_provision_configs,
             )
+            .field("tools", &self.data.tools)
             .finish()
     }
 }
@@ -189,6 +198,11 @@ pub struct ComponentMetadataInnerData {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+
+    /// Complete deployment input for every tool implemented by this component.
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
 }
 
 /// Per-agent-type provisioning configuration stored alongside AgentType declarations

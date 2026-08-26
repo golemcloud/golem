@@ -337,6 +337,8 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             timestamp: Timestamp::now_utc(),
             parent_start_index: None,
             function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
+            invocation_id: None,
+            observational_owner: None,
             request: Some(cancelled_request_payload),
             durable_function_type: DurableFunctionType::WriteRemote,
         })

@@ -75,6 +75,13 @@ impl PlanService {
                 monthly_gas_limit: plan.monthly_gas_limit,
                 monthly_upload_limit: plan.monthly_upload_limit,
                 max_memory_per_worker: plan.max_memory_per_worker,
+                max_memory_per_worker_ceiling: plan.max_memory_per_worker_ceiling,
+                max_memory_per_worker_user_configurable: plan
+                    .max_memory_per_worker_user_configurable,
+                monthly_memory_gb_seconds: plan.monthly_memory_gb_seconds,
+                monthly_memory_gb_seconds_ceiling: plan.monthly_memory_gb_seconds_ceiling,
+                monthly_memory_gb_seconds_user_configurable: plan
+                    .monthly_memory_gb_seconds_user_configurable,
                 max_table_elements_per_worker: plan.max_table_elements_per_worker,
                 max_disk_space_per_worker: plan.max_disk_space_per_worker,
                 max_disk_space_per_worker_ceiling: plan
@@ -140,6 +147,12 @@ impl PlanService {
             name: plan.name.0,
             plan_id: plan.plan_id.0,
             max_memory_per_worker: plan.max_memory_per_worker.into(),
+            max_memory_per_worker_ceiling: plan.max_memory_per_worker_ceiling.into(),
+            max_memory_per_worker_user_configurable: plan.max_memory_per_worker_user_configurable,
+            monthly_memory_gb_seconds: plan.monthly_memory_gb_seconds.into(),
+            monthly_memory_gb_seconds_ceiling: plan.monthly_memory_gb_seconds_ceiling.into(),
+            monthly_memory_gb_seconds_user_configurable: plan
+                .monthly_memory_gb_seconds_user_configurable,
             max_table_elements_per_worker: plan.max_table_elements_per_worker.into(),
             max_disk_space_per_worker: plan.max_disk_space_per_worker.into(),
             max_disk_space_per_worker_ceiling: plan.max_disk_space_per_worker_ceiling.into(),

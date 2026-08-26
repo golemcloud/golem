@@ -6,7 +6,7 @@ max_websocket_connections = 100
 runtime_metrics_sampling_interval = "5s"
 tracing_file_name_with_port = true
 
-[active_workers]
+[active_agents]
 drop_when_full = 0.25
 ttl = "8h"
 
@@ -143,7 +143,7 @@ event_broadcast_capacity = 1024
 event_history_size = 128
 fuel_to_borrow = 10000
 invocation_result_broadcast_capacity = 100000
-max_active_workers = 1024
+max_active_agents = 1024
 max_concurrent_streams = 1024
 max_invocation_context_stack_depth = 1024
 max_oplog_query_pages_size = 100
@@ -153,7 +153,6 @@ tail_work_settle_timeout = "30s"
 acquire_retry_delay = "500ms"
 component_size_coefficient = 2.0
 enable_measured_admission = true
-worker_estimate_coefficient = 1.1
 worker_memory_ratio = 0.8
 
 [memory.oom_retry_config]
@@ -370,7 +369,7 @@ without_time = false
 # runtime_metrics_sampling_interval = "5s"
 # tracing_file_name_with_port = true
 # 
-# [active_workers]
+# [active_agents]
 # drop_when_full = 0.25
 # ttl = "8h"
 # 
@@ -510,7 +509,7 @@ without_time = false
 # event_history_size = 128
 # fuel_to_borrow = 10000
 # invocation_result_broadcast_capacity = 100000
-# max_active_workers = 1024
+# max_active_agents = 1024
 # max_concurrent_streams = 1024
 # max_invocation_context_stack_depth = 1024
 # max_oplog_query_pages_size = 100
@@ -520,7 +519,6 @@ without_time = false
 # acquire_retry_delay = "500ms"
 # component_size_coefficient = 2.0
 # enable_measured_admission = true
-# worker_estimate_coefficient = 1.1
 # worker_memory_ratio = 0.8
 # 
 # [memory.oom_retry_config]
@@ -736,7 +734,7 @@ without_time = false
 # runtime_metrics_sampling_interval = "5s"
 # tracing_file_name_with_port = true
 # 
-# [active_workers]
+# [active_agents]
 # drop_when_full = 0.25
 # ttl = "8h"
 # 
@@ -847,7 +845,7 @@ without_time = false
 # event_history_size = 128
 # fuel_to_borrow = 10000
 # invocation_result_broadcast_capacity = 100000
-# max_active_workers = 1024
+# max_active_agents = 1024
 # max_concurrent_streams = 1024
 # max_invocation_context_stack_depth = 1024
 # max_oplog_query_pages_size = 100
@@ -857,7 +855,6 @@ without_time = false
 # acquire_retry_delay = "500ms"
 # component_size_coefficient = 2.0
 # enable_measured_admission = true
-# worker_estimate_coefficient = 1.1
 # worker_memory_ratio = 0.8
 # 
 # [memory.oom_retry_config]

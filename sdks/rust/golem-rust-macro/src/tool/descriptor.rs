@@ -1322,7 +1322,7 @@ fn flag_spec_tokens(name: &str, base_ty: &Type, arg: Option<&ArgIr>) -> Result<T
             Some(expr) => quote! { ::std::option::Option::Some({ let __m: u32 = #expr; __m }) },
             None => quote! { ::std::option::Option::None },
         };
-        quote! { golem_rust::golem_agentic::golem::tool::common::FlagShape::CountFlag(#max) }
+        quote! { golem_rust::schema::tool::wit::wire::FlagShape::CountFlag(#max) }
     } else {
         let default = match arg.and_then(|a| a.default.as_ref()) {
             Some(expr) => bool_default(expr)?,
@@ -1330,8 +1330,8 @@ fn flag_spec_tokens(name: &str, base_ty: &Type, arg: Option<&ArgIr>) -> Result<T
         };
         let negatable = arg.and_then(|a| a.negatable).unwrap_or(false);
         quote! {
-            golem_rust::golem_agentic::golem::tool::common::FlagShape::BoolFlag(
-                golem_rust::golem_agentic::golem::tool::common::BoolFlagShape {
+            golem_rust::schema::tool::wit::wire::FlagShape::BoolFlag(
+                golem_rust::schema::tool::wit::wire::BoolFlagShape {
                     default: #default,
                     negatable: #negatable,
                 }
@@ -1485,7 +1485,7 @@ fn option_spec_tokens(
                     repetition: #rep,
                     map_type: #graph,
                     duplicate_key_policy:
-                        golem_rust::golem_agentic::golem::tool::common::DuplicateKeyPolicy::Reject,
+                        golem_rust::schema::tool::wit::wire::DuplicateKeyPolicy::Reject,
                 }
             )
         }
@@ -1658,7 +1658,7 @@ fn inherited_tail_option_surrogate_tokens(
             shape: golem_rust::agentic::ExtendedOptionShape::RepeatableList(
                 golem_rust::agentic::ExtendedRepeatableListShape {
                     repetition:
-                        golem_rust::golem_agentic::golem::tool::common::Repetition::Repeated,
+                        golem_rust::schema::tool::wit::wire::Repetition::Repeated,
                     item_type: #graph,
                 }
             ),
@@ -1685,7 +1685,7 @@ fn repetition_tokens(arg: Option<&ArgIr>) -> Result<TokenStream, Error> {
                     "`delim` requires `repeatable = \"delimited\"` or `repeatable = \"either\"`",
                 ));
             }
-            Ok(quote! { golem_rust::golem_agentic::golem::tool::common::Repetition::Repeated })
+            Ok(quote! { golem_rust::schema::tool::wit::wire::Repetition::Repeated })
         }
         RepeatableMode::Delimited => {
             let d = delim.ok_or_else(|| {
@@ -1694,7 +1694,7 @@ fn repetition_tokens(arg: Option<&ArgIr>) -> Result<TokenStream, Error> {
                     "repeatable = \"delimited\" requires a `delim = '<char>'`",
                 )
             })?;
-            Ok(quote! { golem_rust::golem_agentic::golem::tool::common::Repetition::Delimited(#d) })
+            Ok(quote! { golem_rust::schema::tool::wit::wire::Repetition::Delimited(#d) })
         }
         RepeatableMode::Either => {
             let d = delim.ok_or_else(|| {
@@ -1703,7 +1703,7 @@ fn repetition_tokens(arg: Option<&ArgIr>) -> Result<TokenStream, Error> {
                     "repeatable = \"either\" requires a `delim = '<char>'`",
                 )
             })?;
-            Ok(quote! { golem_rust::golem_agentic::golem::tool::common::Repetition::Either(#d) })
+            Ok(quote! { golem_rust::schema::tool::wit::wire::Repetition::Either(#d) })
         }
     }
 }
@@ -1980,10 +1980,10 @@ fn ref_tokens(r: &RefIr) -> Result<TokenStream, Error> {
 fn quantifier_tokens(q: QuantifierIr) -> TokenStream {
     match q {
         QuantifierIr::All => {
-            quote! { golem_rust::golem_agentic::golem::tool::common::Quantifier::All }
+            quote! { golem_rust::schema::tool::wit::wire::Quantifier::All }
         }
         QuantifierIr::Any => {
-            quote! { golem_rust::golem_agentic::golem::tool::common::Quantifier::Any }
+            quote! { golem_rust::schema::tool::wit::wire::Quantifier::Any }
         }
     }
 }
@@ -2367,7 +2367,7 @@ fn is_auto_injected_principal_type(ty: &Type) -> bool {
     let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
     matches!(
         segments.as_slice(),
-        ["golem_rust", "agentic", "Principal"]
+        ["golem_rust", "agentic" | "tool", "Principal"]
             | [
                 "golem_rust",
                 "golem_agentic",

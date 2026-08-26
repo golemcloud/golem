@@ -481,7 +481,7 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
       "guards-block",
       "samples/guards/repl-guards-block.ts",
       Contains(
-        (Seq("retry-visible-ok", "level-ok", "idem-ok", "atomic-ok") ++ GolemServer.scalaCliRetryPolicyNames)*
+        (Seq("retry-visible-ok", "idem-ok", "atomic-ok") ++ GolemServer.scalaCliRetryPolicyNames)*
       )
     ),
     Sample(
@@ -504,7 +504,7 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
     Sample(
       "observability-durability",
       "samples/observability/repl-durability.ts",
-      Contains("=== Durability Demo ===", "isLive", "persistenceLevel")
+      Contains("=== Durability Demo ===", "durable result")
     ),
 
     // --- Storage / Config ---
@@ -564,7 +564,7 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
     Sample(
       "host-api-explorer-durability",
       "samples/host-api-explorer/repl-explore-durability.ts",
-      Contains("isLive=", "persistenceLevel=")
+      Contains("DurabilityApi.durable()")
     ),
     Sample(
       "host-api-explorer-blobstore",

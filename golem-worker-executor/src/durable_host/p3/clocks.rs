@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::DurabilityHost;
-use crate::durable_host::concurrent::{
-    CallHandle, NotCancellable, drain_queued_dropped_call_events,
-};
+use crate::durable_host::concurrent::{Cancellable, DurableCallSession, NotCancellable};
 use crate::durable_host::p3::{DurableP3, DurableP3View, run_read_access};
 use crate::durable_host::suspendable_wait::{
     ParkOutcome, SuspendableWaitContext, ephemeral_sleep_too_long_error, park_suspendable_wait,
@@ -45,18 +43,11 @@ impl<Ctx: WorkerCtx> types::Host for DurableP3View<'_, Ctx> {}
 impl<Ctx: WorkerCtx> system_clock::Host for DurableP3View<'_, Ctx> {
     async fn now(&mut self) -> wasmtime::Result<system_clock::Instant> {
         let ctx = self.0.durable_ctx_mut();
-        drain_queued_dropped_call_events(ctx)
-            .await
-            .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3SystemClockNow, NotCancellable>::start(
+        let result = DurableCallSession::<P3SystemClockNow, NotCancellable>::invoke(
             ctx,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
-        )
-        .await?;
-
-        let result = handle
-            .run(ctx, async |ctx| -> wasmtime::Result<_> {
+            async |ctx| -> wasmtime::Result<_> {
                 let result = {
                     let mut view = ctx.as_wasi_view();
                     system_clock::Host::now(&mut view.clocks()).await?
@@ -64,33 +55,28 @@ impl<Ctx: WorkerCtx> system_clock::Host for DurableP3View<'_, Ctx> {
                 Ok(HostResponseWallClock {
                     time: SerializableDateTime::from(result),
                 })
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         Ok(result.time.into())
     }
 
     async fn get_resolution(&mut self) -> wasmtime::Result<types::Duration> {
         let ctx = self.0.durable_ctx_mut();
-        drain_queued_dropped_call_events(ctx)
-            .await
-            .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3SystemClockGetResolution, NotCancellable>::start(
+        let result = DurableCallSession::<P3SystemClockGetResolution, NotCancellable>::invoke(
             ctx,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
-        )
-        .await?;
-
-        let result = handle
-            .run(ctx, async |ctx| -> wasmtime::Result<_> {
+            async |ctx| -> wasmtime::Result<_> {
                 let nanos = {
                     let mut view = ctx.as_wasi_view();
                     system_clock::Host::get_resolution(&mut view.clocks()).await?
                 };
                 Ok(HostResponseMonotonicClockTimestamp { nanos })
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         Ok(result.nanos)
     }
@@ -99,50 +85,38 @@ impl<Ctx: WorkerCtx> system_clock::Host for DurableP3View<'_, Ctx> {
 impl<Ctx: WorkerCtx> monotonic_clock::Host for DurableP3View<'_, Ctx> {
     async fn now(&mut self) -> wasmtime::Result<monotonic_clock::Mark> {
         let ctx = self.0.durable_ctx_mut();
-        drain_queued_dropped_call_events(ctx)
-            .await
-            .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3MonotonicClockNow, NotCancellable>::start(
+        let result = DurableCallSession::<P3MonotonicClockNow, NotCancellable>::invoke(
             ctx,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
-        )
-        .await?;
-
-        let result = handle
-            .run(ctx, async |ctx| -> wasmtime::Result<_> {
+            async |ctx| -> wasmtime::Result<_> {
                 let nanos = {
                     let mut view = ctx.as_wasi_view();
                     monotonic_clock::Host::now(&mut view.clocks()).await?
                 };
                 Ok(HostResponseMonotonicClockTimestamp { nanos })
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         Ok(result.nanos)
     }
 
     async fn get_resolution(&mut self) -> wasmtime::Result<types::Duration> {
         let ctx = self.0.durable_ctx_mut();
-        drain_queued_dropped_call_events(ctx)
-            .await
-            .map_err(wasmtime::Error::from)?;
-        let handle = CallHandle::<P3MonotonicClockGetResolution, NotCancellable>::start(
+        let result = DurableCallSession::<P3MonotonicClockGetResolution, NotCancellable>::invoke(
             ctx,
             HostRequestNoInput {},
             DurableFunctionType::ReadLocal,
-        )
-        .await?;
-
-        let result = handle
-            .run(ctx, async |ctx| -> wasmtime::Result<_> {
+            async |ctx| -> wasmtime::Result<_> {
                 let nanos = {
                     let mut view = ctx.as_wasi_view();
                     monotonic_clock::Host::get_resolution(&mut view.clocks()).await?
                 };
                 Ok(HostResponseMonotonicClockTimestamp { nanos })
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         Ok(result.nanos)
     }
@@ -153,7 +127,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         store: &Accessor<U, Self>,
         when: monotonic_clock::Mark,
     ) -> wasmtime::Result<()> {
-        run_read_access::<_, _, Ctx, P3MonotonicClockWaitUntil, _, _>(
+        run_read_access::<_, _, Ctx, P3MonotonicClockWaitUntil, _>(
             store,
             HostRequestMonotonicClockTimestamp { nanos: when },
             DurableFunctionType::ReadLocal,
@@ -170,20 +144,30 @@ impl<U: Send + 'static, Ctx: WorkerCtx> monotonic_clock::HostWithStore<U> for Du
         store: &Accessor<U, Self>,
         how_long: types::Duration,
     ) -> wasmtime::Result<()> {
-        let recorded_now = run_read_access::<_, _, Ctx, P3MonotonicClockNow, _, _>(
-            store,
-            HostRequestNoInput {},
-            DurableFunctionType::ReadLocal,
-            || async {
-                let nanos = current_monotonic_now::<U, Ctx>(store)?;
-                Ok(HostResponseMonotonicClockTimestamp { nanos })
-            },
-        )
-        .await?
-        .nanos;
-        let when = recorded_now.saturating_add(how_long);
+        let (now, mut delivery) =
+            DurableCallSession::<P3MonotonicClockNow, Cancellable>::invoke_access_deferred(
+                store,
+                super::durable_worker_ctx::<Ctx, U>,
+                HostRequestNoInput {},
+                DurableFunctionType::ReadLocal,
+                async || {
+                    let nanos = current_monotonic_now::<U, Ctx>(store)?;
+                    Ok::<_, wasmtime::Error>(HostResponseMonotonicClockTimestamp { nanos })
+                },
+            )
+            .await?;
+        if delivery.is_replay_discarded() {
+            std::future::pending::<()>().await;
+        }
+        delivery
+            .prepare_delivery()
+            .await
+            .map_err(wasmtime::Error::from)?;
+        delivery.delivered();
 
-        run_read_access::<_, _, Ctx, P3MonotonicClockWaitFor, _, _>(
+        let when = now.nanos.saturating_add(how_long);
+
+        run_read_access::<_, _, Ctx, P3MonotonicClockWaitFor, _>(
             store,
             HostRequestMonotonicClockDuration {
                 duration_in_nanos: how_long,

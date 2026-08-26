@@ -14,13 +14,12 @@
 
 use crate::command::card::CardSubcommand;
 use crate::command_handler::Handlers;
-use crate::command_handler::worker::WorkerCommandHandler;
+use crate::command_handler::agent::AgentCommandHandler;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
-use crate::log::log_warn_action;
-use crate::model::text::card::{CardGetView, CardListView, CardRevokeResult};
-use crate::model::worker::RawAgentId;
+use crate::model::agent::RawAgentId;
+use crate::model::card::{CardGetView, CardListView, CardRevokeView};
 use anyhow::bail;
 use golem_client::api::{CardClient, WorkerClient};
 use golem_common::model::account::AccountId;
@@ -140,10 +139,10 @@ impl CardCommandHandler {
     async fn cmd_list_agent_wallet(&self, agent: RawAgentId) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
-        let worker_handler = WorkerCommandHandler::new(self.ctx.clone());
-        let agent_name_match = worker_handler.match_agent_name(agent).await?;
-        let (component, agent_name) = worker_handler
-            .component_by_agent_name_match(&agent_name_match)
+        let agent_handler = AgentCommandHandler::new(self.ctx.clone());
+        let agent_id_match = agent_handler.match_agent_id(agent).await?;
+        let (component, agent_id) = agent_handler
+            .component_by_agent_id_match(&agent_id_match)
             .await?;
 
         let cards = self
@@ -151,7 +150,7 @@ impl CardCommandHandler {
             .golem_clients()
             .await?
             .worker
-            .get_agent_wallet(&component.id.0, &agent_name.0)
+            .get_agent_wallet(&component.id.0, &agent_id.0)
             .await
             .map_service_error()?;
 
@@ -193,9 +192,7 @@ impl CardCommandHandler {
             .await
             .map_service_error()?;
 
-        log_warn_action("Revoked", "card");
-
-        self.ctx.log_handler().log_output(CardRevokeResult {
+        self.ctx.log_handler().log_output(CardRevokeView {
             revoked_card_ids: response.revoked_card_ids,
         })?;
 

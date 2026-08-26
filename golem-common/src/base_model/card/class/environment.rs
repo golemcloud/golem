@@ -61,6 +61,7 @@ pub enum EnvironmentVerb {
     ViewDeployment,
     ViewDeploymentPlan,
     ViewAgentTypes,
+    ViewTools,
     WriteDeploymentRecord,
 }
 impl VerbPattern for EnvironmentVerb {
@@ -75,6 +76,7 @@ impl VerbPattern for EnvironmentVerb {
             "view-deployment" => Some(Self::ViewDeployment),
             "view-deployment-plan" => Some(Self::ViewDeploymentPlan),
             "view-agent-types" => Some(Self::ViewAgentTypes),
+            "view-tools" => Some(Self::ViewTools),
             "write-deployment-record" => Some(Self::WriteDeploymentRecord),
             _ => None,
         }

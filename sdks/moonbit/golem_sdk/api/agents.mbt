@@ -57,7 +57,7 @@ pub fn resolve_agent_id_strict(
 ///|
 /// Get the current agent's metadata.
 pub fn get_self_metadata() -> AgentMetadata {
-  @raw.get_self_metadata()
+  @raw.get_self_metadata().unwrap()
 }
 
 ///|
@@ -75,7 +75,7 @@ pub fn update_agent(
   target_revision : UInt64,
   mode : UpdateMode,
 ) -> Unit {
-  @raw.update_agent(agent_id, target_revision, mode)
+  @raw.update_agent(agent_id, target_revision, mode).unwrap()
 }
 
 ///|
@@ -85,7 +85,7 @@ pub fn fork_agent(
   target_agent_id : @types.AgentId,
   oplog_idx_cut_off : UInt64,
 ) -> Unit {
-  @raw.fork_agent(source_agent_id, target_agent_id, oplog_idx_cut_off)
+  @raw.fork_agent(source_agent_id, target_agent_id, oplog_idx_cut_off).unwrap()
 }
 
 ///|
@@ -94,14 +94,14 @@ pub fn revert_agent(
   agent_id : @types.AgentId,
   revert_target : RevertAgentTarget,
 ) -> Unit {
-  @raw.revert_agent(agent_id, revert_target)
+  @raw.revert_agent(agent_id, revert_target).unwrap()
 }
 
 ///|
 /// Forks the current agent at the current execution point. The new agent
 /// gets the same base agent ID but with a new unique phantom ID.
 pub fn fork() -> ForkResult {
-  @raw.fork()
+  @raw.fork().unwrap()
 }
 
 ///|
@@ -128,7 +128,7 @@ pub fn get_agents(
 /// Retrieves the next batch of agent metadata.
 /// Returns None when there are no more results.
 pub fn AgentsPager::next_page(self : AgentsPager) -> Array[AgentMetadata]? {
-  self.inner.get_next()
+  self.inner.get_next().unwrap()
 }
 
 ///|
@@ -136,7 +136,7 @@ pub fn AgentsPager::next_page(self : AgentsPager) -> Array[AgentMetadata]? {
 pub fn AgentsPager::collect_all(self : AgentsPager) -> Array[AgentMetadata] {
   let result : Array[AgentMetadata] = []
   while true {
-    match self.inner.get_next() {
+    match self.inner.get_next().unwrap() {
       Some(page) => result.append(page)
       None => break
     }

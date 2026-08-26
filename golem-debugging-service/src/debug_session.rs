@@ -194,6 +194,9 @@ enum PairingSignature {
     CompletionDiscarded {
         start_index: OplogIndex,
     },
+    CompletionDelivered {
+        start_index: OplogIndex,
+    },
     HostStreamFrame {
         parent_start_index: OplogIndex,
         kind: HostStreamKind,
@@ -255,6 +258,11 @@ impl PairingSignature {
             },
             OplogEntry::CompletionDiscarded { start_index, .. } => {
                 PairingSignature::CompletionDiscarded {
+                    start_index: *start_index,
+                }
+            }
+            OplogEntry::CompletionDelivered { start_index, .. } => {
+                PairingSignature::CompletionDelivered {
                     start_index: *start_index,
                 }
             }

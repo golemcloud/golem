@@ -1,3 +1,6 @@
+use golem_rust::bindings::golem::rdbms::ignite2::{
+    DbConnection as IgniteDbConnection, DbValue as IgniteDbValue,
+};
 use golem_rust::bindings::golem::rdbms::mysql::{
     DbConnection as MysqlDbConnection, DbValue as MysqlDbValue,
 };
@@ -45,6 +48,24 @@ pub trait RelationalDatabases {
         &self,
         statements: Vec<Statement>,
         end: TransactionEnd,
+    ) -> Result<String, String>;
+    fn postgres_operation_result(
+        &self,
+        operation: String,
+        address: String,
+        statement: String,
+    ) -> Result<String, String>;
+    fn mysql_operation_result(
+        &self,
+        operation: String,
+        address: String,
+        statement: String,
+    ) -> Result<String, String>;
+    fn ignite_operation_result(
+        &self,
+        operation: String,
+        address: String,
+        statement: String,
     ) -> Result<String, String>;
 }
 
@@ -134,6 +155,130 @@ impl RelationalDatabases for RelationalDatabasesImpl {
             postgres_address, mysql_address
         );
         "Ok".to_string()
+    }
+
+    fn postgres_operation_result(
+        &self,
+        operation: String,
+        address: String,
+        statement: String,
+    ) -> Result<String, String> {
+        let connection =
+            PostgresDbConnection::open(&address).map_err(|error| format!("{error:?}"))?;
+        match operation.as_str() {
+            "open" => Ok("open"),
+            "connection-query" => connection.query(&statement, vec![]).map(|_| "query"),
+            "connection-query-stream" => connection
+                .query_stream(&statement, vec![])
+                .map(|_| "query-stream"),
+            "connection-execute" => connection.execute(&statement, vec![]).map(|_| "execute"),
+            "connection-begin-transaction" => {
+                connection.begin_transaction().map(|_| "begin-transaction")
+            }
+            operation => {
+                let transaction = connection
+                    .begin_transaction()
+                    .map_err(|error| format!("{error:?}"))?;
+                match operation {
+                    "transaction-query" => transaction.query(&statement, vec![]).map(|_| "query"),
+                    "transaction-query-stream" => transaction
+                        .query_stream(&statement, vec![])
+                        .map(|_| "query-stream"),
+                    "transaction-execute" => {
+                        transaction.execute(&statement, vec![]).map(|_| "execute")
+                    }
+                    "transaction-commit" => transaction.commit().map(|_| "commit"),
+                    "transaction-rollback" => transaction.rollback().map(|_| "rollback"),
+                    _ => return Err(format!("unknown PostgreSQL operation: {operation}")),
+                }
+            }
+        }
+        .map(str::to_string)
+        .map_err(|error| format!("{error:?}"))
+    }
+
+    fn mysql_operation_result(
+        &self,
+        operation: String,
+        address: String,
+        statement: String,
+    ) -> Result<String, String> {
+        let connection = MysqlDbConnection::open(&address).map_err(|error| format!("{error:?}"))?;
+        match operation.as_str() {
+            "open" => Ok("open".to_string()),
+            "connection-query" => connection
+                .query(&statement, &[])
+                .map(|_| "query".to_string()),
+            "connection-query-stream" => connection
+                .query_stream(&statement, &[])
+                .map(|_| "query-stream".to_string()),
+            "connection-execute" => connection
+                .execute(&statement, &[])
+                .map(|_| "execute".to_string()),
+            "connection-begin-transaction" => connection
+                .begin_transaction()
+                .map(|_| "begin-transaction".to_string()),
+            operation => {
+                let transaction = connection
+                    .begin_transaction()
+                    .map_err(|error| format!("{error:?}"))?;
+                match operation {
+                    "transaction-query" => transaction.query(&statement, &[]).map(|_| "query"),
+                    "transaction-query-stream" => transaction
+                        .query_stream(&statement, &[])
+                        .map(|_| "query-stream"),
+                    "transaction-execute" => {
+                        transaction.execute(&statement, &[]).map(|_| "execute")
+                    }
+                    "transaction-commit" => transaction.commit().map(|_| "commit"),
+                    "transaction-rollback" => transaction.rollback().map(|_| "rollback"),
+                    _ => return Err(format!("unknown MySQL operation: {operation}")),
+                }
+                .map(str::to_string)
+            }
+        }
+        .map_err(|error| format!("{error:?}"))
+    }
+
+    fn ignite_operation_result(
+        &self,
+        operation: String,
+        address: String,
+        statement: String,
+    ) -> Result<String, String> {
+        let connection =
+            IgniteDbConnection::open(&address).map_err(|error| format!("{error:?}"))?;
+        let params: &[IgniteDbValue] = &[];
+        match operation.as_str() {
+            "open" => Ok("open"),
+            "connection-query" => connection.query(&statement, params).map(|_| "query"),
+            "connection-query-stream" => connection
+                .query_stream(&statement, params)
+                .map(|_| "query-stream"),
+            "connection-execute" => connection.execute(&statement, params).map(|_| "execute"),
+            "connection-begin-transaction" => {
+                connection.begin_transaction().map(|_| "begin-transaction")
+            }
+            operation => {
+                let transaction = connection
+                    .begin_transaction()
+                    .map_err(|error| format!("{error:?}"))?;
+                match operation {
+                    "transaction-query" => transaction.query(&statement, params).map(|_| "query"),
+                    "transaction-query-stream" => transaction
+                        .query_stream(&statement, params)
+                        .map(|_| "query-stream"),
+                    "transaction-execute" => {
+                        transaction.execute(&statement, params).map(|_| "execute")
+                    }
+                    "transaction-commit" => transaction.commit().map(|_| "commit"),
+                    "transaction-rollback" => transaction.rollback().map(|_| "rollback"),
+                    _ => return Err(format!("unknown Ignite operation: {operation}")),
+                }
+            }
+        }
+        .map(str::to_string)
+        .map_err(|error| format!("{error:?}"))
     }
 
     fn postgres_executions(&self, statements: Vec<Statement>) -> Result<String, String> {

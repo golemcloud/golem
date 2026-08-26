@@ -170,25 +170,6 @@ impl ComponentMetadataRegistry {
             }
         }
 
-        for tool in &metadata.tools {
-            let Some(tool_name) = tool.name() else {
-                continue;
-            };
-            if let Some(existing) = index.tool_name_sources.get(tool_name)
-                && !existing.contains(component_name)
-            {
-                let mut all = existing.clone();
-                all.insert(component_name.clone());
-                bail!(
-                    "Tool name {} is defined by multiple components: {}",
-                    tool_name.log_color_highlight(),
-                    all.iter()
-                        .map(|s| s.as_str().log_color_highlight())
-                        .join(", ")
-                );
-            }
-        }
-
         // Only publish index changes after validation succeeds
         for agent_type in &metadata.agent_types {
             index

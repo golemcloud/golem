@@ -2,9 +2,9 @@
 
 ## Overview
 
-Golem provides **automatic durable execution** — all agents are durable by default. These APIs are **advanced controls** that most agents will never need. Only use them when you have specific requirements around persistence granularity, idempotency, or atomicity.
+Golem provides **automatic durable execution** — all agents are durable by default. These APIs are **advanced controls** that most agents will never need. Only use them when you have specific requirements around idempotency or atomicity.
 
-All helper functions (`atomically`, `withPersistenceLevel`, `withIdempotenceMode`, `withRetryPolicy`) accept both sync and async callbacks. When an async callback is passed, the function returns a `Promise`.
+The scoped helpers (`atomically`, `withIdempotenceMode`, `withRetryPolicy`) accept both sync and async callbacks. When an async callback is passed, the function returns a `Promise`.
 
 ## Atomic Operations
 
@@ -14,7 +14,7 @@ This also applies to a **single** external call when its result is followed by a
 
 > **What this is NOT.** `atomically` is **not** an STM/transaction primitive and **not** for grouping in-memory state mutations. Golem agents are single-threaded, and in-memory state is automatically rebuilt by oplog replay on recovery, so wrapping plain in-memory updates in `atomically` does nothing useful. The terminology overlaps with Haskell STM, database transactions, and `synchronized` blocks, but the semantics are different: this is purely about how durable, externally-observable effects are re-executed across a crash boundary.
 >
-> **It is also NOT how you reduce oplog size or speed up recovery.** Despite the description's mention of "oplog management" and "persistence control", `atomically`/persistence-level/idempotency-mode APIs do not shrink the oplog or skip replay. If your concern is that the oplog is growing too large or recovery/replay is becoming slow (long-running agents, heartbeats, polling, recurring tasks), use **snapshot-based recovery** instead — see [`golem-custom-snapshot-ts`](/next/how-to-guides/ts/golem-custom-snapshot-ts). You cannot opt out of oplog writes for a durable agent.
+> **It is also NOT how you reduce oplog size or speed up recovery.** `atomically` and idempotency-mode APIs do not shrink the oplog or skip replay. If your concern is that the oplog is growing too large or recovery/replay is becoming slow (long-running agents, heartbeats, polling, recurring tasks), use **snapshot-based recovery** instead — see [`golem-custom-snapshot-ts`](/next/how-to-guides/ts/golem-custom-snapshot-ts). You cannot opt out of oplog writes for a durable agent.
 >
 > Use it only when you have **two or more external side effects** that must not be left in a "first one happened, second one didn't" state across a recovery, or when a single external side effect is immediately followed by validation that may throw and must cause that side effect to be retried.
 
@@ -74,31 +74,11 @@ atomically(() => {
 });
 ```
 
-## Persistence Level Control
+## Custom Durability for Libraries
 
-Adjust how the oplog is interpreted for a section of code. Setting the level to `persist-nothing` does **not** disable oplog recording — entries are still written, but they are treated only as an observable log and are **not used for replay**. On recovery, the side effects are **not** re-executed and **not** replayed; if the block naively runs the same side effects during replay, recovery will fail.
+The low-level `golem:durability@1.6.0` interface is intended for SDK and library authors, not as an application tuning knob. It lets a library represent several raw host effects as one custom durable invocation. The SDK's `durable(spec, request, body)` combinator owns the live invocation resource: it evaluates a synchronous or asynchronous body only on the live path, finishes and persists its typed result, or returns the recorded result on replay.
 
-This is **not** a knob for application code. Its primary use case is **authoring Golem-specific libraries** that implement their own custom durability on top of raw side effects. Code inside such a block must:
-
-1. Explicitly check whether the agent is in live or replay mode (via the durability API).
-2. Skip the raw side effects during replay.
-3. Use the durability APIs to record/recover state in a custom way.
-
-```typescript
-import { withPersistenceLevel } from '@golemcloud/golem-ts-sdk';
-
-// Sync
-withPersistenceLevel({ tag: 'persist-nothing' }, () => {
-    // Oplog entries here are observable only, never used for replay.
-    // The block MUST check live vs replay mode and use custom durability
-    // primitives — naively running side effects will break recovery.
-});
-
-// Async
-await withPersistenceLevel({ tag: 'persist-nothing' }, async () => {
-    // Same constraints as the sync version — custom durability required.
-});
-```
+A returned `Result.err(...)` is a normal typed result: the combinator finishes the invocation, persists the error, and returns the same error on replay. A throw, rejected promise, trap, or cancellation before `finish` instead drops the unfinished resource without recording an `End`, so recovery retries the whole custom operation. Library authors must make repeated attempts safe with the correct operation classification, external idempotency keys, or transactions.
 
 ## Idempotence Mode
 

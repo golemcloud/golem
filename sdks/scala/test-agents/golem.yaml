@@ -34,6 +34,11 @@ agents:
         host: "manifest-db.example.com"
         port: 5432
 
+tools:
+  git: { }
+  grep: { }
+  tool-demo: { }
+
 httpApi:
   deployments:
     local:

@@ -379,7 +379,8 @@ fn collect_refs<'a>(ty: &'a SchemaType, out: &mut Vec<&'a TypeId>) {
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }
-        | SchemaType::QuotaToken { .. } => {}
+        | SchemaType::QuotaToken { .. }
+        | SchemaType::PermissionCard { .. } => {}
     }
 }
 

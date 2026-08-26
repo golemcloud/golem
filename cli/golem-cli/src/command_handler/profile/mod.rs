@@ -14,7 +14,7 @@
 
 pub mod config;
 
-use crate::command::profile::ProfileSubcommand;
+use crate::command::profile::{ProfileAuthMode, ProfileSubcommand};
 use crate::command_handler::Handlers;
 use crate::config::{
     AuthenticationConfig, Config, NamedProfile, Profile, ProfileConfig, ProfileName,
@@ -22,12 +22,12 @@ use crate::config::{
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_error;
-use crate::log::{LogColorize, log_action, log_warn_action};
-use crate::model::ProfileView;
-use crate::model::format::Format;
-use crate::model::text::profile::{
-    ProfileCreateResult, ProfileDeleteResult, ProfileListView, ProfileSwitchResult,
+use crate::log::{LogColorize, log_action};
+use crate::model::config::ProfileView;
+use crate::model::config::profile::{
+    ProfileCreateResult, ProfileDeleteView, ProfileListView, ProfileSwitchResult,
 };
+use crate::model::format::Format;
 use anyhow::bail;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -51,6 +51,7 @@ impl ProfileCommandHandler {
                 worker_url,
                 default_format,
                 allow_insecure,
+                auth,
                 static_token,
             } => self.cmd_new(
                 name,
@@ -59,6 +60,7 @@ impl ProfileCommandHandler {
                 worker_url,
                 default_format,
                 allow_insecure,
+                auth,
                 static_token,
             ),
             ProfileSubcommand::List => self.cmd_list(),
@@ -85,6 +87,7 @@ impl ProfileCommandHandler {
         worker_url: Option<Url>,
         default_format: Format,
         allow_insecure: bool,
+        auth: Option<ProfileAuthMode>,
         static_token: Option<String>,
     ) -> anyhow::Result<()> {
         let (name, profile, set_active) = match name {
@@ -96,12 +99,7 @@ impl ProfileCommandHandler {
                     bail!(NonSuccessfulExit);
                 }
 
-                let auth = if let Some(static_token) = static_token {
-                    // TODO: we may want to read from prompt instead of reading parameter
-                    AuthenticationConfig::static_token(static_token)
-                } else {
-                    AuthenticationConfig::empty_oauth2()
-                };
+                let auth = self.resolve_auth_config(auth, static_token)?;
 
                 let profile = Profile {
                     custom_url,
@@ -140,6 +138,41 @@ impl ProfileCommandHandler {
         })?;
 
         Ok(())
+    }
+
+    /// Resolves the profile's authentication from the explicit `--auth` mode and
+    /// the optional `--static-token`. A static token implies static auth; `--auth
+    /// static` without a token prompts for one; the two are only in conflict when
+    /// a token is paired with `--auth oauth2`.
+    fn resolve_auth_config(
+        &self,
+        mode: Option<ProfileAuthMode>,
+        static_token: Option<String>,
+    ) -> anyhow::Result<AuthenticationConfig> {
+        match (mode, static_token) {
+            (Some(ProfileAuthMode::OAuth2), Some(_)) => {
+                log_error(
+                    "--static-token cannot be combined with --auth oauth2. A static token implies --auth static.",
+                );
+                bail!(NonSuccessfulExit);
+            }
+            (Some(ProfileAuthMode::Static) | None, Some(token)) if token.trim().is_empty() => {
+                log_error(
+                    "--static-token was empty. Provide a non-empty token (a shell variable such as $GOLEM_API_TOKEN may have resolved to an empty string).",
+                );
+                bail!(NonSuccessfulExit);
+            }
+            (Some(ProfileAuthMode::Static) | None, Some(token)) => {
+                Ok(AuthenticationConfig::static_token(token))
+            }
+            (Some(ProfileAuthMode::Static), None) => {
+                let token = self.ctx.interactive_handler().prompt_static_token()?;
+                Ok(AuthenticationConfig::static_token(token))
+            }
+            (Some(ProfileAuthMode::OAuth2), None) | (None, None) => {
+                Ok(AuthenticationConfig::empty_oauth2())
+            }
+        }
     }
 
     fn cmd_list(&self) -> anyhow::Result<()> {
@@ -228,12 +261,7 @@ impl ProfileCommandHandler {
 
         Config::delete_profile(&profile_name, self.ctx.config_dir())?;
 
-        log_warn_action(
-            "Deleted",
-            format!("profile {}", profile_name.0.log_color_highlight()),
-        );
-
-        self.ctx.log_handler().log_output(ProfileDeleteResult {
+        self.ctx.log_handler().log_output(ProfileDeleteView {
             deleted: true,
             profile: profile_name,
         })?;

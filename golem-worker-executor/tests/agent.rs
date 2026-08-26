@@ -405,6 +405,7 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
             freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
                 as i32,
             config: Vec::new(),
+            scope_card: None,
         })
         .await?;
 
@@ -455,6 +456,7 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
             freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
                 as i32,
             config: Vec::new(),
+            scope_card: None,
         })
         .await?
         .into_inner();
@@ -522,6 +524,7 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             freshness_disposition: workerexecutor::v1::InvocationFreshnessDisposition::MayExist
                 as i32,
             config: Vec::new(),
+            scope_card: None,
         })
         .await?;
 

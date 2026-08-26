@@ -236,6 +236,7 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
 pub fn create_context(
     args: &[impl AsRef<str>],
     root_dir: PathBuf,
+    preopen_root: bool,
     stdin: impl StdinStream + Sized + 'static,
     stdout: impl StdoutStream + Sized + 'static,
     stderr: impl StdoutStream + Sized + 'static,
@@ -243,14 +244,19 @@ pub fn create_context(
     suspend_threshold: Duration,
 ) -> Result<(WasiCtx, IoCtx, ResourceTable), anyhow::Error> {
     let table = ResourceTable::new();
-    let (wasi, io_ctx) = WasiCtxBuilder::new()
+    let mut builder = WasiCtxBuilder::new();
+    builder
         .args(args)
         .stdin(stdin)
         .stdout(stdout)
         .stderr(stderr)
-        .monotonic_clock(helpers::clocks::monotonic_clock())
-        .preopened_dir(root_dir.clone(), "/", DirPerms::all(), FilePerms::all())?
-        .preopened_dir(root_dir, ".", DirPerms::all(), FilePerms::all())?
+        .monotonic_clock(helpers::clocks::monotonic_clock());
+    if preopen_root {
+        builder
+            .preopened_dir(root_dir.clone(), "/", DirPerms::all(), FilePerms::all())?
+            .preopened_dir(root_dir, ".", DirPerms::all(), FilePerms::all())?;
+    }
+    let (wasi, io_ctx) = builder
         .set_suspend(suspend_threshold, suspend_signal)
         .allow_ip_name_lookup(true)
         .inherit_network()

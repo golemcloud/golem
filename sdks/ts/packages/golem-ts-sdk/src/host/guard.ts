@@ -14,56 +14,12 @@
 
 import {
   type OplogIndex,
-  type PersistenceLevel,
   getIdempotenceMode,
-  getOplogPersistenceLevel,
   markBeginOperation,
   markEndOperation,
   setIdempotenceMode,
-  setOplogPersistenceLevel,
   trap,
 } from './hostapi';
-
-/**
- * PersistenceLevelGuard is a guard type that sets the persistence level for the oplog.
- * You must call drop on the guard once you are finished using it.
- */
-export class PersistenceLevelGuard {
-  constructor(private originalLevel: PersistenceLevel) {}
-  drop() {
-    setOplogPersistenceLevel(this.originalLevel);
-  }
-}
-
-/**
- * Sets the persistence level for the oplog and returns a guard.
- * You must call drop on the guard once you are finished using it.
- * @param level - The persistence level to set.
- * @returns A PersistenceLevelGuard instance.
- */
-export function usePersistenceLevel(level: PersistenceLevel) {
-  const originalLevel = getOplogPersistenceLevel();
-  setOplogPersistenceLevel(level);
-  return new PersistenceLevelGuard(originalLevel);
-}
-
-export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => Promise<R>): Promise<R>;
-export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => R): R;
-
-/**
- * Executes a function with a specific persistence level for the oplog.
- * Supports both sync and async callbacks.
- * @param level - The persistence level to set.
- * @param f - The function to execute (sync or async).
- * @returns The result of the executed function, or a Promise if an async function was passed.
- */
-export function withPersistenceLevel<R>(
-  level: PersistenceLevel,
-  f: () => R | Promise<R>,
-): R | Promise<R> {
-  const guard = usePersistenceLevel(level);
-  return executeWithDrop([guard], f);
-}
 
 /**
  * IdempotenceModeGuard is a guard type that sets the idempotence mode.

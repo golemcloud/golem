@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::authorization::targets::websocket_target;
 use crate::durable_host::concurrent::{
-    CallHandle, CallReplayOutcome, LeaveIncompleteOnDrop, NotCancellable,
+    CallReplayOutcome, DurableCallSession, LeaveIncompleteOnDrop, NotCancellable,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::websocket::client::{
@@ -104,15 +105,49 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Resource<WebSocketConnectionEntry>, Error>> {
         self.observe_function_call("golem:websocket/client", "connect");
 
-        let mut call = CallHandle::<host_functions::WebsocketClientConnect, NotCancellable>::start(
-            self,
-            HostRequestWebsocketConnect {
-                url: url.clone(),
-                headers: headers.clone(),
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let begun =
+            DurableCallSession::<host_functions::WebsocketClientConnect, NotCancellable>::begin(
+                self,
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
+
+        let mut call = if begun.is_live() {
+            let denied = match websocket_target(&url) {
+                Ok(normalized) => !matches!(
+                    self.authorize_live_permission(&normalized.permission).await,
+                    Ok(Ok(_))
+                ),
+                Err(_) => true,
+            };
+            let call = begun
+                .start_live(
+                    self,
+                    HostRequestWebsocketConnect {
+                        url: url.clone(),
+                        headers: headers.clone(),
+                    },
+                )
+                .await?;
+            if denied {
+                let response = call
+                    .complete(
+                        self,
+                        HostResponseWebsocketConnectResponse {
+                            result: Err(SerializableWebsocketError::Other(
+                                "permission denied".into(),
+                            )),
+                        },
+                    )
+                    .await?;
+                return Ok(Err(serializable_error_to_error(
+                    response.result.unwrap_err(),
+                )));
+            }
+            call
+        } else {
+            begun.start_replay(self).await?
+        };
 
         if !call.is_live() {
             match call.replay(self).await? {
@@ -207,14 +242,15 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), Error>> {
         self.observe_function_call("golem:websocket/client", "send");
 
-        let mut call = CallHandle::<host_functions::WebsocketClientSend, NotCancellable>::start(
-            self,
-            HostRequestWebsocketSend {
-                message: message_to_serializable(&message),
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut call =
+            DurableCallSession::<host_functions::WebsocketClientSend, NotCancellable>::start(
+                self,
+                HostRequestWebsocketSend {
+                    message: message_to_serializable(&message),
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
         if !call.is_live() {
             let _ = self.as_wasi_view().table().get(&self_)?;
@@ -312,15 +348,16 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), Error>> {
         self.observe_function_call("golem:websocket/client", "close");
 
-        let mut call = CallHandle::<host_functions::WebsocketClientClose, NotCancellable>::start(
-            self,
-            HostRequestWebsocketClose {
-                code,
-                reason: reason.clone(),
-            },
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let mut call =
+            DurableCallSession::<host_functions::WebsocketClientClose, NotCancellable>::start(
+                self,
+                HostRequestWebsocketClose {
+                    code,
+                    reason: reason.clone(),
+                },
+                DurableFunctionType::WriteRemote,
+            )
+            .await?;
 
         let terminal_close_error =
             TerminalWebSocketError::Closed(Some(SerializableWebsocketCloseInfo {
@@ -458,7 +495,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 .observe_function_call("golem:websocket/client", "receive")
         });
 
-        let mut call = CallHandle::<
+        let mut call = DurableCallSession::<
             host_functions::WebsocketClientReceive,
             LeaveIncompleteOnDrop,
         >::start_access(
@@ -575,7 +612,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 .observe_function_call("golem:websocket/client", "receive-with-timeout")
         });
 
-        let mut call = CallHandle::<
+        let mut call = DurableCallSession::<
             host_functions::WebsocketClientReceiveWithTimeout,
             LeaveIncompleteOnDrop,
         >::start_access(
@@ -735,7 +772,7 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
 
     // The read-only side-effect trap fires earlier: every caller of this helper
     // (`send` / `receive` / `receive-with-timeout` / `close`) goes through
-    // `CallHandle::start` with `WriteRemote` first, which routes through
+    // `DurableCallSession::start` with `WriteRemote` first, which routes through
     // `DurabilityHost::begin_durable_function` — the single central read-only guard.
     let request = match build_request(&info.url, info.headers.as_deref()) {
         Ok(request) => request,
@@ -837,7 +874,7 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
     }
 
     // The read-only side-effect trap fires earlier: every caller of this helper goes through
-    // `CallHandle::start_access` with `WriteRemote` first, which routes through
+    // `DurableCallSession::start_access` with `WriteRemote` first, which routes through
     // `DurabilityHost::begin_durable_function` — the single central read-only guard.
     let request = match build_request(&info.url, info.headers.as_deref()) {
         Ok(request) => request,
@@ -940,7 +977,7 @@ fn to_tungstenite_message(message: Message) -> tungstenite::Message {
 fn to_user_message(msg: tungstenite::Message) -> Result<Option<Message>, Error> {
     match msg {
         tungstenite::Message::Text(text) => Ok(Some(Message::Text(text.as_str().to_owned()))),
-        tungstenite::Message::Binary(data) => Ok(Some(Message::Binary(data.as_slice().to_vec()))),
+        tungstenite::Message::Binary(data) => Ok(Some(Message::Binary(data.as_ref().to_vec()))),
         tungstenite::Message::Close(frame) => {
             let (code, reason) = match frame {
                 Some(frame) => (frame.code.into(), frame.reason.to_string()),
@@ -1044,5 +1081,21 @@ fn serializable_error_to_error(e: SerializableWebsocketError) -> Error {
             reason: ci.reason,
         })),
         SerializableWebsocketError::Other(s) => Error::Other(s),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn permission_denial_uses_the_existing_other_error_case() {
+        let denied = Error::Other("permission denied".to_string());
+
+        assert!(matches!(
+            serializable_error_to_error(error_to_serializable(&denied)),
+            Error::Other(message) if message == "permission denied"
+        ));
     }
 }

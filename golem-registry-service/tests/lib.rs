@@ -15,10 +15,12 @@
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use test_r::{sequential_suite, test_dep};
 
+pub mod grpc;
 pub mod repo;
 
 test_r::enable!();
 
+sequential_suite!(grpc);
 sequential_suite!(repo);
 
 #[derive(Debug)]

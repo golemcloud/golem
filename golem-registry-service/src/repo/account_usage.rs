@@ -23,7 +23,7 @@ use chrono::Datelike;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use golem_common::model::account_usage::{StorageLimit, StorageUsagePeriod};
+use golem_common::model::account_usage::{MemoryLimit, StorageLimit, StorageUsagePeriod};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -220,6 +220,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             month: date.as_utc().month(),
             usage,
             storage_limit: storage_limit(&account_plan),
+            max_memory_per_worker: max_memory_per_worker(&account_plan),
+            monthly_memory_gb_seconds: monthly_memory_gb_seconds(&account_plan),
             plan: account_plan.plan,
             changes: Default::default(),
         }))
@@ -351,6 +353,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             month: date.as_utc().month(),
             usage,
             storage_limit: storage_limit(&account_plan),
+            max_memory_per_worker: max_memory_per_worker(&account_plan),
+            monthly_memory_gb_seconds: monthly_memory_gb_seconds(&account_plan),
             plan: account_plan.plan,
             changes: Default::default(),
         }))
@@ -371,15 +375,15 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                         FROM account_usage_stats
                         WHERE account_id = $1
                             AND usage_key < $2
-                            AND usage_type IN ($3, $4, $5)
+                            AND usage_type IN ($3, $4, $5, $6)
                         ORDER BY usage_key DESC
-                        LIMIT $6
+                        LIMIT $7
                     )
                     SELECT stats.usage_key, stats.usage_type, stats.value
                     FROM account_usage_stats stats
                     JOIN periods ON periods.usage_key = stats.usage_key
                     WHERE stats.account_id = $1
-                        AND stats.usage_type IN ($3, $4, $5)
+                        AND stats.usage_type IN ($3, $4, $5, $6)
                     ORDER BY stats.usage_key DESC
                 "#})
                 .bind(account_id)
@@ -387,11 +391,12 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 .bind(UsageType::MonthlyDurableAgentStorageByteSeconds)
                 .bind(UsageType::MonthlyEphemeralStorageByteSeconds)
                 .bind(UsageType::MonthlyGasLimit)
+                .bind(UsageType::MonthlyMemoryGbSeconds)
                 .bind(i64::try_from(last).unwrap_or(i64::MAX)),
             )
             .await?;
 
-        let mut periods = BTreeMap::<StorageUsagePeriod, (u64, u64, u64)>::new();
+        let mut periods = BTreeMap::<StorageUsagePeriod, (u64, u64, u64, u64)>::new();
         for row in rows {
             let usage_key: String = row.try_get("usage_key")?;
             let Some((year, month)) = usage_key.split_once('-') else {
@@ -407,6 +412,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 UsageType::MonthlyDurableAgentStorageByteSeconds => values.0 = value,
                 UsageType::MonthlyEphemeralStorageByteSeconds => values.1 = value,
                 UsageType::MonthlyGasLimit => values.2 = value,
+                UsageType::MonthlyMemoryGbSeconds => values.3 = value,
                 _ => continue,
             }
         }
@@ -415,11 +421,12 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             .into_iter()
             .rev()
             .map(
-                |(period, (durable, ephemeral, compute))| StorageUsageHistoryRecord {
+                |(period, (durable, ephemeral, compute, memory))| StorageUsageHistoryRecord {
                     period,
                     durable_storage_byte_seconds: durable,
                     ephemeral_storage_byte_seconds: ephemeral,
                     compute_fuel: compute,
+                    memory_gb_seconds: memory,
                 },
             )
             .collect())
@@ -537,9 +544,15 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                 SELECT
-                    p.plan_id, p.name, p.max_memory_per_worker, p.max_table_elements_per_worker,
+                    p.plan_id, p.name, p.max_memory_per_worker,
+                    p.max_memory_per_worker_ceiling, p.max_memory_per_worker_user_configurable,
+                    p.monthly_memory_gb_seconds, p.monthly_memory_gb_seconds_ceiling,
+                    p.monthly_memory_gb_seconds_user_configurable,
+                    p.max_table_elements_per_worker,
                     p.max_disk_space_per_worker,
-                    aro.override_value AS storage_override_value,
+                    storage_override.override_value AS storage_override_value,
+                    memory_override.override_value AS max_memory_override_value,
+                    monthly_memory_override.override_value AS monthly_memory_override_value,
                     p.max_disk_space_per_worker_ceiling, p.max_disk_space_per_worker_user_configurable,
                     p.max_concurrent_agents_per_executor,
                     p.total_app_count,
@@ -551,14 +564,24 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                 FROM accounts a
                 JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
                 JOIN plans p ON p.plan_id = ar.plan_id
-                LEFT JOIN account_resource_overrides aro
-                    ON aro.account_id = a.account_id
-                    AND aro.dimension = $2
-                    AND (aro.expires_at IS NULL OR aro.expires_at > $3)
+                LEFT JOIN account_resource_overrides storage_override
+                    ON storage_override.account_id = a.account_id
+                    AND storage_override.dimension = $2
+                    AND (storage_override.expires_at IS NULL OR storage_override.expires_at > $5)
+                LEFT JOIN account_resource_overrides memory_override
+                    ON memory_override.account_id = a.account_id
+                    AND memory_override.dimension = $3
+                    AND (memory_override.expires_at IS NULL OR memory_override.expires_at > $5)
+                LEFT JOIN account_resource_overrides monthly_memory_override
+                    ON monthly_memory_override.account_id = a.account_id
+                    AND monthly_memory_override.dimension = $4
+                    AND (monthly_memory_override.expires_at IS NULL OR monthly_memory_override.expires_at > $5)
                 WHERE a.account_id = $1 AND a.deleted_at IS NULL
             "#})
                 .bind(account_id)
                 .bind(AccountResourceOverrideDimension::MaxDiskSpacePerWorker.as_str())
+                .bind(AccountResourceOverrideDimension::MaxMemoryPerWorker.as_str())
+                .bind(AccountResourceOverrideDimension::MonthlyMemoryGbSeconds.as_str())
                 .bind(SqlDateTime::now()),
             )
             .await?;
@@ -583,6 +606,32 @@ fn storage_limit(account_plan: &AccountUsagePlan) -> StorageLimit {
         account_plan
             .plan
             .max_disk_space_per_worker_user_configurable,
+    )
+}
+
+fn max_memory_per_worker(account_plan: &AccountUsagePlan) -> MemoryLimit {
+    MemoryLimit::resolve(
+        account_plan.plan.max_memory_per_worker.get(),
+        account_plan
+            .max_memory_override_value
+            .as_ref()
+            .map(NumericU64::get),
+        account_plan.plan.max_memory_per_worker_ceiling.get(),
+        account_plan.plan.max_memory_per_worker_user_configurable,
+    )
+}
+
+fn monthly_memory_gb_seconds(account_plan: &AccountUsagePlan) -> MemoryLimit {
+    MemoryLimit::resolve(
+        account_plan.plan.monthly_memory_gb_seconds.get(),
+        account_plan
+            .monthly_memory_override_value
+            .as_ref()
+            .map(NumericU64::get),
+        account_plan.plan.monthly_memory_gb_seconds_ceiling.get(),
+        account_plan
+            .plan
+            .monthly_memory_gb_seconds_user_configurable,
     )
 }
 

@@ -16,11 +16,11 @@ use super::scala::{
     is_scala_keyword, to_scala_term_ident, to_scala_type_ident, unique_idents_with_reserved,
 };
 use super::scala_writer::ScalaWriter;
+use super::schema_graph::SchemaGraphRegistry;
 use super::{
-    CLIENT_PKG_BASE, GUEST_CODEC, GUEST_SCHEMA_VALUE_TYPE, LIST, SCALA_SOURCE_ROOT,
-    ScalaBridgeGenerator, scala_string_literal,
+    CLIENT_PKG_BASE, GUEST_SCHEMA_VALUE_TYPE, LIST, SCALA_SOURCE_ROOT, ScalaBridgeGenerator,
+    scala_string_literal,
 };
-use crate::bridge_gen::json::stringify_precision_sensitive_numbers;
 use crate::bridge_gen::tool_bridge_client_directory_name;
 use crate::bridge_gen::tool_common::{
     command_path, field_names, global_surfaces, idx_to_usize, synthetic_agent_type,
@@ -35,6 +35,7 @@ use golem_common::schema::tool::canonical::{
 };
 use golem_common::schema::tool::{CommandBody, CommandNode, Tool};
 use heck::{ToSnakeCase, ToUpperCamelCase};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 const SCALA_NOTHING: &str = "_root_.scala.Nothing";
@@ -61,6 +62,7 @@ pub struct ScalaToolBridgeGenerator {
     inner: ScalaBridgeGenerator,
     clients: BTreeMap<usize, ClientNode>,
     error_names: BTreeMap<usize, String>,
+    schema_graphs: RefCell<SchemaGraphRegistry>,
 }
 
 impl ScalaToolBridgeGenerator {
@@ -87,6 +89,7 @@ impl ScalaToolBridgeGenerator {
             inner,
             clients,
             error_names,
+            schema_graphs: RefCell::new(SchemaGraphRegistry::default()),
         })
     }
 
@@ -160,6 +163,10 @@ impl ScalaToolBridgeGenerator {
         self.inner.write_guest_unstructured_definitions(&mut writer);
         self.inner.write_multimodal_definitions(&mut writer)?;
         self.inner.write_codecs(&mut writer)?;
+        if let Some(definition) = self.schema_graphs.borrow().definition() {
+            writer.blank();
+            writer.line(definition);
+        }
 
         Ok(self.inner.rewrite_guest_runtime_refs(writer.finish()))
     }
@@ -333,7 +340,8 @@ impl ScalaToolBridgeGenerator {
             self.leaf_fields(command_index, &client.provided)?;
         let mut all_fields = provided_fields.clone();
         all_fields.extend(remaining_fields.clone());
-        let schema_json = self.record_schema_json(&all_fields)?;
+        let schema = self.record_schema(&all_fields)?;
+        let schema = self.schema_graphs.borrow_mut().intern(schema);
         let param_names = self.param_names(&remaining_fields, &["stdin"]);
         let mut params = self.param_decls(&remaining_fields, &param_names)?;
         let stdin_expr = match &body.stdin {
@@ -365,10 +373,7 @@ impl ScalaToolBridgeGenerator {
         writer.indent();
         writer.line("try {");
         writer.indent();
-        writer.line(format!(
-            "val __schema = {GUEST_CODEC}.schemaGraphFromJson({})",
-            scala_string_literal(&schema_json)
-        ));
+        writer.line(format!("val __schema = {schema}"));
         writer.line(format!("val __fields = inherited ++ {LIST}("));
         writer.indent();
         for (idx, field) in remaining_fields.iter().enumerate() {
@@ -621,7 +626,7 @@ impl ScalaToolBridgeGenerator {
         Ok((provided_fields, remaining))
     }
 
-    fn record_schema_json(&self, fields: &[CanonicalInputField]) -> anyhow::Result<String> {
+    fn record_schema(&self, fields: &[CanonicalInputField]) -> anyhow::Result<SchemaGraph> {
         let field_graphs = fields
             .iter()
             .map(|field| FieldGraph {
@@ -632,14 +637,8 @@ impl ScalaToolBridgeGenerator {
                 },
             })
             .collect::<Vec<_>>();
-        let schema = record_schema_from_field_graphs(
-            field_graphs.iter().map(|f| (f.name.as_str(), &f.graph)),
-        )
-        .map_err(|e| anyhow!("failed to build tool input record schema: {e}"))?;
-        let mut value = serde_json::to_value(&schema)
-            .context("failed to serialize embedded tool input schema")?;
-        stringify_precision_sensitive_numbers(&mut value);
-        serde_json::to_string(&value).context("failed to serialize embedded tool input schema")
+        record_schema_from_field_graphs(field_graphs.iter().map(|f| (f.name.as_str(), &f.graph)))
+            .map_err(|e| anyhow!("failed to build tool input record schema: {e}"))
     }
 
     fn param_names(&self, fields: &[CanonicalInputField], extra_reserved: &[&str]) -> Vec<String> {

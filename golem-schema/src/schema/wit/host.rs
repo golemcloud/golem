@@ -28,6 +28,7 @@ pub mod generated {
         with: {
             "golem:core/types@2.0.0.quota-token": crate::schema::wit::QuotaTokenHandleRep,
             "golem:core/types@2.0.0.secret": crate::schema::wit::SecretHandleRep,
+            "golem:core/types@2.0.0.permission-card": crate::schema::wit::PermissionCardHandleRep,
         },
     });
 }

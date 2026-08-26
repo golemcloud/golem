@@ -4,9 +4,7 @@ package "golemcloud/golem_sdk/interface/wasi/io/error"
 // Values
 
 // Errors
-pub(all) suberror Error_ {
-  Error_(Int)
-} derive(Eq, Show)
+pub(all) suberror Error_ Int derive(Eq, Show)
 pub fn Error_::drop(Self) -> Unit
 pub fn Error_::to_debug_string(Self) -> String
 

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::services::oplog::{CommitLevel, Oplog, OrderedOplogStart};
+use crate::services::oplog::{CommitLevel, Oplog, OplogAddReceipt, OrderedOplogStart};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::payload::types::{
@@ -21,8 +21,7 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpRequestBodyFrame, SerializableTlsAlertReceivedPayload,
 };
 use golem_common::model::oplog::{
-    HostRequest, HostStreamKind, OplogEntry, OplogIndex, OplogPayload, PayloadId, PersistenceLevel,
-    RawOplogPayload,
+    HostRequest, HostStreamKind, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
 };
 use http::{HeaderMap, HeaderValue};
 use http_body::Frame;
@@ -122,6 +121,13 @@ impl Oplog for FrameTestOplog {
         OplogIndex::from_u64(entries.len() as u64)
     }
 
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        let mut entries = self.entries.lock().unwrap();
+        entries.push(entry);
+        let index = OplogIndex::from_u64(entries.len() as u64);
+        Box::pin(async move { index })
+    }
+
     async fn add_pair(
         &self,
         start: OplogEntry,
@@ -202,8 +208,6 @@ impl Oplog for FrameTestOplog {
     ) -> Result<Vec<u8>, String> {
         unimplemented!()
     }
-
-    async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
 }
 
 /// A guest body producing the given frames, then ending (or failing when

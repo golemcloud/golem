@@ -79,7 +79,9 @@ cargo test -p golem-rust --features export_golem_agentic  # Agent tests
 ## Code Style
 
 - Follow Rust idioms and existing code conventions
-- Use `cargo fmt` and `cargo clippy` before committing
+- Check affected crates with `cargo fmt -p <crate> -- --check` and
+  `cargo clippy -p <crate> --all-targets -- -Dwarnings`
+- Use workspace-wide SDK formatting and clippy only for cross-crate changes
 - Do not add unnecessary comments
 - Use existing patterns from neighboring code
 
@@ -125,12 +127,14 @@ attribute is forgotten, the compiler reports a missing hidden trait item named
 
 ## Integration with Main Repository
 
-This SDK is part of the main Golem repository but is **not built by `cargo make build`**. When changes affect core functionality, test with the full Golem test suite:
+This SDK is part of the main Golem repository but is **not built by `cargo make build`**. When changes affect platform integration, run the worker executor tests that exercise the changed SDK behavior:
 
 ```shell
 # From repository root
-cargo make worker-executor-tests  # Tests that use SDK features
+cargo test -p golem-worker-executor --test integration -- <affected-test> --report-time
 ```
+
+Use a worker executor test group or `cargo make worker-executor-tests` only for broad SDK runtime, durability, value-conversion, or agent framework changes whose platform consumers cannot be isolated. SDK-only implementation, test, or documentation changes do not require root workspace checks.
 
 ## Testing Local SDK Changes
 

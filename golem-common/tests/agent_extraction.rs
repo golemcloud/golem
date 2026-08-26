@@ -14,6 +14,7 @@
 
 use assert2::assert;
 use golem_common::model::agent::extraction::extract_agent_type_schemas;
+use golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache;
 use std::path::PathBuf;
 use std::str::FromStr;
 use test_r::test;
@@ -51,10 +52,7 @@ async fn can_extract_agent_type_schemas_from_component_importing_p3_http() -> an
     // Guard: the fixture must actually import P3 `wasi:http`, otherwise a
     // future rebuild of the component would silently defeat the purpose of
     // this regression test.
-    let mut config = wasmtime::Config::default();
-    config.wasm_component_model(true);
-    config.wasm_component_model_async(true);
-    config.wasm_component_model_error_context(true);
+    let config = create_wasmtime_config_without_fs_cache();
     let engine = wasmtime::Engine::new(&config)?;
     let component = wasmtime::component::Component::from_file(&engine, &wasm_path)?;
     let imports_p3_http = component

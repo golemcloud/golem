@@ -25,7 +25,7 @@ mod visual;
 
 use crate::context::Context;
 use crate::model::environment::EnvironmentReference;
-use crate::model::worker::AgentsMetadataResponseView;
+use crate::model::agent::AgentsMetadataResponseView;
 use context_executor::TuiContextTaskResult;
 use crossterm::event::Event;
 use golem_client::model::EnvironmentWithDetails;

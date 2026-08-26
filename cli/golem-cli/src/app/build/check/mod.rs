@@ -31,7 +31,7 @@ use crate::app::context::{BuildContext, validated_to_anyhow};
 use crate::app::edit::golem_yaml;
 use crate::fs;
 use crate::log::LogColorize;
-use crate::model::GuestLanguage;
+use crate::model::language::GuestLanguage;
 use crate::process::which;
 use crate::sdk_overrides::sdk_overrides;
 use crate::validation::ValidationBuilder;

@@ -35,6 +35,7 @@ fn schema_kind_name(body : @model.SchemaTypeBody) -> String {
     Union(_) => "union"
     Secret(_) => "secret"
     QuotaToken(_) => "quota-token"
+    PermissionCard(_) => "permission-card"
     Future(_) => "future"
     Stream(_) => "stream"
   }

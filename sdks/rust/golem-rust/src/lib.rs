@@ -15,6 +15,15 @@
 #[cfg(test)]
 test_r::enable!();
 
+#[cfg(all(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware",
+    not(feature = "export_golem_agentic_tool_middleware")
+))]
+compile_error!(
+    "`export_golem_agentic` and `export_golem_tool_middleware` cannot be enabled together; use `export_golem_agentic_tool_middleware`"
+);
+
 pub use uuid::Uuid;
 pub use wasip3;
 
@@ -62,6 +71,18 @@ pub fn decode_typed_schema_value(
     schema::wit::decode_typed(value)
 }
 
+pub fn encode_typed_schema_value_owned(
+    value: TypedSchemaValue,
+) -> Result<schema::wit::wire::TypedSchemaValue, schema::wit::EncodeError> {
+    schema::wit::encode_typed_owned(value)
+}
+
+pub fn decode_typed_schema_value_owned(
+    value: schema::wit::wire::TypedSchemaValue,
+) -> Result<TypedSchemaValue, schema::wit::DecodeError> {
+    schema::wit::decode_typed_owned(value)
+}
+
 // Compatibility shim for the `wasi:clocks` types the Golem WIT interfaces reference
 // (`wasi:clocks/system-clock@0.3.0.{instant}` and
 // `wasi:clocks/types@0.3.0.{duration}`). The `with:` remaps in every
@@ -91,6 +112,7 @@ mod raw_bindings {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
             "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
         }
@@ -124,11 +146,18 @@ pub mod bindings {
         }
 
         pub mod agent {
-            pub use crate::raw_bindings::golem::agent::host;
+            pub use crate::raw_bindings::golem::agent::{common, host};
+        }
+
+        pub mod permissions {
+            pub use crate::raw_bindings::golem::permissions::{
+                derive, inspect, kernel_introspection, revoke, types, wallet,
+            };
         }
 
         pub mod tool {
             pub use crate::raw_bindings::golem::tool::host;
+            pub use crate::schema::tool::wit::wire as common;
         }
 
         pub use crate::raw_bindings::golem::{rdbms, websocket};
@@ -148,6 +177,7 @@ pub mod load_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
             "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 
@@ -156,7 +186,7 @@ pub mod load_snapshot {
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
-            "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
+            "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
@@ -190,6 +220,7 @@ pub mod save_snapshot {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
             "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 
@@ -198,7 +229,7 @@ pub mod save_snapshot {
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
-            "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
+            "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
@@ -219,7 +250,13 @@ pub mod save_snapshot {
     pub use __export_golem_rust_save_snapshot_impl as export_save_snapshot;
 }
 
-#[cfg(feature = "export_golem_agentic")]
+#[cfg(all(
+    any(
+        feature = "export_golem_agentic",
+        feature = "export_golem_tool_middleware"
+    ),
+    not(feature = "export_golem_agentic_tool_middleware")
+))]
 pub mod golem_agentic {
     use wit_bindgen::generate;
 
@@ -237,6 +274,7 @@ pub mod golem_agentic {
 
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
             "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 
@@ -244,7 +282,7 @@ pub mod golem_agentic {
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
-            "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
+            "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
@@ -266,10 +304,93 @@ pub mod golem_agentic {
     pub use __export_golem_agentic_impl as export_golem_agentic;
 }
 
-#[cfg(feature = "export_golem_agentic")]
+#[cfg(all(
+    feature = "export_golem_tool_middleware",
+    not(feature = "export_golem_agentic_tool_middleware")
+))]
+pub mod golem_tool_middleware {
+    use wit_bindgen::generate;
+
+    generate!({
+        path: "wit",
+        world: "golem-tool-middleware",
+        async: [
+            "export:golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
+        ],
+        generate_all,
+        generate_unused_types: true,
+        pub_export_macro: true,
+        with: {
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:agent/common@2.0.0": crate::golem_agentic::golem::agent::common,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
+        }
+    });
+
+    pub use __export_golem_tool_middleware_impl as export_golem_tool_middleware;
+}
+
+#[cfg(feature = "export_golem_agentic_tool_middleware")]
+pub mod golem_agentic_tool_middleware {
+    use wit_bindgen::generate;
+
+    generate!({
+        path: "wit",
+        world: "golem-agentic-tool-middleware",
+        async: [
+            "export:golem:agent/guest@2.0.0#initialize",
+            "export:golem:agent/guest@2.0.0#invoke",
+            "export:golem:tool/guest@0.1.0#invoke",
+            "export:golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
+        ],
+        generate_all,
+        generate_unused_types: true,
+        pub_export_macro: true,
+        with: {
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
+            "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
+            "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
+
+            "golem:api/host@1.5.0": crate::bindings::golem::api::host,
+            "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
+            "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
+            "golem:api/context@1.5.0": crate::bindings::golem::api::context,
+            "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
+            "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
+            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
+            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
+            "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
+            "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
+            "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
+            "wasi:blobstore/blobstore": crate::bindings::wasi::blobstore::blobstore,
+            "wasi:blobstore/container": crate::bindings::wasi::blobstore::container,
+            "wasi:blobstore/types": crate::bindings::wasi::blobstore::types,
+            "wasi:keyvalue/eventual-batch@0.1.0": crate::bindings::wasi::keyvalue::eventual_batch,
+            "wasi:keyvalue/eventual@0.1.0": crate::bindings::wasi::keyvalue::eventual,
+            "wasi:keyvalue/types@0.1.0": crate::bindings::wasi::keyvalue::types,
+            "wasi:keyvalue/wasi-keyvalue-error@0.1.0": crate::bindings::wasi::keyvalue::wasi_keyvalue_error,
+            "wasi:logging/logging": crate::bindings::wasi::logging::logging,
+            "wasi:config/store@0.2.0-draft": crate::bindings::wasi::config::store,
+        }
+    });
+
+    pub use __export_golem_agentic_tool_middleware_impl as export_golem_agentic_tool_middleware;
+}
+
+#[cfg(feature = "export_golem_agentic_tool_middleware")]
+pub use golem_agentic_tool_middleware as golem_agentic;
+
+#[cfg(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
 pub use ctor;
 
-#[cfg(feature = "export_golem_agentic")]
+#[cfg(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
 pub use async_trait;
 
 #[cfg(feature = "export_golem_agentic")]
@@ -294,6 +415,7 @@ pub mod oplog_processor {
         pub_export_macro: true,
         with: {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
             "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
             "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
 
@@ -302,7 +424,7 @@ pub mod oplog_processor {
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
-            "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
+            "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
             "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
             "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
             "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
@@ -323,7 +445,10 @@ pub mod oplog_processor {
     pub use __export_golem_rust_oplog_processor_impl as export_oplog_processor;
 }
 
-#[cfg(feature = "export_golem_agentic")]
+#[cfg(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
 pub mod agentic;
 
 #[cfg(feature = "durability")]
@@ -338,13 +463,14 @@ pub use json::*;
 mod checkpoint;
 pub mod quota;
 pub mod secrets;
+pub mod tool;
 mod transaction;
 
 use std::future::Future;
 
 use bindings::golem::api::host::{
-    self as host_api, get_idempotence_mode, get_oplog_persistence_level, mark_begin_operation,
-    mark_end_operation, set_idempotence_mode, set_oplog_persistence_level,
+    self as host_api, get_idempotence_mode, mark_begin_operation, mark_end_operation,
+    set_idempotence_mode,
 };
 
 pub type OplogIndex = u64;
@@ -380,18 +506,6 @@ fn schema_component_id_to_wire(value: ComponentId) -> schema::wit::wire::Compone
 
 fn wire_component_id_to_schema(value: schema::wit::wire::ComponentId) -> ComponentId {
     ComponentId {
-        uuid: wire_uuid_to_schema(value.uuid),
-    }
-}
-
-fn schema_card_id_to_wire(value: CardId) -> schema::wit::wire::CardId {
-    schema::wit::wire::CardId {
-        uuid: schema_uuid_to_wire(value.uuid),
-    }
-}
-
-fn wire_card_id_to_schema(value: schema::wit::wire::CardId) -> CardId {
-    CardId {
         uuid: wire_uuid_to_schema(value.uuid),
     }
 }
@@ -437,84 +551,9 @@ fn host_environment_id_to_schema(value: host_api::EnvironmentId) -> EnvironmentI
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
-pub enum PersistenceLevel {
-    PersistNothing,
-    PersistRemoteSideEffects,
-    Smart,
-}
-
-impl From<host_api::PersistenceLevel> for PersistenceLevel {
-    fn from(value: host_api::PersistenceLevel) -> Self {
-        match value {
-            host_api::PersistenceLevel::PersistNothing => Self::PersistNothing,
-            host_api::PersistenceLevel::PersistRemoteSideEffects => Self::PersistRemoteSideEffects,
-            host_api::PersistenceLevel::Smart => Self::Smart,
-        }
-    }
-}
-
-impl From<PersistenceLevel> for host_api::PersistenceLevel {
-    fn from(value: PersistenceLevel) -> Self {
-        match value {
-            PersistenceLevel::PersistNothing => Self::PersistNothing,
-            PersistenceLevel::PersistRemoteSideEffects => Self::PersistRemoteSideEffects,
-            PersistenceLevel::Smart => Self::Smart,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 pub enum UpdateMode {
     Automatic,
     SnapshotBased,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
-pub struct Card {
-    pub card_id: CardId,
-}
-
-impl From<host_api::Card> for Card {
-    fn from(value: host_api::Card) -> Self {
-        Self {
-            card_id: wire_card_id_to_schema(value.card_id),
-        }
-    }
-}
-
-impl From<Card> for host_api::Card {
-    fn from(value: Card) -> Self {
-        Self {
-            card_id: schema_card_id_to_wire(value.card_id),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
-pub enum CardInstallError {
-    Revoked,
-    NotFound,
-    NotPermitted,
-}
-
-impl From<host_api::CardInstallError> for CardInstallError {
-    fn from(value: host_api::CardInstallError) -> Self {
-        match value {
-            host_api::CardInstallError::Revoked => Self::Revoked,
-            host_api::CardInstallError::NotFound => Self::NotFound,
-            host_api::CardInstallError::NotPermitted => Self::NotPermitted,
-        }
-    }
-}
-
-impl From<CardInstallError> for host_api::CardInstallError {
-    fn from(value: CardInstallError) -> Self {
-        match value {
-            CardInstallError::Revoked => Self::Revoked,
-            CardInstallError::NotFound => Self::NotFound,
-            CardInstallError::NotPermitted => Self::NotPermitted,
-        }
-    }
 }
 
 impl From<host_api::UpdateMode> for UpdateMode {
@@ -917,6 +956,8 @@ pub struct GetAgents {
     raw: host_api::GetAgents,
 }
 
+pub use host_api::AgentOperationError;
+
 impl GetAgents {
     pub fn new(component_id: ComponentId, filter: Option<&AgentAnyFilter>, precise: bool) -> Self {
         let raw_filter = filter.cloned().map(host_api::AgentAnyFilter::from);
@@ -929,10 +970,10 @@ impl GetAgents {
         }
     }
 
-    pub fn get_next(&self) -> Option<Vec<AgentMetadata>> {
+    pub fn get_next(&self) -> Result<Option<Vec<AgentMetadata>>, AgentOperationError> {
         self.raw
             .get_next()
-            .map(|values| values.into_iter().map(Into::into).collect())
+            .map(|values| values.map(|values| values.into_iter().map(Into::into).collect()))
     }
 }
 
@@ -1002,15 +1043,19 @@ pub fn oplog_commit(replicas: u8) {
     host_api::oplog_commit(replicas)
 }
 
-pub fn get_self_metadata() -> AgentMetadata {
-    Into::into(host_api::get_self_metadata())
+pub fn get_self_metadata() -> Result<AgentMetadata, AgentOperationError> {
+    host_api::get_self_metadata().map(Into::into)
 }
 
 pub fn get_agent_metadata(agent_id: &AgentId) -> Option<AgentMetadata> {
     host_api::get_agent_metadata(&schema_agent_id_to_wire(agent_id.clone())).map(Into::into)
 }
 
-pub fn update_agent(agent_id: &AgentId, target_revision: u64, mode: UpdateMode) {
+pub fn update_agent(
+    agent_id: &AgentId,
+    target_revision: u64,
+    mode: UpdateMode,
+) -> Result<(), AgentOperationError> {
     host_api::update_agent(
         &schema_agent_id_to_wire(agent_id.clone()),
         target_revision,
@@ -1030,8 +1075,8 @@ pub fn resolve_agent_id_strict(component_reference: &str, agent_name: &str) -> O
     host_api::resolve_agent_id_strict(component_reference, agent_name).map(wire_agent_id_to_schema)
 }
 
-pub fn fork() -> ForkResult {
-    Into::into(host_api::fork())
+pub fn fork() -> Result<ForkResult, AgentOperationError> {
+    host_api::fork().map(Into::into)
 }
 
 /// Awaits a promise blocking the execution of the agent. The agent is going to be
@@ -1051,41 +1096,6 @@ pub fn blocking_await_promise(promise_id: &PromiseId) -> Vec<u8> {
 pub async fn await_promise(promise_id: &PromiseId) -> Vec<u8> {
     let promise = get_promise(promise_id);
     promise.get().await
-}
-
-pub struct PersistenceLevelGuard {
-    original_level: host_api::PersistenceLevel,
-}
-
-impl Drop for PersistenceLevelGuard {
-    fn drop(&mut self) {
-        set_oplog_persistence_level(self.original_level);
-    }
-}
-
-/// Temporarily sets the oplog persistence level to the given value.
-///
-/// When the returned guard is dropped, the original persistence level is restored.
-#[must_use]
-pub fn use_persistence_level(level: PersistenceLevel) -> PersistenceLevelGuard {
-    let original_level = get_oplog_persistence_level();
-    set_oplog_persistence_level(Into::into(level));
-    PersistenceLevelGuard { original_level }
-}
-
-/// Executes the given function with the oplog persistence level set to the given value.
-pub fn with_persistence_level<R>(level: PersistenceLevel, f: impl FnOnce() -> R) -> R {
-    let _guard = use_persistence_level(level);
-    f()
-}
-
-/// Executes the given async function with the oplog persistence level set to the given value.
-pub async fn with_persistence_level_async<R, F: Future<Output = R>>(
-    level: PersistenceLevel,
-    f: impl FnOnce() -> F,
-) -> R {
-    let _guard = use_persistence_level(level);
-    f().await
 }
 
 pub struct IdempotenceModeGuard {
@@ -1128,20 +1138,6 @@ pub async fn with_idempotence_mode_async<R, F: Future<Output = R>>(
 /// to introduce idempotence.
 pub fn generate_idempotency_key() -> uuid::Uuid {
     Into::into(host_api::generate_idempotency_key())
-}
-
-pub fn self_card() -> Option<Card> {
-    host_api::self_card().map(Into::into)
-}
-
-pub fn derive_card(card: Card) -> Result<Card, String> {
-    let card = host_api::Card::from(card);
-    host_api::derive_card(card).map(Into::into)
-}
-
-pub fn install_card(card: Card) -> Result<(), CardInstallError> {
-    let card = host_api::Card::from(card);
-    host_api::install_card(card).map_err(Into::into)
 }
 
 pub struct AtomicOperationGuard {

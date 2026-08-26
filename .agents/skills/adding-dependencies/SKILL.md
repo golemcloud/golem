@@ -48,9 +48,13 @@ The same pattern applies to `[dev-dependencies]` and `[build-dependencies]`.
 ### Step 3: Verify
 
 ```shell
-cargo build -p <crate>   # Build the specific crate
-cargo make build          # Full workspace build
+cargo check -p <crate> --all-targets
+cargo test -p <crate> --lib -- --report-time  # If library behavior is affected
 ```
+
+Verify every crate where the dependency was added or whose features changed. Also check directly affected consumers when a dependency change alters a public type, feature unification, build script, proc macro, or runtime integration.
+
+Use `cargo make build` only for dependency updates with broad workspace impact, such as a widely used version bump, a workspace-wide feature change, or a patched foundational dependency. A dependency added to one leaf crate does not require a full workspace build.
 
 ## Updating a Dependency Version
 
@@ -66,4 +70,5 @@ Some dependencies use exact versions (`=x.y.z`) to ensure compatibility. Check t
 2. Member crate references it with `{ workspace = true }`
 3. No version numbers in member crate `Cargo.toml` files
 4. Entry is alphabetically sorted in the workspace dependencies list
-5. `cargo make build` succeeds
+5. Every consuming crate checks/builds and its affected tests pass
+6. Direct consumers or the full workspace were checked when dependency impact is broader

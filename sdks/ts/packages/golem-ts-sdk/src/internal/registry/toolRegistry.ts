@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type { Tool, ToolError } from 'golem:tool/common@0.1.0';
+import { schemaValueIsCanonical } from '../../schema/codec';
 import {
   deepEqual,
   type SchemaValue,
@@ -303,7 +304,7 @@ function canonicalValueConforms(field: CanonicalInputField, value: SchemaValue):
     return false;
   }
   try {
-    return deepEqual(field.codec.toValue(field.codec.fromValue(value)), value);
+    return schemaValueIsCanonical(field.codec, value);
   } catch {
     return false;
   }

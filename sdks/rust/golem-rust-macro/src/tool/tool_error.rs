@@ -17,20 +17,46 @@
 //! `impl ToolErrorSchema` exposing the per-variant error cases is synthesized.
 
 use crate::tool::doc::parse_doc_full;
-use crate::tool::helpers::{SeenKeys, expr_str, expr_u8, to_kebab_case};
+use crate::tool::helpers::{
+    SeenKeys, expr_str, expr_u8, fresh_internal_ident, normalize_sdk_paths_in_derive_input,
+    resolve_generated_sdk_paths, to_kebab_case,
+};
 use crate::tool::ir::{
     ErrorKindIr, ToolErrorIr, ToolErrorNoPayloadStyleIr, ToolErrorPayloadIr, ToolErrorVariantIr,
 };
 use crate::tool::synthesis::{doc_tokens, error_kind_tokens};
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use quote::quote;
 use syn::spanned::Spanned;
-use syn::{Attribute, Data, DeriveInput, Error, Expr, Fields};
+use syn::{Attribute, Data, DeriveInput, Error, Expr, Fields, Ident};
 
-pub fn derive_tool_error_impl(input: TokenStream) -> TokenStream {
+pub fn derive_tool_error_impl(input: TokenStream, golem_rust: &Ident) -> TokenStream {
     let derive_input = syn::parse_macro_input!(input as DeriveInput);
-    match parse_tool_error(&derive_input) {
-        Ok(ir) => synthesize_tool_error(&ir),
+    let canonical_golem_rust = Ident::new("golem_rust", Span::call_site());
+    let preserved_golem_rust = fresh_internal_ident(
+        &quote! { #derive_input },
+        &format!(
+            "__golem_preserved_golem_rust_identifier_for_{}",
+            derive_input.ident
+        ),
+        derive_input.ident.span(),
+    );
+    let mut ir_input = derive_input.clone();
+    normalize_sdk_paths_in_derive_input(
+        &mut ir_input,
+        golem_rust,
+        &canonical_golem_rust,
+        &preserved_golem_rust,
+    );
+    match parse_tool_error(&ir_input) {
+        Ok(ir) => resolve_generated_sdk_paths(
+            synthesize_tool_error(&ir).into(),
+            golem_rust,
+            &canonical_golem_rust,
+            &preserved_golem_rust,
+        )
+        .into(),
         Err(err) => err.to_compile_error().into(),
     }
 }

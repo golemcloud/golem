@@ -5,4 +5,5 @@ package golem.component;
 message LinearMemory {
   uint64 initial = 1;
   optional uint64 maximum = 2;
+  bool shared = 3;
 }

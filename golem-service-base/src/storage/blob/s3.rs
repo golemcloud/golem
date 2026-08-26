@@ -1192,6 +1192,6 @@ impl<D: Buf, E> http_body::Body for SizedBody<D, E> {
 
     #[inline]
     fn size_hint(&self) -> SizeHint {
-        self.hint.clone()
+        self.hint
     }
 }

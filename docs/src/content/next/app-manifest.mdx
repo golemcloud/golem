@@ -74,6 +74,111 @@ Available naming related string transforming functions:
   { /* @formatter:on */}
 </Example>
 
+## Component-implemented tools
+
+Components that export `golem:tool/guest` declare each discovered tool by its root name in the top-level `tools` map. The declaration configures how the tool implementation is provisioned. Deployment fails if a discovered tool has no matching declaration, a declaration has no implementation, or more than one component implements the same tool.
+
+### Tools-only component
+
+A component can implement tools without exporting an agent:
+
+```yaml
+components:
+  support:search-tools:
+    componentWasm: build/search-tools.wasm
+
+tools:
+  search:
+    config:
+      index: documentation
+    env:
+      LOG_LEVEL: info
+```
+
+### Component containing tools and agents
+
+Declarations are matched to metadata discovered from the built components, so one component can provide both kinds of export:
+
+```yaml
+components:
+  support:assistant:
+    componentWasm: build/assistant.wasm
+
+agents:
+  SupportAgent: {}
+
+tools:
+  search: {}
+```
+
+In this example, `build/assistant.wasm` must export both `SupportAgent` and the `search` tool.
+
+### Environment and agent bindings
+
+Tool bindings select which deployed tools are available and provide invocation parameters. Environment bindings apply generally. An agent binding is layered on top and can narrow or replace individual fields. Map merge modes are `upsert` (the default), `replace`, or `remove`; parameter maps use the same modes.
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      search:
+        version: "1.0.0"
+        parameters:
+          index: documentation
+          limit: 20
+
+agents:
+  SupportAgent:
+    tools:
+      search:
+        parametersMergeMode: upsert
+        parameters:
+          limit: 5
+```
+
+For a component-implemented tool, `version` can be omitted to use the version discovered from the component. When specified, it must match that version. The optional `account` must be the account that owns the locally deployed implementing component.
+
+### Secret policy
+
+`secretKeysReadable` and `secretKeysRevealable` accept either `"*"` or a list of secret paths. Policies are narrowing-only: environment and agent scopes are intersected, and revealable keys outside the effective readable scope are dropped with a deployment warning. The only supported secret merge mode is `intersect`, which is also the default.
+
+```yaml
+environments:
+  production:
+    server: cloud
+    tools:
+      search:
+        secretKeysReadable: "*"
+        secretKeysRevealable:
+          - credentials.search.token
+
+agents:
+  SupportAgent:
+    tools:
+      search:
+        secretKeysReadable:
+          - credentials.search.token
+          - credentials.search.endpoint
+        secretKeysRevealable:
+          - credentials.search.token
+```
+
+### Current scope
+
+This manifest support deploys component-implemented tools, compiles their effective bindings, and preserves the resulting metadata with the deployment. It does not yet provide runtime tool discovery or invocation. Host-implemented tools, imported MCP tools, middleware chains, capability validation, cross-environment or cross-account registrations and grants, tool child-instance execution, and runtime enforcement of the compiled secret policy are separate capabilities.
+
+Bridge generation continues to use tools discovered from components in the local application:
+
+```yaml
+bridge:
+  rust:
+    internal:
+      tools: [search]
+```
+
+There is no `local | registry` bridge source selector or registry fallback. Registry-backed bridge generation requires the cross-environment registration and grant model; the future source-selection design must also remain consistent with agent/RPC clients.
+
 <Fields>
   ## Field reference
 

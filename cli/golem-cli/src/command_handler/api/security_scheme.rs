@@ -19,7 +19,7 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
 use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::text::http_api_security::{
+use crate::model::http_api::security::{
     HttpSecuritySchemeCreateView, HttpSecuritySchemeDeleteView, HttpSecuritySchemeGetView,
     HttpSecuritySchemeListView, HttpSecuritySchemeUpdateView,
 };
@@ -266,7 +266,7 @@ impl ApiSecuritySchemeCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_output(HttpSecuritySchemeDeleteView(result))?;
+            .log_output(HttpSecuritySchemeDeleteView::from(result))?;
 
         Ok(())
     }

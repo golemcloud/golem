@@ -362,8 +362,8 @@ async fn t4_read_only_bypasses_queue_during_slow_write(
 /// Instead of using a test-only forced-eviction hook, we drive the
 /// **production memory-pressure eviction path**: the executor is started with
 /// a tight worker-memory budget so that loading a second worker forces the
-/// first one to be unloaded by `ActiveWorkers::try_free_up_memory`. The
-/// `Worker` shell (and its read-only cache) stays alive in `ActiveWorkers`.
+/// first one to be unloaded by `ActiveAgents::try_free_up_memory`. The
+/// `Worker` shell (and its read-only cache) stays alive in `ActiveAgents`.
 /// Then we issue another `get_count` on the evicted worker and assert:
 ///   1. it returns the cached value without recording a new
 ///      `AgentInvocationStarted/Finished` pair on the oplog (cache hit), and
@@ -468,7 +468,7 @@ async fn t5_read_only_bypasses_agent_loading(
     let q_owned = OwnedAgentId::new(context.default_environment_id, &q_worker_id);
 
     // Trigger Q's instance load. The invocation forces the worker out of
-    // `Unloaded`, which acquires memory from `ActiveWorkers` and runs
+    // `Unloaded`, which acquires memory from `ActiveAgents` and runs
     // `try_free_up_memory` if necessary.
     let q_result = tokio::time::timeout(
         Duration::from_secs(10),

@@ -26,7 +26,9 @@
 use crate::model::agent::text_utils::{
     write_json_escaped, write_json_escaped_char, write_with_decimal_point,
 };
-use crate::schema::canonical::{datetime, duration, quantity, quota_token, secret};
+use crate::schema::canonical::{
+    datetime, duration, permission_card, quantity, quota_token, secret,
+};
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::schema_type::{SchemaType, UnionSpec};
 use crate::schema::schema_value::{
@@ -492,6 +494,13 @@ fn format_schema_value(
         (SchemaValue::QuotaToken(v), SchemaType::QuotaToken { .. }) => {
             format_tagged_string(buf, "qt", &quota_token::to_text(v).map_err(canonical_err)?)
         }
+        (SchemaValue::PermissionCard(v), SchemaType::PermissionCard { .. }) => {
+            format_tagged_string(
+                buf,
+                "pc",
+                &permission_card::to_text(v).map_err(canonical_err)?,
+            )
+        }
         (SchemaValue::Union(UnionValuePayload { tag, body }), SchemaType::Union { spec, .. }) => {
             let (idx, branch) = union_branch(spec, tag)?;
             write!(buf, "u{idx}").unwrap();
@@ -792,6 +801,10 @@ impl<'a> Parser<'a> {
             SchemaType::QuotaToken { .. } => Ok(SchemaValue::QuotaToken(
                 quota_token::from_text(&self.parse_tagged_string("qt")?)
                     .map_err(|e| self.error(&format!("Invalid quota token: {e}")))?,
+            )),
+            SchemaType::PermissionCard { .. } => Ok(SchemaValue::PermissionCard(
+                permission_card::from_text(&self.parse_tagged_string("pc")?)
+                    .map_err(|e| self.error(&format!("Invalid permission card: {e}")))?,
             )),
             SchemaType::Union { spec, .. } => self.parse_schema_union(spec, graph, depth),
             SchemaType::Future { .. } | SchemaType::Stream { .. } => {

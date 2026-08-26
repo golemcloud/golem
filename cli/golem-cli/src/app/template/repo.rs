@@ -19,7 +19,7 @@ use crate::app::template::template::{
     AppTemplateComponent, AppTemplatesForLanguage,
 };
 use crate::fs;
-use crate::model::GuestLanguage;
+use crate::model::language::GuestLanguage;
 use anyhow::{Context, anyhow, bail};
 use include_dir::{Dir, include_dir};
 use std::collections::{BTreeMap, HashSet};
@@ -330,7 +330,7 @@ impl AppTemplateRepo {
 #[cfg(test)]
 mod tests {
     use super::AppTemplateRepo;
-    use crate::model::GuestLanguage;
+    use crate::model::language::GuestLanguage;
     use std::fs as stdfs;
     use std::path::{Path, PathBuf};
     use test_r::test;

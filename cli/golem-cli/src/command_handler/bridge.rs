@@ -14,8 +14,8 @@
 
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::model::GuestLanguage;
 use crate::model::app::{ApplicationComponentSelectMode, BuildConfig, CustomBridgeSdkTarget};
+use crate::model::language::GuestLanguage;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentName;
 use std::path::PathBuf;
@@ -50,9 +50,9 @@ impl BridgeCommandHandler {
             )
             .await?;
 
-        self.ctx.log_handler().log_output(
-            crate::model::text::action_result::GenerateBridgeResult { generated: true },
-        )?;
+        self.ctx
+            .log_handler()
+            .log_output(crate::app::build::gen_bridge::GenerateBridgeResult { generated: true })?;
 
         Ok(())
     }

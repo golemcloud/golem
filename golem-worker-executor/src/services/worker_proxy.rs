@@ -19,22 +19,24 @@ use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
     AgentError, CancelInvocationRequest, CancelInvocationResponse, CompletePromiseRequest,
-    CompletePromiseResponse, ForkWorkerRequest, InvokeAgentRequest, InvokeAgentResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, ProcessOplogEntriesRequest,
-    ProcessOplogEntriesResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
-    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, agent_error,
-    cancel_invocation_response, complete_promise_response, fork_worker_response,
+    CompletePromiseResponse, DeliverCardTransferRequest, DeliverCardTransferResponse,
+    ForkWorkerRequest, InvokeAgentRequest, InvokeAgentResponse, LaunchNewWorkerRequest,
+    LaunchNewWorkerResponse, ProcessOplogEntriesRequest, ProcessOplogEntriesResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, agent_error, cancel_invocation_response,
+    complete_promise_response, deliver_card_transfer_response, fork_worker_response,
     invoke_agent_response, launch_new_worker_response, process_oplog_entries_response,
     resume_worker_response, revert_worker_response, update_worker_response,
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, UpdateMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
+use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
+use golem_common::model::worker::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
     InvocationStatus, OwnedAgentId, PromiseId,
@@ -57,6 +59,7 @@ pub trait WorkerProxy: Send + Sync {
     async fn start(
         &self,
         owned_agent_id: &OwnedAgentId,
+        method_name: &str,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -81,7 +84,17 @@ pub trait WorkerProxy: Send + Sync {
         principal: Principal,
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerProxyError>;
+
+    async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: &StoredCard,
+    ) -> Result<(), WorkerProxyError>;
 
     async fn update(
         &self,
@@ -111,6 +124,7 @@ pub trait WorkerProxy: Send + Sync {
         &self,
         agent_id: &AgentId,
         target: RevertWorkerTarget,
+        resolved_revert: Option<ResolvedRevert>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError>;
 
@@ -268,6 +282,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn start(
         &self,
         owned_agent_id: &OwnedAgentId,
+        method_name: &str,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -294,6 +309,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     principal: Some(principal.clone().into()),
+                    method_name: Some(method_name.to_string()),
                 }))
             })
             .await?
@@ -334,6 +350,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         principal: Principal,
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
         debug!("Invoking remote agent method {method_name} on worker {agent_id}");
 
@@ -347,6 +364,13 @@ impl WorkerProxy for RemoteWorkerProxy {
 
         let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
             method_parameters.into();
+        let proto_scope_card = scope_card
+            .as_ref()
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(|error: String| {
+                WorkerProxyError::InternalError(WorkerExecutorError::invalid_request(error))
+            })?;
         let first_dispatch = AtomicBool::new(true);
 
         let response: InvokeAgentResponse = self
@@ -384,6 +408,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     environment_id: Some(environment_id.into()),
                     freshness_disposition: proto_freshness_disposition,
                     config: config.clone().into_iter().map(Into::into).collect(),
+                    scope_card: proto_scope_card.clone(),
                 }))
             })
             .await?
@@ -454,6 +479,46 @@ impl WorkerProxy for RemoteWorkerProxy {
             Some(invoke_agent_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(
                 WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
+            )),
+        }
+    }
+
+    async fn deliver_card_transfer(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        transfer_id: uuid::Uuid,
+        source_card_id: CardId,
+        card: &StoredCard,
+    ) -> Result<(), WorkerProxyError> {
+        debug!(%target_agent_id, %transfer_id, "Delivering permission card to remote agent");
+
+        let card = desert_rust::serialize_to_byte_vec(card).map_err(|error| {
+            WorkerProxyError::InternalError(WorkerExecutorError::unknown(format!(
+                "Failed to serialize permission card transfer: {error}"
+            )))
+        })?;
+
+        let response: DeliverCardTransferResponse = self
+            .worker_service_client
+            .call("deliver_card_transfer", move |client| {
+                Box::pin(client.deliver_card_transfer(DeliverCardTransferRequest {
+                    target_agent_id: Some(target_agent_id.clone().into()),
+                    environment_id: Some(environment_id.into()),
+                    transfer_id: Some(transfer_id.into()),
+                    card: card.clone(),
+                    auth_ctx: Some(AuthCtx::System.into()),
+                    source_card_id: Some(source_card_id.0.into()),
+                }))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(deliver_card_transfer_response::Result::Success(_)) => Ok(()),
+            Some(deliver_card_transfer_response::Result::Error(error)) => Err(error.into()),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API"),
             )),
         }
     }
@@ -557,6 +622,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         agent_id: &AgentId,
         target: RevertWorkerTarget,
+        resolved_revert: Option<ResolvedRevert>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         let response: RevertWorkerResponse = self
@@ -566,6 +632,12 @@ impl WorkerProxy for RemoteWorkerProxy {
                     agent_id: Some(agent_id.clone().into()),
                     target: Some(target.clone().into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    resolved_revert: resolved_revert.clone().map(|resolved| {
+                        golem_api_grpc::proto::golem::common::ResolvedRevert {
+                            last_oplog_index: resolved.last_oplog_index.as_u64(),
+                            observed_oplog_index: resolved.observed_oplog_index.as_u64(),
+                        }
+                    }),
                 }))
             })
             .await?
@@ -667,6 +739,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     freshness_disposition: golem_api_grpc::proto::golem::worker::v1::InvocationFreshnessDisposition::MayExist
                         as i32,
                     config: Vec::new(),
+                    scope_card: None,
                 }))
             })
             .await?
@@ -740,6 +813,7 @@ mod tests {
     };
     use golem_api_grpc::proto::golem::worker::v1::{ForkWorkerResponse, InvokeAgentSuccess};
     use golem_common::model::component::ComponentId;
+    use prost::Message;
     use std::sync::{Arc, Mutex};
     use test_r::test;
     use tokio::net::TcpListener;
@@ -749,6 +823,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct FlakyWorkerService {
         dispositions: Arc<Mutex<Vec<i32>>>,
+        scope_card_payloads: Arc<Mutex<Vec<Vec<u8>>>>,
     }
 
     macro_rules! unimplemented_rpc {
@@ -798,13 +873,25 @@ mod tests {
             ProcessOplogEntriesRequest,
             ProcessOplogEntriesResponse
         );
+        unimplemented_rpc!(
+            deliver_card_transfer,
+            DeliverCardTransferRequest,
+            DeliverCardTransferResponse
+        );
 
         async fn invoke_agent(
             &self,
             request: Request<InvokeAgentRequest>,
         ) -> Result<Response<InvokeAgentResponse>, Status> {
             let mut dispositions = self.dispositions.lock().unwrap();
-            dispositions.push(request.into_inner().freshness_disposition);
+            let request = request.into_inner();
+            dispositions.push(request.freshness_disposition);
+            if let Some(scope_card) = request.scope_card {
+                self.scope_card_payloads
+                    .lock()
+                    .unwrap()
+                    .push(scope_card.encode_to_vec());
+            }
             if dispositions.len() == 1 {
                 Err(Status::unavailable("ambiguous transport failure"))
             } else {
@@ -821,6 +908,7 @@ mod tests {
     async fn invoke_agent_marks_retry_as_may_exist_after_ambiguous_failure() {
         let service = FlakyWorkerService::default();
         let dispositions = service.dispositions.clone();
+        let scope_card_payloads = service.scope_card_payloads.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -861,6 +949,14 @@ mod tests {
                 Principal::anonymous(),
                 EnvironmentId::new(),
                 &AuthCtx::System,
+                Some(ScopeCard {
+                    scope_card_id: CardId::new(),
+                    root_card_ids: vec![CardId::new()],
+                    lower_positive: Vec::new(),
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                }),
             )
             .await
             .unwrap();
@@ -874,5 +970,8 @@ mod tests {
                     as i32,
             ]
         );
+        let scope_card_payloads = scope_card_payloads.lock().unwrap();
+        assert_eq!(scope_card_payloads.len(), 2);
+        assert_eq!(scope_card_payloads[0], scope_card_payloads[1]);
     }
 }

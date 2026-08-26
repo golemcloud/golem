@@ -17,5 +17,9 @@ pub mod moonbit;
 pub mod parameter_naming;
 pub mod rust;
 pub mod scala;
+pub mod schema_graph_literals;
+#[path = "../../src/bridge_gen/schema_graph_test_fixture.rs"]
+#[allow(dead_code)]
+pub mod schema_graph_test_fixture;
 pub mod type_naming;
 pub mod typescript;

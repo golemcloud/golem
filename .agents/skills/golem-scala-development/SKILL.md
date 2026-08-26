@@ -31,7 +31,6 @@ sdks/scala/
 ## Scala Versions
 
 - **Scala 3.8.2** — All Golem Scala 3 projects. Prefix sbt commands with `++3.8.2` (without `!` — only golem projects with 3.8.2 in crossScalaVersions are affected).
-- **Scala 2.13.18** — Cross-build for Scala 2 users.
 - **Scala 2.12.21** — The SBT plugin (`golemScalaSbt`) only. Use `++2.12.21!` (the `!` forces override).
 
 > **Important**: `sbt --client` mode preserves Scala version across invocations. Always specify the version explicitly to avoid version drift.
@@ -48,24 +47,46 @@ sdks/scala/
 | `testAgents` | Test agents for integration tests |
 | `integrationTests` | Integration test suite |
 
-## Running All Tests
+## Choosing Scala Tests
 
-Use these sbt aliases (from `sdks/scala/`) to run all golem-scala tests:
+Start with the affected project and Scala version. Examples from `sdks/scala/`:
+
+```bash
+sbt "++3.8.2; core/test"
+sbt "++3.8.2; modelJVM/test; modelJS/test"
+sbt "++3.8.2; macros/test"
+sbt "++3.8.2; codegen/test"
+sbt "++2.12.21!; sbtPlugin/test"
+```
+
+Compile affected consumers such as `testAgents` when public APIs, macros, code generation, or plugin behavior changes. Run focused integration tests when behavior reaches generated applications or the Golem platform.
+
+The only broad test alias is:
 
 | Alias | What it runs |
 |-------|-------------|
-| `sbt golemTest3` | All unit tests (JVM + JS) + test-agents compile + integration tests — **Scala 3** |
-| `sbt golemTest2` | All unit tests (JVM + JS) + test-agents compile — **Scala 2** (integration tests are Scala 3 only) |
-| `sbt golemTestAll` | Both of the above (Scala 3 then Scala 2) |
+| `sbt golemTestAll` | Scala 3.8.2 `modelJVM`, `modelJS`, `core`, and `macros` tests, then `testAgents/fastLinkJS` |
 
-**Always run `golemTestAll` before considering a change complete.**
+`golemTestAll` does not run `codegen` tests, Scala 2.12 tests, sbt plugin tests, or integration tests. Add the relevant commands explicitly for broad changes:
+
+```bash
+# Shared codegen and sbt plugin behavior across their supported Scala versions
+sbt "++3.8.2; codegen/test; ++2.12.21!; codegen/test; sbtPlugin/test"
+
+# Generated-application/platform behavior
+GOLEM_TS_PACKAGES_PATH=<TS_PACKAGES_PATH> sbt "++3.8.2; integrationTests/test"
+```
+
+Run `golemTestAll` plus the applicable explicit commands for broad shared-model, codegen/plugin, generated-application, release-sensitive, or unclear changes. Isolated project changes need only focused coverage.
 
 Integration tests require the TypeScript SDK packages path. The `GOLEM_TS_PACKAGES_PATH` env var is forwarded automatically by `build.sbt`, but `sbt --client` doesn't propagate env vars. Use non-client `sbt` instead:
 
 ```bash
 cd sdks/scala
-GOLEM_TS_PACKAGES_PATH=<TS_PACKAGES_PATH> sbt golemTestAll
+GOLEM_TS_PACKAGES_PATH=<TS_PACKAGES_PATH> sbt "++3.8.2; integrationTests/test"
 ```
+
+For formatting, use the affected project's `scalafmtCheckAll` task where possible; use root `scalafmtCheckAll` for cross-project formatting changes. Apply `scalafmtAll` only when formatting fixes are needed.
 
 ## Compiling
 
@@ -110,15 +131,6 @@ The SBT plugin depends on `codegen`, so both must be published for Scala 2.12:
 ```bash
 cd sdks/scala
 sbt '++2.12.21!; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; codegen/publishLocal; sbtPlugin/publishLocal'
-```
-
-### Step 3 (optional): Publish Scala 2.13 cross-builds
-
-If testing with Scala 2.13 user projects:
-
-```bash
-cd sdks/scala
-sbt '++2.13.18; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; core/publishLocal'
 ```
 
 > **Note**: The `golemPublishLocal` alias exists in `build.sbt` but may need `set every (publish / skip) := false` prepended to work correctly. The explicit commands above are the most reliable approach.

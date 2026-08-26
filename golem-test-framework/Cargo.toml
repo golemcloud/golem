@@ -50,7 +50,7 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
-tokio-tungstenite = { workspace = true, features = ["native-tls"] }
+tokio-tungstenite = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-core = { workspace = true }

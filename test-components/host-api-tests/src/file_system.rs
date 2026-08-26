@@ -1,4 +1,9 @@
-use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
+use golem_rust::wasip3::filesystem::preopens as p3_preopens;
+use golem_rust::wasip3::filesystem::types as p3_types;
+use golem_rust::{
+    FromSchema, IntoSchema, PromiseId, agent_definition, agent_implementation,
+    blocking_await_promise, create_promise,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
@@ -60,8 +65,15 @@ pub trait FileSystem {
     fn remove_directory(&self, path: String) -> Result<(), String>;
     fn remove_file(&self, path: String) -> Result<(), String>;
     fn rename_file(&self, source: String, destination: String) -> Result<(), String>;
+    fn create_release_promise(&self) -> PromiseId;
+    fn write_after_promise(
+        &self,
+        path: String,
+        contents: String,
+        release: PromiseId,
+    ) -> Result<(), String>;
     fn hash(&self, path: String) -> Result<HashResult, String>;
-    fn stream_to_file(&self, path: String, len: u64) -> Result<(), String>;
+    fn write_zeroes_to_file_via_stream(&self, path: String, len: u64) -> Result<(), String>;
     fn stream_to_stdout(&self, len: u64) -> Result<(), String>;
     fn blocking_stream_and_flush_to_file(&self, path: String, len: u64) -> Result<(), String>;
     /// Set the size of a file using `descriptor::set_size` (the WASI pwrite-truncate path).
@@ -77,6 +89,8 @@ pub trait FileSystem {
     /// Read from `src_path` and splice into a new file at `dst_path` using
     /// the non-blocking `output-stream.splice`.
     fn splice(&self, src_path: String, dst_path: String) -> Result<u64, String>;
+    async fn probe_p2(&self, operation: String, path: String, other: String) -> Result<(), String>;
+    async fn probe_p3(&self, operation: String, path: String, other: String) -> Result<(), String>;
 }
 
 pub struct FileSystemImpl {
@@ -246,7 +260,35 @@ impl FileSystem for FileSystemImpl {
         fs::rename(source, destination).map_err(|err| err.to_string())
     }
 
-    fn stream_to_file(&self, path: String, len: u64) -> Result<(), String> {
+    fn create_release_promise(&self) -> PromiseId {
+        create_promise()
+    }
+
+    fn write_after_promise(
+        &self,
+        path: String,
+        contents: String,
+        release: PromiseId,
+    ) -> Result<(), String> {
+        let dirs = wasi::filesystem::preopens::get_directories();
+        let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
+        let fd = root
+            .open_at(
+                PathFlags::empty(),
+                path.trim_start_matches('/'),
+                OpenFlags::CREATE,
+                DescriptorFlags::WRITE,
+            )
+            .map_err(|e| format!("{e:?}"))?;
+        let stream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
+
+        blocking_await_promise(&release);
+        stream
+            .blocking_write_and_flush(contents.as_bytes())
+            .map_err(|e| format!("{e:?}"))
+    }
+
+    fn write_zeroes_to_file_via_stream(&self, path: String, len: u64) -> Result<(), String> {
         let dirs = wasi::filesystem::preopens::get_directories();
         let (root, _) = dirs.into_iter().next().ok_or("no preopened directory")?;
         let rel = path.trim_start_matches('/');
@@ -259,7 +301,9 @@ impl FileSystem for FileSystemImpl {
             )
             .map_err(|e| format!("{e:?}"))?;
         let stream: OutputStream = fd.write_via_stream(0).map_err(|e| format!("{e:?}"))?;
-        stream.write_zeroes(len).map_err(|e| format!("{e:?}"))
+        stream
+            .blocking_write_zeroes_and_flush(len)
+            .map_err(|e| format!("{e:?}"))
     }
 
     fn stream_to_stdout(&self, len: u64) -> Result<(), String> {
@@ -425,5 +469,221 @@ impl FileSystem for FileSystemImpl {
         }
 
         Ok(total)
+    }
+
+    async fn probe_p2(&self, operation: String, path: String, other: String) -> Result<(), String> {
+        let (root, _) = wasi::filesystem::preopens::get_directories()
+            .into_iter()
+            .next()
+            .ok_or("no P2 preopened directory")?;
+        let path = path.trim_start_matches('/');
+        let other = other.trim_start_matches('/');
+
+        if let Some((open_flags, descriptor_flags)) = match operation.as_str() {
+            "open-read" => Some((OpenFlags::empty(), DescriptorFlags::READ)),
+            "open-list" => Some((OpenFlags::DIRECTORY, DescriptorFlags::READ)),
+            "open-create" => Some((OpenFlags::CREATE, DescriptorFlags::WRITE)),
+            "open-write" => Some((OpenFlags::empty(), DescriptorFlags::WRITE)),
+            "open-truncate" => Some((OpenFlags::TRUNCATE, DescriptorFlags::WRITE)),
+            _ => None,
+        } {
+            return root
+                .open_at(PathFlags::empty(), path, open_flags, descriptor_flags)
+                .map(|_| ())
+                .map_err(|error| format!("{error:?}"));
+        }
+
+        let descriptor = if path.is_empty() {
+            root
+        } else {
+            root.open_at(
+                PathFlags::empty(),
+                path,
+                OpenFlags::empty(),
+                DescriptorFlags::READ,
+            )
+            .map_err(|error| format!("open probe descriptor: {error:?}"))?
+        };
+        let (destination_root, _) = wasi::filesystem::preopens::get_directories()
+            .into_iter()
+            .next()
+            .ok_or("no P2 destination preopened directory")?;
+        let result = match operation.as_str() {
+            "read" => descriptor.read(1, 0).map(|_| ()),
+            "read-via-stream" => descriptor.read_via_stream(0).map(|_| ()),
+            "write" => descriptor.write(&[0], 0).map(|_| ()),
+            "write-via-stream" => descriptor.write_via_stream(0).map(|_| ()),
+            "append-via-stream" => descriptor.append_via_stream().map(|_| ()),
+            "set-size" => descriptor.set_size(0),
+            "set-times" => descriptor.set_times(
+                wasi::filesystem::types::NewTimestamp::Now,
+                wasi::filesystem::types::NewTimestamp::Now,
+            ),
+            "sync-data" => descriptor.sync_data(),
+            "sync" => descriptor.sync(),
+            "read-directory" => descriptor.read_directory().map(|_| ()),
+            "stat" => descriptor.stat().map(|_| ()),
+            "stat-at" => descriptor.stat_at(PathFlags::empty(), other).map(|_| ()),
+            "metadata-hash" => descriptor.metadata_hash().map(|_| ()),
+            "metadata-hash-at" => descriptor
+                .metadata_hash_at(PathFlags::empty(), other)
+                .map(|_| ()),
+            "readlink-at" => descriptor.readlink_at(other).map(|_| ()),
+            "create-directory-at" => descriptor.create_directory_at(other),
+            "set-times-at" => descriptor.set_times_at(
+                PathFlags::empty(),
+                other,
+                wasi::filesystem::types::NewTimestamp::Now,
+                wasi::filesystem::types::NewTimestamp::Now,
+            ),
+            "symlink-at" => descriptor.symlink_at(other, "probe-link"),
+            "remove-directory-at" => descriptor.remove_directory_at(other),
+            "unlink-file-at" => descriptor.unlink_file_at(other),
+            "rename-at" => descriptor.rename_at(other, &destination_root, "probe-renamed"),
+            "link-at" => {
+                descriptor.link_at(PathFlags::empty(), other, &destination_root, "probe-linked")
+            }
+            _ => {
+                return Err(format!(
+                    "unknown P2 filesystem probe operation: {operation}"
+                ));
+            }
+        };
+        result.map_err(|error| format!("{error:?}"))
+    }
+
+    async fn probe_p3(&self, operation: String, path: String, other: String) -> Result<(), String> {
+        let (root, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .ok_or("no P3 preopened directory")?;
+        let path = path.trim_start_matches('/').to_string();
+        let other = other.trim_start_matches('/').to_string();
+
+        if let Some((open_flags, descriptor_flags)) = match operation.as_str() {
+            "open-read" => Some((
+                p3_types::OpenFlags::empty(),
+                p3_types::DescriptorFlags::READ,
+            )),
+            "open-list" => Some((
+                p3_types::OpenFlags::DIRECTORY,
+                p3_types::DescriptorFlags::READ,
+            )),
+            "open-create" => Some((
+                p3_types::OpenFlags::CREATE,
+                p3_types::DescriptorFlags::WRITE,
+            )),
+            "open-write" => Some((
+                p3_types::OpenFlags::empty(),
+                p3_types::DescriptorFlags::WRITE,
+            )),
+            "open-truncate" => Some((
+                p3_types::OpenFlags::TRUNCATE,
+                p3_types::DescriptorFlags::WRITE,
+            )),
+            _ => None,
+        } {
+            return root
+                .open_at(
+                    p3_types::PathFlags::empty(),
+                    path,
+                    open_flags,
+                    descriptor_flags,
+                )
+                .await
+                .map(|_| ())
+                .map_err(|error| format!("{error:?}"));
+        }
+
+        let descriptor = if path.is_empty() {
+            root
+        } else {
+            root.open_at(
+                p3_types::PathFlags::empty(),
+                path,
+                p3_types::OpenFlags::empty(),
+                p3_types::DescriptorFlags::READ,
+            )
+            .await
+            .map_err(|error| format!("open probe descriptor: {error:?}"))?
+        };
+        let (destination_root, _) = p3_preopens::get_directories()
+            .into_iter()
+            .next()
+            .ok_or("no P3 destination preopened directory")?;
+        let result = match operation.as_str() {
+            "read-via-stream" => {
+                let (_, completion) = descriptor.read_via_stream(0);
+                completion.await
+            }
+            "write-via-stream" => {
+                let (writer, reader) = golem_rust::wasip3::wit_stream::new::<u8>();
+                drop(writer);
+                descriptor.write_via_stream(reader, 0).await
+            }
+            "append-via-stream" => {
+                let (writer, reader) = golem_rust::wasip3::wit_stream::new::<u8>();
+                drop(writer);
+                descriptor.append_via_stream(reader).await
+            }
+            "set-size" => descriptor.set_size(0).await,
+            "set-times" => {
+                descriptor
+                    .set_times(p3_types::NewTimestamp::Now, p3_types::NewTimestamp::Now)
+                    .await
+            }
+            "sync-data" => descriptor.sync_data().await,
+            "sync" => descriptor.sync().await,
+            "read-directory" => {
+                let (_, completion) = descriptor.read_directory();
+                completion.await
+            }
+            "stat" => descriptor.stat().await.map(|_| ()),
+            "stat-at" => descriptor
+                .stat_at(p3_types::PathFlags::empty(), other)
+                .await
+                .map(|_| ()),
+            "metadata-hash" => descriptor.metadata_hash().await.map(|_| ()),
+            "metadata-hash-at" => descriptor
+                .metadata_hash_at(p3_types::PathFlags::empty(), other)
+                .await
+                .map(|_| ()),
+            "readlink-at" => descriptor.readlink_at(other).await.map(|_| ()),
+            "create-directory-at" => descriptor.create_directory_at(other).await,
+            "set-times-at" => {
+                descriptor
+                    .set_times_at(
+                        p3_types::PathFlags::empty(),
+                        other,
+                        p3_types::NewTimestamp::Now,
+                        p3_types::NewTimestamp::Now,
+                    )
+                    .await
+            }
+            "symlink-at" => descriptor.symlink_at(other, "probe-link".to_string()).await,
+            "remove-directory-at" => descriptor.remove_directory_at(other).await,
+            "unlink-file-at" => descriptor.unlink_file_at(other).await,
+            "rename-at" => {
+                descriptor
+                    .rename_at(other, &destination_root, "probe-renamed".to_string())
+                    .await
+            }
+            "link-at" => {
+                descriptor
+                    .link_at(
+                        p3_types::PathFlags::empty(),
+                        other,
+                        &destination_root,
+                        "probe-linked".to_string(),
+                    )
+                    .await
+            }
+            _ => {
+                return Err(format!(
+                    "unknown P3 filesystem probe operation: {operation}"
+                ));
+            }
+        };
+        result.map_err(|error| format!("{error:?}"))
     }
 }

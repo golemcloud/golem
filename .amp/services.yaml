@@ -1,0 +1,8 @@
+services:
+  docker-daemon:
+    command: >-
+      sudo dockerd
+      --host=unix:///var/run/docker.sock
+      --host=tcp://127.0.0.1:$PORT
+      --storage-driver=vfs
+      --group user

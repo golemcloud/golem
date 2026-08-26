@@ -325,6 +325,17 @@ describe('schema markers', () => {
     expect(codec.graph.root.body.tag).toBe('quota-token');
   });
 
+  it('maps and round-trips permissionCard values with the requested polymorphism', () => {
+    const codec = compileSchema(s.permissionCard({ polymorphic: true }));
+    expect(codec.graph.root.body).toEqual({
+      tag: 'permission-card',
+      spec: { polymorphic: true },
+    });
+
+    const raw = { id: 'opaque-permission-card' } as never;
+    expect(codec.fromValue(codec.toValue(raw))).toBe(raw);
+  });
+
   it('maps unstructuredText to a role-tagged variant and round-trips', () => {
     const codec = compileSchema(s.unstructuredText());
     expect(codec.graph.root.body.tag).toBe('variant');

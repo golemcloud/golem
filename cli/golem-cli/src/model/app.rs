@@ -12,23 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
+use super::http_api::HttpApiDeploymentDeployProperties;
+use super::mcp::McpDeploymentDeployProperties;
 use crate::bridge_gen::{
     BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_application_preload};
+use crate::model::app_raw;
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::json::JsonProperty;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
+use crate::model::cascade::property::tool_bindings::{ToolBindingState, ToolBindingsProperty};
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
 use crate::model::cascade::store::Store;
+use crate::model::cli_output::StructuredOutput;
+use crate::model::language::GuestLanguage;
 use crate::model::repl::ReplLanguage;
-use crate::model::template::Template;
-use crate::model::{GuestLanguage, app_raw};
+use crate::model::template_render::TemplateRender;
+use crate::model::text_format::{NoTextOutput, TextOutput};
+use crate::model::tool_deployment::{
+    ToolEntityPath, ToolValidationCode, ToolValidationIssue, ToolValidationPhase, add_tool_issues,
+};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
 use golem_common::model::agent::AgentTypeName;
@@ -38,6 +46,7 @@ use golem_common::model::deployment::DeploymentRetryPolicyDefault;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::quota::{ResourceDefinitionCreation, ResourceName};
+use golem_common::model::tool::ToolName;
 use golem_common::model::validate_lower_kebab_case_identifier;
 use golem_common::schema::AgentTypeSchema;
 use golem_common::schema::tool::Tool;
@@ -47,7 +56,7 @@ use heck::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
@@ -274,33 +283,6 @@ pub enum AppBuildStep {
     Build,
     AddMetadata,
     GenBridge,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub struct ToolName(String);
-
-impl ToolName {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Display for ToolName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl TryFrom<&str> for ToolName {
-    type Error = String;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        if value.is_empty() {
-            Err("Tool dependency name must not be empty".to_string())
-        } else {
-            Ok(Self(value.to_string()))
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -551,11 +533,13 @@ pub struct Application {
 
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+    environment_sources: BTreeMap<EnvironmentName, PathBuf>,
     component_preset_selector: ComponentPresetSelector,
     all_sources: BTreeSet<PathBuf>,
     components:
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
     agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
+    tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
     component_layer_store: Store<ComponentLayer>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
@@ -725,8 +709,28 @@ impl Application {
         !self.components.is_empty()
     }
 
-    pub fn agent_names(&self) -> impl Iterator<Item = &AgentTypeName> {
+    pub fn agent_ids(&self) -> impl Iterator<Item = &AgentTypeName> {
         self.agents.keys()
+    }
+
+    pub fn agent_declaration_source(&self, name: &AgentTypeName) -> Option<&Path> {
+        self.agents.get(name).map(|agent| agent.source.as_path())
+    }
+
+    pub fn tool_declarations(&self) -> &BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>> {
+        &self.tool_declarations
+    }
+
+    pub fn selected_environment(&self) -> &app_raw::Environment {
+        self.environments
+            .get(self.environment_name())
+            .expect("selected environment must exist")
+    }
+
+    pub fn selected_environment_source(&self) -> Option<&Path> {
+        self.environment_sources
+            .get(self.environment_name())
+            .map(PathBuf::as_path)
     }
 
     pub fn resolve_agents(
@@ -834,6 +838,8 @@ impl Application {
                         plugins: Some(template_layer_props.plugins.value().clone()),
                         files_merge_mode: None,
                         files: Some(template_layer_props.files.value().clone()),
+                        tools_merge_mode: None,
+                        tools: None,
                     };
 
                     let template_id =
@@ -919,6 +925,132 @@ impl Application {
         .with_context(|| format!("Failed to resolve final agent layer '{}'", target_id))?;
 
         Ok((AgentProperties::from_resolved(&resolved), resolved))
+    }
+
+    pub fn resolve_tool_provision(
+        &self,
+        tool_name: &ToolName,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<ResolvedToolProvision> {
+        let declaration = self
+            .tool_declarations
+            .get(tool_name)
+            .with_context(|| format!("Tool '{}' is not declared", tool_name))?;
+        let component = self.component(component_name);
+        let mut store = Store::new();
+
+        let component_id = ToolLayerId::Component(component_name.clone());
+        store
+            .add_layer(ToolLayer {
+                id: component_id.clone(),
+                parents: Vec::new(),
+                properties: ToolLayerPropertiesKind::Common(Box::new(component.tool_base_layer())),
+            })
+            .map_err(|error| anyhow!(error.to_string()))?;
+
+        let template_apply_context = ComponentLayerApplyContext::new(
+            Some(component_name.clone()),
+            Some(self.app_root_dir_str.clone()),
+            Some(self.golem_temp_dir_str.clone()),
+            fs::path_to_str(component.component_dir())
+                .ok()
+                .map(str::to_string),
+            fs::path_to_str(component.component_dir())
+                .ok()
+                .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
+        );
+
+        let mut latest_parent = component_id;
+        for template_name in declaration.value.templates.clone().into_vec() {
+            let component_template_id =
+                ComponentLayerId::TemplateCustomPresets(template_name.clone());
+            let template = self
+                .component_layer_store
+                .value(
+                    &component_template_id,
+                    &self.component_preset_selector,
+                    &template_apply_context,
+                )
+                .map_err(|error| anyhow!(error.to_string()))
+                .with_context(|| {
+                    format!(
+                        "Failed to resolve template '{}' for tool '{}'",
+                        template_name, tool_name
+                    )
+                })?;
+            let id = ToolLayerId::ToolTemplate(tool_name.clone(), template_name);
+            store
+                .add_layer(ToolLayer {
+                    id: id.clone(),
+                    parents: vec![latest_parent],
+                    properties: ToolLayerPropertiesKind::Common(Box::new(
+                        ToolLayerInput::from_component_properties(&template),
+                    )),
+                })
+                .map_err(|error| anyhow!(error.to_string()))?;
+            latest_parent = id;
+        }
+
+        let common_id = ToolLayerId::ToolCommon(tool_name.clone());
+        store
+            .add_layer(ToolLayer {
+                id: common_id.clone(),
+                parents: vec![latest_parent],
+                properties: ToolLayerPropertiesKind::Common(Box::new(ToolLayerInput::from_raw(
+                    declaration.value.tool_layer_properties(),
+                    &declaration.source,
+                ))),
+            })
+            .map_err(|error| anyhow!(error.to_string()))?;
+
+        let presets = PartitionedToolPresets::new(declaration.value.presets.clone());
+        let environment_id = ToolLayerId::ToolEnvironmentPresets(tool_name.clone());
+        store
+            .add_layer(ToolLayer {
+                id: environment_id.clone(),
+                parents: vec![common_id],
+                properties: if presets.env_presets.is_empty() {
+                    ToolLayerPropertiesKind::Empty
+                } else {
+                    ToolLayerPropertiesKind::Presets {
+                        presets: ToolLayerInput::from_raw_presets(
+                            presets.env_presets,
+                            &declaration.source,
+                        ),
+                        default_preset: EMPTY_STR.to_string(),
+                    }
+                },
+            })
+            .map_err(|error| anyhow!(error.to_string()))?;
+
+        let custom_id = ToolLayerId::ToolCustomPresets(tool_name.clone());
+        store
+            .add_layer(ToolLayer {
+                id: custom_id.clone(),
+                parents: vec![environment_id],
+                properties: match presets.default_custom_preset {
+                    Some(default_preset) => ToolLayerPropertiesKind::Presets {
+                        presets: ToolLayerInput::from_raw_presets(
+                            presets.custom_presets,
+                            &declaration.source,
+                        ),
+                        default_preset,
+                    },
+                    None => ToolLayerPropertiesKind::Empty,
+                },
+            })
+            .map_err(|error| anyhow!(error.to_string()))?;
+
+        let layer_properties = store
+            .value(&custom_id, &self.component_preset_selector, &())
+            .map_err(|error| anyhow!(error.to_string()))
+            .with_context(|| format!("Failed to resolve provision for tool '{tool_name}'"))?;
+
+        Ok(ResolvedToolProvision {
+            source: declaration.source.clone(),
+            properties: ToolProvisionProperties::from_resolved(&layer_properties),
+            layer_properties,
+        })
     }
 
     pub fn contains_component(&self, component_name: &ComponentName) -> bool {
@@ -1181,6 +1313,41 @@ struct PartitionedAgentPresets {
     env_presets: IndexMap<String, app_raw::AgentLayerProperties>,
 }
 
+#[derive(Debug, Clone)]
+struct PartitionedToolPresets {
+    custom_presets: IndexMap<String, app_raw::ToolLayerProperties>,
+    default_custom_preset: Option<String>,
+    env_presets: IndexMap<String, app_raw::ToolLayerProperties>,
+}
+
+impl PartitionedToolPresets {
+    fn new(presets: IndexMap<String, app_raw::ToolPreset>) -> Self {
+        let mut default_custom_preset = None;
+        let mut custom_presets = IndexMap::new();
+        let mut env_presets = IndexMap::new();
+
+        for (preset_name, preset) in presets {
+            match preset_name.strip_prefix(APP_ENV_PRESET_PREFIX) {
+                Some(env_name) => {
+                    env_presets.insert(env_name.to_string(), preset.into_tool_layer_properties());
+                }
+                None => {
+                    if preset.default == Some(app_raw::Marker) || default_custom_preset.is_none() {
+                        default_custom_preset = Some(preset_name.clone());
+                    }
+                    custom_presets.insert(preset_name, preset.into_tool_layer_properties());
+                }
+            }
+        }
+
+        Self {
+            custom_presets,
+            default_custom_preset,
+            env_presets,
+        }
+    }
+}
+
 impl PartitionedAgentPresets {
     fn new(presets: IndexMap<String, app_raw::AgentPreset>) -> Self {
         let mut default_custom_preset = None;
@@ -1349,6 +1516,8 @@ impl ComponentLayerId {
 pub struct ComponentLayer {
     id: ComponentLayerId,
     parents: Vec<ComponentLayerId>,
+    #[serde(skip)]
+    source: PathBuf,
     properties: ComponentLayerPropertiesKind,
 }
 
@@ -1733,6 +1902,14 @@ impl Layer for ComponentLayer {
                     properties.files.value().clone(),
                 ),
             );
+            value.file_sources.apply_layer(
+                id,
+                selection,
+                (
+                    properties.files_merge_mode.unwrap_or_default(),
+                    vec![self.source.clone(); properties.files.value().len()],
+                ),
+            );
         }
 
         Ok(())
@@ -1797,6 +1974,10 @@ impl<'a> Agent<'a> {
     pub fn files(&self) -> &[app_raw::InitialComponentFile] {
         &self.resolved.properties.files
     }
+
+    pub fn tool_bindings(&self) -> &BTreeMap<String, ToolBindingState> {
+        &self.resolved.properties.tool_bindings
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1827,18 +2008,12 @@ impl<'a> Component<'a> {
         self.component_name
     }
 
-    // TODO: FCL: cleanup this, and make lang ids reserved for template names
+    // Guesses the language from the applied language templates, which are named after the
+    // language id they provide (see `GuestLanguage::from_id_string`).
     pub fn guess_language(&self) -> Option<GuestLanguage> {
-        self.applied_layers().iter().find_map(|(id, _)| {
-            id.template_name()
-                .and_then(|template_name| match template_name {
-                    "ts" => Some(GuestLanguage::TypeScript),
-                    "rust" => Some(GuestLanguage::Rust),
-                    "scala" => Some(GuestLanguage::Scala),
-                    "moonbit" => Some(GuestLanguage::MoonBit),
-                    _ => None,
-                })
-        })
+        self.applied_layers()
+            .iter()
+            .find_map(|(id, _)| id.template_name().and_then(GuestLanguage::from_id_string))
     }
 
     pub fn source(&self) -> &Path {
@@ -1955,7 +2130,13 @@ impl<'a> Component<'a> {
             plugins: Some(self.layer_properties().plugins.value().clone()),
             files_merge_mode: None,
             files: Some(self.layer_properties().files.value().clone()),
+            tools_merge_mode: None,
+            tools: None,
         }
+    }
+
+    fn tool_base_layer(&self) -> ToolLayerInput {
+        ToolLayerInput::from_component_properties(self.layer_properties())
     }
 }
 
@@ -2000,6 +2181,8 @@ pub struct ComponentLayerProperties {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files_merge_mode: Option<VecMergeMode>,
     pub files: VecProperty<ComponentLayer, app_raw::InitialComponentFile>,
+    #[serde(skip)]
+    file_sources: VecProperty<ComponentLayer, PathBuf>,
 }
 
 impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
@@ -2022,6 +2205,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             plugins: value.agent_properties.plugins.unwrap_or_default().into(),
             files_merge_mode: value.agent_properties.files_merge_mode,
             files: value.agent_properties.files.unwrap_or_default().into(),
+            file_sources: Vec::new().into(),
         }
     }
 }
@@ -2040,6 +2224,7 @@ impl ComponentLayerProperties {
         self.env.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
+        self.file_sources.compact_trace();
     }
 
     pub fn with_compacted_traces(&self) -> Self {
@@ -2066,6 +2251,301 @@ impl ComponentLayerProperties {
             .collect::<Vec<_>>()
             .serialize(serializer)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolLayerId {
+    Component(ComponentName),
+    ToolTemplate(ToolName, String),
+    ToolCommon(ToolName),
+    ToolEnvironmentPresets(ToolName),
+    ToolCustomPresets(ToolName),
+}
+
+impl Display for ToolLayerId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Component(component_name) => write!(f, "component:{component_name}"),
+            Self::ToolTemplate(tool_name, template_name) => {
+                write!(f, "tool:{tool_name}:template:{template_name}")
+            }
+            Self::ToolCommon(tool_name) => write!(f, "tool:{tool_name}:common"),
+            Self::ToolEnvironmentPresets(tool_name) => {
+                write!(f, "tool:{tool_name}:environment-presets")
+            }
+            Self::ToolCustomPresets(tool_name) => {
+                write!(f, "tool:{tool_name}:custom-presets")
+            }
+        }
+    }
+}
+
+impl ToolLayerId {
+    fn is_environment_preset(&self) -> bool {
+        matches!(self, Self::ToolEnvironmentPresets(_))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ToolLayer {
+    id: ToolLayerId,
+    parents: Vec<ToolLayerId>,
+    properties: ToolLayerPropertiesKind,
+}
+
+#[derive(Debug, Clone, Serialize)]
+enum ToolLayerPropertiesKind {
+    Empty,
+    Common(Box<ToolLayerInput>),
+    Presets {
+        presets: IndexMap<String, ToolLayerInput>,
+        default_preset: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ToolLayerInput {
+    properties: app_raw::ToolLayerProperties,
+    files: Vec<ToolProvisionFile>,
+}
+
+impl ToolLayerInput {
+    fn from_raw(mut properties: app_raw::ToolLayerProperties, source: &Path) -> Self {
+        let files = properties
+            .files
+            .take()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|file| ToolProvisionFile {
+                source: source.to_path_buf(),
+                file,
+            })
+            .collect();
+        Self { properties, files }
+    }
+
+    fn from_raw_presets(
+        presets: IndexMap<String, app_raw::ToolLayerProperties>,
+        source: &Path,
+    ) -> IndexMap<String, Self> {
+        presets
+            .into_iter()
+            .map(|(name, properties)| (name, Self::from_raw(properties, source)))
+            .collect()
+    }
+
+    fn from_component_properties(properties: &ComponentLayerProperties) -> Self {
+        debug_assert_eq!(
+            properties.files.value().len(),
+            properties.file_sources.value().len()
+        );
+        Self {
+            properties: app_raw::ToolLayerProperties {
+                config: properties.config.value().clone(),
+                env_merge_mode: None,
+                env: Some(properties.env.value().clone()),
+                plugins_merge_mode: None,
+                plugins: Some(properties.plugins.value().clone()),
+                files_merge_mode: None,
+                files: None,
+            },
+            files: properties
+                .files
+                .value()
+                .iter()
+                .cloned()
+                .zip(properties.file_sources.value().iter().cloned())
+                .map(|(file, source)| ToolProvisionFile { source, file })
+                .collect(),
+        }
+    }
+}
+
+impl Layer for ToolLayer {
+    type Id = ToolLayerId;
+    type Value = ToolLayerProperties;
+    type Selector = ComponentPresetSelector;
+    type AppliedSelection = String;
+    type ApplyContext = ();
+    type ApplyError = String;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+
+    fn parent_layers(&self) -> &[Self::Id] {
+        &self.parents
+    }
+
+    fn apply_onto_parent(
+        &self,
+        _ctx: &Self::ApplyContext,
+        selector: &Self::Selector,
+        value: &mut Self::Value,
+    ) -> Result<(), Self::ApplyError> {
+        let (property_layers_to_apply, selection) = match &self.properties {
+            ToolLayerPropertiesKind::Empty => (Vec::new(), None),
+            ToolLayerPropertiesKind::Common(properties) => (vec![properties.as_ref()], None),
+            ToolLayerPropertiesKind::Presets {
+                presets,
+                default_preset,
+            } => {
+                if self.id.is_environment_preset() {
+                    (
+                        presets
+                            .get(&selector.environment.0)
+                            .into_iter()
+                            .collect::<Vec<_>>(),
+                        Some(format!("{APP_ENV_PRESET_PREFIX}{}", selector.environment.0)),
+                    )
+                } else {
+                    let selected = selector
+                        .presets
+                        .iter()
+                        .filter_map(|preset_name| {
+                            presets
+                                .get(preset_name.0.as_str())
+                                .map(|preset| (preset, preset_name.0.as_str()))
+                        })
+                        .collect::<Vec<_>>();
+                    if selected.is_empty() {
+                        (
+                            presets.get(default_preset).into_iter().collect(),
+                            Some(default_preset.clone()),
+                        )
+                    } else {
+                        (
+                            selected.iter().map(|(preset, _)| *preset).collect(),
+                            Some(selected.iter().map(|(_, name)| *name).join(", ")),
+                        )
+                    }
+                }
+            }
+        };
+
+        let selection = selection.as_ref();
+        let id = self.id();
+        if !property_layers_to_apply.is_empty() {
+            value.applied_layers.push((id.clone(), selection.cloned()));
+        }
+
+        for layer in property_layers_to_apply {
+            let properties = &layer.properties;
+            value
+                .config
+                .apply_layer(id, selection, properties.config.clone());
+            value.env.apply_layer(
+                id,
+                selection,
+                (
+                    properties.env_merge_mode.unwrap_or_default(),
+                    properties.env.clone().unwrap_or_default(),
+                ),
+            );
+            value.plugins.apply_layer(
+                id,
+                selection,
+                (
+                    properties.plugins_merge_mode.unwrap_or_default(),
+                    properties.plugins.clone().unwrap_or_default(),
+                ),
+            );
+            value.files.apply_layer(
+                id,
+                selection,
+                (
+                    properties.files_merge_mode.unwrap_or_default(),
+                    layer.files.clone(),
+                ),
+            );
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ToolLayerProperties {
+    #[serde(
+        serialize_with = "ToolLayerProperties::serialize_applied_layers",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub applied_layers: Vec<(ToolLayerId, Option<String>)>,
+    config: JsonProperty<ToolLayer>,
+    env: MapProperty<ToolLayer, String, String>,
+    plugins: VecProperty<ToolLayer, app_raw::PluginInstallation>,
+    files: VecProperty<ToolLayer, ToolProvisionFile>,
+}
+
+impl ToolLayerProperties {
+    pub fn compact_traces(&mut self) {
+        self.config.compact_trace();
+        self.env.compact_trace();
+        self.plugins.compact_trace();
+        self.files.compact_trace();
+    }
+
+    pub fn with_compacted_traces(&self) -> Self {
+        let mut properties = self.clone();
+        properties.compact_traces();
+        properties
+    }
+
+    fn serialize_applied_layers<S>(
+        applied_layers: &[(ToolLayerId, Option<String>)],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        applied_layers
+            .iter()
+            .map(|(id, selection)| match selection {
+                Some(selection) => format!("{id}[{selection}]"),
+                None => id.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .serialize(serializer)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolProvisionProperties {
+    pub config: Option<JsonValue>,
+    pub env: BTreeMap<String, String>,
+    pub plugins: Vec<app_raw::PluginInstallation>,
+    pub files: Vec<ToolProvisionFile>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolProvisionFile {
+    pub source: PathBuf,
+    pub file: app_raw::InitialComponentFile,
+}
+
+impl ToolProvisionProperties {
+    fn from_resolved(properties: &ToolLayerProperties) -> Self {
+        Self {
+            config: properties.config.value().clone(),
+            env: properties
+                .env
+                .value()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            plugins: properties.plugins.value().clone(),
+            files: properties.files.value().clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolvedToolProvision {
+    pub source: PathBuf,
+    pub properties: ToolProvisionProperties,
+    pub layer_properties: ToolLayerProperties,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -2230,6 +2710,14 @@ impl Layer for AgentLayer {
                     properties.files.clone().unwrap_or_default(),
                 ),
             );
+            value.tool_bindings.apply_layer(
+                id,
+                selection,
+                (
+                    properties.tools_merge_mode.unwrap_or_default(),
+                    properties.tools.clone().unwrap_or_default(),
+                ),
+            );
         }
 
         Ok(())
@@ -2248,6 +2736,7 @@ pub struct AgentLayerProperties {
     env: MapProperty<AgentLayer, String, String>,
     plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
     files: VecProperty<AgentLayer, app_raw::InitialComponentFile>,
+    tool_bindings: ToolBindingsProperty<AgentLayer>,
 }
 
 impl AgentLayerProperties {
@@ -2267,6 +2756,7 @@ impl AgentLayerProperties {
         self.env.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
+        self.tool_bindings.compact_trace();
     }
 
     pub fn with_compacted_traces(&self) -> Self {
@@ -2302,6 +2792,7 @@ pub struct AgentProperties {
     pub env: BTreeMap<String, String>,
     pub plugins: Vec<app_raw::PluginInstallation>,
     pub files: Vec<app_raw::InitialComponentFile>,
+    pub tool_bindings: BTreeMap<String, ToolBindingState>,
 }
 
 impl AgentProperties {
@@ -2317,6 +2808,12 @@ impl AgentProperties {
                 .collect(),
             plugins: layer_properties.plugins.value().clone(),
             files: layer_properties.files.value().clone(),
+            tool_bindings: layer_properties
+                .tool_bindings
+                .value()
+                .iter()
+                .map(|(name, binding)| (name.clone(), binding.clone()))
+                .collect(),
         }
     }
 }
@@ -2405,22 +2902,22 @@ impl ComponentProperties {
             })
             .collect::<Vec<_>>();
         let tools = tool_dependencies.iter().filter_map(|dependency| {
-            parse_component_dependency_reference(validation, "tool", dependency).map(
-                |(component_name, name)| ComponentDependency::Tool {
+            let (component_name, name) =
+                parse_component_dependency_reference(validation, "tool", dependency)?;
+            match ToolName::try_from(name.as_str()) {
+                Ok(tool_name) => Some(ComponentDependency::Tool {
                     component_name,
-                    tool_name: match ToolName::try_from(name.as_str()) {
-                        Ok(tool_name) => tool_name,
-                        Err(err) => {
-                            validation.add_error(format!(
-                                "Invalid tool dependency name: {}. {}",
-                                name.log_color_error_highlight(),
-                                err
-                            ));
-                            ToolName(name)
-                        }
-                    },
-                },
-            )
+                    tool_name,
+                }),
+                Err(err) => {
+                    validation.add_error(format!(
+                        "Invalid tool dependency name: {}. {}",
+                        name.log_color_error_highlight(),
+                        err
+                    ));
+                    None
+                }
+            }
         });
 
         agents.into_iter().chain(tools).collect()
@@ -2643,20 +3140,23 @@ impl PluginInstallation {
 mod app_builder {
     use super::ResourceDefinitionCreation;
     use super::ResourceName;
+    use super::{
+        ToolEntityPath, ToolName, ToolValidationCode, ToolValidationIssue, ToolValidationPhase,
+        add_tool_issues,
+    };
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        Application, ApplicationPreload, BridgeSdkTargetKind, ComponentDependency, ComponentLayer,
-        ComponentLayerApplyContext, ComponentLayerId, ComponentLayerProperties,
-        ComponentLayerPropertiesKind, ComponentPresetName, ComponentPresetSelector,
+        APP_ENV_PRESET_PREFIX, Application, ApplicationPreload, BridgeSdkTargetKind,
+        ComponentDependency, ComponentLayer, ComponentLayerApplyContext, ComponentLayerId,
+        ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetSelector,
         ComponentProperties, PartitionedComponentPresets, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
-    use crate::model::http_api::{
-        HttpApiDeploymentDeployProperties, McpDeploymentAgentOptions, McpDeploymentDeployProperties,
-    };
+    use crate::model::http_api::HttpApiDeploymentDeployProperties;
+    use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
@@ -2710,6 +3210,7 @@ mod app_builder {
         Template(String),
         Component(ComponentName),
         Agent(AgentTypeName),
+        Tool(ToolName),
         Environment(EnvironmentName),
         SecretDefaults(EnvironmentName),
         RetryPolicyDefaults(EnvironmentName),
@@ -2729,6 +3230,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Template(_) => "Template",
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
                 UniqueSourceCheckedEntityKey::Agent(_) => "Agent",
+                UniqueSourceCheckedEntityKey::Tool(_) => "Tool",
                 UniqueSourceCheckedEntityKey::Environment(_) => "Environment",
                 UniqueSourceCheckedEntityKey::SecretDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::RetryPolicyDefaults(_) => property,
@@ -2754,8 +3256,11 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Component(component_name) => {
                     component_name.as_str().log_color_highlight().to_string()
                 }
-                UniqueSourceCheckedEntityKey::Agent(agent_name) => {
-                    agent_name.0.log_color_highlight().to_string()
+                UniqueSourceCheckedEntityKey::Agent(agent_id) => {
+                    agent_id.0.log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::Tool(tool_name) => {
+                    tool_name.as_str().log_color_highlight().to_string()
                 }
                 UniqueSourceCheckedEntityKey::Environment(environment_name) => {
                     environment_name.0.log_color_highlight().to_string()
@@ -2972,12 +3477,17 @@ mod app_builder {
 
         raw_component_names: HashSet<String>,
         component_names_to_source_and_dir: BTreeMap<ComponentName, (PathBuf, Option<PathBuf>)>,
-        component_custom_presets: BTreeSet<ComponentPresetName>,
+        // Every custom preset name defined by any component, component template,
+        // or agent (env-scoped `app-env:` presets excluded), so environment preset
+        // references can be validated. Populated as those parts are processed, via
+        // `record_selectable_presets`.
+        custom_preset_names: BTreeSet<String>,
         component_layer_store: Store<ComponentLayer>,
 
         components:
             BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
         agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
+        tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
 
         http_api_deployments: BTreeMap<
             EnvironmentName,
@@ -3000,6 +3510,7 @@ mod app_builder {
         >,
 
         all_sources: BTreeSet<PathBuf>,
+        environment_sources: BTreeMap<EnvironmentName, PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
     }
 
@@ -3049,8 +3560,8 @@ mod app_builder {
                 builder.add_raw_app(&mut validation, app);
             }
 
-            // TODO: atomic: validate presets used in envs and template references
-            //               before component resolve, and skip if they are not valid
+            builder.validate_environment_preset_references(&mut validation);
+            builder.validate_selected_preset_references(&mut validation, &component_presets);
             builder.resolve_and_validate_components(&mut validation, &component_presets);
             builder.validate_unique_sources(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
@@ -3061,11 +3572,13 @@ mod app_builder {
                 golem_temp_dir_str: builder.golem_temp_dir_str,
                 cargo_workspace_mode: builder.cargo_workspace_mode,
                 environments,
+                environment_sources: builder.environment_sources,
                 component_preset_selector: component_presets,
                 application_name,
                 all_sources: builder.all_sources,
                 components: builder.components,
                 agents: builder.agents,
+                tool_declarations: builder.tool_declarations,
                 component_layer_store: builder.component_layer_store,
                 custom_commands: builder.custom_commands,
                 clean: builder.clean,
@@ -3154,6 +3667,14 @@ mod app_builder {
                     let app_source_dir = fs::parent_or_err(&app.source).expect("Failed to get parent");
                     self.all_sources.insert(app.source.clone());
 
+                    for environment_name in app.application.environments.keys() {
+                        if let Ok(environment_name) = environment_name.parse::<EnvironmentName>() {
+                            self.environment_sources
+                                .entry(environment_name)
+                                .or_insert_with(|| app.source.clone());
+                        }
+                    }
+
                     if !app.application.includes.is_empty()
                         && self
                         .add_entity_source(UniqueSourceCheckedEntityKey::Include, &app.source)
@@ -3166,7 +3687,12 @@ mod app_builder {
                             UniqueSourceCheckedEntityKey::Template(template_name.clone()),
                             &app.source,
                         ) {
-                            self.add_component_template(validation, template_name, template);
+                            self.add_component_template(
+                                validation,
+                                &app.source,
+                                template_name,
+                                template,
+                            );
                         }
                     }
 
@@ -3189,7 +3715,12 @@ mod app_builder {
                             self.raw_component_names.insert(component_name.0.clone());
                             self.component_names_to_source_and_dir
                                 .insert(component_name.clone(), (app.source.clone(), component.dir.as_ref().map(PathBuf::from)));
-                            self.add_component(validation, component_name, component);
+                            self.add_component(
+                                validation,
+                                &app.source,
+                                component_name,
+                                component,
+                            );
                         }
                     }
 
@@ -3198,12 +3729,69 @@ mod app_builder {
                         // agent templates/presets and flattened component fallback layers.
                         let unique_key = UniqueSourceCheckedEntityKey::Agent(agent_type_name.clone());
                         if self.add_entity_source(unique_key, &app.source) {
+                            self.record_selectable_presets(agent_properties.presets.keys());
                             self.agents.insert(
                                 agent_type_name,
                                 WithSource::new(app.source.clone(), agent_properties),
                             );
                         }
                     }
+
+                    let mut tool_issues = Vec::new();
+                    for (raw_tool_name, raw_declaration) in app.application.tools.into_entries() {
+                        if raw_tool_name == "middleware" {
+                            tool_issues.push(ToolValidationIssue::error(
+                                ToolValidationPhase::DeclarationDiscoveryIdentity,
+                                ToolValidationCode::ReservedMiddleware,
+                                ToolEntityPath::tool(&raw_tool_name, "tools.middleware"),
+                                Some(app.source.clone()),
+                                "tools.middleware is reserved for tool middleware declarations, which are implemented by GOL-39",
+                            ));
+                            continue;
+                        }
+
+                        let tool_name = match ToolName::try_from(raw_tool_name.as_str()) {
+                            Ok(tool_name) => tool_name,
+                            Err(message) => {
+                                tool_issues.push(ToolValidationIssue::error(
+                                    ToolValidationPhase::DeclarationDiscoveryIdentity,
+                                    ToolValidationCode::InvalidName,
+                                    ToolEntityPath::tool(&raw_tool_name, "tools"),
+                                    Some(app.source.clone()),
+                                    message,
+                                ));
+                                continue;
+                            }
+                        };
+
+                        let unique_key = UniqueSourceCheckedEntityKey::Tool(tool_name.clone());
+                        let is_first_source = self.add_entity_source(unique_key, &app.source);
+
+                        let declaration = match serde_json::from_value::<app_raw::ToolDeclaration>(
+                            raw_declaration,
+                        ) {
+                            Ok(declaration) => declaration,
+                            Err(error) => {
+                                tool_issues.push(ToolValidationIssue::error(
+                                    ToolValidationPhase::StructuralMetadata,
+                                    ToolValidationCode::InvalidDeclaration,
+                                    ToolEntityPath::tool(&tool_name, "tools"),
+                                    Some(app.source.clone()),
+                                    format!("Invalid tool declaration: {error}"),
+                                ));
+                                continue;
+                            }
+                        };
+
+                        if is_first_source {
+                            self.record_selectable_presets(declaration.presets.keys());
+                            self.tool_declarations.insert(
+                                tool_name,
+                                WithSource::new(app.source.clone(), declaration),
+                            );
+                        }
+                    }
+                    add_tool_issues(validation, tool_issues);
 
                     for (command_name, command) in app.application.custom_commands {
                         if self.add_entity_source(
@@ -3486,12 +4074,6 @@ mod app_builder {
 
                             self.environments
                                 .insert(environment_name.clone(), environment.clone());
-                            validation.with_context(
-                                vec![("environment", environment_name.0)],
-                                |_validation| {
-                                    // TODO: atomic: validate environment
-                                },
-                            );
                         }
                     }
 
@@ -3593,6 +4175,7 @@ mod app_builder {
         fn add_component_template(
             &mut self,
             validation: &mut ValidationBuilder,
+            source: &Path,
             template_name: String,
             template: app_raw::ComponentTemplate,
         ) {
@@ -3606,6 +4189,7 @@ mod app_builder {
                             parents: ComponentLayerId::parent_ids_from_raw_template_references(
                                 template.templates.clone(),
                             ),
+                            source: source.to_path_buf(),
                             properties: ComponentLayerPropertiesKind::Common(Box::new(
                                 template.component_layer_properties().into(),
                             )),
@@ -3615,6 +4199,7 @@ mod app_builder {
                         validation.add_error(err.to_string())
                     }
 
+                    self.record_selectable_presets(template.presets.keys());
                     let presets = PartitionedComponentPresets::new(template.presets);
 
                     if let Some(err) = self
@@ -3622,6 +4207,7 @@ mod app_builder {
                         .add_layer(ComponentLayer {
                             id: ComponentLayerId::TemplateEnvironmentPresets(template_name.clone()),
                             parents: vec![ComponentLayerId::TemplateCommon(template_name.clone())],
+                            source: source.to_path_buf(),
                             properties: {
                                 if presets.env_presets.is_empty() {
                                     ComponentLayerPropertiesKind::Empty
@@ -3645,6 +4231,7 @@ mod app_builder {
                             parents: vec![ComponentLayerId::TemplateEnvironmentPresets(
                                 template_name.clone(),
                             )],
+                            source: source.to_path_buf(),
                             properties: {
                                 match presets.default_custom_preset {
                                     Some(default_custom_preset) => {
@@ -3668,6 +4255,7 @@ mod app_builder {
         fn add_component(
             &mut self,
             validation: &mut ValidationBuilder,
+            source: &Path,
             component_name: ComponentName,
             component: app_raw::Component,
         ) {
@@ -3681,6 +4269,7 @@ mod app_builder {
                             parents: ComponentLayerId::parent_ids_from_raw_template_references(
                                 component.templates.clone(),
                             ),
+                            source: source.to_path_buf(),
                             properties: ComponentLayerPropertiesKind::Common(Box::new(
                                 component.component_layer_properties().into(),
                             )),
@@ -3690,12 +4279,8 @@ mod app_builder {
                         validation.add_error(err.to_string())
                     }
 
+                    self.record_selectable_presets(component.presets.keys());
                     let presets = PartitionedComponentPresets::new(component.presets);
-
-                    presets.custom_presets.keys().for_each(|preset_name| {
-                        self.component_custom_presets
-                            .insert(ComponentPresetName(preset_name.clone()));
-                    });
 
                     if let Some(err) = self
                         .component_layer_store
@@ -3706,6 +4291,7 @@ mod app_builder {
                             parents: vec![ComponentLayerId::ComponentCommon(
                                 component_name.clone(),
                             )],
+                            source: source.to_path_buf(),
                             properties: {
                                 if presets.env_presets.is_empty() {
                                     ComponentLayerPropertiesKind::Empty
@@ -3729,6 +4315,7 @@ mod app_builder {
                             parents: vec![ComponentLayerId::ComponentEnvironmentPresets(
                                 component_name.clone(),
                             )],
+                            source: source.to_path_buf(),
                             properties: {
                                 match presets.default_custom_preset {
                                     Some(default_custom_preset) => {
@@ -3755,16 +4342,117 @@ mod app_builder {
                 .into_iter()
                 .filter(|(_, sources)| sources.len() > 1)
                 .for_each(|(key, sources)| {
-                    validation.add_error(format!(
-                        "{} {} is defined in multiple sources: {}",
-                        key.entity_kind(),
-                        key.entity_name(),
-                        sources
-                            .into_iter()
-                            .map(|s| s.log_color_highlight())
-                            .join(", ")
-                    ))
+                    if let UniqueSourceCheckedEntityKey::Tool(tool_name) = &key {
+                        add_tool_issues(
+                            validation,
+                            [ToolValidationIssue::error(
+                                ToolValidationPhase::DeclarationDiscoveryIdentity,
+                                ToolValidationCode::DuplicateDeclaration,
+                                ToolEntityPath::tool(tool_name, "tools"),
+                                sources.first().cloned(),
+                                format!(
+                                    "Tool declaration is defined in multiple sources: {}",
+                                    sources.iter().map(|s| s.display()).join(", ")
+                                ),
+                            )],
+                        );
+                    } else {
+                        validation.add_error(format!(
+                            "{} {} is defined in multiple sources: {}",
+                            key.entity_kind(),
+                            key.entity_name(),
+                            sources
+                                .into_iter()
+                                .map(|s| s.log_color_highlight())
+                                .join(", ")
+                        ));
+                    }
                 })
+        }
+
+        /// Records preset names (from a component, template, agent, or tool) that an
+        /// environment can select into [`Self::custom_preset_names`]. Env-scoped
+        /// `app-env:` presets are applied automatically rather than selected by
+        /// name, so they are excluded.
+        fn record_selectable_presets<'a>(&mut self, names: impl Iterator<Item = &'a String>) {
+            for name in names {
+                if !name.starts_with(APP_ENV_PRESET_PREFIX) {
+                    self.custom_preset_names.insert(name.clone());
+                }
+            }
+        }
+
+        /// Validates that every preset an environment declares is defined somewhere.
+        /// Preset selection (see `ComponentLayer::apply`) silently drops names it
+        /// does not recognise, so without this an environment typo would apply no
+        /// preset with no warning. The `--preset` flag is checked separately, in
+        /// [`Self::validate_selected_preset_references`].
+        fn validate_environment_preset_references(&self, validation: &mut ValidationBuilder) {
+            for (environment_name, environment) in &self.environments {
+                let referenced = environment.component_presets.clone().into_vec();
+                if referenced.is_empty() {
+                    continue;
+                }
+                validation.with_context(
+                    vec![("environment", environment_name.0.clone())],
+                    |validation| {
+                        for preset in referenced {
+                            self.validate_preset_defined(validation, &preset, None);
+                        }
+                    },
+                );
+            }
+        }
+
+        /// Validates the presets actually selected for this run. Environment presets
+        /// are covered by [`Self::validate_environment_preset_references`]; this also
+        /// catches presets given with `--preset`, which replace the environment's
+        /// list and would otherwise be silently dropped.
+        fn validate_selected_preset_references(
+            &self,
+            validation: &mut ValidationBuilder,
+            selector: &ComponentPresetSelector,
+        ) {
+            let environment_refs = self
+                .environments
+                .get(&selector.environment)
+                .map(|environment| environment.component_presets.clone().into_set())
+                .unwrap_or_default();
+
+            for preset in &selector.presets {
+                // Skip presets that came from the environment; those are already
+                // reported by validate_environment_preset_references.
+                if environment_refs.contains(&preset.0) {
+                    continue;
+                }
+                self.validate_preset_defined(validation, &preset.0, Some("--preset"));
+            }
+        }
+
+        /// Adds an error if `preset` is not a defined selectable preset name.
+        /// `selected_with` names the flag it came from, when not an environment.
+        fn validate_preset_defined(
+            &self,
+            validation: &mut ValidationBuilder,
+            preset: &str,
+            selected_with: Option<&str>,
+        ) {
+            if self.custom_preset_names.contains(preset) {
+                return;
+            }
+            let source = selected_with
+                .map(|flag| format!(" selected with {flag}"))
+                .unwrap_or_default();
+            validation.add_error(format!(
+                "Unknown preset {}{source}.\n{}",
+                preset.log_color_error_highlight(),
+                self.available_options_help(
+                    "presets",
+                    "preset names",
+                    preset,
+                    self.custom_preset_names.iter().map(String::as_str),
+                ),
+            ));
         }
 
         fn resolve_and_validate_components(
@@ -3846,6 +4534,7 @@ mod app_builder {
                         component_dir,
                         &component_layer_properties,
                     );
+                    Self::validate_unique_file_targets(validation, &component_properties);
                     self.validate_component_dependencies(
                         validation,
                         &component_name,
@@ -3857,6 +4546,32 @@ mod app_builder {
                     );
                 }
                 Err(err) => validation.add_error(format!("Failed to resolve component: {err}")),
+            }
+        }
+
+        // Manifest-time check for duplicate IFS target paths. This catches obvious
+        // collisions between literal file entries early (before deploy). Directory sources
+        // are only expanded at build time, so `ifs::validate_unique_targets` remains the
+        // backstop for collisions that only appear after expansion.
+        fn validate_unique_file_targets(
+            validation: &mut ValidationBuilder,
+            component_properties: &ComponentProperties,
+        ) {
+            let duplicate_targets = component_properties
+                .files
+                .iter()
+                .map(|file| &file.target.path)
+                .counts()
+                .into_iter()
+                .filter(|&(_, count)| count > 1)
+                .map(|(path, _)| path.to_string())
+                .collect::<Vec<_>>();
+
+            if !duplicate_targets.is_empty() {
+                validation.add_error(format!(
+                    "Multiple initial component files map to the same target path: {}",
+                    duplicate_targets.into_iter().join(", ")
+                ));
             }
         }
 
@@ -3926,19 +4641,6 @@ mod app_builder {
             unknown: &str,
         ) -> String {
             self.available_options_help("profiles", "profile names", unknown, available_profiles)
-        }
-
-        // TODO: atomic
-        #[allow(unused)]
-        fn available_templates(&self, _unknown: &str) -> String {
-            // TODO: atomic
-            /*self.available_options_help(
-                "templates",
-                "template names",
-                unknown,
-                self.templates.keys().map(|name| name.as_str()),
-            )*/
-            todo!()
         }
 
         fn available_options_help<'a, I: IntoIterator<Item = &'a str>>(
@@ -4032,6 +4734,47 @@ mod app_builder {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanResult {
+    pub cleaned: bool,
+}
+
+impl NoTextOutput for CleanResult {}
+impl TextOutput for CleanResult {}
+
+impl StructuredOutput for CleanResult {
+    const KIND: &'static str = "clean";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildResult {
+    pub built: bool,
+}
+
+impl NoTextOutput for BuildResult {}
+impl TextOutput for BuildResult {}
+
+impl StructuredOutput for BuildResult {
+    const KIND: &'static str = "build";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewAppResult {
+    pub created: bool,
+    pub application_name: String,
+    pub application_dir: PathBuf,
+}
+
+impl NoTextOutput for NewAppResult {}
+impl TextOutput for NewAppResult {}
+
+impl StructuredOutput for NewAppResult {
+    const KIND: &'static str = "new";
+}
+
 #[cfg(test)]
 mod test {
     use crate::bridge_gen::{BridgeMode, bridge_client_directory_name};
@@ -4070,6 +4813,15 @@ mod test {
                 componentWasm: dummy-component.wasm
 
             components:
+              # Defines debug/release so they are known preset names; app:main
+              # below deliberately does not define them, to exercise the fallback.
+              app:other:
+                componentWasm: other.wasm
+                presets:
+                  debug:
+                    componentWasm: other-debug.wasm
+                  release:
+                    componentWasm: other-release.wasm
               app:main:
                 templates: malbogle
                 presets:
@@ -4196,6 +4948,335 @@ mod test {
                 "app:main".to_string(),
                 "app:main[app-env:cloud]".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn tool_provision_resolution_follows_component_template_common_environment_custom_order() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            componentTemplates:
+              tool-base:
+                config:
+                  templateOnly: true
+                  nested: { winner: template }
+                env:
+                  TEMPLATE_ONLY: template
+
+            components:
+              app:main:
+                componentWasm: main.wasm
+                config:
+                  componentOnly: true
+                  nested: { winner: component }
+                env:
+                  VALUE: component
+
+            tools:
+              grep:
+                templates: tool-base
+                config:
+                  commonOnly: true
+                  nested: { winner: common }
+                env:
+                  VALUE: common
+                presets:
+                  app-env:local:
+                    config:
+                      environmentOnly: true
+                      nested: { winner: environment }
+                    env:
+                      VALUE: environment
+                  debug:
+                    config:
+                      customOnly: true
+                      nested: { winner: custom }
+                    env:
+                      VALUE: custom
+        "# };
+
+        let (app, _tmp_dir) = load_app_for_env(source, "local", &["debug"]);
+        let resolved = app
+            .resolve_tool_provision(
+                &ToolName::try_from("grep").unwrap(),
+                &parse_component_name("app:main"),
+            )
+            .unwrap();
+        let config = resolved.properties.config.unwrap();
+
+        assert_eq!(config["componentOnly"], serde_json::json!(true));
+        assert_eq!(config["templateOnly"], serde_json::json!(true));
+        assert_eq!(config["commonOnly"], serde_json::json!(true));
+        assert_eq!(config["environmentOnly"], serde_json::json!(true));
+        assert_eq!(config["customOnly"], serde_json::json!(true));
+        assert_eq!(config["nested"]["winner"], serde_json::json!("custom"));
+        assert_eq!(resolved.properties.env["TEMPLATE_ONLY"], "template");
+        assert_eq!(resolved.properties.env["VALUE"], "custom");
+        assert_eq!(
+            resolved
+                .layer_properties
+                .applied_layers
+                .iter()
+                .map(|(id, selection)| match selection {
+                    Some(selection) => format!("{id}[{selection}]"),
+                    None => id.to_string(),
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                "component:app:main",
+                "tool:grep:template:tool-base",
+                "tool:grep:common",
+                "tool:grep:environment-presets[app-env:local]",
+                "tool:grep:custom-presets[debug]",
+            ]
+        );
+    }
+
+    #[test]
+    fn tool_provision_files_retain_their_defining_manifest_source() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let root = tmp_dir.path().join("golem.yaml");
+        let template_source = tmp_dir.path().join("templates/component.yaml");
+        let component_source = tmp_dir.path().join("components/component.yaml");
+        std::fs::create_dir_all(template_source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(component_source.parent().unwrap()).unwrap();
+        fs::write(
+            &root,
+            indoc! {r#"
+                app: hello-app
+                environments:
+                  local:
+                    server: local
+                tools:
+                  grep:
+                    files:
+                      - sourcePath: tool.txt
+                        targetPath: /tool.txt
+            "#},
+        )
+        .unwrap();
+        fs::write(
+            &template_source,
+            indoc! {r#"
+                componentTemplates:
+                  component-base:
+                    files:
+                      - sourcePath: template.txt
+                        targetPath: /template.txt
+            "#},
+        )
+        .unwrap();
+        fs::write(
+            &component_source,
+            indoc! {r#"
+                components:
+                  app:main:
+                    templates: component-base
+                    componentWasm: main.wasm
+                    files:
+                      - sourcePath: component.txt
+                        targetPath: /component.txt
+            "#},
+        )
+        .unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&root).unwrap(),
+            app_raw::ApplicationWithSource::from_yaml_file(&template_source).unwrap(),
+            app_raw::ApplicationWithSource::from_yaml_file(&component_source).unwrap(),
+        ];
+        let preload = Application::preload_from_raw_apps(&raw_apps)
+            .into_product()
+            .0
+            .unwrap();
+        let app = Application::from_raw_apps(
+            tmp_dir.path().to_path_buf(),
+            preload.application_name,
+            preload.environments,
+            preload.local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product()
+        .0
+        .unwrap();
+
+        let resolved = app
+            .resolve_tool_provision(
+                &ToolName::try_from("grep").unwrap(),
+                &parse_component_name("app:main"),
+            )
+            .unwrap();
+
+        assert_eq!(resolved.properties.files.len(), 3);
+        assert_eq!(resolved.properties.files[0].source, template_source);
+        assert_eq!(resolved.properties.files[1].source, component_source);
+        assert_eq!(resolved.properties.files[2].source, root);
+    }
+
+    #[test]
+    fn tool_template_files_retain_the_template_manifest_source() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let root = tmp_dir.path().join("golem.yaml");
+        let template_source = tmp_dir.path().join("templates/tools.yaml");
+        let component_source = tmp_dir.path().join("components/component.yaml");
+        std::fs::create_dir_all(template_source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(component_source.parent().unwrap()).unwrap();
+        fs::write(
+            &root,
+            indoc! {r#"
+                app: hello-app
+                environments:
+                  local:
+                    server: local
+                tools:
+                  grep:
+                    templates: tool-base
+            "#},
+        )
+        .unwrap();
+        fs::write(
+            &template_source,
+            indoc! {r#"
+                componentTemplates:
+                  tool-base:
+                    files:
+                      - sourcePath: template.txt
+                        targetPath: /template.txt
+            "#},
+        )
+        .unwrap();
+        fs::write(
+            &component_source,
+            indoc! {r#"
+                components:
+                  app:main:
+                    componentWasm: main.wasm
+            "#},
+        )
+        .unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&root).unwrap(),
+            app_raw::ApplicationWithSource::from_yaml_file(&template_source).unwrap(),
+            app_raw::ApplicationWithSource::from_yaml_file(&component_source).unwrap(),
+        ];
+        let preload = Application::preload_from_raw_apps(&raw_apps)
+            .into_product()
+            .0
+            .unwrap();
+        let app = Application::from_raw_apps(
+            tmp_dir.path().to_path_buf(),
+            preload.application_name,
+            preload.environments,
+            preload.local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product()
+        .0
+        .unwrap();
+
+        let resolved = app
+            .resolve_tool_provision(
+                &ToolName::try_from("grep").unwrap(),
+                &parse_component_name("app:main"),
+            )
+            .unwrap();
+
+        assert_eq!(resolved.properties.files.len(), 1);
+        assert_eq!(resolved.properties.files[0].source, template_source);
+    }
+
+    #[test]
+    fn malformed_tool_declarations_are_reported_together() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            components:
+              app:main:
+                componentWasm: main.wasm
+            tools:
+              middleware: {}
+              Bad_Name: {}
+              grep:
+                unsupported: true
+        "# });
+
+        assert_eq!(errors.len(), 3, "unexpected errors: {errors:#?}");
+        assert!(errors.iter().any(|error| error.contains("GOL-39")));
+        assert!(errors.iter().any(|error| error.contains("InvalidName")));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("InvalidDeclaration"))
+        );
+    }
+
+    #[test]
+    fn duplicate_tool_declaration_is_reported_when_the_first_declaration_is_malformed() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let root = tmp_dir.path().join("golem.yaml");
+        let included = tmp_dir.path().join("included.yaml");
+        fs::write(
+            &root,
+            indoc! {r#"
+                app: hello-app
+                environments:
+                  local:
+                    server: local
+                components:
+                  app:main:
+                    componentWasm: main.wasm
+                tools:
+                  grep:
+                    unsupported: true
+            "#},
+        )
+        .unwrap();
+        fs::write(
+            &included,
+            indoc! {r#"
+                tools:
+                  grep: {}
+            "#},
+        )
+        .unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&root).unwrap(),
+            app_raw::ApplicationWithSource::from_yaml_file(&included).unwrap(),
+        ];
+        let preload = Application::preload_from_raw_apps(&raw_apps)
+            .into_product()
+            .0
+            .unwrap();
+        let (_, _, errors) = Application::from_raw_apps(
+            tmp_dir.path().to_path_buf(),
+            preload.application_name,
+            preload.environments,
+            preload.local_server,
+            selector("local", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("InvalidDeclaration")),
+            "unexpected errors: {errors:#?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("DuplicateDeclaration")),
+            "unexpected errors: {errors:#?}"
         );
     }
 
@@ -4402,7 +5483,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &alpha_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::External
             ),
             app_tmp_dir
@@ -4416,7 +5497,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &beta_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::External
             ),
             app_tmp_dir
@@ -4458,7 +5539,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &alpha_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::External
             ),
             app.temp_dir()
@@ -4472,7 +5553,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &alpha_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::Guest
             ),
             app.temp_dir()
@@ -4513,7 +5594,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &alpha_agent,
-                crate::model::GuestLanguage::Rust,
+                crate::model::language::GuestLanguage::Rust,
                 BridgeMode::Guest
             ),
             app_tmp_dir
@@ -4550,7 +5631,7 @@ mod test {
         let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
 
         assert_eq!(
-            app.tool_bridge_sdk_dir("MyTool", crate::model::GuestLanguage::Rust),
+            app.tool_bridge_sdk_dir("MyTool", crate::model::language::GuestLanguage::Rust),
             app_tmp_dir.path().join("bridge-sdk/rust-guest").join(
                 crate::bridge_gen::tool_bridge_client_directory_name("MyTool")
             )
@@ -4558,7 +5639,7 @@ mod test {
 
         let used_modes = app.bridge_sdks().for_all_used_modes();
         assert_eq!(used_modes.len(), 1);
-        assert_eq!(used_modes[0].0, crate::model::GuestLanguage::Rust);
+        assert_eq!(used_modes[0].0, crate::model::language::GuestLanguage::Rust);
         assert_eq!(used_modes[0].1, BridgeMode::Guest);
     }
 
@@ -4586,7 +5667,7 @@ mod test {
         let (app, app_tmp_dir) = load_app_for_env(source, "local", &[]);
 
         assert_eq!(
-            app.tool_bridge_sdk_dir("MyTool", crate::model::GuestLanguage::MoonBit),
+            app.tool_bridge_sdk_dir("MyTool", crate::model::language::GuestLanguage::MoonBit),
             app_tmp_dir.path().join("bridge-sdk/moonbit-guest").join(
                 crate::bridge_gen::tool_bridge_client_directory_name("MyTool")
             )
@@ -4594,7 +5675,10 @@ mod test {
 
         let used_modes = app.bridge_sdks().for_all_used_modes();
         assert_eq!(used_modes.len(), 1);
-        assert_eq!(used_modes[0].0, crate::model::GuestLanguage::MoonBit);
+        assert_eq!(
+            used_modes[0].0,
+            crate::model::language::GuestLanguage::MoonBit
+        );
         assert_eq!(used_modes[0].1, BridgeMode::Guest);
     }
 
@@ -4720,6 +5804,120 @@ mod test {
     }
 
     #[test]
+    fn component_files_reject_duplicate_target_paths() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                files:
+                  - sourcePath: a.txt
+                    targetPath: /data/shared.txt
+                  - sourcePath: b.txt
+                    targetPath: /data/shared.txt
+        "# });
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:?}");
+        assert!(
+            errors[0].contains("same target path") && errors[0].contains("/data/shared.txt"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn environment_unknown_component_preset_is_rejected() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: slow
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                presets:
+                  fast:
+                    env:
+                      MODE: fast
+        "# });
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:?}");
+        assert!(
+            errors[0].contains("Unknown preset") && errors[0].contains("slow"),
+            "unexpected error: {}",
+            errors[0]
+        );
+        // The available presets are listed so the user can find the right name.
+        assert!(
+            errors[0].contains("fast"),
+            "error should list available presets: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn environment_known_component_preset_is_accepted() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+                componentPresets: fast
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                presets:
+                  fast:
+                    env:
+                      MODE: fast
+        "# });
+
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn unknown_preset_selected_with_flag_is_rejected() {
+        // A `--preset` value replaces the environment's list and would otherwise
+        // be silently dropped during selection.
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                presets:
+                  fast:
+                    env:
+                      MODE: fast
+        "# };
+
+        let errors = load_app_errors_with_selector(source, &selector("local", &["slow"]));
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:?}");
+        assert!(
+            errors[0].contains("Unknown preset")
+                && errors[0].contains("slow")
+                && errors[0].contains("--preset"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
     fn typescript_guest_bridge_mode_is_accepted() {
         let source = indoc! { r#"
             app: hello-app
@@ -4796,7 +5994,7 @@ mod test {
         assert_eq!(
             app.bridge_sdk_dir(
                 &agent_type_name,
-                crate::model::GuestLanguage::Scala,
+                crate::model::language::GuestLanguage::Scala,
                 BridgeMode::Guest
             ),
             app_tmp_dir
@@ -5042,6 +6240,11 @@ mod test {
             components:
               app:main:
                 componentWasm: dummy-component.wasm
+                # 'missing' is a known preset name (so selecting it is valid), but
+                # test-agent below does not define it, exercising the fallback.
+                presets:
+                  missing:
+                    componentWasm: dummy-component.wasm
 
             agents:
               test-agent:
@@ -5813,6 +7016,13 @@ mod test {
     }
 
     fn load_app_errors(source: &str) -> Vec<String> {
+        load_app_errors_with_selector(source, &selector("local", &[]))
+    }
+
+    fn load_app_errors_with_selector(
+        source: &str,
+        selector: &ComponentPresetSelector,
+    ) -> Vec<String> {
         let tmp_dir = tempfile::tempdir().unwrap();
 
         let golem_yaml_path = tmp_dir.path().join("golem.yaml");
@@ -5840,7 +7050,7 @@ mod test {
             application_name,
             environments,
             local_server,
-            selector("local", &[]),
+            selector.clone(),
             raw_apps,
         )
         .into_product();

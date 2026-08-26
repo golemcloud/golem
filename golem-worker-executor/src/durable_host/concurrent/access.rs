@@ -28,8 +28,8 @@ enum AccessTerminalGuardState {
         /// so the call stays counted as in flight while the append is still pending.
         live_call_permit: Option<LiveCallPermit>,
         /// `Some` while a torn drop must record a `CompletionDiscarded` marker (successful `End`
-        /// path, no error observed by the caller yet); see [`DiscardMarker`].
-        discard_marker: Option<DiscardMarker>,
+        /// path, no error observed by the caller yet); see [`CompletionMarkerRecord`].
+        discard_marker: Option<CompletionMarkerRecord>,
     },
     Disarmed,
 }
@@ -89,7 +89,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
     pub(super) fn cleanup_after_terminal(
         &mut self,
         terminal: tokio::task::JoinHandle<Result<(), WorkerExecutorError>>,
-        discard_marker: Option<DiscardMarker>,
+        discard_marker: Option<CompletionMarkerRecord>,
     ) {
         let call = match std::mem::replace(&mut self.state, AccessTerminalGuardState::Disarmed) {
             AccessTerminalGuardState::BeforeTerminal { call } => call,
@@ -161,7 +161,7 @@ impl<P: DropPolicy> AccessTerminalGuard<P> {
                     // Normally already joined (`wait_terminal`) by the time the guard is
                     // converted; chained defensively so a still-pending terminal append can never
                     // be overtaken by a marker append.
-                    pending_append: terminal,
+                    pending_append: terminal.map(OrderedAppend::Task),
                 })),
             },
             _ => CompletionDelivery::unarmed(),
@@ -184,14 +184,14 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                 live_call_permit,
                 discard_marker,
             } => {
-                // A torn drop with the marker still armed: the guest discarded a persisted
-                // successful completion. Chain the owned marker append after the terminal task
-                // and let the chained handle take the terminal's place in the drop event, so
-                // drains (and thus invocation completion) await the marker append too. The task
-                // is spawned unconditionally — marker recording must not depend on the event
-                // surviving the drain.
+                // A torn drop with the marker still armed: queue a discarded marker after the
+                // terminal task, then let a receipt-waiting task take the terminal's place in the
+                // cleanup event so invocation completion awaits the marker too.
                 let terminal = match discard_marker {
-                    Some(marker) => Some(marker.spawn_chained(terminal)),
+                    Some(marker) => Some(task_for_marker_receipt(marker.record(
+                        CompletionMarkerKind::Discarded,
+                        terminal.map(OrderedAppend::Task),
+                    ))),
                     None => terminal,
                 };
                 if let Some(sink) = &self.cleanup_sink {

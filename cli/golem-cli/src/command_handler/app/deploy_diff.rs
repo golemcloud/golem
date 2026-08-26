@@ -17,8 +17,9 @@ use crate::model::deploy::{
     DeploymentDisplay, DeploymentDisplayContext, DeploymentDisplayMode, EnvironmentSetupPlan,
 };
 use crate::model::environment::ResolvedEnvironmentIdentity;
-use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
+use crate::model::http_api::HttpApiDeploymentDeployProperties;
 use crate::model::masking::MaskingConfig;
+use crate::model::mcp::McpDeploymentDeployProperties;
 use anyhow::bail;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
 use golem_common::model::component::{ComponentDto, ComponentName};

@@ -22,7 +22,7 @@ use crate::log::Output;
 use crate::model::app::ApplicationSourceMode;
 use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::environment::EnvironmentReference;
-use crate::model::worker::{
+use crate::model::agent::{
     AgentListMode, AgentListRequest, AgentMetadataView, AgentsMetadataResponseView,
 };
 use crate::tui::TuiEvent;
@@ -1578,7 +1578,7 @@ impl TuiApp {
                 };
                 launch_context
                     .context()
-                    .worker_handler()
+                    .agent_handler()
                     .list_agent_metadata(request)
                     .await
             },
@@ -3109,7 +3109,7 @@ fn agent_items_from_metadata_response(response: AgentsMetadataResponseView) -> V
 }
 
 fn agent_item_from_metadata(agent: AgentMetadataView) -> AgentListItem {
-    let name = agent.agent_name.0.clone();
+    let name = agent.agent_id.0.clone();
     let component = Some(agent.component_name.0.clone());
     let agent_type = agent_type_from_agent_name(&name);
     let status = Some(format!("{:?}", agent.status));
@@ -8966,7 +8966,7 @@ environments:
             component_name: golem_common::model::component::ComponentName(
                 component_name.to_string(),
             ),
-            agent_name: crate::model::worker::RawAgentId(agent_name.to_string()),
+            agent_id: crate::model::agent::RawAgentId(agent_name.to_string()),
             created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
             env: BTreeMap::new().into_iter().collect(),

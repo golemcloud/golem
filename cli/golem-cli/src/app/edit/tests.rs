@@ -18,7 +18,7 @@ use crate::app::edit::{
     agents_md, cargo_toml, gitignore, golem_yaml, json, main_rs, main_ts, package_json,
     tsconfig_json,
 };
-use crate::model::GuestLanguage;
+use crate::model::language::GuestLanguage;
 use proptest::prelude::*;
 use serde::Serialize;
 use serde_json::{Map as JsonMap, Value as JsonValue};

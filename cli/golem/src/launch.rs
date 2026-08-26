@@ -41,8 +41,8 @@ use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
     FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
     IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
-    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
-    SchedulerStorageConfig, WorkerServiceGrpcConfig,
+    KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, SchedulerStorageConfig,
+    WorkerServiceGrpcConfig,
 };
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::{
@@ -186,7 +186,7 @@ async fn start_components(
 
     let worker_executor = {
         let config =
-            worker_executor_config(args, &shard_manager, &registry_service, &worker_service);
+            worker_executor_config(args, &shard_manager, &registry_service, &worker_service)?;
         run_worker_executor(config, join_set).await?
     };
 
@@ -248,6 +248,11 @@ fn registry_service_config(
                     monthly_gas_limit: u64::MAX,
                     monthly_upload_limit: u64::MAX,
                     max_memory_per_worker: u64::MAX,
+                    max_memory_per_worker_ceiling: u64::MAX,
+                    max_memory_per_worker_user_configurable: true,
+                    monthly_memory_gb_seconds: u64::MAX,
+                    monthly_memory_gb_seconds_ceiling: u64::MAX,
+                    monthly_memory_gb_seconds_user_configurable: true,
                     max_table_elements_per_worker: u64::MAX,
                     max_disk_space_per_worker: u64::MAX,
                     max_disk_space_per_worker_ceiling: None,
@@ -354,7 +359,7 @@ fn worker_executor_config(
     shard_manager_run_details: &golem_shard_manager::RunDetails,
     registry_service_run_details: &golem_registry_service::SingleExecutableRunDetails,
     worker_service_run_details: &golem_worker_service::TrafficReadyEndpoints,
-) -> WorkerExecutorConfig {
+) -> anyhow::Result<WorkerExecutorConfig> {
     let mut config = WorkerExecutorConfig {
         http_port: 0,
         grpc: golem_worker_executor::services::golem_config::GrpcApiConfig {
@@ -392,10 +397,7 @@ fn worker_executor_config(
             port: registry_service_run_details.grpc_port,
             ..Default::default()
         },
-        resource_limits: ResourceLimitsConfig::Grpc(ResourceLimitsGrpcConfig {
-            batch_update_interval: Duration::from_secs(60),
-            limit_refresh_interval: Duration::from_secs(300),
-        }),
+        resource_limits: ResourceLimitsConfig::default(),
         agent_types_service: AgentTypesServiceConfig::Grpc(
             golem_worker_executor::services::golem_config::AgentTypesServiceGrpcConfig {
                 ..Default::default()
@@ -422,7 +424,7 @@ fn worker_executor_config(
     };
 
     config.add_port_to_tracing_file_name_if_enabled();
-    config
+    Ok(config)
 }
 
 fn worker_service_config(

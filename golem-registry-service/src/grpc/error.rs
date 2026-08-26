@@ -141,6 +141,18 @@ impl From<CardError> for GrpcApiError {
                 code: api::error_code::AUTH_FORBIDDEN.to_string(),
                 cause: None,
             }),
+            CardError::RuntimeCardConflict(_) | CardError::RuntimeCardRevoked(_) => {
+                Self::AlreadyExists(ErrorBody {
+                    error,
+                    code: api::error_code::CONCURRENT_UPDATE.to_string(),
+                    cause: None,
+                })
+            }
+            CardError::RuntimeCardCannotBeSystemCard => Self::BadRequest(ErrorsBody {
+                errors: vec![error],
+                code: api::error_code::INVALID_RUNTIME_CARD.to_string(),
+                cause: None,
+            }),
             CardError::ConcurrentModification => Self::InternalError(ErrorBody {
                 error,
                 code: api::error_code::CONCURRENT_UPDATE.to_string(),
@@ -282,6 +294,11 @@ impl From<DeploymentError> for GrpcApiError {
             DeploymentError::AgentTypeNotFound(_) => Self::NotFound(ErrorBody {
                 error,
                 code: api::error_code::AGENT_TYPE_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            DeploymentError::ToolNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::TOOL_NOT_FOUND.to_string(),
                 cause: None,
             }),
 

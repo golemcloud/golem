@@ -16,10 +16,16 @@ declare module 'golem:api/oplog@1.5.0' {
   export function enrichOplogEntries(environmentId: EnvironmentId, agentId: AgentId, entries: [OplogIndex, OplogEntry][], componentRevision: ComponentRevision): PublicOplogEntry[];
   export class GetOplog {
     constructor(agentId: AgentId, start: OplogIndex);
+    /**
+     * @throws OplogReadError
+     */
     getNext(): PublicOplogEntry[] | undefined;
   }
   export class SearchOplog {
     constructor(agentId: AgentId, text: string);
+    /**
+     * @throws OplogReadError
+     */
     getNext(): [OplogIndex, PublicOplogEntry][] | undefined;
   }
   export type Datetime = wasiClocks030SystemClock.Instant;
@@ -29,7 +35,6 @@ declare module 'golem:api/oplog@1.5.0' {
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type ComponentRevision = golemApi150Host.ComponentRevision;
   export type OplogIndex = golemApi150Host.OplogIndex;
-  export type PersistenceLevel = golemApi150Host.PersistenceLevel;
   export type EnvironmentId = golemApi150Host.EnvironmentId;
   export type Uuid = golemApi150Host.Uuid;
   export type AgentId = golemApi150Host.AgentId;
@@ -185,6 +190,8 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     parentStartIndex?: OplogIndex;
     functionName: string;
+    invocationId?: Uuid;
+    observationalOwner?: OplogIndex;
     request?: TypedSchemaValue;
     durableFunctionType: WrappedFunctionType;
   };
@@ -216,6 +223,16 @@ declare module 'golem:api/oplog@1.5.0' {
    * future after the `end` was already recorded.
    */
   export type CompletionDiscardedParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
+  /**
+   * Parameters of a `completion-delivered` entry: the successful result of the durable host
+   * call started at `start-index` was handed to the agent at this point in the recorded
+   * execution. Replay may prepare the recorded host result earlier, but does not hand it to the
+   * agent until this marker and prevents later oplog entries from advancing until that handoff.
+   */
+  export type CompletionDeliveredParameters = {
     timestamp: Datetime;
     startIndex: OplogIndex;
   };
@@ -467,10 +484,6 @@ declare module 'golem:api/oplog@1.5.0' {
     key: string;
     value: AttributeValue;
   };
-  export type ChangePersistenceLevelParameters = {
-    timestamp: Datetime;
-    persistenceLevel: PersistenceLevel;
-  };
   export type BeginRemoteTransactionParameters = {
     timestamp: Datetime;
     transactionId: string;
@@ -693,6 +706,8 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     parentStartIndex?: OplogIndex;
     functionName: string;
+    invocationId?: Uuid;
+    observationalOwner?: OplogIndex;
     request?: OplogPayload;
     durableFunctionType: WrappedFunctionType;
   };
@@ -708,6 +723,10 @@ declare module 'golem:api/oplog@1.5.0' {
     partial?: OplogPayload;
   };
   export type RawCompletionDiscardedParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+  };
+  export type RawCompletionDeliveredParameters = {
     timestamp: Datetime;
     startIndex: OplogIndex;
   };
@@ -998,11 +1017,6 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'set-span-attribute'
     val: SetSpanAttributeParameters
   } |
-  /** Change the current persistence level */
-  {
-    tag: 'change-persistence-level'
-    val: ChangePersistenceLevelParameters
-  } |
   /** Begins a transaction operation */
   {
     tag: 'begin-remote-transaction'
@@ -1089,6 +1103,14 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'completion-discarded'
     val: RawCompletionDiscardedParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was delivered to the agent at this point in the recorded execution
+   */
+  {
+    tag: 'completion-delivered'
+    val: RawCompletionDeliveredParameters
   };
   export type PublicOplogEntry =
   /** The initial agent oplog entry */
@@ -1267,11 +1289,6 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'set-span-attribute'
     val: SetSpanAttributeParameters
   } |
-  /** Change the current persistence level */
-  {
-    tag: 'change-persistence-level'
-    val: ChangePersistenceLevelParameters
-  } |
   /** Begins a transaction operation */
   {
     tag: 'begin-remote-transaction'
@@ -1358,6 +1375,22 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'completion-discarded'
     val: CompletionDiscardedParameters
+  } |
+  /**
+   * The successful completion of the durable host call started by the matching `start`
+   * was delivered to the agent at this point in the recorded execution
+   */
+  {
+    tag: 'completion-delivered'
+    val: CompletionDeliveredParameters
+  };
+  export type OplogReadError =
+  {
+    tag: 'permission-denied'
+  } |
+  {
+    tag: 'internal-error'
+    val: string
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

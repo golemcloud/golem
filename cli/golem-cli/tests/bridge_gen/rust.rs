@@ -20,7 +20,7 @@ use crate::bridge_gen::type_naming::test_type_naming;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustBridgeMode, RustTypeName};
 use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
-use golem_cli::model::GuestLanguage;
+use golem_cli::model::language::GuestLanguage;
 use golem_common::model::Empty;
 use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snapshotting};
 use golem_common::schema::agent::{

@@ -41,6 +41,9 @@ use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::IoView;
 
 impl RdbmsDurabilityPairs for PostgresType {
+    const ENGINE: crate::durable_host::authorization::targets::RdbmsEngine =
+        crate::durable_host::authorization::targets::RdbmsEngine::Postgres;
+    type ConnBeginTransaction = RdbmsPostgresDbConnectionBeginTransaction;
     type ConnExecute = RdbmsPostgresDbConnectionExecute;
     type ConnQuery = RdbmsPostgresDbConnectionQuery;
     type ConnQueryStream = RdbmsPostgresDbConnectionQueryStream;

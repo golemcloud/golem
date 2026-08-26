@@ -20,7 +20,7 @@ use crate::app::context::BuildContext;
 use crate::app::edit;
 use crate::app::edit::cargo_toml::{DependencySpec, DependencyTable};
 use crate::fs;
-use crate::model::GuestLanguage;
+use crate::model::language::GuestLanguage;
 use crate::sdk_overrides::{RustDependency, SdkOverrides};
 use crate::versions;
 use std::collections::BTreeMap;

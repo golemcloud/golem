@@ -124,7 +124,6 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-directory-source-ifs:ts-main:
@@ -156,7 +155,6 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-directory-source-ifs:ts-main:
@@ -216,7 +214,6 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-directory-source-ifs:ts-main:
@@ -374,7 +371,6 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
             environments:
               local:
                 server: local
-                componentPresets: debug
 
             components:
               test-app-directory-source-ifs:ts-main:

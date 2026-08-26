@@ -17,7 +17,25 @@
 // (`toValue`/`fromValue`). It depends only on the new schema model
 // (`internal/schema-model/`), never on the decorator-era `Type.Type` resolvers.
 
-import { SchemaGraph, SchemaValue } from '../internal/schema-model';
+import {
+  cloneSchemaValue,
+  deepEqual,
+  schemaValueToWit,
+  SchemaGraph,
+  SchemaType,
+  SchemaValue,
+} from '../internal/schema-model';
+import { GuestSecretHandle } from '../internal/schema-model/secretHandle';
+import { SECRET_INTERNAL } from '../internal/schema-model/secretInternal';
+import { GuestQuotaTokenHandle } from '../internal/schema-model/quotaTokenHandle';
+import { QUOTA_INTERNAL } from '../internal/schema-model/quotaInternal';
+import { GuestPermissionCardHandle } from '../internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
+import type {
+  PermissionCard as RawPermissionCard,
+  QuotaToken as RawQuotaToken,
+  Secret as RawSecret,
+} from 'golem:core/types@2.0.0';
 import type { StandardSchemaV1 } from './standardSchema';
 
 /** An SDK codec rejected a value because its outer source shape does not match. */
@@ -158,3 +176,243 @@ export type SchemaWalker = (
   schema: unknown,
   recurse: (child: unknown) => SchemaCodec,
 ) => SchemaCodec;
+
+/**
+ * Check that encoding and decoding `source` preserves its source shape without
+ * consuming any affine handle retained in `encoded` for the real wire transfer.
+ */
+export function sourceValueIsCanonical(
+  codec: SchemaCodec,
+  source: unknown,
+  encoded: SchemaValue,
+): boolean {
+  if (!graphMayContainCapability(codec.graph)) {
+    return deepEqual(codec.fromValue(encoded), source);
+  }
+
+  const probe = codec.toValue(source);
+  try {
+    return deepEqual(codec.fromValue(probe), source);
+  } finally {
+    drainCapabilityHandles(probe);
+  }
+}
+
+/**
+ * Check a decoded schema value for codec-specific canonicality without moving
+ * any affine handle that will subsequently be delivered to application code.
+ */
+export function schemaValueIsCanonical(codec: SchemaCodec, value: SchemaValue): boolean {
+  if (!graphMayContainCapability(codec.graph)) {
+    return deepEqual(codec.toValue(codec.fromValue(value)), value);
+  }
+
+  const sentinels = new Map<unknown, object>();
+  const expected = cloneWithSentinelHandles(value, sentinels);
+  const probe = cloneWithSentinelHandles(value, sentinels);
+  let roundTrip: SchemaValue | undefined;
+  try {
+    roundTrip = codec.toValue(codec.fromValue(probe));
+    return deepEqual(schemaValueToWit(roundTrip), schemaValueToWit(expected));
+  } finally {
+    drainCapabilityHandles(probe);
+    drainCapabilityHandles(expected);
+    if (roundTrip !== undefined) drainCapabilityHandles(roundTrip);
+  }
+}
+
+const capabilityGraphCache = new WeakMap<SchemaGraph, boolean>();
+
+function graphMayContainCapability(graph: SchemaGraph): boolean {
+  const cached = capabilityGraphCache.get(graph);
+  if (cached !== undefined) return cached;
+
+  const visitedRefs = new Set<string>();
+  const visit = (type: SchemaType): boolean => {
+    const body = type.body;
+    switch (body.tag) {
+      case 'secret':
+      case 'quota-token':
+      case 'permission-card':
+        return true;
+      case 'ref': {
+        if (visitedRefs.has(body.id)) return false;
+        visitedRefs.add(body.id);
+        const definition = graph.defs.get(body.id);
+        return definition !== undefined && visit(definition.body);
+      }
+      case 'record':
+        return body.fields.some((field) => visit(field.body));
+      case 'variant':
+        return body.cases.some(
+          (variant) => variant.payload !== undefined && visit(variant.payload),
+        );
+      case 'tuple':
+        return body.elements.some(visit);
+      case 'list':
+      case 'fixed-list':
+      case 'option':
+        return visit(body.element);
+      case 'map':
+        return visit(body.key) || visit(body.value);
+      case 'result':
+        return (
+          (body.ok !== undefined && visit(body.ok)) || (body.err !== undefined && visit(body.err))
+        );
+      case 'union':
+        return body.branches.some((branch) => visit(branch.body));
+      case 'future':
+      case 'stream':
+        return body.element !== undefined && visit(body.element);
+      default:
+        return false;
+    }
+  };
+
+  const result = visit(graph.root);
+  capabilityGraphCache.set(graph, result);
+  return result;
+}
+
+function cloneWithSentinelHandles(
+  value: SchemaValue,
+  sentinels: Map<unknown, object>,
+): SchemaValue {
+  const sentinelFor = (raw: unknown): object => {
+    const existing = sentinels.get(raw);
+    if (existing !== undefined) return existing;
+    const sentinel = Object.freeze({});
+    sentinels.set(raw, sentinel);
+    return sentinel;
+  };
+
+  switch (value.tag) {
+    case 'secret': {
+      const raw = value.handle.withHandle((handle) => handle);
+      if (raw === undefined) throw new Error('secret handle was already transferred');
+      return {
+        tag: 'secret',
+        handle: GuestSecretHandle.fromRaw(SECRET_INTERNAL, sentinelFor(raw) as RawSecret),
+      };
+    }
+    case 'quota-token': {
+      const raw = value.handle.withHandle((handle) => handle);
+      if (raw === undefined) throw new Error('quota-token handle was already transferred');
+      return {
+        tag: 'quota-token',
+        handle: GuestQuotaTokenHandle.fromRaw(QUOTA_INTERNAL, sentinelFor(raw) as RawQuotaToken),
+      };
+    }
+    case 'permission-card': {
+      const raw = value.handle.withHandle((handle) => handle);
+      if (raw === undefined) throw new Error('permission-card handle was already transferred');
+      return {
+        tag: 'permission-card',
+        handle: GuestPermissionCardHandle.fromRaw(
+          PERMISSION_CARD_INTERNAL,
+          sentinelFor(raw) as RawPermissionCard,
+        ),
+      };
+    }
+    case 'record':
+      return {
+        tag: 'record',
+        fields: value.fields.map((field) => cloneWithSentinelHandles(field, sentinels)),
+      };
+    case 'variant':
+      return {
+        tag: 'variant',
+        caseIndex: value.caseIndex,
+        payload:
+          value.payload === undefined
+            ? undefined
+            : cloneWithSentinelHandles(value.payload, sentinels),
+      };
+    case 'tuple':
+      return {
+        tag: 'tuple',
+        elements: value.elements.map((element) => cloneWithSentinelHandles(element, sentinels)),
+      };
+    case 'list':
+      return {
+        tag: 'list',
+        elements: value.elements.map((element) => cloneWithSentinelHandles(element, sentinels)),
+      };
+    case 'fixed-list':
+      return {
+        tag: 'fixed-list',
+        elements: value.elements.map((element) => cloneWithSentinelHandles(element, sentinels)),
+      };
+    case 'map':
+      return {
+        tag: 'map',
+        entries: value.entries.map((entry) => ({
+          key: cloneWithSentinelHandles(entry.key, sentinels),
+          value: cloneWithSentinelHandles(entry.value, sentinels),
+        })),
+      };
+    case 'option':
+      return {
+        tag: 'option',
+        value:
+          value.value === undefined ? undefined : cloneWithSentinelHandles(value.value, sentinels),
+      };
+    case 'result':
+      return {
+        tag: 'result',
+        result: {
+          tag: value.result.tag,
+          value:
+            value.result.value === undefined
+              ? undefined
+              : cloneWithSentinelHandles(value.result.value, sentinels),
+        },
+      };
+    case 'union':
+      return {
+        tag: 'union',
+        unionTag: value.unionTag,
+        body: cloneWithSentinelHandles(value.body, sentinels),
+      };
+    default:
+      return cloneSchemaValue(value);
+  }
+}
+
+function drainCapabilityHandles(value: SchemaValue): void {
+  switch (value.tag) {
+    case 'secret':
+    case 'quota-token':
+    case 'permission-card':
+      value.handle.take();
+      return;
+    case 'record':
+      value.fields.forEach(drainCapabilityHandles);
+      return;
+    case 'variant':
+      if (value.payload !== undefined) drainCapabilityHandles(value.payload);
+      return;
+    case 'tuple':
+    case 'list':
+    case 'fixed-list':
+      value.elements.forEach(drainCapabilityHandles);
+      return;
+    case 'map':
+      value.entries.forEach((entry) => {
+        drainCapabilityHandles(entry.key);
+        drainCapabilityHandles(entry.value);
+      });
+      return;
+    case 'option':
+      if (value.value !== undefined) drainCapabilityHandles(value.value);
+      return;
+    case 'result':
+      if (value.result.value !== undefined) drainCapabilityHandles(value.result.value);
+      return;
+    case 'union':
+      drainCapabilityHandles(value.body);
+      return;
+    default:
+      return;
+  }
+}

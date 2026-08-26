@@ -470,7 +470,7 @@ mod canonical {
             ExtendedRepeatableListShape, ExtendedToolType, ExtendedValueIsLiteral,
             get_extended_tool_by_name, get_tool_by_name, option_collected_graph, render_help,
         };
-        use golem_rust::golem_agentic::golem::tool::common::{ErrorKind, FlagShape, Repetition};
+        use golem_rust::schema::tool::wit::wire::{ErrorKind, FlagShape, Repetition};
         use golem_rust::schema::{SchemaType, SchemaValue};
         use golem_rust::{FromSchema, IntoSchema, tool_definition, tool_implementation};
         use golem_rust_macro::ToolError;

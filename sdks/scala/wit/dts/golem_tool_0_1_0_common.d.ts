@@ -38,10 +38,15 @@
  *     `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`.
  *   • Subcommand names + aliases are pairwise unique among siblings.
  *   • Within a `command-body`: option long-names + flag long-names +
- *     positional names + aliases + short forms are pairwise unique,
- *     AND unique against globals inherited from any ancestor command.
- *   • Constraint `ref` names resolve against body-declared options /
- *     flags / positionals AND globals inherited from any ancestor.
+ *     positional names + aliases are pairwise unique, AND unique against
+ *     the long-names + aliases of globals inherited from any ancestor.
+ *   • Option and flag short forms occupy a separate `char` namespace:
+ *     they are pairwise unique with other short forms in the body and with
+ *     inherited global short forms. A string name or alias such as `"f"`
+ *     does not collide with the short form `'f'`.
+ *   • Constraint `ref` string names resolve against body-declared long-names,
+ *     positional names, aliases, and globals inherited from any ancestor;
+ *     short forms do not participate in constraint resolution.
  *   • For `ref::value-is(name, lit)`, the literal must be a valid value
  *     for the declared type node of `name` in `tool.schema`.
  *   • `default-formatter` resolves to a name in `formatters`.
@@ -72,6 +77,12 @@
  */
 declare module 'golem:tool/common@0.1.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
+  export class UnderlyingTool {
+    /**
+     * @throws ToolError
+     */
+    invoke(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined): Promise<InvocationResult>;
+  }
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type TypeNodeIndex = golemCore200Types.TypeNodeIndex;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
@@ -397,6 +408,24 @@ declare module 'golem:tool/common@0.1.0' {
      */
     schema: SchemaGraph;
   };
+  export type MonomorphicScope = {
+    presented: Tool;
+    expected?: Tool;
+  };
+  export type ToolMiddlewareScope =
+  {
+    tag: 'monomorphic'
+    val: MonomorphicScope
+  } |
+  {
+    tag: 'universal'
+  };
+  export type ToolMiddleware = {
+    name: string;
+    aliases: string[];
+    doc: Doc;
+    scope: ToolMiddlewareScope;
+  };
   /**
    * Invocation contract — shared between guest and host
    */
@@ -442,4 +471,5 @@ declare module 'golem:tool/common@0.1.0' {
     result?: TypedSchemaValue;
     stdout?: AsyncIterable<number>;
   };
+  export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

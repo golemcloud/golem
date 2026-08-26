@@ -14,15 +14,18 @@
 
 //! Seam 3 runtime test for concurrent durability.
 //!
-//! Durable replay of concurrently-completing host calls requires that the
-//! host->guest event *delivery* order equals the order the host recorded the
-//! completions (the oplog `End` order). The Golem Wasmtime fork pins the
-//! component-model-async ready queue to FIFO/insertion order for exactly this
-//! reason (`WaitableSet.ready` is a `VecDeque` drained front-first); before that
-//! change the ready set was a `BTreeSet<Waitable>` ordered by table-slot
-//! identity (`TableId` rep), so when several host calls completed before the
-//! guest drained them they were delivered by allocation order instead of
-//! completion order.
+//! When several host calls become ready before the guest drains them, their
+//! host->guest events must retain that ready order. The Golem Wasmtime fork pins
+//! the component-model-async ready queue to FIFO/insertion order for this reason
+//! (`WaitableSet.ready` is a `VecDeque` drained front-first); before that change
+//! the ready set was a `BTreeSet<Waitable>` ordered by table-slot identity
+//! (`TableId` rep), so events were delivered by allocation order instead.
+//!
+//! Host completion and guest delivery are still distinct durability boundaries:
+//! unrelated guest work may run between a call's oplog `End` and its callback.
+//! Durable replay records that callback boundary separately. This test isolates
+//! the runtime ready-queue ordering only; it does not equate `End` order with
+//! delivery order in the general case.
 //!
 //! Unlike the `replay_state` fuzz tests (Seam 1), which operate on fabricated
 //! oplogs, this test exercises the *actual* runtime: a bespoke minimal
@@ -37,7 +40,7 @@
 
 use test_r::test;
 use wasmtime::component::{Accessor, Component, Linker};
-use wasmtime::{Config, Engine, Store};
+use wasmtime::{Engine, Store};
 
 /// Host-side state driving the completion order of the bespoke `call` host
 /// function.
@@ -49,12 +52,7 @@ struct DeliveryState {
 }
 
 fn engine() -> Engine {
-    let mut config = Config::default();
-    // Mirror the production component-model-async configuration (see
-    // `Golem::create_wasmtime_config`).
-    config.wasm_component_model(true);
-    config.wasm_component_model_async(true);
-    config.wasm_component_model_error_context(true);
+    let config = golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache();
     Engine::new(&config).expect("failed to create engine")
 }
 
@@ -116,6 +114,8 @@ async fn delivery_order_for(schedule: Vec<u32>) -> Vec<u32> {
         .expect("register golem:cmtest/host#call");
 
     let mut store = Store::new(&engine, DeliveryState { schedule, step: 0 });
+    store.set_fuel(u64::MAX).expect("set test fuel");
+    store.set_epoch_deadline(u64::MAX);
     let instance = linker
         .instantiate_async(&mut store, &component)
         .await

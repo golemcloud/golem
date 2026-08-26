@@ -313,7 +313,7 @@ impl WebhookAgent for WebhookAgentImpl {
     }
 
     async fn test_webhook(&self) -> WebhookResponse {
-        let webhook = create_webhook();
+        let webhook = create_webhook().expect("webhook creation should be allowed");
 
         let url = WebhookUrl {
             webhook_url: webhook.url().to_string(),

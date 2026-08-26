@@ -65,5 +65,5 @@ uuid = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
-default = ["kubernetes"]
+default = []
 kubernetes = ["dep:kube", "dep:k8s-openapi"]

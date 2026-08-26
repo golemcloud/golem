@@ -2,6 +2,7 @@
 name = "golem-registry-service"
 version = "0.0.0"
 edition = "2024"
+autotests = false
 
 [[bin]]
 name = "golem-registry-service"
@@ -27,8 +28,6 @@ anyhow = { workspace = true }
 applying = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
-aws-config = { workspace = true }
-aws-sdk-s3 = { workspace = true }
 bigdecimal = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }

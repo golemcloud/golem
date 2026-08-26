@@ -38,7 +38,6 @@ wit_dir="$sdk_root/wit"
 gen_dir="$sdk_root/.generated"
 agent_wit_root="$gen_dir/agent-wit-root"
 wrapper_dir="$gen_dir/agent-guest-wrapper"
-out_wasm="$wrapper_dir/target/wasm32-wasip2/release/agent_guest.wasm"
 
 echo "[agent-guest] sdk_root=$sdk_root" >&2
 
@@ -133,12 +132,22 @@ fi
 # resolve a fresh lock during the build.
 rm -f "$wrapper_dir/Cargo.lock"
 
-echo "[agent-guest] Building guest runtime (cargo build --target wasm32-wasip2 --release)..." >&2
 if [[ -f "$HOME/.cargo/env" ]]; then
   # shellcheck disable=SC1091
   . "$HOME/.cargo/env"
 fi
 
+target_dir="$(
+  cd "$wrapper_dir"
+  rustup run stable cargo metadata --no-deps --format-version 1 | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p'
+)"
+if [[ -z "$target_dir" ]]; then
+  echo "[agent-guest] ERROR: failed to resolve the cargo target directory" >&2
+  exit 1
+fi
+out_wasm="$target_dir/wasm32-wasip2/release/agent_guest.wasm"
+
+echo "[agent-guest] Building guest runtime (cargo build --target wasm32-wasip2 --release)..." >&2
 ( cd "$wrapper_dir" && env -u ARGV0 rustup run stable cargo build --target wasm32-wasip2 --release --no-default-features --features full-p3,golem )
 
 if [[ ! -f "$out_wasm" ]]; then

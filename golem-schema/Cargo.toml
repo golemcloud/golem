@@ -12,6 +12,11 @@ license-file = "../LICENSE"
 [lib]
 harness = false
 
+[[test]]
+name = "owned_typed_wit"
+harness = false
+required-features = ["guest"]
+
 [features]
 default = []
 bigdecimal = []

@@ -25,44 +25,6 @@ object HostApiCompileSpec extends ZIOSpecDefault {
 
   def spec = suite("HostApiCompileSpec")(
     // ---------------------------------------------------------------------------
-    // PersistenceLevel
-    // ---------------------------------------------------------------------------
-
-    test("all PersistenceLevel variants construct") {
-      val levels: List[HostApi.PersistenceLevel] = List(
-        HostApi.PersistenceLevel.PersistNothing,
-        HostApi.PersistenceLevel.PersistRemoteSideEffects,
-        HostApi.PersistenceLevel.Smart,
-        HostApi.PersistenceLevel.Unknown("future-level")
-      )
-      assertTrue(levels.size == 4)
-    },
-
-    test("PersistenceLevel.fromTag roundtrips all known tags") {
-      assertTrue(
-        HostApi.PersistenceLevel.fromTag("persist-nothing") == HostApi.PersistenceLevel.PersistNothing,
-        HostApi.PersistenceLevel.fromTag("persist-remote-side-effects") ==
-          HostApi.PersistenceLevel.PersistRemoteSideEffects,
-        HostApi.PersistenceLevel.fromTag("smart") == HostApi.PersistenceLevel.Smart
-      )
-    },
-
-    test("PersistenceLevel.fromTag returns Unknown for unrecognized tags") {
-      val result = HostApi.PersistenceLevel.fromTag("new-level")
-      assertTrue(result == HostApi.PersistenceLevel.Unknown("new-level"))
-    },
-
-    test("PersistenceLevel exhaustive pattern match compiles") {
-      def describe(level: HostApi.PersistenceLevel): String = level match {
-        case HostApi.PersistenceLevel.PersistNothing           => "nothing"
-        case HostApi.PersistenceLevel.PersistRemoteSideEffects => "remote"
-        case HostApi.PersistenceLevel.Smart                    => "smart"
-        case HostApi.PersistenceLevel.Unknown(tag)             => s"unknown($tag)"
-      }
-      assertTrue(describe(HostApi.PersistenceLevel.Smart) == "smart")
-    },
-
-    // ---------------------------------------------------------------------------
     // ForkResult
     // ---------------------------------------------------------------------------
 

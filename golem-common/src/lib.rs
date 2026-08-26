@@ -65,6 +65,8 @@ pub mod retries;
 pub mod serialization;
 #[cfg(feature = "full")]
 pub mod tracing;
+#[cfg(feature = "full")]
+pub mod wasmtime_config;
 
 mod macros;
 

@@ -1,0 +1,9 @@
+[package]
+name = "middleware-compile-fail"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+middleware-definition = { path = "../definition" }
+sdk = { package = "golem-rust", path = "../../../..", features = ["export_golem_tool_middleware"] }

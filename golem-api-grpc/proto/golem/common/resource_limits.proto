@@ -15,6 +15,8 @@ message ResourceLimits {
   uint64 available_rpc_calls = 8;
   uint64 max_concurrent_agents_per_executor = 9;
   uint64 oplog_writes_per_second = 10;
+  // True only when the registry applied the corresponding batch update.
+  bool usage_update_applied = 11;
 }
 
 message AccountResourceLimitsEntry {

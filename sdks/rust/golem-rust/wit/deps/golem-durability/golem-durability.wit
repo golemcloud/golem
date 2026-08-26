@@ -1,20 +1,25 @@
-package golem:durability@1.5.0;
+package golem:durability@1.6.0;
 
 interface durability {
-    use golem:api/host@1.5.0.{persistence-level};
-    use golem:api/oplog@1.5.0.{oplog-index, wrapped-function-type};
+    use golem:api/oplog@1.5.0.{wrapped-function-type};
     use wasi:clocks/system-clock@0.3.0.{instant as datetime};
     use golem:core/types@2.0.0.{typed-schema-value};
 
     type durable-function-type = wrapped-function-type;
 
-    /// Represents the current durable execution state
-    record durable-execution-state {
-        /// If true, the executor is in live mode, side-effects should be performed and persisted.
-        /// If false, the executor is in replay mode, side-effects should be replayed from the persisted data.
-        is-live: bool,
-        /// The currently active persistence level
-        persistence-level: persistence-level,
+    /// A live custom durable invocation.
+    ///
+    /// Host effects initiated while this resource is active are recorded as replay-inert
+    /// observational entries belonging to the invocation. Finishing consumes the resource and
+    /// persists the response. Dropping it without finishing leaves the invocation incomplete so
+    /// normal recovery re-executes it.
+    resource live-custom-durable-invocation {
+        /// Completes the invocation with its schema-carrying response.
+        finish: static func(
+            this: live-custom-durable-invocation,
+            response: typed-schema-value,
+            forced-commit: bool,
+        );
     }
 
     /// Represents the oplog entry version; this is for backward compatibility and most use cases should always use
@@ -39,42 +44,27 @@ interface durability {
         entry-version: oplog-entry-version
     }
 
+    /// The result of opening a custom durable invocation.
+    variant custom-durable-invocation {
+        /// Execute the operation body and finish the returned live invocation.
+        live(live-custom-durable-invocation),
+        /// Return the recorded response without executing the operation body.
+        replayed(persisted-durable-function-invocation),
+    }
+
     /// Observes a function call (produces logs and metrics)
     observe-function-call: func(iface: string, function: string);
 
-    /// Marks the beginning of a durable function.
+    /// Opens a custom durable invocation.
     ///
-    /// There must be a corresponding call to `end-durable-function` after the function has
-    /// performed its work (it can be ended in a different context, for example after an async
-    /// pollable operation has been completed)
-    begin-durable-function: func(function-type: durable-function-type) -> oplog-index;
-
-    /// Marks the end of a durable function
-    ///
-    /// This is a pair of `begin-durable-function` and should be called after the durable function
-    /// has performed and persisted or replayed its work. The `begin-index` should be the index
-    /// returned by `begin-durable-function`.
-    ///
-    /// Normally commit behavior is decided by the executor based on the `function-type`. However, in special
-    /// cases the `forced-commit` parameter can be used to force commit the oplog in an efficient way.
-    end-durable-function: func(function-type: durable-function-type, begin-index: oplog-index, forced-commit: bool);
-
-    /// Gets the current durable execution state
-    current-durable-execution-state: func() -> durable-execution-state;
-
-    /// Writes a record to the agent's oplog representing a durable function invocation
-    ///
-    /// The request and response are defined as schema-carrying values, which makes it
-    /// self-describing for observers of oplogs.
-    persist-durable-function-invocation: func(
+    /// The executor allocates a deterministic identity synchronously when the call begins. A fresh
+    /// or incomplete invocation returns an owned `live-custom-durable-invocation`. A completed
+    /// invocation returns `replayed` with its recorded response.
+    begin-custom-durable-invocation: func(
         function-name: string,
         request: typed-schema-value,
-        response: typed-schema-value,
         function-type: durable-function-type,
-    );
-
-    /// Reads the next persisted durable function invocation from the oplog during replay
-    read-persisted-durable-function-invocation: func() -> persisted-durable-function-invocation;
+    ) -> custom-durable-invocation;
 
     // The p2 version of this interface had a `lazy-initialized-pollable` resource: a
     // host-owned pollable that was ready while unattached (during replay) and could later

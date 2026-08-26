@@ -132,7 +132,10 @@ resolve_target_dir() {
 
 REPO_ROOT="$(cd "${TEST_COMP_DIR:-$(pwd)}/.." && pwd)"
 TARGET_DIR="$(resolve_target_dir "$REPO_ROOT")"
-GOLEM_CLI="${TARGET_DIR}/debug/golem-cli"
+GOLEM_CLI="${GOLEM_CLI:-${TARGET_DIR}/debug/golem-cli}"
+if [[ "$GOLEM_CLI" != /* ]]; then
+  GOLEM_CLI="${REPO_ROOT}/${GOLEM_CLI}"
+fi
 
 should_clean() {
   [ "$clean_only" = true ] || [ "$rebuild" = true ]

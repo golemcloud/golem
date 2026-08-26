@@ -33,15 +33,6 @@ import scala.concurrent.{ExecutionContext, Future}
  */
 /** Scoped runtime controls for Scala.js agents. */
 object Guards {
-  def withPersistenceLevel[A](level: HostApi.PersistenceLevel)(block: => Future[A]): Future[A] =
-    withGuard(usePersistenceLevel(level))(block)
-
-  def usePersistenceLevel(level: HostApi.PersistenceLevel): PersistenceLevelGuard = {
-    val original = HostApi.getOplogPersistenceLevel()
-    HostApi.setOplogPersistenceLevel(level)
-    new PersistenceLevelGuard(() => HostApi.setOplogPersistenceLevel(original))
-  }
-
   def withRetryPolicy[A](policy: JsNamedRetryPolicy)(block: => Future[A]): Future[A] =
     withGuard(useRetryPolicy(policy))(block)
 
@@ -125,8 +116,6 @@ object Guards {
         release()
       }
   }
-
-  final class PersistenceLevelGuard private[golem] (release: () => Unit) extends Guard(release)
 
   final class RetryPolicyGuard private[golem] (release: () => Unit) extends Guard(release)
 

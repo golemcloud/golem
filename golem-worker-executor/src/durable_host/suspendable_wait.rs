@@ -278,9 +278,7 @@ mod tests {
     use golem_common::model::agent::AgentMode;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::oplog::{
-        OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
-    };
+    use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
     use golem_common::model::{AgentId, OwnedAgentId, PromiseId, ScheduleId, ScheduledAction};
     use std::collections::{BTreeMap, BTreeSet};
     use std::fmt::{Debug, Formatter};
@@ -347,6 +345,10 @@ mod tests {
             unreachable!("oplog is unused by promise waits")
         }
 
+        fn enqueue_add(&self, _entry: OplogEntry) -> crate::services::oplog::OplogAddReceipt {
+            Box::pin(async { unreachable!("oplog is unused by promise waits") })
+        }
+
         async fn add_pair(
             &self,
             _start: OplogEntry,
@@ -410,8 +412,6 @@ mod tests {
         ) -> Result<OrderedOplogStart, String> {
             unreachable!("oplog is unused by this test")
         }
-
-        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
     }
 
     fn unused_wakeup_scheduler() -> WakeupScheduler {
@@ -495,6 +495,10 @@ mod tests {
             unreachable!("oplog writes are unused by wakeup scheduling")
         }
 
+        fn enqueue_add(&self, _entry: OplogEntry) -> crate::services::oplog::OplogAddReceipt {
+            Box::pin(async { unreachable!("oplog writes are unused by wakeup scheduling") })
+        }
+
         async fn add_pair(
             &self,
             _start: OplogEntry,
@@ -558,8 +562,6 @@ mod tests {
         ) -> Result<OrderedOplogStart, String> {
             unreachable!("oplog is unused by this test")
         }
-
-        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
     }
 
     fn flipping_wakeup_scheduler(safe: Arc<AtomicBool>) -> WakeupScheduler {

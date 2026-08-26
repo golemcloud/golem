@@ -64,12 +64,6 @@ fn wasmImportMarkEndOperation(p0 : Int64) = "golem:api/host@1.5.0" "mark-end-ope
 fn wasmImportTrap(p0 : Int, p1 : Int) = "golem:api/host@1.5.0" "trap"
 
 ///|
-fn wasmImportGetOplogPersistenceLevel() -> Int = "golem:api/host@1.5.0" "get-oplog-persistence-level"
-
-///|
-fn wasmImportSetOplogPersistenceLevel(p0 : Int) = "golem:api/host@1.5.0" "set-oplog-persistence-level"
-
-///|
 fn wasmImportGetIdempotenceMode() -> Int = "golem:api/host@1.5.0" "get-idempotence-mode"
 
 ///|
@@ -79,15 +73,6 @@ fn wasmImportSetIdempotenceMode(p0 : Int) = "golem:api/host@1.5.0" "set-idempote
 fn wasmImportGenerateIdempotencyKey(p0 : Int) = "golem:api/host@1.5.0" "generate-idempotency-key"
 
 ///|
-fn wasmImportSelfCard(p0 : Int) = "golem:api/host@1.5.0" "self-card"
-
-///|
-fn wasmImportDeriveCard(p0 : Int64, p1 : Int64, p2 : Int) = "golem:api/host@1.5.0" "derive-card"
-
-///|
-fn wasmImportInstallCard(p0 : Int64, p1 : Int64, p2 : Int) = "golem:api/host@1.5.0" "install-card"
-
-///|
 fn wasmImportUpdateAgent(
   p0 : Int64,
   p1 : Int64,
@@ -95,6 +80,7 @@ fn wasmImportUpdateAgent(
   p3 : Int,
   p4 : Int64,
   p5 : Int,
+  p6 : Int,
 ) = "golem:api/host@1.5.0" "update-agent"
 
 ///|
@@ -120,6 +106,7 @@ fn wasmImportForkAgent(
   p6 : Int,
   p7 : Int,
   p8 : Int64,
+  p9 : Int,
 ) = "golem:api/host@1.5.0" "fork-agent"
 
 ///|
@@ -130,6 +117,7 @@ fn wasmImportRevertAgent(
   p3 : Int,
   p4 : Int,
   p5 : Int64,
+  p6 : Int,
 ) = "golem:api/host@1.5.0" "revert-agent"
 
 ///|
@@ -151,8 +139,25 @@ fn wasmImportResolveAgentIdStrict(
 fn wasmImportFork(p0 : Int) = "golem:api/host@1.5.0" "fork"
 
 ///|
+extern "wasm" fn mbt_ffi_store64(offset : Int, value : Int64) =
+  #|(func (param i32) (param i64) local.get 0 local.get 1 i64.store)
+
+///|
+extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
+
+///|
+extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
+  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
+
+///|
 extern "wasm" fn mbt_ffi_load64(offset : Int) -> Int64 =
   #|(func (param i32) (result i64) local.get 0 i64.load)
+
+///|
+#owned(bytes)
+extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
+  #|(func (param i32) (result i32) local.get 0)
 
 ///|
 extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
@@ -162,40 +167,17 @@ extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
   #| local.get 0)
 
 ///|
-#owned(bytes)
-extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
+extern "wasm" fn mbt_ffi_store8(offset : Int, value : Int) =
+  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store8)
+
+///|
+#owned(str)
+extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
   #|(func (param i32) (result i32) local.get 0)
 
 ///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
   #|(func (param i32) local.get 0 call $moonbit.decref)
-
-///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
-
-///|
-extern "wasm" fn mbt_ffi_store64(offset : Int, value : Int64) =
-  #|(func (param i32) (param i64) local.get 0 local.get 1 i64.store)
-
-///|
-extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
-  #|(func (param i32) (param i32) (result i32)
-  #| local.get 0
-  #| local.get 1 call $moonbit.init_array8
-  #| local.get 0)
-
-///|
-extern "wasm" fn mbt_ffi_store32(offset : Int, value : Int) =
-  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store)
-
-///|
-extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
-
-///|
-extern "wasm" fn mbt_ffi_store8(offset : Int, value : Int) =
-  #|(func (param i32) (param i32) local.get 0 local.get 1 i32.store8)
 
 ///|
 extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
@@ -205,6 +187,12 @@ extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
   #| local.get 1)
 
 ///|
-#owned(str)
-extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
+
+///|
+extern "wasm" fn mbt_ffi_ptr2bytes(ptr : Int, len : Int) -> FixedArray[Byte] =
+  #|(func (param i32) (param i32) (result i32)
+  #| local.get 0
+  #| local.get 1 call $moonbit.init_array8
+  #| local.get 0)

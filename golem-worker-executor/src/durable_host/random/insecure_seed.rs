@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::durable_host::concurrent::{CallHandle, NotCancellable};
+use crate::durable_host::concurrent::{DurableCallSession, NotCancellable};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostResponseRandomSeed, host_functions,
@@ -23,13 +23,11 @@ use wasmtime_wasi::random::WasiRandomView as _;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn insecure_seed(&mut self) -> wasmtime::Result<(u64, u64)> {
-        let handle =
-            CallHandle::<host_functions::RandomInsecureSeedInsecureSeed, NotCancellable>::start(
-                self,
-                HostRequestNoInput {},
-                DurableFunctionType::ReadLocal,
-            )
-            .await?;
+        let handle = DurableCallSession::<
+            host_functions::RandomInsecureSeedInsecureSeed,
+            NotCancellable,
+        >::start(self, HostRequestNoInput {}, DurableFunctionType::ReadLocal)
+        .await?;
         let result = handle
             .run(self, async |ctx| -> wasmtime::Result<_> {
                 let result = {

@@ -33,10 +33,10 @@ use crate::log::{
     LogColorize, LogIndent, log_action, log_anyhow_error, log_error, log_failed_to,
     log_finished_ok, log_skipping_up_to_date, logln,
 };
-use crate::model::GuestLanguage;
-use crate::model::text::diff::log_unified_diff_for_path;
-use crate::model::text::fmt::log_text_view;
-use crate::model::text::help::{AppNewNextStepsHint, AppNewNextStepsMode};
+use crate::model::deploy::log_unified_diff_for_path;
+use crate::model::help::{AppNewNextStepsHint, AppNewNextStepsMode};
+use crate::model::language::GuestLanguage;
+use crate::model::text_format::log_text_view;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
@@ -185,7 +185,7 @@ impl TemplateHandler {
 
         self.ctx
             .log_handler()
-            .log_output(crate::model::text::action_result::NewAppResult {
+            .log_output(crate::model::app::NewAppResult {
                 created: true,
                 application_name: selections.application_name.to_string(),
                 application_dir: context.application_path.clone(),

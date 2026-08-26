@@ -98,8 +98,9 @@ object SchemaTypeBody {
   final case class UnionType(branches: List[UnionBranch]) extends SchemaTypeBody
 
   // Capability nodes
-  final case class SecretType(spec: SecretSpec)         extends SchemaTypeBody
-  final case class QuotaTokenType(spec: QuotaTokenSpec) extends SchemaTypeBody
+  final case class SecretType(spec: SecretSpec)                 extends SchemaTypeBody
+  final case class QuotaTokenType(spec: QuotaTokenSpec)         extends SchemaTypeBody
+  final case class PermissionCardType(spec: PermissionCardSpec) extends SchemaTypeBody
 
   // WASI P3 stubs (parseable only; no semantics yet)
   final case class FutureType(element: Option[SchemaType]) extends SchemaTypeBody

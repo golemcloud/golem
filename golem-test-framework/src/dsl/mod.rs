@@ -31,6 +31,8 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::application::{Application, ApplicationId};
+use golem_common::model::card::parse_polymorphic_permission;
+use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
     AgentTypeProvisionConfigUpdate, CanonicalFilePath, ComponentDto, ComponentId,
@@ -71,15 +73,26 @@ pub struct PrecompiledComponent {
     pub package_name: String,
 }
 
+/// Default permissions for tests that predate host-call enforcement and exercise host APIs.
+pub fn default_test_agent_initial_permissions_for_account(
+    account_email: AccountEmail,
+) -> AgentTypeInitialPermissions {
+    default_test_agent_initial_permissions(RecipientPattern::Account {
+        account: account_email,
+    })
+}
+
+pub fn default_test_agent_initial_permissions(
+    recipient: RecipientPattern,
+) -> AgentTypeInitialPermissions {
+    AgentTypeInitialPermissions::default_for_recipient(recipient)
+}
+
 pub(crate) fn default_agent_type_provision_config_creation_for_account(
     account_email: AccountEmail,
 ) -> AgentTypeProvisionConfigCreation {
     AgentTypeProvisionConfigCreation {
-        initial_permissions: AgentTypeInitialPermissions::default_for_recipient(
-            golem_common::model::card::recipient::RecipientPattern::Account {
-                account: account_email,
-            },
-        ),
+        initial_permissions: default_test_agent_initial_permissions_for_account(account_email),
         env: BTreeMap::new(),
         config: Vec::new(),
         plugin_installations: Vec::new(),
@@ -890,6 +903,44 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
+    /// Starts an agent type without default host permissions except Golem-provided runtime
+    /// metadata.
+    pub fn without_default_host_permissions(mut self, agent_type: &str) -> Self {
+        let recipient = RecipientPattern::Account {
+            account: self.dsl.account_email(),
+        }
+        .render();
+        let runtime_metadata = [
+            "GOLEM_AGENT_ID",
+            "GOLEM_AGENT_TYPE",
+            "GOLEM_WORKER_NAME",
+            "GOLEM_COMPONENT_ID",
+            "GOLEM_COMPONENT_REVISION",
+        ]
+        .into_iter()
+        .map(|name| {
+            parse_polymorphic_permission(&format!("env(?agent) @ {recipient} : read : {name}"))
+                .expect("valid Golem-provided runtime metadata permission")
+        })
+        .collect();
+        self.agent_type_provision_configs.insert(
+            AgentTypeName(agent_type.to_string()),
+            AgentTypeProvisionConfigCreation {
+                initial_permissions: AgentTypeInitialPermissions::from_patterns(
+                    runtime_metadata,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+                env: BTreeMap::new(),
+                config: Vec::new(),
+                plugin_installations: Vec::new(),
+                files: BTreeMap::new(),
+            },
+        );
+        self
+    }
+
     fn provision_config_entry_mut(
         &mut self,
         agent_type: &str,
@@ -1158,6 +1209,7 @@ pub fn is_worker_execution_error(
 pub fn worker_error_message(error: &WorkerExecutorError) -> String {
     match error {
         WorkerExecutorError::InvalidRequest { details } => details.clone(),
+        WorkerExecutorError::PermissionDenied { details } => details.clone(),
         WorkerExecutorError::AgentAlreadyExists { agent_id } => {
             format!("Worker already exists: {:?}", agent_id)
         }

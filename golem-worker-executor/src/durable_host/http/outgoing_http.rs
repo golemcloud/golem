@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::authorization::targets::http_target;
 use crate::durable_host::durability::InFunctionRetryHost;
 use crate::durable_host::http::inline_retry::{
     InlineRetryPhase, is_http_inline_retry_eligible, spawn_http_request_with_retry,
@@ -22,8 +23,8 @@ use crate::durable_host::http::policy::{
     is_http_request_idempotent,
 };
 use crate::durable_host::{
-    DurabilityHost, DurableWorkerCtx, HttpOutgoingBodyState, HttpRequestCloseOwner,
-    HttpRequestState, HttpRetryEligibility, PendingStatusRetryDecision,
+    DurabilityHost, DurableWorkerCtx, HttpOutgoingBodyState, HttpRequestSession, HttpRequestState,
+    HttpRetryEligibility, PendingStatusRetryDecision,
 };
 use crate::services::HasWorker;
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
@@ -98,7 +99,7 @@ pub(crate) async fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
             runtime_retry_policy_mutations,
             retry_properties,
             durable_state.max_in_function_retry_delay,
-            state.begin_index,
+            state.begin_index(),
             ctx.execution_status.clone(),
         );
         HostFutureIncomingResponse::pending(retry_handle)
@@ -183,7 +184,7 @@ pub(crate) async fn maybe_enable_http_pending_status_retry<Ctx: WorkerCtx>(
             assume_idempotence,
             agent_type,
             ctx.state.config.max_in_function_retry_delay,
-            state.begin_index,
+            state.begin_index(),
         ))
     } else {
         old
@@ -202,6 +203,33 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         options: Option<Resource<types::RequestOptions>>,
     ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
         self.observe_function_call("http::outgoing_handler", "handle");
+
+        // Replay restores the recorded HTTP operation and must not construct or evaluate a
+        // permission target. Live admission inspects only the request head and precedes quotas,
+        // durability, body ownership changes, and dispatch.
+        if self.state.is_live() {
+            let host_request = self.table().get(&request)?;
+            let scheme = match host_request.scheme.as_ref().unwrap_or(&Scheme::Https) {
+                Scheme::Http => "http",
+                Scheme::Https => "https",
+                Scheme::Other(_) => return Err(types::ErrorCode::HttpRequestDenied.into()),
+            };
+            let uri = format!(
+                "{}://{}{}",
+                scheme,
+                host_request.authority.as_deref().unwrap_or(""),
+                host_request.path_with_query.as_deref().unwrap_or("/")
+            );
+            let target = http_target(&uri)
+                .map_err(|_| types::ErrorCode::HttpRequestDenied)?
+                .permission;
+            match self.authorize_live_permission(&target).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) | Err(_) => {
+                    return Err(types::ErrorCode::HttpRequestDenied.into());
+                }
+            }
+        }
 
         // Trap immediately if the invocation is restricted to read-only side effects.
         // This must run before any durability machinery so that no oplog entry is written
@@ -354,14 +382,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let handle = future_incoming_response.rep();
                 let outgoing_body_rep = pending_outgoing_body_rep;
                 let output_stream_rep = pending_output_stream_rep;
+                let session = HttpRequestSession::new(
+                    begin_index,
+                    span.span_id().clone(),
+                    self.state.dropped_call_event_sender(),
+                );
 
                 self.state.open_http_requests.insert(
                     handle,
                     HttpRequestState {
-                        close_owner: HttpRequestCloseOwner::FutureIncomingResponseDrop,
-                        begin_index,
+                        session,
                         request,
-                        span_id: span.span_id().clone(),
                         body_handle: None,
                         response_status: None,
                         outgoing_body_rep,

@@ -24,8 +24,8 @@ use golem_common::model::auth::{TokenId, TokenSecret};
 use golem_common::model::card::owner::EmptyOwnerPattern;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    Card, ClassPermissionTarget, EffectiveSurface, PermissionTarget, SystemResourcePattern,
-    SystemVerb,
+    Card, ClassPermissionTarget, DelegationSurface, EffectiveSurface, PermissionTarget,
+    SystemResourcePattern, SystemVerb,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AdminImpersonationAuthCtx, AuthCtx, UserAuthCtx};
@@ -105,7 +105,9 @@ impl AuthService {
             // Normal login flow
             None => {
                 let account_roles = BTreeSet::from_iter(target_account.roles.clone());
-                let effective_surface = self.materialize_effective_surface(&target_account).await?;
+                let (effective_surface, delegation_surface) = self
+                    .materialize_permission_surfaces(&target_account)
+                    .await?;
 
                 Ok(AuthCtx::User(UserAuthCtx {
                     account_id: target_account.id,
@@ -113,6 +115,7 @@ impl AuthService {
                     account_roles,
                     account_plan_id: target_account.plan_id,
                     effective_surface,
+                    delegation_surface: Some(delegation_surface),
                 }))
             }
             // Impersonation flow
@@ -126,14 +129,15 @@ impl AuthService {
 
                 {
                     let account_roles = BTreeSet::from_iter(admin_account.roles.clone());
-                    let effective_surface =
-                        self.materialize_effective_surface(&admin_account).await?;
+                    let (effective_surface, delegation_surface) =
+                        self.materialize_permission_surfaces(&admin_account).await?;
                     let admin_auth_ctx = AuthCtx::User(UserAuthCtx {
                         account_id: admin_account.id,
                         account_email: admin_account.email.clone(),
                         account_roles,
                         account_plan_id: admin_account.plan_id,
                         effective_surface,
+                        delegation_surface: Some(delegation_surface),
                     });
 
                     if admin_auth_ctx
@@ -153,7 +157,9 @@ impl AuthService {
                 }
 
                 let target_account_roles = BTreeSet::from_iter(target_account.roles.clone());
-                let effective_surface = self.materialize_effective_surface(&target_account).await?;
+                let (effective_surface, delegation_surface) = self
+                    .materialize_permission_surfaces(&target_account)
+                    .await?;
 
                 Ok(AuthCtx::AdminImpersonation(AdminImpersonationAuthCtx {
                     admin_account_id,
@@ -162,15 +168,16 @@ impl AuthService {
                     target_account_roles,
                     target_account_plan_id: target_account.plan_id,
                     effective_surface,
+                    delegation_surface: Some(delegation_surface),
                 }))
             }
         }
     }
 
-    async fn materialize_effective_surface(
+    async fn materialize_permission_surfaces(
         &self,
         account: &Account,
-    ) -> Result<EffectiveSurface, AuthError> {
+    ) -> Result<(EffectiveSurface, DelegationSurface), AuthError> {
         let account_root_card: Card = self
             .card_repo
             .get(account.account_root_card_id)
@@ -198,12 +205,15 @@ impl AuthService {
             account: account.email.clone(),
         };
 
-        EffectiveSurface::from_cards(&cards, &account_recipient).map_err(|err| {
-            AuthError::InternalError(anyhow::anyhow!(
-                "Failed to materialize effective surface for account {}: {:?}",
-                account.id,
-                err
-            ))
-        })
+        let effective_surface =
+            EffectiveSurface::from_cards(&cards, &account_recipient).map_err(|err| {
+                AuthError::InternalError(anyhow::anyhow!(
+                    "Failed to materialize effective surface for account {}: {:?}",
+                    account.id,
+                    err
+                ))
+            })?;
+
+        Ok((effective_surface, DelegationSurface::from_cards(&cards)))
     }
 }

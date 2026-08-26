@@ -54,14 +54,34 @@ impl From<IgniteError> for RdbmsError {
             IgniteError::NoRows => {
                 RdbmsError::QueryResponseFailure("query returned no rows".to_string())
             }
+            IgniteError::PoisonedLock(what) => {
+                RdbmsError::Other(format!("internal lock poisoned: {what}"))
+            }
+            IgniteError::UnsupportedOnTransaction(op) => {
+                RdbmsError::Other(format!("{op} is not supported on a transaction handle"))
+            }
         }
     }
 }
 
 // ── Value conversions ─────────────────────────────────────────────────────────
 
-fn ignite_to_service(v: IgniteValue) -> DbValue {
+/// Names the kind of a non-scalar Ignite value for error messages, without
+/// rendering its payload (e.g. an object's raw bytes or a large collection).
+fn non_scalar_kind(v: &IgniteValue) -> &'static str {
     match v {
+        IgniteValue::Object(_) => "binary object",
+        IgniteValue::IntArray(_) => "int[]",
+        IgniteValue::StringArray(_) => "String[]",
+        IgniteValue::Collection(..) => "collection",
+        IgniteValue::Map(..) => "map",
+        IgniteValue::Enum { .. } => "enum",
+        _ => "non-scalar",
+    }
+}
+
+fn ignite_to_service(v: IgniteValue) -> Result<DbValue, RdbmsError> {
+    Ok(match v {
         IgniteValue::Null => DbValue::Null,
         IgniteValue::Bool(v) => DbValue::Boolean(v),
         IgniteValue::Byte(v) => DbValue::Byte(v),
@@ -79,7 +99,27 @@ fn ignite_to_service(v: IgniteValue) -> DbValue {
         IgniteValue::Decimal(v) => DbValue::Decimal(v),
         IgniteValue::ByteArray(v) => DbValue::ByteArray(v),
         IgniteValue::RawObject(v) => DbValue::ByteArray(v),
-    }
+        // Apache Ignite SQL columns are restricted to scalar types (see
+        // org.apache.ignite CommonUtils.isSqlType: the boxed primitives,
+        // BigDecimal, String, UUID, the temporal types, byte[] and Geometry).
+        // The binary-object value kinds (Object, IntArray, StringArray,
+        // Collection, Map, Enum) are Ignite's key-value binary-object API, not
+        // the SQL layer: a non-scalar cache field is projected as its scalar
+        // leaf columns or returned as an opaque object, so a structured binary
+        // value should not appear as a SQL column value. If one does — e.g. an
+        // explicit `SELECT _VAL`, or an object-array (`String[]`) column read
+        // via the H2 engine — report a clear error rather than guess a scalar
+        // mapping. The wildcard also covers any value kind a future
+        // ignite-v2-client version might add.
+        other => {
+            return Err(RdbmsError::QueryResponseFailure(format!(
+                "Ignite SQL results are limited to scalar column types; received a {} \
+                 value, which belongs to Ignite's key-value binary-object API and has \
+                 no SQL db-value representation",
+                non_scalar_kind(&other)
+            )));
+        }
+    })
 }
 
 fn service_to_ignite(v: DbValue) -> IgniteValue {
@@ -137,22 +177,27 @@ fn parse_config(address: &Url) -> Result<IgniteClientConfig, RdbmsError> {
         }
     }
 
-    Ok(IgniteClientConfig {
-        address: ignite_address,
-        username,
-        password,
-        max_pool_size,
-        connect_timeout: Duration::from_secs(10),
-        request_timeout: Duration::from_secs(30),
-        page_size,
-        use_tls,
-        tls_accept_invalid_certs: false,
-    })
+    // Use the builder (ignite-v2-client 1.0.0 added fields — addresses,
+    // partition_awareness, endpoint_discovery, data_center_id — so a struct
+    // literal no longer compiles and would break again on future additions).
+    let mut cfg = IgniteClientConfig::new(ignite_address)
+        .with_pool_size(max_pool_size)
+        .with_connect_timeout(Duration::from_secs(10))
+        .with_request_timeout(Duration::from_secs(30))
+        .with_page_size(page_size);
+    cfg.username = username;
+    cfg.password = password;
+    if use_tls {
+        cfg = cfg.with_tls();
+    }
+    Ok(cfg)
 }
 
 // ── QueryResult → DbResult conversion ────────────────────────────────────────
 
-fn convert_query_result(result: ignite_client::QueryResult) -> DbResult<IgniteType> {
+fn convert_query_result(
+    result: ignite_client::QueryResult,
+) -> Result<DbResult<IgniteType>, RdbmsError> {
     let columns: Vec<DbColumn> = result
         .columns
         .iter()
@@ -163,17 +208,18 @@ fn convert_query_result(result: ignite_client::QueryResult) -> DbResult<IgniteTy
     let rows: Vec<DbRow<DbValue>> = result
         .rows
         .into_iter()
-        .map(|row| DbRow {
-            values: row
+        .map(|row| {
+            let values = row
                 .values()
                 .iter()
                 .cloned()
                 .map(ignite_to_service)
-                .collect(),
+                .collect::<Result<Vec<DbValue>, RdbmsError>>()?;
+            Ok(DbRow { values })
         })
-        .collect();
+        .collect::<Result<Vec<_>, RdbmsError>>()?;
 
-    DbResult::new(columns, rows)
+    Ok(DbResult::new(columns, rows))
 }
 
 // ── IgniteResultStream ────────────────────────────────────────────────────────
@@ -208,14 +254,15 @@ impl DbResultStream<IgniteType> for IgniteResultStream {
         let mut batch: Vec<DbRow<DbValue>> = Vec::with_capacity(PAGE_SIZE);
         for _ in 0..PAGE_SIZE {
             match stream.next().await {
-                Some(Ok(row)) => batch.push(DbRow {
-                    values: row
+                Some(Ok(row)) => {
+                    let values = row
                         .values()
                         .iter()
                         .cloned()
                         .map(ignite_to_service)
-                        .collect(),
-                }),
+                        .collect::<Result<Vec<DbValue>, RdbmsError>>()?;
+                    batch.push(DbRow { values });
+                }
                 Some(Err(e)) => return Err(RdbmsError::from(e)),
                 None => {
                     self.done.store(true, Ordering::Relaxed);
@@ -296,7 +343,7 @@ impl DbTransaction<IgniteType> for IgniteDbTransaction {
             .query(statement, ignite_params)
             .await
             .map_err(RdbmsError::from)?;
-        Ok(convert_query_result(result))
+        convert_query_result(result)
     }
 
     async fn query_stream(
@@ -538,7 +585,7 @@ impl Rdbms<IgniteType> for IgniteRdbms {
             error!(pool_key = key.to_string(), "ignite query error: {e}");
             RdbmsError::from(e)
         })?;
-        Ok(convert_query_result(result))
+        convert_query_result(result)
     }
 
     async fn begin_transaction(
@@ -588,5 +635,73 @@ impl Rdbms<IgniteType> for IgniteRdbms {
             pools.insert(entry.key().clone(), entry.1.clone());
         }
         RdbmsStatus { pools }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    // Apache Ignite SQL only ever returns scalar column values (Ignite's
+    // CommonUtils.isSqlType set: boxed primitives, BigDecimal, String, UUID,
+    // temporal types, byte[], Geometry). A non-scalar cache field is projected
+    // as its scalar leaf columns or returned as an opaque object; the
+    // binary-object value kinds belong to Ignite's key-value binary-object API,
+    // not the SQL layer. These characterization tests lock in that the service
+    // layer maps every scalar faithfully and refuses the binary-object kinds
+    // with a clear error rather than a lossy guess.
+
+    #[test]
+    fn scalars_round_trip_service_to_ignite_and_back() {
+        let scalars = [
+            DbValue::Null,
+            DbValue::Boolean(true),
+            DbValue::Byte(-3),
+            DbValue::Short(1234),
+            DbValue::Int(42),
+            DbValue::Long(1i64 << 40),
+            DbValue::Float(1.5),
+            DbValue::Double(2.5),
+            DbValue::Char(b'Z' as u16),
+            DbValue::String("hello".to_string()),
+            DbValue::Date(19_000),
+            DbValue::Timestamp(1_700_000_000_000, 123),
+            DbValue::Time(3_600_000),
+            DbValue::ByteArray(vec![1, 2, 3, 4]),
+        ];
+        for dbv in scalars {
+            let back = ignite_to_service(service_to_ignite(dbv.clone()))
+                .expect("scalar must convert back without error");
+            assert_eq!(back, dbv, "scalar round-trip mismatch");
+        }
+    }
+
+    #[test]
+    fn binary_object_value_kinds_have_no_sql_representation() {
+        // These are the KV/binary-object value kinds; Ignite SQL never emits
+        // them as a column value, so the SQL interface must reject them clearly.
+        let non_scalars = [
+            IgniteValue::IntArray(vec![1, 2, 3]),
+            IgniteValue::StringArray(vec![Some("a".to_string()), None]),
+            IgniteValue::Enum {
+                type_id: 7,
+                ordinal: 2,
+            },
+            IgniteValue::Collection(2, vec![IgniteValue::Int(1), IgniteValue::Int(2)]),
+            IgniteValue::Map(
+                1,
+                vec![(IgniteValue::Int(1), IgniteValue::String("v".to_string()))],
+            ),
+        ];
+        for v in non_scalars {
+            match ignite_to_service(v) {
+                Err(RdbmsError::QueryResponseFailure(msg)) => assert!(
+                    msg.contains("scalar") && msg.contains("binary-object"),
+                    "error should explain the scalar-only SQL contract, got: {msg}"
+                ),
+                other => panic!("expected QueryResponseFailure, got {other:?}"),
+            }
+        }
     }
 }

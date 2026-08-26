@@ -19,9 +19,9 @@ use crate::schema::agent::{FieldSource, InputSchema, OutputSchema};
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
 use crate::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, NamedFieldType, PathSpec, QuantitySpec, QuantityValue,
-    QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions, UnionBranch, UnionSpec,
-    UrlRestrictions, VariantCaseType,
+    BinaryRestrictions, DiscriminatorRule, NamedFieldType, PathSpec, PermissionCardSpec,
+    QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec,
+    TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
 };
 use serde_json::{Map, Number, Value};
 use std::collections::{HashMap, HashSet};
@@ -791,6 +791,7 @@ pub(super) fn render_type(
 
         SchemaType::Secret { spec, .. } => Value::Object(secret_schema(spec)),
         SchemaType::QuotaToken { spec, .. } => Value::Object(quota_token_schema(spec)),
+        SchemaType::PermissionCard { spec, .. } => Value::Object(permission_card_schema(spec)),
 
         SchemaType::Future { .. } | SchemaType::Stream { .. } => obj([
             ("type", Value::String("null".to_string())),
@@ -1204,6 +1205,48 @@ fn quota_token_schema(_spec: &QuotaTokenSpec) -> Map<String, Value> {
             Value::String("expectedUse".to_string()),
             Value::String("lastCredit".to_string()),
             Value::String("lastCreditAt".to_string()),
+        ]),
+    );
+    m.insert("additionalProperties".to_string(), Value::Bool(false));
+    m
+}
+
+fn permission_card_schema(_spec: &PermissionCardSpec) -> Map<String, Value> {
+    // Permission-card values are opaque capability handles. The transported
+    // snapshot carries card_id (authoritative), parent_ids, expires_at, and
+    // polymorphic as trusted cache. See canonical/permission_card.rs.
+    let card_id = obj_inline([
+        ("type", Value::String("string".to_string())),
+        ("format", Value::String("uuid".to_string())),
+    ]);
+    let parent_ids = obj_inline([
+        ("type", Value::String("array".to_string())),
+        (
+            "items",
+            obj_inline([
+                ("type", Value::String("string".to_string())),
+                ("format", Value::String("uuid".to_string())),
+            ]),
+        ),
+    ]);
+    let expires_at = obj_inline([
+        ("type", Value::String("string".to_string())),
+        ("format", Value::String("date-time".to_string())),
+    ]);
+    let polymorphic = obj_inline([("type", Value::String("boolean".to_string()))]);
+    let mut properties = Map::new();
+    properties.insert("cardId".to_string(), card_id);
+    properties.insert("parentIds".to_string(), parent_ids);
+    properties.insert("expiresAt".to_string(), expires_at);
+    properties.insert("polymorphic".to_string(), polymorphic);
+    let mut m = Map::new();
+    m.insert("type".to_string(), Value::String("object".to_string()));
+    m.insert("properties".to_string(), Value::Object(properties));
+    m.insert(
+        "required".to_string(),
+        Value::Array(vec![
+            Value::String("cardId".to_string()),
+            Value::String("polymorphic".to_string()),
         ]),
     );
     m.insert("additionalProperties".to_string(), Value::Bool(false));

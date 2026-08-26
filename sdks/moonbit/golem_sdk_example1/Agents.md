@@ -353,24 +353,12 @@ Awaited calls use P3 component-model futures and suspend the current task instea
 
 Golem provides **automatic durable execution** — all agents are durable by default without any special code. State is persisted via an oplog (operation log) and agents survive failures, restarts, and updates transparently.
 
-The durability APIs available via the SDK's `interface/golem/durability/durability/` package are **advanced controls** that most agents will never need. Only use them when you have specific requirements around persistence granularity or side-effect replay:
-
-```moonbit
-// Check current execution state
-let state = @durability.current_durable_execution_state()
-// state.is_live — true if executing live, false if replaying
-
-// Wrap a side-effecting call for durability
-let begin_idx = @durability.begin_durable_function(function_type)
-if state.is_live {
-  // Execute real operation, then persist result
-  @durability.persist_durable_function_invocation(name, request, response, function_type)
-} else {
-  // Replaying — read cached result
-  let cached = @durability.read_persisted_durable_function_invocation(begin_idx)
-}
-@durability.end_durable_function(function_type, begin_idx, forced_commit)
-```
+Custom durability is an advanced library-author feature, not an application tuning control. When a
+library must represent raw host effects as one durable operation, use `@api.durable` or
+`@api.durable_async`. The SDK evaluates the body only for a live invocation, persists its typed
+response, and returns that response without evaluating the body during replay. If the body remains
+unfinished, recovery retries the whole custom operation, so repeated attempts must be safe through
+the correct operation type, an external idempotency key, or a transaction.
 
 ## Environments and Build Presets
 
@@ -431,7 +419,8 @@ golem agent invoke -L '<agent-id>' 'method' args   # Invoke method directly
 - `moon check --target wasm` — type-check (must target WASM)
 - `moon test` — run tests; use `moon test --update` to update snapshots
 - `moon info` — regenerate `.mbti` interface files
-- Always run `moon info && moon fmt` before finalizing changes
+- Run `moon fmt` for changed MoonBit source and `moon info` when public interfaces change
+- Start with tests for the affected package or file; use all tests for broad or unclear impact
 
 ## Documentation
 

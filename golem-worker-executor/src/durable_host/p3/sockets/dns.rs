@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::authorization::targets::dns_target;
+use crate::durable_host::concurrent::authorize_live_permissions_at_serialized_access;
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::p3::{
-    DurableP3, DurableP3View, run_read_access_classified, wasi_sockets_view,
+    DurableP3, DurableP3View, durable_worker_ctx, run_read_access_classified, wasi_sockets_view,
 };
 use crate::workerctx::WorkerCtx;
 use golem_common::model::RetryContext;
@@ -33,6 +35,28 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
         store: &Accessor<U, Self>,
         name: String,
     ) -> wasmtime::Result<Result<Vec<types::IpAddress>, ip_name_lookup::ErrorCode>> {
+        let live = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .state
+                .is_live()
+        });
+        let denied = if live {
+            match dns_target(&name) {
+                Ok(target) => !matches!(
+                    authorize_live_permissions_at_serialized_access(
+                        store,
+                        durable_worker_ctx::<Ctx, U>,
+                        &[target],
+                    )
+                    .await,
+                    Ok(Ok(_))
+                ),
+                Err(_) => true,
+            }
+        } else {
+            false
+        };
+
         // Worker-level retry classification, mirroring the P2 `resolve_addresses` path: a
         // transient resolver failure raises a retry trap (the worker goes to `Retrying` per its
         // retry policy and re-executes the lookup from the abandoned `Start` on replay) instead
@@ -56,6 +80,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
                 },
                 RetryContext::dns(&name),
                 || async {
+                    if denied {
+                        return Ok(HostResponseP3SocketsResolveName {
+                            result: Err(SerializableP3IpNameLookupError::AccessDenied),
+                        });
+                    }
                     let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
                     let result =
                         <WasiSockets as ip_name_lookup::HostWithStore<U>>::resolve_addresses(

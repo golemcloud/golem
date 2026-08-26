@@ -15,6 +15,7 @@
 import { describe, it, expect } from 'vitest';
 
 import type {
+  DiscriminatorRule,
   SchemaGraph as WitSchemaGraph,
   SchemaValueTree as WitSchemaValueTree,
   SchemaValueNode as WitSchemaValueNode,
@@ -23,17 +24,21 @@ import type {
 import {
   GuestSecretHandle,
   GuestQuotaTokenHandle,
+  GuestPermissionCardHandle,
   SchemaBuilder,
   SchemaEncodeError,
+  classifyDiscriminatorPair,
   type SchemaGraph,
   type SchemaValue,
   emptyMetadata,
   field,
   schemaGraphFromWit,
   schemaGraphToWit,
+  schemaType,
   schemaValueFromWit,
   schemaValueToWit,
   t,
+  validateSchemaGraph,
   v,
   variantCase,
 } from '../../src/internal/schema-model';
@@ -43,6 +48,7 @@ import {
 // capability key directly to stand in for that SDK-internal caller.
 import { SECRET_INTERNAL } from '../../src/internal/schema-model/secretInternal';
 import { QUOTA_INTERNAL } from '../../src/internal/schema-model/quotaInternal';
+import { PERMISSION_CARD_INTERNAL } from '../../src/internal/schema-model/permissionCardInternal';
 
 function roundtripValue(value: SchemaValue): void {
   expect(schemaValueFromWit(schemaValueToWit(value))).toEqual(value);
@@ -136,6 +142,11 @@ describe('anonymous vs named placement', () => {
 });
 
 describe('empty and degenerate composites', () => {
+  it('permission-card schema types preserve polymorphism through the WIT carrier', () => {
+    roundtripGraph({ defs: new Map(), root: t.permissionCard({ polymorphic: true }) });
+    roundtripGraph({ defs: new Map(), root: t.permissionCard({ polymorphic: false }) });
+  });
+
   it('empty record / variant / enum / flags types round-trip', () => {
     roundtripGraph({ defs: new Map(), root: t.record([]) });
     roundtripGraph({ defs: new Map(), root: t.variant([]) });
@@ -302,6 +313,67 @@ describe('rich semantic and capability values', () => {
       expect(decoded.handle.isPresent()).toBe(true);
       expect(decoded.handle.take()).toBe(raw);
     }
+  });
+
+  it('permission-card handles transfer once through nested schema values', () => {
+    const raw = { id: 'opaque-permission-card' } as never;
+    const handle = GuestPermissionCardHandle.fromRaw(PERMISSION_CARD_INTERNAL, raw);
+
+    const wit = schemaValueToWit(v.tuple([v.string('card'), v.permissionCard(handle)]));
+    expect(wit.valueNodes).toContainEqual({ tag: 'permission-card-handle', val: raw });
+    expect(handle.isPresent()).toBe(false);
+
+    const decoded = schemaValueFromWit(wit);
+    expect(decoded.tag).toBe('tuple');
+    if (decoded.tag === 'tuple') {
+      const card = decoded.elements[1];
+      expect(card.tag).toBe('permission-card');
+      if (card.tag === 'permission-card') {
+        expect(card.handle.take()).toBe(raw);
+      }
+    }
+  });
+
+  it('permission-card encoding rejects aliases atomically and consumed handles', () => {
+    const handle = GuestPermissionCardHandle.fromRaw(PERMISSION_CARD_INTERNAL, {} as never);
+    const aliased = v.tuple([v.permissionCard(handle), v.permissionCard(handle)]);
+
+    expect(() => schemaValueToWit(aliased)).toThrow(/more than once/);
+    expect(handle.isPresent()).toBe(true);
+
+    schemaValueToWit(v.permissionCard(handle));
+    expect(() => schemaValueToWit(v.permissionCard(handle))).toThrow(/already transferred/);
+  });
+
+  it('rejected WIT trees drain owned permission-card handles', () => {
+    const raw = { id: 'opaque-permission-card' } as never;
+    const wit: WitSchemaValueTree = {
+      valueNodes: [
+        { tag: 'tuple-value', val: [1, 2] },
+        { tag: 'permission-card-handle', val: raw },
+        { tag: 'list-value', val: [99] },
+      ],
+      root: 0,
+    };
+
+    expect(() => schemaValueFromWit(wit)).toThrow(/out of range/);
+    expect((wit.valueNodes[1] as { val: unknown }).val).toBeUndefined();
+  });
+
+  it('rejects duplicate raw permission-card resources and drains both nodes', () => {
+    const raw = { id: 'opaque-permission-card' } as never;
+    const wit: WitSchemaValueTree = {
+      valueNodes: [
+        { tag: 'tuple-value', val: [1, 2] },
+        { tag: 'permission-card-handle', val: raw },
+        { tag: 'permission-card-handle', val: raw },
+      ],
+      root: 0,
+    };
+
+    expect(() => schemaValueFromWit(wit)).toThrow(/more than once/);
+    expect((wit.valueNodes[1] as { val: unknown }).val).toBeUndefined();
+    expect((wit.valueNodes[2] as { val: unknown }).val).toBeUndefined();
   });
 
   it('encoding an already-transferred quota-token handle is rejected', () => {
@@ -475,6 +547,275 @@ describe('rich semantic and capability values', () => {
         metadata: { aliases: [], examples: [] },
       },
     });
+  });
+});
+
+describe('discriminator pair validation', () => {
+  type ExpectedClassification = 'reject' | 'disjoint' | 'indeterminate';
+  interface ClassificationCase {
+    readonly name: string;
+    readonly left: DiscriminatorRule;
+    readonly right: DiscriminatorRule;
+    readonly expected: ExpectedClassification;
+  }
+
+  const prefix = (val: string): DiscriminatorRule => ({ tag: 'prefix', val });
+  const suffix = (val: string): DiscriminatorRule => ({ tag: 'suffix', val });
+  const contains = (val: string): DiscriminatorRule => ({ tag: 'contains', val });
+  const regex = (val: string): DiscriminatorRule => ({ tag: 'regex', val });
+  const fieldEquals = (fieldName: string, literal?: string): DiscriminatorRule => ({
+    tag: 'field-equals',
+    val: { fieldName, literal },
+  });
+  const fieldAbsent = (val: string): DiscriminatorRule => ({ tag: 'field-absent', val });
+
+  const cases: readonly ClassificationCase[] = [
+    {
+      name: 'prefix_prefix_nested_reject',
+      left: prefix('a'),
+      right: prefix('ab'),
+      expected: 'reject',
+    },
+    { name: 'prefix_prefix_disjoint', left: prefix('a'), right: prefix('b'), expected: 'disjoint' },
+    {
+      name: 'empty_prefix_prefix_reject',
+      left: prefix(''),
+      right: prefix('a'),
+      expected: 'reject',
+    },
+    {
+      name: 'suffix_suffix_nested_reject',
+      left: suffix('ing'),
+      right: suffix('ng'),
+      expected: 'reject',
+    },
+    { name: 'suffix_suffix_disjoint', left: suffix('a'), right: suffix('b'), expected: 'disjoint' },
+    {
+      name: 'empty_suffix_suffix_reject',
+      left: suffix(''),
+      right: suffix('a'),
+      expected: 'reject',
+    },
+    { name: 'prefix_suffix_reject', left: prefix('a'), right: suffix('b'), expected: 'reject' },
+    { name: 'prefix_contains_reject', left: prefix('a'), right: contains('b'), expected: 'reject' },
+    { name: 'suffix_contains_reject', left: suffix('a'), right: contains('b'), expected: 'reject' },
+    {
+      name: 'contains_contains_reject',
+      left: contains('a'),
+      right: contains('b'),
+      expected: 'reject',
+    },
+    {
+      name: 'regex_regex_identical_reject',
+      left: regex('a.*'),
+      right: regex('a.*'),
+      expected: 'reject',
+    },
+    {
+      name: 'regex_regex_distinct_indeterminate',
+      left: regex('a.*'),
+      right: regex('.*a'),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'regex_prefix_indeterminate',
+      left: regex('^a'),
+      right: prefix('a'),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'regex_empty_prefix_indeterminate',
+      left: regex('^a'),
+      right: prefix(''),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'regex_suffix_indeterminate',
+      left: regex('a$'),
+      right: suffix('a'),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'regex_empty_suffix_indeterminate',
+      left: regex('a$'),
+      right: suffix(''),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'regex_contains_indeterminate',
+      left: regex('a'),
+      right: contains('a'),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'regex_empty_contains_indeterminate',
+      left: regex('a'),
+      right: contains(''),
+      expected: 'indeterminate',
+    },
+    {
+      name: 'prefix_field_equals_disjoint',
+      left: prefix('a'),
+      right: fieldEquals('kind', 'a'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'prefix_field_absent_disjoint',
+      left: prefix('a'),
+      right: fieldAbsent('kind'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'suffix_field_equals_disjoint',
+      left: suffix('a'),
+      right: fieldEquals('kind', 'a'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'suffix_field_absent_disjoint',
+      left: suffix('a'),
+      right: fieldAbsent('kind'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'contains_field_equals_disjoint',
+      left: contains('a'),
+      right: fieldEquals('kind', 'a'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'contains_field_absent_disjoint',
+      left: contains('a'),
+      right: fieldAbsent('kind'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'regex_field_equals_disjoint',
+      left: regex('a'),
+      right: fieldEquals('kind', 'a'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'regex_field_absent_disjoint',
+      left: regex('a'),
+      right: fieldAbsent('kind'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'field_equals_same_field_different_literals_disjoint',
+      left: fieldEquals('kind', 'a'),
+      right: fieldEquals('kind', 'b'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'field_equals_same_field_same_literal_reject',
+      left: fieldEquals('kind', 'a'),
+      right: fieldEquals('kind', 'a'),
+      expected: 'reject',
+    },
+    {
+      name: 'field_equals_same_field_one_literal_absent_reject',
+      left: fieldEquals('kind'),
+      right: fieldEquals('kind', 'a'),
+      expected: 'reject',
+    },
+    {
+      name: 'field_equals_same_field_both_literals_absent_reject',
+      left: fieldEquals('kind'),
+      right: fieldEquals('kind'),
+      expected: 'reject',
+    },
+    {
+      name: 'field_equals_different_fields_reject',
+      left: fieldEquals('left', 'a'),
+      right: fieldEquals('right', 'b'),
+      expected: 'reject',
+    },
+    {
+      name: 'field_absent_same_field_reject',
+      left: fieldAbsent('kind'),
+      right: fieldAbsent('kind'),
+      expected: 'reject',
+    },
+    {
+      name: 'field_absent_different_fields_reject',
+      left: fieldAbsent('left'),
+      right: fieldAbsent('right'),
+      expected: 'reject',
+    },
+    {
+      name: 'field_equals_field_absent_same_field_disjoint',
+      left: fieldEquals('kind', 'a'),
+      right: fieldAbsent('kind'),
+      expected: 'disjoint',
+    },
+    {
+      name: 'field_equals_field_absent_different_fields_reject',
+      left: fieldEquals('left', 'a'),
+      right: fieldAbsent('right'),
+      expected: 'reject',
+    },
+  ];
+
+  it.each(cases)('$name', ({ left, right, expected }) => {
+    expect(classifyDiscriminatorPair(left, right).tag).toBe(expected);
+    expect(classifyDiscriminatorPair(right, left).tag).toBe(expected);
+  });
+
+  it('only Reject classifications produce ambiguous-discriminator validation errors', () => {
+    const errorsFor = (left: DiscriminatorRule, right: DiscriminatorRule) =>
+      validateSchemaGraph({
+        defs: new Map(),
+        root: schemaType({
+          tag: 'union',
+          branches: [
+            { tag: 'left', body: t.string(), discriminator: left, metadata: emptyMetadata() },
+            { tag: 'right', body: t.string(), discriminator: right, metadata: emptyMetadata() },
+          ],
+        }),
+      }).filter((error) => error.code === 'union-ambiguous-discriminators');
+
+    expect(errorsFor(prefix('a'), contains('b'))).toHaveLength(1);
+    expect(errorsFor(prefix('a'), prefix('b'))).toEqual([]);
+    expect(errorsFor(regex('^a'), prefix('a'))).toEqual([]);
+  });
+
+  it('rejects Text union bodies for string rules', () => {
+    const errors = validateSchemaGraph({
+      defs: new Map(),
+      root: schemaType({
+        tag: 'union',
+        branches: [
+          {
+            tag: 'text',
+            body: schemaType({ tag: 'text', restrictions: {} }),
+            discriminator: prefix('a'),
+            metadata: emptyMetadata(),
+          },
+        ],
+      }),
+    });
+    expect(errors.map((error) => error.code)).toContain('union-string-rule-on-non-string-body');
+  });
+
+  it('rejects field-equals literals on Text fields', () => {
+    const errors = validateSchemaGraph({
+      defs: new Map(),
+      root: schemaType({
+        tag: 'union',
+        branches: [
+          {
+            tag: 'text-field',
+            body: t.record([field('kind', schemaType({ tag: 'text', restrictions: {} }))]),
+            discriminator: fieldEquals('kind', 'a'),
+            metadata: emptyMetadata(),
+          },
+        ],
+      }),
+    });
+    expect(errors.map((error) => error.code)).toContain(
+      'union-field-equals-literal-on-non-string-field',
+    );
   });
 });
 

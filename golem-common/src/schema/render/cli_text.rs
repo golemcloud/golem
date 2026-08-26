@@ -247,6 +247,13 @@ fn type_to_text_inner(
         }
         SchemaType::Secret { .. } => "secret".to_string(),
         SchemaType::QuotaToken { .. } => "quota-token".to_string(),
+        SchemaType::PermissionCard { spec, .. } => {
+            if spec.polymorphic {
+                "permission-card<polymorphic>".to_string()
+            } else {
+                "permission-card".to_string()
+            }
+        }
         SchemaType::Future { inner, .. } => match inner {
             None => "future".to_string(),
             Some(t) => format!("future<{}>", type_to_text_inner(graph, t, visited)),
@@ -402,6 +409,9 @@ fn render_value(
         (SchemaType::Secret { .. }, SchemaValue::Secret(p)) => Ok(canonical::secret::to_text(p)?),
         (SchemaType::QuotaToken { .. }, SchemaValue::QuotaToken(p)) => {
             Ok(canonical::quota_token::to_text(p)?)
+        }
+        (SchemaType::PermissionCard { .. }, SchemaValue::PermissionCard(p)) => {
+            Ok(canonical::permission_card::to_text(p)?)
         }
 
         (SchemaType::Record { fields, .. }, SchemaValue::Record { fields: vs }) => {

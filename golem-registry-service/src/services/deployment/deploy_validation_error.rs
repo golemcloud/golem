@@ -20,6 +20,7 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::model::tool::ToolName;
 use golem_common::schema::graph::SchemaGraph;
 use golem_service_base::custom_api::PathSegment;
 
@@ -147,6 +148,74 @@ pub enum DeployValidationError {
         "Reset override flags are only allowed when environment compatibility_check is disabled"
     )]
     ResetOverrideRequiresCompatibilityCheckDisabled,
+    #[error(
+        "Component {component_name} contains tools but does not export golem:tool/guest@0.1.0 (found {found:?})"
+    )]
+    ToolUnsupportedGuestExport {
+        component_name: ComponentName,
+        found: Option<String>,
+    },
+    #[error(
+        "Tool {tool_name} in component {component_name} has definition name {definition_name:?}"
+    )]
+    ToolDefinitionNameMismatch {
+        component_name: ComponentName,
+        tool_name: ToolName,
+        definition_name: Option<String>,
+    },
+    #[error(
+        "Tool {tool_name} in component {component_name} is invalid: {errors}",
+        errors = errors.join(", ")
+    )]
+    InvalidTool {
+        component_name: ComponentName,
+        tool_name: ToolName,
+        errors: Vec<String>,
+    },
+    #[error(
+        "Tool {tool_name} is implemented by multiple components: {components}",
+        components = components.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+    )]
+    DuplicateToolImplementation {
+        tool_name: ToolName,
+        components: Vec<ComponentName>,
+    },
+    #[error(
+        "Tool {tool_name} in component {component_name} has a binding for unknown agent type {agent_type}"
+    )]
+    ToolBindingUnknownAgent {
+        component_name: ComponentName,
+        tool_name: ToolName,
+        agent_type: AgentTypeName,
+    },
+    #[error(
+        "Tool {tool_name} binding{agent} requests version {requested_version}, but the deployed tool version is {tool_version}",
+        agent = agent_type.as_ref().map(|name| format!(" for agent {name}")).unwrap_or_default()
+    )]
+    ToolBindingVersionMismatch {
+        tool_name: ToolName,
+        agent_type: Option<AgentTypeName>,
+        requested_version: String,
+        tool_version: String,
+    },
+    #[error(
+        "Tool {tool_name} binding{agent} requests account {requested_account}, but the implementing component is owned by {owner_account}",
+        agent = agent_type.as_ref().map(|name| format!(" for agent {name}")).unwrap_or_default()
+    )]
+    ToolBindingAccountMismatch {
+        tool_name: ToolName,
+        agent_type: Option<AgentTypeName>,
+        requested_account: String,
+        owner_account: String,
+    },
+    #[error(
+        "Tool {tool_name} binding{agent} parameters must be a JSON object",
+        agent = agent_type.as_ref().map(|name| format!(" for agent {name}")).unwrap_or_default()
+    )]
+    ToolBindingParametersMustBeObject {
+        tool_name: ToolName,
+        agent_type: Option<AgentTypeName>,
+    },
 }
 
 impl SafeDisplay for DeployValidationError {

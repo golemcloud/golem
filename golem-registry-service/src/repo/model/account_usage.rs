@@ -53,6 +53,7 @@ pub enum UsageType {
     MonthlyRpcCalls = 9,
     MonthlyDurableAgentStorageByteSeconds = 10,
     MonthlyEphemeralStorageByteSeconds = 11,
+    MonthlyMemoryGbSeconds = 12,
 }
 
 impl UsageType {
@@ -69,6 +70,7 @@ impl UsageType {
             | UsageType::MonthlyRpcCalls
             | UsageType::MonthlyDurableAgentStorageByteSeconds
             | UsageType::MonthlyEphemeralStorageByteSeconds => UsageGrouping::Monthly,
+            UsageType::MonthlyMemoryGbSeconds => UsageGrouping::Monthly,
         }
     }
 
@@ -85,6 +87,7 @@ impl UsageType {
             | UsageType::MonthlyRpcCalls
             | UsageType::MonthlyDurableAgentStorageByteSeconds
             | UsageType::MonthlyEphemeralStorageByteSeconds => UsageTracking::Stats,
+            UsageType::MonthlyMemoryGbSeconds => UsageTracking::Stats,
         }
     }
 }
@@ -115,6 +118,8 @@ pub struct AccountUsage {
     pub usage: BTreeMap<UsageType, u64>,
     pub plan: PlanRecord,
     pub storage_limit: StorageLimit,
+    pub max_memory_per_worker: golem_common::model::account_usage::MemoryLimit,
+    pub monthly_memory_gb_seconds: golem_common::model::account_usage::MemoryLimit,
     pub changes: BTreeMap<UsageType, i64>,
 }
 
@@ -123,6 +128,8 @@ pub struct AccountUsagePlan {
     #[sqlx(flatten)]
     pub plan: PlanRecord,
     pub storage_override_value: Option<NumericU64>,
+    pub max_memory_override_value: Option<NumericU64>,
+    pub monthly_memory_override_value: Option<NumericU64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +138,7 @@ pub struct StorageUsageHistoryRecord {
     pub durable_storage_byte_seconds: u64,
     pub ephemeral_storage_byte_seconds: u64,
     pub compute_fuel: u64,
+    pub memory_gb_seconds: u64,
 }
 
 impl AccountUsage {
@@ -180,7 +188,7 @@ impl AccountUsage {
 
         ResourceLimits {
             available_fuel,
-            max_memory_per_worker: self.plan.max_memory_per_worker.get(),
+            max_memory_per_worker: self.max_memory_per_worker.effective_value,
             max_table_elements_per_worker: self.plan.max_table_elements_per_worker.get(),
             max_disk_space_per_worker: self.storage_limit.effective_value,
             per_invocation_http_call_limit: self.plan.per_invocation_http_call_limit.get(),
@@ -189,6 +197,7 @@ impl AccountUsage {
             available_rpc_calls,
             max_concurrent_agents_per_executor: self.plan.max_concurrent_agents_per_executor.get(),
             oplog_writes_per_second: self.plan.oplog_writes_per_second.get(),
+            usage_update_applied: true,
         }
     }
 }

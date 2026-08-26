@@ -36,8 +36,8 @@ pub struct DroppedCall {
     pub(super) trap_context: DurableCallTrapContext,
     /// Keeps the dropped call counted as an in-flight live host call until the drop event is
     /// actually processed (its `Cancelled`/terminal recorded at a drain point). Without this, a
-    /// handle dropped between a drain and a subsequent in-flight check (e.g. the
-    /// `set_oplog_persistence_level` boundary guard) would release its permit before its terminal
+    /// handle dropped between a drain and a subsequent boundary check would release its permit
+    /// before its terminal
     /// entry is recorded, letting the terminal land on the far side of a positional replay
     /// boundary. `None` for call sites that only use the snapshot locally while the handle (and
     /// its own permit) is still alive.
@@ -116,7 +116,7 @@ impl DroppedCall {
 /// Deferred work emitted from `Drop` impls that cannot touch the worker store themselves.
 ///
 /// Each worker owns a `dropped_call_events` channel (see `PrivateDurableWorkerState`); `Drop`
-/// impls ([`CallHandle`], [`AccessTerminalGuard`], resource wrappers) enqueue these events, and
+/// impls ([`DurableCallSession`], [`AccessTerminalGuard`], resource wrappers) enqueue these events, and
 /// they are drained from the next safe worker-access window: [`drain_queued_dropped_call_events`]
 /// at the start of every `&mut ctx` durable call and [`drain_dropped_call_events_access`] on the
 /// accessor path (call start and terminals). The drain records durable effects (`Cancelled`
@@ -140,7 +140,7 @@ pub enum DropEvent {
         trap_context: DurableCallTrapContext,
         /// Keeps the call counted as in flight until this event is fully consumed (the owned
         /// terminal task joined and the durable-function scope closed), so a positional boundary
-        /// (e.g. a persistence-level change) cannot be placed before the delayed terminal append.
+        /// cannot be placed before the delayed terminal append.
         /// Never read — held purely for its `Drop` effect on the shared counter.
         live_call_permit: Option<LiveCallPermit>,
     },
@@ -148,12 +148,20 @@ pub enum DropEvent {
     /// its call's terminal `End` is already recorded and the durable scope already closed, so the
     /// only remaining work is joining the owned marker (or trailing ordered-append) task while
     /// keeping the call counted as in flight — no scope close and no atomic-region cleanup.
-    AwaitDiscardMarker {
-        terminal: Option<tokio::task::JoinHandle<Result<(), WorkerExecutorError>>>,
+    AwaitCompletionMarker {
+        receipt: Option<MarkerReceipt>,
         trap_context: DurableCallTrapContext,
         /// Held so invocation settlement waits until the marker append is joined; released when
         /// the event is finished or dropped. Never read.
         live_call_permit: Option<LiveCallPermit>,
+    },
+    /// Settles an owned custom-invocation `begin` task before invocation progress can overtake it.
+    /// Guest cancellation appends a matching `Cancelled`; whole-invocation failure only waits for
+    /// a possible Start and leaves it incomplete for retry. Both release the parent's initiation
+    /// guard after the owned task finishes.
+    SettleCustomInvocationBegin {
+        lifecycle: Arc<CustomBeginLifecycle>,
+        terminal: Option<tokio::task::JoinHandle<Result<Option<OplogIndex>, WorkerExecutorError>>>,
     },
     /// A guest-cancelled accessor future may leave a caller-managed durable scope with no code path
     /// back into the resource's `drop`. Close that parent scope from the next safe store-access
@@ -231,7 +239,7 @@ impl Drop for AccessDropEventDrainGuard {
 /// (cancellable drops as `Cancelled`, deferred terminal joins, scope closes, span finishes).
 ///
 /// Called from the next safe worker-access window after the events were enqueued — the start of
-/// every `&mut ctx` durable call ([`CallHandle::begin`]). The helper deliberately drains only
+/// every `&mut ctx` durable call ([`DurableCallSession::begin`]). The helper deliberately drains only
 /// currently available events; callers decide where to wait for more work.
 pub async fn drain_queued_dropped_call_events<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
@@ -297,26 +305,42 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                 .await
                 .map_err(|err| TerminalCallError::new(err, trap_context))?;
         }
-        DropEvent::AwaitDiscardMarker {
-            terminal,
+        DropEvent::AwaitCompletionMarker {
+            mut receipt,
             trap_context,
             // Bound (not `_`) so the permit is released only at the end of this arm, after the
             // marker append is joined.
             live_call_permit: _live_call_permit,
         } => {
-            if let Some(terminal) = terminal {
-                let joined = terminal.await.map_err(|err| {
-                    WorkerExecutorError::runtime(format!(
-                        "completion-discarded marker recorder task failed: {err}"
-                    ))
-                });
-                match joined {
-                    Ok(Ok(())) => {}
-                    Ok(Err(err)) | Err(err) => {
-                        return Err(TerminalCallError::new(err, trap_context));
-                    }
-                }
+            if let Some(receipt) = &mut receipt {
+                await_marker_receipt(receipt)
+                    .await
+                    .map_err(|err| TerminalCallError::new(err, trap_context))?;
             }
+        }
+        DropEvent::SettleCustomInvocationBegin {
+            lifecycle,
+            terminal,
+        } => {
+            let cancelled_start = if let Some(terminal) = terminal {
+                terminal
+                    .await
+                    .map_err(|err| {
+                        TerminalCallError::new(
+                            WorkerExecutorError::runtime(format!(
+                                "custom invocation cancellation recorder task failed: {err}"
+                            )),
+                            ambient_trap_context(ctx),
+                        )
+                    })?
+                    .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?
+            } else {
+                None
+            };
+            if let Some(start_index) = cancelled_start {
+                ctx.state.active_custom_invocations.remove(&start_index);
+            }
+            lifecycle.release_initiation();
         }
         DropEvent::CloseDurableScope {
             function_type,
@@ -392,8 +416,8 @@ where
                         // instead of re-appending a second `Cancelled`.
                         call.release_atomic_lease();
                         let live_call_permit = call.live_call_permit.take();
-                        drain.replace_current(DropEvent::AwaitDiscardMarker {
-                            terminal: None,
+                        drain.replace_current(DropEvent::AwaitCompletionMarker {
+                            receipt: None,
                             trap_context: context,
                             live_call_permit,
                         });
@@ -484,8 +508,8 @@ where
                     }
                 }
             }
-            DropEvent::AwaitDiscardMarker {
-                terminal,
+            DropEvent::AwaitCompletionMarker {
+                receipt,
                 trap_context,
                 // Left in place: the permit stays owned by the event, so it survives a torn drain
                 // (the event is re-queued with the permit) and is released when the event is
@@ -493,17 +517,13 @@ where
                 live_call_permit: _,
             } => {
                 let trap_context = *trap_context;
-                if let Some(handle) = terminal {
-                    match handle.await.map_err(|err| {
-                        WorkerExecutorError::runtime(format!(
-                            "completion-discarded marker recorder task failed: {err}"
-                        ))
-                    }) {
-                        Ok(Ok(())) => {
-                            *terminal = None;
+                if let Some(pending) = receipt {
+                    match await_marker_receipt(pending).await {
+                        Ok(()) => {
+                            *receipt = None;
                             recorded += 1;
                         }
-                        Ok(Err(err)) | Err(err) => {
+                        Err(err) => {
                             if first_error.is_none() {
                                 first_error = Some(TerminalCallError::new(err, trap_context));
                             }
@@ -511,6 +531,47 @@ where
                     }
                 } else {
                     recorded += 1;
+                }
+            }
+            DropEvent::SettleCustomInvocationBegin {
+                lifecycle,
+                terminal,
+            } => {
+                let mut cancelled_start = None;
+                if let Some(handle) = terminal {
+                    match handle.await.map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "custom invocation cancellation recorder task failed: {err}"
+                        ))
+                    }) {
+                        Ok(Ok(start_index)) => {
+                            *terminal = None;
+                            cancelled_start = start_index;
+                            recorded += 1;
+                        }
+                        Ok(Err(err)) | Err(err) => {
+                            if first_error.is_none() {
+                                first_error = Some(TerminalCallError::new(
+                                    err,
+                                    store.with(|mut access| {
+                                        let ctx = get_ctx(access.data_mut());
+                                        ambient_trap_context(ctx)
+                                    }),
+                                ));
+                            }
+                        }
+                    }
+                }
+                if terminal.is_none() {
+                    if let Some(start_index) = cancelled_start {
+                        store.with(|mut access| {
+                            get_ctx(access.data_mut())
+                                .state
+                                .active_custom_invocations
+                                .remove(&start_index);
+                        });
+                    }
+                    lifecycle.release_initiation();
                 }
             }
             DropEvent::CloseDurableScope {

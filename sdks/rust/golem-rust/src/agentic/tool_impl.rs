@@ -13,11 +13,15 @@
 // limitations under the License.
 
 use crate::agentic::InputStream;
+#[cfg(feature = "export_golem_agentic")]
 use crate::agentic::agent_impl::Component;
+#[cfg(feature = "export_golem_agentic")]
 use crate::agentic::tool_registry::{get_all_tools, get_tool_by_name, get_tool_invoker_by_name};
+#[cfg(feature = "export_golem_agentic")]
 use crate::golem_agentic::exports::golem::tool::guest::{
     Guest, InvocationResult, Tool, ToolError, TypedSchemaValue,
 };
+#[cfg(feature = "export_golem_agentic")]
 use crate::golem_agentic::golem::agent::common::Principal;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -133,6 +137,7 @@ pub fn new_tool_stdout() -> (OutputStream, InputStream) {
     (OutputStream { state }, reader)
 }
 
+#[cfg(feature = "export_golem_agentic")]
 impl Guest for Component {
     fn discover_tools() -> Result<Vec<Tool>, ToolError> {
         Ok(get_all_tools())
