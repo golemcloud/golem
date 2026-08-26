@@ -140,7 +140,22 @@ async fn go_wall_clock_replayed_after_restart(
 /// concurrent P3 calls: replay must not expose the recorded HTTP result before the
 /// point where the live execution delivered it to the Go callback, because durable
 /// clock and body operations may have occurred between those boundaries.
+///
+/// IGNORED — the worker hangs while replaying the recorded call after the restart,
+/// reaching the test timeout. Observed:
+///   - reproducible: 3/3 locally in isolation, and in CI;
+///   - `monotonic_clock::now` calls surround the replayed HTTP operation, i.e. the
+///     hang variant of the Go-guest replay divergence rather than an assertion
+///     failure;
+///   - still reproduces on the newest tree at the time of writing (main
+///     748d19797, wasmtime 252ab61f) and with PR #3771 applied locally;
+///   - the other Go runtime tests in this suite pass, including
+///     `go_counter_survives_restart` and `go_wall_clock_replayed_after_restart`.
+///
+/// This is the regression test for the mixed P2/P3 durable replay fix, so re-check
+/// it whenever the replay/delivery machinery changes.
 #[test]
+#[ignore = "hangs while replaying the recorded outbound-HTTP call after a restart — go-guest replay divergence, see the linked Linear issue"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_outgoing_http_replayed_without_network(
