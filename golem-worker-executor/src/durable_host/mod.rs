@@ -1390,7 +1390,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(self.agent_wallet_cards_snapshot());
         }
 
-        self.public_state.worker().reattach_worker_status().await;
+        self.public_state.worker().reattach_worker_status().await?;
         self.check_post_replay_wallet_liveness().await?;
         self.drain_card_events_at_boundary().await?;
         let pending_revoked_cards = self
@@ -2986,7 +2986,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 .await;
 
                             // TODO: this recomputation should not be necessary.
-                            self.public_state.worker().reattach_worker_status().await;
+                            self.public_state.worker().reattach_worker_status().await?;
                             // Switched to live and re-running the body: the scope `End` will be
                             // appended live by `end_function`, so do not store the (now incomplete)
                             // replay handle.
@@ -3376,7 +3376,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .await;
 
                     // TODO: this recomputation should not be necessary.
-                    self.public_state.worker().reattach_worker_status().await;
+                    self.public_state.worker().reattach_worker_status().await?;
 
                     let (tx_id, tx) = handler.create_new().await?;
                     let _ = self
@@ -5890,7 +5890,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
-        let workers = this.worker_service().get_running_workers_in_shards().await;
+        let workers = this
+            .worker_service()
+            .get_running_workers_in_shards()
+            .await?;
 
         debug!(workers = ?workers, "Recovering running workers");
 

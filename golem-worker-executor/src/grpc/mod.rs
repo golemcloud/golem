@@ -360,7 +360,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ));
                 }
             } else {
-                let existing_worker = self.worker_service().get(&owned_agent_id).await;
+                let existing_worker = self.worker_service().get(&owned_agent_id).await?;
                 if let Some(existing) = existing_worker
                     && !Self::is_same_worker_creation_request(
                         &existing.initial_worker_metadata,
@@ -601,7 +601,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .into();
 
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
@@ -725,7 +725,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral);
         if is_ephemeral
             && Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-                .await
+                .await?
                 .is_none()
         {
             return Ok(None);
@@ -768,7 +768,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let metadata = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
             None
         } else {
-            Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await
+            Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await?
         };
 
         if let Some(metadata) = &metadata
@@ -872,7 +872,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
@@ -1024,7 +1024,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let principal = extract_principal(&request.principal);
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
+            .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
@@ -1858,7 +1858,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         if Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await
+            .await?
             .is_none()
         {
             let component = self

@@ -530,7 +530,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
         } else if let Some(worker::GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
-        }) = self.worker_service.get(&owned_agent_id).await
+        }) = self.worker_service.get(&owned_agent_id).await?
         {
             let status_deps = StatusDeps {
                 oplog_service: self.oplog_service.clone(),

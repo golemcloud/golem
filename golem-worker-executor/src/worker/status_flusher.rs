@@ -394,6 +394,7 @@ mod tests {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{AgentId, AgentStatus, AgentStatusRecord};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use test_r::test;
     use uuid::Uuid;
 
@@ -451,10 +452,15 @@ mod tests {
 
     #[async_trait]
     impl WorkerService for MockWorkerService {
-        async fn get(&self, _owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
+        async fn get(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
             unimplemented!()
         }
-        async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
+        async fn get_running_workers_in_shards(
+            &self,
+        ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
             unimplemented!()
         }
         async fn remove(&self, _owned_agent_id: &OwnedAgentId) {}

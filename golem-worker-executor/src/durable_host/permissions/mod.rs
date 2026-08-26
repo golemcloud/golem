@@ -1233,6 +1233,11 @@ async fn resolve_install_target_context<Ctx: WorkerCtx>(
         .worker_service
         .get(&owned_target)
         .await
+        .map_err(|error| {
+            permissions_types::PermissionError::NotPermitted(format!(
+                "install-card target metadata lookup failed: {error}"
+            ))
+        })?
         .map(|metadata| {
             metadata
                 .last_known_status

@@ -585,10 +585,17 @@ impl SchedulerServiceDefault {
                 {
                     Some(fingerprint) => fingerprint != target_worker_fingerprint,
                     None => match self.worker_service.get(&owned_agent_id).await {
-                        Some(meta) => {
+                        Ok(Some(meta)) => {
                             meta.initial_worker_metadata.fingerprint != target_worker_fingerprint
                         }
-                        None => true,
+                        Ok(None) => true,
+                        Err(error) => {
+                            warn!(
+                                agent_id = owned_agent_id.to_string(),
+                                "Failed to read worker metadata for scheduled invocation: {error}"
+                            );
+                            return false;
+                        }
                     },
                 };
 
@@ -1004,11 +1011,16 @@ mod tests {
 
     #[async_trait]
     impl WorkerService for WorkerServiceMock {
-        async fn get(&self, _owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
+        async fn get(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
             unimplemented!()
         }
 
-        async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
+        async fn get_running_workers_in_shards(
+            &self,
+        ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
             unimplemented!()
         }
 

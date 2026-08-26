@@ -64,7 +64,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
     AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction, Timestamp,
 };
-use golem_service_base::error::worker_executor::InterruptKind;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::any::Any;
 use std::future::Future;
 use std::sync::Arc;
@@ -113,12 +113,12 @@ enum StatusJob {
         _worker_keepalive: Arc<dyn Any + Send + Sync>,
         _instance_guard: OwnedMutexGuard<WorkerInstance>,
         _card_event_boundary_guard: OwnedMutexGuard<()>,
-        done: oneshot::Sender<()>,
+        done: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
     /// Returns the published status after reattaching it when a jump or revert detached it.
     /// Serialization on the status queue prevents observing an in-flight status transition.
     AttachedStatus {
-        done: oneshot::Sender<Arc<AgentStatusRecord>>,
+        done: oneshot::Sender<Result<Arc<AgentStatusRecord>, WorkerExecutorError>>,
     },
     /// Returns the published status if it is currently attached to the oplog, `None` if it is
     /// detached. Runs on the status queue so it cannot observe the detached window of an
@@ -130,7 +130,9 @@ enum StatusJob {
     },
     /// Commits, then — if the status became detached (a jump or revert made it non-foldable) —
     /// recomputes it from the oplog, republishes it, and forces a cache flush.
-    Reattach { done: oneshot::Sender<()> },
+    Reattach {
+        done: oneshot::Sender<Result<(), WorkerExecutorError>>,
+    },
 }
 
 /// A request processed by the lifecycle task. Notifications and ordinary growth persistence are
@@ -241,17 +243,22 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                             async {
                                 state.oplog.add(*entry).await;
                                 state.commit_and_update_state(CommitLevel::Always).await;
-                                state.ensure_status_attached().await;
+                                state.ensure_status_attached().await.map(|_| ())
                             },
                             done,
                         )
                         .await;
                     }
                     StatusJob::AttachedStatus { done } => {
-                        if state.detached.load(Ordering::Acquire) {
-                            state.reattach().await;
-                        }
-                        let _ = done.send(state.last_known_status.load_full());
+                        let result = if state.detached.load(Ordering::Acquire) {
+                            state
+                                .reattach()
+                                .await
+                                .map(|()| state.last_known_status.load_full())
+                        } else {
+                            Ok(state.last_known_status.load_full())
+                        };
+                        let _ = done.send(result);
                     }
                     StatusJob::NonDetachedStatus { done } => {
                         let status = if state.detached.load(Ordering::Acquire) {
@@ -262,8 +269,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         let _ = done.send(status);
                     }
                     StatusJob::Reattach { done } => {
-                        state.reattach().await;
-                        let _ = done.send(());
+                        let result = state.reattach().await;
+                        let _ = done.send(result);
                     }
                 }
             }
@@ -337,7 +344,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         worker: Arc<Worker<Ctx>>,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
         card_event_boundary_guard: OwnedMutexGuard<()>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         let worker_keepalive: Arc<dyn Any + Send + Sync> = worker;
         self.commit
             .run_status_job(|done| StatusJob::AppendAndCommitAttached {
@@ -350,7 +357,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .await
     }
 
-    pub async fn attached_status(&self) -> Arc<AgentStatusRecord> {
+    pub async fn attached_status(&self) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
         self.commit
             .run_status_job(|done| StatusJob::AttachedStatus { done })
             .await
@@ -368,7 +375,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
 
     /// Commits and, if the status is detached, recomputes and republishes it (see
     /// [`Worker::reattach_worker_status`]).
-    pub async fn reattach_worker_status(&self) {
+    pub async fn reattach_worker_status(&self) -> Result<(), WorkerExecutorError> {
         self.commit
             .run_status_job(|done| StatusJob::Reattach { done })
             .await
@@ -540,13 +547,13 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         changed
     }
 
-    async fn reattach(&self) {
+    async fn reattach(&self) -> Result<(), WorkerExecutorError> {
         self.commit_and_update_state(CommitLevel::Always).await;
 
-        self.ensure_status_attached().await;
+        self.ensure_status_attached().await.map(|_| ())
     }
 
-    async fn ensure_status_attached(&self) -> bool {
+    async fn ensure_status_attached(&self) -> Result<bool, WorkerExecutorError> {
         if self.detached.load(Ordering::Acquire) {
             debug!(
                 agent_id = %self.owned_agent_id.agent_id,
@@ -559,9 +566,13 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 self.agent_mode,
                 None,
             )
-            .await
-            .expect("Failed to read oplog while recomputing worker status")
-            .expect("Failed to recompute worker status for existing worker");
+            .await?
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed to recompute status for existing worker {}",
+                    self.owned_agent_id
+                ))
+            })?;
 
             // Install the recomputed status while still detached, so a concurrent background sweep
             // keeps skipping (the in-memory status is not authoritative until it is installed).
@@ -583,9 +594,9 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 );
             }
 
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 

@@ -594,13 +594,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_latest_metadata<T: HasAll<Ctx>>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-    ) -> Option<AgentMetadata> {
+    ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
         if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
-            Some(worker.get_latest_worker_metadata().await)
+            Ok(Some(worker.get_latest_worker_metadata().await))
         } else if let Some(GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
-        }) = deps.worker_service().get(owned_agent_id).await
+        }) = deps.worker_service().get(owned_agent_id).await?
         {
             // update with latest data from oplog
             let agent_mode = initial_worker_metadata.agent_mode;
@@ -610,15 +610,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 agent_mode,
                 last_known_status,
             )
-            .await
-            .expect("Failed to read oplog while calculating worker status")
-            .expect("Failed to calculate worker status for worker even though it is initialized");
+            .await?
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed to calculate status for existing worker {owned_agent_id}"
+                ))
+            })?;
 
             initial_worker_metadata.last_known_status = last_known_status;
 
-            Some(initial_worker_metadata)
+            Ok(Some(initial_worker_metadata))
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -2940,7 +2943,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        let status = self.state_actor.attached_status().await;
+        let status = self.state_actor.attached_status().await?;
         if let Some(received) = status.received_card_transfers.get(&transfer_id) {
             return match received {
                 golem_common::model::ReceivedCardTransferState::Received {
@@ -2983,7 +2986,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 instance_guard,
                 boundary_guard,
             )
-            .await;
+            .await?;
 
         Ok(())
     }
@@ -3193,7 +3196,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // this commit will detach the worker status, immediately reattach it so we see the up to date status.
             self.add_and_commit_oplog_internal(&instance_guard, OplogEntry::revert(region), None)
                 .await;
-            self.reattach_worker_status().await;
+            self.reattach_worker_status().await?;
 
             if let WorkerInstance::Running(running) = &*instance_guard {
                 running.sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -3642,7 +3645,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 None
             } else {
                 // Note: this also checks the oplog for the existence of the create entry.
-                this.worker_service().get(owned_agent_id).await
+                this.worker_service().get(owned_agent_id).await?
             };
 
         match existing_worker_metadata {
@@ -3920,8 +3923,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     // TODO: should be private, exposed for the invocation loop for now.
-    pub async fn reattach_worker_status(&self) {
-        self.state_actor.reattach_worker_status().await;
+    pub async fn reattach_worker_status(&self) -> Result<(), WorkerExecutorError> {
+        self.state_actor.reattach_worker_status().await
     }
 
     async fn start_waiting_worker(
@@ -4554,7 +4557,7 @@ impl RunningWorker {
         let component_id = parent.owned_agent_id.component_id();
 
         // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
-        parent.reattach_worker_status().await;
+        parent.reattach_worker_status().await?;
 
         let worker_metadata = parent.get_latest_worker_metadata().await;
         debug!("Creating instance with parent metadata {worker_metadata:?}");

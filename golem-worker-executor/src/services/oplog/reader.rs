@@ -114,6 +114,22 @@ pub struct OplogRead<T> {
     entries: BTreeMap<OplogIndex, T>,
 }
 
+pub(crate) fn checked_range_end(
+    start: OplogIndex,
+    count: u64,
+) -> Result<Option<OplogIndex>, OplogReadError> {
+    if count == 0 {
+        Ok(None)
+    } else {
+        start
+            .as_u64()
+            .checked_add(count - 1)
+            .map(OplogIndex::from_u64)
+            .map(Some)
+            .ok_or(OplogReadError::InvalidRange { start, count })
+    }
+}
+
 pub fn exact_from_source<T: PartialEq>(
     source: OplogReadSource,
     start: OplogIndex,
@@ -156,16 +172,7 @@ pub fn verify_persisted_entries<T: PartialEq>(
 
 impl<T: PartialEq> OplogRead<T> {
     pub fn new(start: OplogIndex, count: u64) -> Result<Self, OplogReadError> {
-        let end = if count == 0 {
-            None
-        } else {
-            let end = start
-                .as_u64()
-                .checked_add(count - 1)
-                .map(OplogIndex::from_u64)
-                .ok_or(OplogReadError::InvalidRange { start, count })?;
-            Some(end)
-        };
+        let end = checked_range_end(start, count)?;
 
         Ok(Self {
             start,
@@ -229,6 +236,13 @@ impl<T: PartialEq> OplogRead<T> {
                     entries.len()
                 ),
             ));
+        }
+
+        if last < needed_end {
+            return Err(OplogReadError::Gap {
+                start: last.next(),
+                end: needed_end,
+            });
         }
 
         if last > needed_end {
@@ -342,10 +356,24 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_suffix_source_response() {
+    fn reports_gap_when_source_ends_before_requested_suffix() {
         let mut read = OplogRead::new(OplogIndex::INITIAL, 10).unwrap();
-        assert!(matches!(
+        assert_eq!(
             read.add_source(OplogReadSource::Primary, entries(5, 8)),
+            Err(OplogReadError::Gap {
+                start: OplogIndex::from_u64(9),
+                end: OplogIndex::from_u64(10),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_non_contiguous_source_response() {
+        let mut read = OplogRead::new(OplogIndex::INITIAL, 10).unwrap();
+        let mut source_entries = entries(5, 10);
+        source_entries.remove(&OplogIndex::from_u64(8));
+        assert!(matches!(
+            read.add_source(OplogReadSource::Primary, source_entries),
             Err(OplogReadError::Corruption { .. })
         ));
     }

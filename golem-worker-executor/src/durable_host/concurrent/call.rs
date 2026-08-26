@@ -1368,7 +1368,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             .public_state
                             .worker()
                             .reattach_worker_status()
-                            .await;
+                            .await
+                            .map_err(|err| {
+                                (
+                                    err,
+                                    AccessStartCleanup {
+                                        atomic_lease: prepared.atomic_lease.clone(),
+                                    },
+                                )
+                            })?;
                         Ok(AccessOpenedScope {
                             begin_index,
                             replay_handle: None,

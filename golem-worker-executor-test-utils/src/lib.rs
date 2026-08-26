@@ -2969,7 +2969,7 @@ impl Oplog for TestOplog {
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         self.additional_test_deps
-            .record_oplog_call(&self.owned_agent_id, "read_many");
+            .record_oplog_call(&self.owned_agent_id, "read_exact");
         self.oplog.read_exact(oplog_index, n).await
     }
 

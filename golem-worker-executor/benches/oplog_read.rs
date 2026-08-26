@@ -13,6 +13,9 @@
 // limitations under the License.
 
 //! Oplog read-path benchmarks covering primary, buffered, archived, and cross-tier reads.
+//! Archived scenarios distinguish append-populated warm caches from freshly opened cold handles.
+//! Cold-handle construction runs in Criterion's untimed batch setup; source dispatch counts are
+//! asserted separately in oplog tests so timed reads contain no counting instrumentation.
 //!
 //! Run before and after reader changes with:
 //!
@@ -21,7 +24,9 @@
 //! ```
 
 use arc_swap::ArcSwap;
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{
+    BatchSize, BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
+};
 use golem_common::base_model::account::{AccountEmail, AccountId};
 use golem_common::base_model::agent::AgentMode;
 use golem_common::base_model::component::ComponentId;
@@ -49,6 +54,26 @@ const READ_SIZES: [u64; 7] = [1, 1023, 1024, 1025, 4095, 4096, 4097];
 
 struct Fixture {
     oplog: Arc<dyn Oplog>,
+    indexed_storage: Arc<InMemoryIndexedStorage>,
+    blob_storage: Arc<InMemoryBlobStorage>,
+    owned_agent_id: OwnedAgentId,
+    initial_metadata: AgentMetadata,
+}
+
+impl Fixture {
+    async fn reopen(&self) -> Arc<dyn Oplog> {
+        build_service(self.indexed_storage.clone(), self.blob_storage.clone())
+            .await
+            .open(
+                &self.owned_agent_id,
+                AgentMode::Durable,
+                None,
+                self.initial_metadata.clone(),
+                last_known_status(),
+                execution_status(),
+            )
+            .await
+    }
 }
 
 fn metadata(
@@ -95,9 +120,10 @@ fn entry(value: u64) -> OplogEntry {
     }
 }
 
-async fn build_service() -> Arc<MultiLayerOplogService> {
-    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
-    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+async fn build_service(
+    indexed_storage: Arc<InMemoryIndexedStorage>,
+    blob_storage: Arc<InMemoryBlobStorage>,
+) -> Arc<MultiLayerOplogService> {
     let primary = Arc::new(
         PrimaryOplogService::new(
             indexed_storage.clone(),
@@ -126,7 +152,9 @@ async fn build_service() -> Arc<MultiLayerOplogService> {
 }
 
 async fn open_fixture(initial_entries: u64) -> Fixture {
-    let service = build_service().await;
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let service = build_service(indexed_storage.clone(), blob_storage.clone()).await;
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId {
@@ -134,12 +162,13 @@ async fn open_fixture(initial_entries: u64) -> Fixture {
         agent_id: "oplog-read-benchmark".to_string(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let initial_metadata = metadata(agent_id, account_id, environment_id);
     let oplog = service
         .create(
             &owned_agent_id,
             AgentMode::Durable,
             entry(0),
-            metadata(agent_id, account_id, environment_id),
+            initial_metadata.clone(),
             last_known_status(),
             execution_status(),
         )
@@ -150,7 +179,13 @@ async fn open_fixture(initial_entries: u64) -> Fixture {
     }
     oplog.commit(CommitLevel::Always).await;
 
-    Fixture { oplog }
+    Fixture {
+        oplog,
+        indexed_storage,
+        blob_storage,
+        owned_agent_id,
+        initial_metadata,
+    }
 }
 
 async fn primary_fixture() -> Fixture {
@@ -223,6 +258,37 @@ fn benchmark_fixture(
     group.finish();
 }
 
+fn benchmark_cold_fixture(
+    criterion: &mut Criterion,
+    runtime: &Runtime,
+    name: &str,
+    fixture: &Fixture,
+    start_for: impl Fn(u64) -> OplogIndex,
+) {
+    let mut group = criterion.benchmark_group(name);
+    for count in READ_SIZES {
+        let start = start_for(count);
+        group.throughput(Throughput::Elements(count));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(count),
+            &count,
+            |bencher, &count| {
+                bencher.iter_batched(
+                    || runtime.block_on(fixture.reopen()),
+                    |oplog| {
+                        let entries: BTreeMap<OplogIndex, OplogEntry> = runtime
+                            .block_on(oplog.read_exact(black_box(start), black_box(count)))
+                            .expect("benchmark read must be contiguous");
+                        black_box(entries);
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+    group.finish();
+}
+
 fn bench_oplog_reads(criterion: &mut Criterion) {
     let runtime = Runtime::new().expect("failed to create benchmark runtime");
     let primary = runtime.block_on(primary_fixture());
@@ -240,16 +306,37 @@ fn bench_oplog_reads(criterion: &mut Criterion) {
     benchmark_fixture(criterion, &runtime, "buffered/tail", &buffered, |count| {
         OplogIndex::from_u64(ENTRY_COUNT - count + 1)
     });
-    benchmark_fixture(criterion, &runtime, "compressed/start", &compressed, |_| {
+    benchmark_fixture(
+        criterion,
+        &runtime,
+        "compressed/warm-start",
+        &compressed,
+        |_| OplogIndex::INITIAL,
+    );
+    benchmark_cold_fixture(
+        criterion,
+        &runtime,
+        "compressed/cold-start",
+        &compressed,
+        |_| OplogIndex::INITIAL,
+    );
+    benchmark_fixture(criterion, &runtime, "blob/warm-start", &blob, |_| {
         OplogIndex::INITIAL
     });
-    benchmark_fixture(criterion, &runtime, "blob/start", &blob, |_| {
+    benchmark_cold_fixture(criterion, &runtime, "blob/cold-start", &blob, |_| {
         OplogIndex::INITIAL
     });
     benchmark_fixture(
         criterion,
         &runtime,
-        "cross-tier/boundary",
+        "cross-tier/warm-boundary",
+        &cross_tier,
+        |count| OplogIndex::from_u64(ARCHIVE_BOUNDARY.saturating_sub(count / 2).max(1)),
+    );
+    benchmark_cold_fixture(
+        criterion,
+        &runtime,
+        "cross-tier/cold-boundary",
         &cross_tier,
         |count| OplogIndex::from_u64(ARCHIVE_BOUNDARY.saturating_sub(count / 2).max(1)),
     );

@@ -18,7 +18,7 @@ use crate::metrics::storage::{
     record_storage_objects_written,
 };
 use crate::model::ExecutionStatus;
-use crate::services::oplog::reader::{OplogReadSource, exact_from_source};
+use crate::services::oplog::reader::{OplogReadSource, checked_range_end, exact_from_source};
 use crate::services::oplog::{
     CommitLevel, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor, OplogReadError,
     OplogService, OrderedOplogStart, PendingUpload, ReservedPayload, cursor_value,
@@ -83,6 +83,53 @@ where
             }
             Err(err) => {
                 panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}");
+            }
+        }
+    }
+}
+
+async fn retry_storage_read<T, F, Fut>(
+    retry_config: &RetryConfig,
+    op_name: &str,
+    key: &str,
+    mut op: F,
+) -> Result<T, OplogReadError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
+{
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        match op().await {
+            Ok(value) => return Ok(value),
+            Err(IndexedStorageError::Transient(message)) => {
+                if let Some(delay) = get_delay(retry_config, attempts) {
+                    record_oplog_storage_retry(op_name);
+                    warn!(
+                        op = op_name,
+                        key = key,
+                        attempt = attempts,
+                        delay_ms = delay.as_millis() as u64,
+                        "Transient indexed storage error, retrying: {message}"
+                    );
+                    tokio::time::sleep(delay).await;
+                } else {
+                    return Err(OplogReadError::source_failure(
+                        OplogReadSource::Primary,
+                        format!(
+                            "indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: Transient storage error: {message}"
+                        ),
+                    ));
+                }
+            }
+            Err(error) => {
+                return Err(OplogReadError::source_failure(
+                    OplogReadSource::Primary,
+                    format!(
+                        "indexed storage operation '{op_name}' failed for key '{key}': {error}"
+                    ),
+                ));
             }
         }
     }
@@ -445,17 +492,17 @@ impl OplogService for PrimaryOplogService {
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         record_oplog_call("read");
-        if n == 0 {
+        let Some(end) = checked_range_end(idx, n)? else {
             return Ok(BTreeMap::new());
-        }
+        };
 
-        Ok({
+        let entries = {
             let is = self.indexed_storage.clone();
             let agent_id = owned_agent_id.agent_id();
             let key = Self::oplog_key(&owned_agent_id.agent_id);
             let start: u64 = idx.into();
-            let end: u64 = idx.range_end(n).into();
-            retry_storage_op(&self.retry_config, "read", &key, || {
+            let end: u64 = end.into();
+            retry_storage_read(&self.retry_config, "read", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
@@ -468,11 +515,12 @@ impl OplogService for PrimaryOplogService {
                         .await
                 }
             })
-            .await
+            .await?
             .into_iter()
             .map(|(k, v): (u64, OplogEntry)| (OplogIndex::from_u64(k), v))
             .collect()
-        })
+        };
+        Ok(entries)
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
@@ -974,7 +1022,7 @@ impl OplogReader {
             let agent_mode = self.agent_mode;
             let key = self.key.clone();
             let idx: u64 = oplog_index.into();
-            retry_storage_op(&self.retry_config, "read", &key, || {
+            retry_storage_read(&self.retry_config, "read", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
@@ -987,7 +1035,7 @@ impl OplogReader {
                         .await
                 }
             })
-            .await
+            .await?
         };
 
         entries
@@ -1004,14 +1052,13 @@ impl OplogReader {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
-        record_oplog_call("read_many");
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+        record_oplog_call("read_exact");
 
-        if n == 0 {
-            return BTreeMap::new();
-        }
+        let Some(last_idx) = checked_range_end(oplog_index, n)? else {
+            return Ok(BTreeMap::new());
+        };
 
-        let last_idx = oplog_index.range_end(n);
         let mut result: BTreeMap<OplogIndex, OplogEntry> = if oplog_index <= self.last_committed_idx
         {
             let is = self.indexed_storage.clone();
@@ -1020,7 +1067,7 @@ impl OplogReader {
             let key = self.key.clone();
             let start: u64 = oplog_index.into();
             let end: u64 = min(last_idx, self.last_committed_idx).into();
-            retry_storage_op(&self.retry_config, "read_many", &key, || {
+            retry_storage_read(&self.retry_config, "read_exact", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
@@ -1033,7 +1080,7 @@ impl OplogReader {
                         .await
                 }
             })
-            .await
+            .await?
             .into_iter()
             .map(|(idx, entry)| (OplogIndex::from_u64(idx), entry))
             .collect()
@@ -1064,7 +1111,7 @@ impl OplogReader {
             }
         }
 
-        result
+        Ok(result)
     }
 
     async fn length(&self) -> u64 {
@@ -1435,7 +1482,7 @@ impl Oplog for PrimaryOplog {
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        let entries = reader.read_source(oplog_index, n).await;
+        let entries = reader.read_source(oplog_index, n).await?;
         exact_from_source(OplogReadSource::Primary, oplog_index, n, entries)
     }
 
@@ -1445,7 +1492,7 @@ impl Oplog for PrimaryOplog {
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        Ok(reader.read_source(oplog_index, n).await)
+        reader.read_source(oplog_index, n).await
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {

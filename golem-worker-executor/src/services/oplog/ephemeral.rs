@@ -17,7 +17,7 @@ use crate::services::oplog::multilayer::{
     BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService, OplogArchive,
     TransferFiber, WrappedOplogArchive, transfer_between_lower_layers,
 };
-use crate::services::oplog::reader::{OplogRead, OplogReadSource};
+use crate::services::oplog::reader::{OplogRead, OplogReadSource, checked_range_end};
 use crate::services::oplog::{
     CommitLevel, Oplog, OplogAddReceipt, OplogReadError, OplogService, OrderedOplogStart,
     PendingUpload, downcast_oplog,
@@ -609,7 +609,7 @@ impl Oplog for EphemeralOplog {
         oplog_index: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
-        record_oplog_call("read_many");
+        record_oplog_call("read_exact");
         let mut read = OplogRead::new(oplog_index, n)?;
         if read.next_range().is_none() {
             return read.finish();
@@ -623,7 +623,23 @@ impl Oplog for EphemeralOplog {
             .await;
 
         let req_start: u64 = oplog_index.into();
-        let req_end: u64 = oplog_index.range_end(n).into();
+        let req_end = checked_range_end(oplog_index, n)?.unwrap().as_u64();
+        let snapshot_end = snapshot
+            .last_committed_idx
+            .as_u64()
+            .checked_add(snapshot.buffer.len() as u64)
+            .ok_or_else(|| {
+                OplogReadError::corruption(
+                    OplogReadSource::EphemeralBuffer,
+                    "snapshot tail exceeds the oplog index range",
+                )
+            })?;
+        if req_end > snapshot_end {
+            return Err(OplogReadError::Gap {
+                start: OplogIndex::from_u64(max(req_start, snapshot_end + 1)),
+                end: OplogIndex::from_u64(req_end),
+            });
+        }
 
         let mut buffered = BTreeMap::new();
 

@@ -804,7 +804,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         .await;
 
                     // TODO: this recomputation should not be necessary.
-                    self.public_state.worker().reattach_worker_status().await;
+                    self.public_state.worker().reattach_worker_status().await?;
                 }
             }
 
@@ -1091,7 +1091,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
                 let owned_agent_id =
                     OwnedAgentId::new(ctx.owned_agent_id.environment_id, &agent_id);
-                let result = ctx.state.worker_service.get(&owned_agent_id).await;
+                let result = ctx.state.worker_service.get(&owned_agent_id).await?;
                 let metadata: Option<AgentMetadataForGuests> = if let Some(result) = result {
                     let mut metadata = result.initial_worker_metadata;
                     if let Some(last_known_status) = &result.last_known_status {
@@ -1445,13 +1445,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let retry_properties = RetryContext::golem_api("resolve-agent-id-strict");
             let result = loop {
                 let owned_id = OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
-                let result = Ok(
-                    if self.state.worker_service.get(&owned_id).await.is_some() {
-                        Some(agent_id.clone())
-                    } else {
-                        None
-                    },
-                );
+                let result = self
+                    .state
+                    .worker_service
+                    .get(&owned_id)
+                    .await
+                    .map(|metadata| metadata.map(|_| agent_id.clone()));
 
                 match handle
                     .try_trigger_retry_or_loop_with_properties(
