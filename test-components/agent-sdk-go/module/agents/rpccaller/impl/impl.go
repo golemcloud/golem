@@ -21,6 +21,14 @@ func init() {
 		c := ledger.Agent.Get(ledger.Id{Region: in.Region})
 		return ledger.Record.Call(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
 	})
+	golem.Handle(agent, rpccaller.AtomicCall, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
+		var total int64
+		golem.Atomically(func() {
+			c := ledger.Agent.Get(ledger.Id{Region: in.Region})
+			total = ledger.Record.Call(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
+		})
+		return total
+	})
 	golem.Handle(agent, rpccaller.Async, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
 		c := ledger.Agent.Get(ledger.Id{Region: in.Region})
 		return ledger.Record.CallAsync(c, ledger.RecordIn{Amount: in.Amount}).Get().MustOk()

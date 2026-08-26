@@ -13,6 +13,12 @@ compensated in **reverse order**. The saga helpers build on the durability
 primitives (an atomic region + the oplog) — no persistence beyond what the runtime
 already provides.
 
+> **Steps that call HTTP.** A transaction runs its steps inside an atomic region,
+> and an outgoing HTTP request (`net/http`) does not yet settle inside one — the
+> region fails to close with *"non-re-executable durable calls initiated in it are
+> still in flight"*. Cross-agent RPC is unaffected, so today a step should do its
+> external work through RPC to an agent that owns the HTTP call.
+
 The Go API lives in the `golem` package:
 
 - `golem.Operation[In, Out, E]` — a compensable step, built with `golem.NewOperation`.

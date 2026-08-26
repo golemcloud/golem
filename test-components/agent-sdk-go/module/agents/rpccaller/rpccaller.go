@@ -20,4 +20,8 @@ var (
 		golem.Desc("Record via a synchronous RPC and return the ledger's new total"))
 	Async = golem.DefineMethod[Id, CallIn, int64]("async",
 		golem.Desc("Record via CallAsync + Future.Get and return the ledger's new total"))
+	// AtomicCall makes the same RPC inside golem.Atomically — checks whether a
+	// cross-agent call settles before an atomic region closes.
+	AtomicCall = golem.DefineMethod[Id, CallIn, int64]("atomic-call",
+		golem.Desc("Record via a synchronous RPC inside an atomic region"))
 )
