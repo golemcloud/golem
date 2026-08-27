@@ -96,6 +96,9 @@ pub enum ScenarioCode {
     /// The same cut, held for longer than the key-value retry budget, so the
     /// executors are expected to be replaced rather than to ride it out.
     S22,
+    /// Executors cut off from the indexed-oplog PostgreSQL cluster, the other
+    /// Aurora cluster underneath them, for the length of a writer failover.
+    S14,
 }
 
 impl ScenarioCode {
@@ -114,13 +117,14 @@ impl ScenarioCode {
             ScenarioCode::S9 => "S9",
             ScenarioCode::S16 => "S16",
             ScenarioCode::S22 => "S22",
+            ScenarioCode::S14 => "S14",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 13] = [
+    pub const ALL: [ScenarioCode; 14] = [
         ScenarioCode::S1,
         ScenarioCode::S3,
         ScenarioCode::S5,
@@ -132,6 +136,7 @@ impl ScenarioCode {
         ScenarioCode::S11,
         ScenarioCode::S12,
         ScenarioCode::S13,
+        ScenarioCode::S14,
         ScenarioCode::S16,
         ScenarioCode::S22,
     ];
@@ -1444,6 +1449,7 @@ mod tests {
         assert_eq!(ScenarioCode::parse("s6"), Some(ScenarioCode::S6));
         assert_eq!(ScenarioCode::parse("s9"), Some(ScenarioCode::S9));
         assert_eq!(ScenarioCode::parse("s16"), Some(ScenarioCode::S16));
+        assert_eq!(ScenarioCode::parse("s14"), Some(ScenarioCode::S14));
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
@@ -1489,7 +1495,7 @@ mod tests {
                     entry.require_workload().unwrap();
                     entry.require_rollback().unwrap();
                 }
-                ScenarioCode::S16 | ScenarioCode::S22 => {
+                ScenarioCode::S14 | ScenarioCode::S16 | ScenarioCode::S22 => {
                     entry.require_workload().unwrap();
                     entry.require_scheduled().unwrap();
                     entry.require_storage().unwrap();

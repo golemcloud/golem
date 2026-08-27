@@ -1097,3 +1097,101 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # S14 — the oplog half of the storage matrix (GOL-376). Same driver as S16 and
+  # S22, same cut, aimed at the other Aurora cluster.
+  #
+  # S16 takes away the cluster that says what the platform is doing: promises,
+  # the running-workers set, user key-value data and the scheduler's schema. S14
+  # takes away the one that says what it did. The oplog is the only thing on the
+  # indexed cluster, so under this cut promises still resolve, the scheduler
+  # still claims and acknowledges on time, and the running-workers set is still
+  # writable — and nothing durable can be committed. The two scenarios are
+  # near-mirror images and are meant to be read side by side.
+  #
+  # The retry budget is not the interesting quantity here the way it is in S16
+  # and S22. golem-dev gives indexed storage 200 attempts with a 10s cap, which
+  # is over half an hour of stalling, so this window cannot exhaust it. What is
+  # worth watching instead is the error classification: `retry_storage_op`
+  # panics immediately on any indexed-storage error it was not handed as
+  # transient, and transient means `PoolTimedOut` or `Io` and nothing else. An
+  # executor lost during this run is a misclassification finding, not an
+  # exhaustion one.
+  - code: S14
+    name: indexed-oplog-postgres-outage
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # Every executor, as in S16 and for the same reason: a storage outage only
+      # some executors could see would be a routing fault wearing a database's
+      # clothes.
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 60
+
+    phases:
+      # Same as S16, so the two are comparable: long enough for cold starts,
+      # component loading and route warm-up to settle, and for the scheduler to
+      # be firing steadily.
+      baselineSecs: 300
+      # The same worst-case Aurora writer promotion S16 is sized to, about a
+      # minute. GOL-376 was written with 30s, before that number had been
+      # worked out; 60s is the failover this is supposed to model and matching
+      # S16 is what makes the two results readable against each other.
+      faultSecs: 60
+      # As S16: every stream needs several whole operations after the heal, and
+      # scheduled actions registered during the outage have to fall due and fire
+      # inside the run.
+      recoverySecs: 420
+
+    workload:
+      # Identical to S16, deliberately. The comparison between the two runs is
+      # the point, and a different population would turn the difference into a
+      # question about the workload.
+      durableAgents: 200
+      ephemeralAgents: 50
+      # Zero for the same reason as S16: the scheduled stream comes from the
+      # block below, because only its registrations carry a token into the
+      # target's fire log. Setting both is refused at load time.
+      scheduledAgents: 0
+      # Promises live on the cluster this cut leaves alone, so unlike in S16
+      # this stream is not directly on the fault path. It still degrades,
+      # because completing a promise wakes an agent that then cannot commit,
+      # and that gap between "the promise was written" and "the agent got
+      # anywhere" is worth having on the record.
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # Same as S16's, and it should be met with room to spare. The scheduler is
+      # outside this cut, so claims and acknowledgements keep their timing and
+      # the delay reduces to how long the fired invocation could not commit.
+      # That makes S14 the cleanest read of scheduler lag in the suite: in S16
+      # and S22 the scheduler is inside the outage and the two costs cannot be
+      # separated.
+      leaseBudgetSecs: 240
+
+    storage:
+      # The indexed writer endpoint, not the key-value one. This is the only
+      # field that differs materially from S16.
+      endpoint: golem-postgres-dev-indexed.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+      # Same floor and same reasoning as S16.
+      outageQuietFloorPercent: 50
+      # Recorded, not asserted. Expected to be small: nothing is replaced here,
+      # so this is a connection pool noticing its database is back plus whatever
+      # the stalled commits still have to do.
+      recoveryBudgetSecs: 120
+
+    retryPolicy:
+      # Identical to S16's, for the same reason.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

@@ -259,6 +259,9 @@ pub enum ChaosScenarioArg {
     S16,
     /// The same cut, held for longer than the key-value retry budget.
     S22,
+    /// Executors cut off from the indexed-oplog PostgreSQL cluster for the
+    /// length of a writer failover.
+    S14,
 }
 
 /// Density subcommand action.

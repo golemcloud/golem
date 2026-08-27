@@ -12,38 +12,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Key-value storage outage: the shared choreography behind S16 and S22.
+//! Storage outage: the shared choreography behind S14, S16 and S22.
 //!
-//! Both codes run this module. They differ only in how long the storage is
-//! taken away for, which is a suite setting, and in what a reader should expect
-//! of the result:
+//! All three codes run this module. They differ in which cluster is taken away
+//! and for how long, both of which are suite settings, and in what a reader
+//! should expect of the result:
 //!
-//! * **S16** (GOL-379) cuts for the length of an AWS storage failover, about a
-//!   minute. The key-value retry budget covers that, so the claim is that the
-//!   platform absorbs it: operations stall and then complete, and no executor
-//!   is lost.
-//! * **S22** (GOL-499) cuts for longer than the retry budget. The budget is
-//!   then exhausted, the recovery-index write in `status_flusher` panics on
-//!   purpose, and executors are replaced. The claim is not survival but that
-//!   the exit is the intended one and nothing is lost across it.
+//! * **S16** (GOL-379) cuts the key-value cluster for the length of an AWS
+//!   storage failover, about a minute. The key-value retry budget covers that,
+//!   so the claim is that the platform absorbs it: operations stall and then
+//!   complete, and no executor is lost.
+//! * **S22** (GOL-499) cuts the same cluster for longer than that budget. The
+//!   budget is then exhausted, the recovery-index write in `status_flusher`
+//!   panics on purpose, and executors are replaced. The claim is not survival
+//!   but that the exit is the intended one and nothing is lost across it.
+//! * **S14** (GOL-376) cuts the *other* Aurora cluster, the one carrying the
+//!   oplog, again for the length of a failover. golem-dev gives the indexed
+//!   retry 200 attempts with a 10s cap, so the budget is not the question here
+//!   the way it is in the other two, and the claim is again absorption.
 //!
-//! The driver is the same either way because the difference is one of
-//! expectation, not of choreography. Nothing below asserts on which of the two
-//! happened: the account it produces answers both questions, and the oracles
-//! that fail the build — the scheduled-fire account and the exactly-once
-//! account — are the ones both scenarios share.
+//! The driver is the same in all three because the difference is one of
+//! expectation, not of choreography. Nothing below asserts on which outcome
+//! happened: the account it produces answers all three questions, and the
+//! oracles that fail the build — the scheduled-fire account and the
+//! exactly-once account — are the ones every one of them shares.
 //!
-//! The first scenario in the suite that breaks something the platform depends
-//! on rather than something the platform *is*. Every fault before this one
-//! removed a golem process or a link between two of them, and in each case some
-//! part of the cluster stayed healthy and could be compared against. Here the
-//! executors keep running, keep their shards, keep answering the shard-manager,
-//! and simply cannot reach the database underneath them.
+//! The first scenarios in the suite that break something the platform depends
+//! on rather than something the platform *is*. Every fault before these removed
+//! a golem process or a link between two of them, and in each case some part of
+//! the cluster stayed healthy and could be compared against. Here the executors
+//! keep running, keep their shards, keep answering the shard-manager, and
+//! simply cannot reach a database underneath them.
 //!
 //! ## What the fault takes away
 //!
-//! More than the name suggests. Reading the golem-dev executor deployment, the
-//! key-value Aurora cluster carries four things:
+//! Two different halves of the platform, depending on the code, and they are
+//! close to mirror images of each other.
+//!
+//! Reading the golem-dev executor deployment, the **key-value** cluster that
+//! S16 and S22 cut carries four things:
 //!
 //! * promises,
 //! * the running-workers set,
@@ -51,13 +58,19 @@
 //! * and the scheduler, in its own schema on the same cluster.
 //!
 //! The oplog lives on a different Aurora cluster and the worker-status hot
-//! cache lives in Redis, and the partition touches neither. That combination is
-//! what makes the scenario worth running: the platform keeps the ability to
-//! *record* what it did and loses the ability to know *what it is doing*.
+//! cache lives in Redis, and that partition touches neither. So the platform
+//! keeps the ability to *record* what it did and loses the ability to know
+//! *what it is doing*.
 //!
-//! It also means no stream here is a control group. A durable increment needs
-//! the running-workers set before it can start, so `durable` degrades along
-//! with everything else and must not be read as untouched.
+//! The **indexed** cluster that S14 cuts carries the oplog and nothing else.
+//! Promises still resolve, the scheduler still claims and acknowledges on time,
+//! the running-workers set is still writable. What goes is the ability to
+//! commit anything durable at all, which is the opposite arrangement: the
+//! platform knows exactly what it is doing and cannot record any of it.
+//!
+//! Either way no stream is a control group. A durable increment needs the
+//! running-workers set before it can start and the oplog before it can finish,
+//! so `durable` degrades under both cuts and must not be read as untouched.
 //!
 //! ## The control is the baseline, not another pod
 //!
@@ -78,17 +91,24 @@
 //! The mixed workload's scheduled stream registers through `schedule_poll_at`,
 //! which increments a counter and records nothing else. That is enough to ask
 //! "did every registration eventually fire" and useless for asking "how late".
-//! Scheduler lag is one of the two things GOL-379 asks this run to record, and
-//! the only place a due time survives is the target's own fire log, so S16
-//! drives the token-carrying registration loop from [`crate::chaos::scheduled`]
-//! instead and leaves `scheduledAgents` at zero in the mixed workload. Setting
-//! both is refused at load time — see `ScenarioConfig::require_storage`.
+//! Scheduler lag is one of the two things GOL-379 asks these runs to record,
+//! and the only place a due time survives is the target's own fire log, so
+//! these scenarios drive the token-carrying registration loop from
+//! [`crate::chaos::scheduled`] instead and leave `scheduledAgents` at zero in
+//! the mixed workload. Setting both is refused at load time — see
+//! `ScenarioConfig::require_storage`.
+//!
+//! S14 is where that lag reads most directly. Its cut leaves the scheduler on
+//! the healthy cluster, so claims and acknowledgements keep their timing and
+//! what the delays measure is purely how long the fired invocation could not
+//! commit. Under S16 and S22 the scheduler is inside the outage and the two
+//! costs are not separable.
 //!
 //! One consequence worth stating plainly for anyone reading the result: the
-//! fire account's `group` axis is degenerate here. S16 kills no executor, so
-//! every target is reported as `elsewhere` and only the `window` axis carries
-//! information. The delays to read are the `during-fault` and `after-fault`
-//! cells against `before-fault`.
+//! fire account's `group` axis is degenerate here. None of these scenarios
+//! names a pod to kill, so every target is reported as `elsewhere` and only the
+//! `window` axis carries information. The delays to read are the `during-fault`
+//! and `after-fault` cells against `before-fault`.
 //!
 //! ## What fails the run
 //!
@@ -107,7 +127,8 @@
 //! that never came back are both things a human has to look at, and neither is
 //! improved by turning the job red.
 //!
-//! Run-by-run findings live in the S16 runbook in golem-cloud, not here.
+//! Run-by-run findings live in the per-scenario runbooks in golem-cloud, not
+//! here.
 
 use crate::chaos::fires::{FaultWindow, ScheduleFireReport};
 use crate::chaos::history::{OperationHistory, OperationRecord, Outcome, Phase, Stream};
@@ -775,9 +796,10 @@ mod tests {
     }
 
     /// The storage account's findings never reach the termination reason. An
-    /// outage that failed to land is the loudest thing S16 can report and it is
-    /// deliberately not fatal: turning the job red would say the platform did
-    /// something wrong, and what actually went wrong is the experiment.
+    /// outage that failed to land is the loudest thing these scenarios can
+    /// report, and it is deliberately not fatal: turning the job red would say
+    /// the platform did something wrong, and what actually went wrong is the
+    /// experiment.
     #[test]
     fn a_storage_finding_does_not_change_the_termination_reason() {
         let mut outage =
