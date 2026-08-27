@@ -11520,9 +11520,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c3f4f07c06f38d6858db65eed7975674f19aca749e6fd8bd56dd6e9376b8d33"
+checksum = "e870a6b59731416c8ebe60fe42dedd65fc92df7820d4f387a68330bd06ed1212"
 dependencies = [
  "anyhow",
  "camino",
