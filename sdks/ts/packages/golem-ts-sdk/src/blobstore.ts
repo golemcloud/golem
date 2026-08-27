@@ -68,7 +68,6 @@ const wrap = <A>(operation: string, fn: () => A): A => {
 // ---------------------------------------------------------------------------
 
 const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder('utf-8', { fatal: true });
 
 const validateSync = <T>(schema: StandardSchemaV1, value: unknown): T => {
   const result = schema['~standard'].validate(value);
@@ -90,7 +89,7 @@ const encodeValue = <T>(schema: StandardSchemaV1, value: T): Uint8Array =>
 
 const decodeValue = <T>(schema: StandardSchemaV1, bytes: Uint8Array): T =>
   wrap('schema.decode', () => {
-    const json = textDecoder.decode(bytes);
+    const json = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     const parsed: unknown = JSON.parse(json);
     return validateSync<T>(schema, parsed);
   });
