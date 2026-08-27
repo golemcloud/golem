@@ -206,8 +206,8 @@ impl From<WorkerExecutorError> for RpcError {
 impl From<WorkerProxyError> for RpcError {
     fn from(value: WorkerProxyError) -> Self {
         match value {
-            WorkerProxyError::BadRequest(errors) => RpcError::ProtocolError {
-                details: errors.join(", "),
+            WorkerProxyError::BadRequest(errors) => RpcError::RemoteAgentError {
+                error: Box::new(ModelAgentError::InvalidInput(errors.join(", "))),
             },
             WorkerProxyError::Unauthorized(error) => RpcError::Denied { details: error },
             WorkerProxyError::LimitExceeded(error) => RpcError::Denied { details: error },
@@ -1112,6 +1112,22 @@ mod tests {
     #[test]
     fn invalid_remote_request_is_an_agent_input_error() {
         let error = RpcError::from(WorkerExecutorError::invalid_request("wrong argument shape"));
+
+        assert_eq!(
+            error,
+            RpcError::RemoteAgentError {
+                error: Box::new(ModelAgentError::InvalidInput(
+                    "wrong argument shape".to_string()
+                )),
+            }
+        );
+    }
+
+    #[test]
+    fn proxied_bad_request_is_an_agent_input_error() {
+        let error = RpcError::from(WorkerProxyError::BadRequest(vec![
+            "wrong argument shape".to_string(),
+        ]));
 
         assert_eq!(
             error,

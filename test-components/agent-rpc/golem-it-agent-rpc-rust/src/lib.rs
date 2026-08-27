@@ -590,8 +590,7 @@ impl CancelTester for CancelTesterImpl {
 
     fn test_cancel_before_await(&self, counter_name: String) {
         let constructor_data = encode_single_parameter(counter_name);
-        let wasm_rpc = WasmRpc::create("RpcCounter", constructor_data, None, Vec::new())
-            .expect("failed to create RPC client");
+        let wasm_rpc = WasmRpc::new("RpcCounter", constructor_data, None, Vec::new());
 
         let input = encode_single_parameter(1u64);
         let future = wasm_rpc
@@ -606,8 +605,7 @@ impl CancelTester for CancelTesterImpl {
 
     async fn test_cancel_completed(&self, counter_name: String) -> u64 {
         let constructor_data = encode_single_parameter(counter_name.clone());
-        let wasm_rpc = WasmRpc::create("RpcCounter", constructor_data, None, Vec::new())
-            .expect("failed to create RPC client");
+        let wasm_rpc = WasmRpc::new("RpcCounter", constructor_data, None, Vec::new());
 
         // First, call inc_by to increment the counter
         let input = encode_single_parameter(5u64);

@@ -806,13 +806,13 @@ impl AgentHost for Context {
         AgentHost::get_agent_type(&mut self.durable_ctx, agent_type_name).await
     }
 
-    async fn get_agent_type_for(
+    async fn get_agent_type_by_agent_id(
         &mut self,
         agent_id: golem_schema::schema::wit::wire::AgentId,
     ) -> anyhow::Result<
         Option<golem_common::schema::agent::bindings::golem::agent::common::RegisteredAgentType>,
     > {
-        AgentHost::get_agent_type_for(&mut self.durable_ctx, agent_id).await
+        AgentHost::get_agent_type_by_agent_id(&mut self.durable_ctx, agent_id).await
     }
 
     async fn make_agent_id(

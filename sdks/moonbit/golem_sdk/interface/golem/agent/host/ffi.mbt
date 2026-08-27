@@ -16,13 +16,13 @@ fn wasmImportGetAllAgentTypes(p0 : Int) = "golem:agent/host@2.0.0" "get-all-agen
 fn wasmImportGetAgentType(p0 : Int, p1 : Int, p2 : Int) = "golem:agent/host@2.0.0" "get-agent-type"
 
 ///|
-fn wasmImportGetAgentTypeFor(
+fn wasmImportGetAgentTypeByAgentId(
   p0 : Int64,
   p1 : Int64,
   p2 : Int,
   p3 : Int,
   p4 : Int,
-) = "golem:agent/host@2.0.0" "get-agent-type-for"
+) = "golem:agent/host@2.0.0" "get-agent-type-by-agent-id"
 
 ///|
 fn wasmImportMakeAgentId(

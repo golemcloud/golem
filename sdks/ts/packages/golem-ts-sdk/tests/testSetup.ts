@@ -45,7 +45,7 @@ vi.mock('golem:agent/host@2.0.0', () => ({
     }
     return undefined;
   }),
-  getAgentTypeFor: vi.fn(() => undefined),
+  getAgentTypeByAgentId: vi.fn(() => undefined),
   makeAgentId: vi.fn(() => 'MockAgent()'),
   parseAgentId: vi.fn((agentId: string) => {
     const match = agentId.match(/^(.*)\((.*)\)(\[(\d+)-(\d+)])?$/);

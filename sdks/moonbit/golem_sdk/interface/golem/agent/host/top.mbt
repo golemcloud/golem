@@ -9758,13 +9758,13 @@ pub fn get_agent_type(agent_type_name : String) -> @common.RegisteredAgentType? 
 }
 
 ///|
-/// Gets the registered agent type associated with an existing agent instance.
-pub fn get_agent_type_for(
+/// Gets the registered agent type used by an existing agent, identified by its agent ID.
+pub fn get_agent_type_by_agent_id(
   agent_id : @types.AgentId,
 ) -> @common.RegisteredAgentType? {
   let ptr = mbt_ffi_str2ptr(agent_id.agent_id)
   let return_area = mbt_ffi_malloc(200)
-  wasmImportGetAgentTypeFor(
+  wasmImportGetAgentTypeByAgentId(
     agent_id.component_id.uuid.high_bits.reinterpret_as_int64(),
     agent_id.component_id.uuid.low_bits.reinterpret_as_int64(),
     ptr,
@@ -21525,11 +21525,11 @@ pub fn create_webhook(
 }
 
 ///|
-/// Creates a fail-fast RPC client connecting to the given target agent.
+/// Creates an RPC client connecting to the given target agent.
 ///
-/// This constructor is intended for statically generated clients, where a
-/// mismatch between the generated client and the deployed agent is a
-/// terminal failure rather than a recoverable result.
+/// `constructor` is a value tree whose root encodes the target agent
+/// constructor's parameter list. This fail-fast form traps if the client
+/// cannot be created and is intended for statically generated clients.
 pub fn WasmRpc::wasm_rpc(
   agent_type_name : String,
   constructor_ : @types.SchemaValueTree,
@@ -24859,8 +24859,9 @@ pub fn WasmRpc::wasm_rpc(
 /// Creates an RPC client connecting to the given target agent.
 ///
 /// `constructor` is a value tree whose root encodes the target agent
-/// constructor's parameter list. This fallible form is intended for
-/// reflective and other dynamic clients that can adapt to the error.
+/// constructor's parameter list. This fallible form returns an RPC error
+/// if the client cannot be created and is intended for reflective and
+/// other dynamic clients.
 pub fn WasmRpc::create(
   agent_type_name : String,
   constructor_ : @types.SchemaValueTree,
