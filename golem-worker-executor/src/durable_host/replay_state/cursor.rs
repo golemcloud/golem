@@ -2527,7 +2527,12 @@ fn scope_entry_owner(
         | OplogEntry::CardTransferStarted { .. }
         | OplogEntry::CardTransferred { .. }
         | OplogEntry::CardRevokedCascade { .. }
-        | OplogEntry::CardTransferConfirmed { .. } => None,
+        | OplogEntry::CardTransferConfirmed { .. }
+        | OplogEntry::StreamRegistered { .. }
+        | OplogEntry::StreamItems { .. }
+        | OplogEntry::StreamEnd { .. }
+        | OplogEntry::StreamCancel { .. }
+        | OplogEntry::StreamSession { .. } => None,
     }
 }
 
@@ -2588,6 +2593,11 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::CardTransferred { .. }
         | OplogEntry::CardRevokedCascade { .. }
         | OplogEntry::CardTransferConfirmed { .. }
-        | OplogEntry::HostStreamFrame { .. } => None,
+        | OplogEntry::HostStreamFrame { .. }
+        | OplogEntry::StreamRegistered { .. }
+        | OplogEntry::StreamItems { .. }
+        | OplogEntry::StreamEnd { .. }
+        | OplogEntry::StreamCancel { .. }
+        | OplogEntry::StreamSession { .. } => None,
     }
 }

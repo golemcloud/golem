@@ -6,5 +6,6 @@ import {
   "golemcloud/golem_sdk/interface/golem/durability/durability" @raw_durability,
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model" @model,
+  "golemcloud/golem_sdk/schema_model_host" @model_host,
   "moonbitlang/core/debug",
 }

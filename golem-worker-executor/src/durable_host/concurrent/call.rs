@@ -117,14 +117,14 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     /// durable-scope `Start` for a non-idempotent remote write and the pre-call index otherwise.
     pub(super) boundary: DurableCallBoundary,
     pub(super) is_live: bool,
-    /// `true` when a `Start` entry was actually appended. It is `false` while snapshotting (where
-    /// nothing is persisted) and for replay handles.
+    /// `true` when a `Start` entry was actually appended. It is `false` during unpersisted
+    /// execution and for replay handles.
     pub(super) persisted: bool,
     /// Tracks the (possibly deferred) blob upload of this call's request payload, started when the
     /// `Start` was reserved. Awaited before the matching `End` / `Cancelled` is appended so an
     /// upload failure surfaces at the call site rather than only at the leaf oplog's commit barrier.
-    /// `PendingUpload::already_durable()` (a no-op) for replay handles, snapshotting, and inline
-    /// requests.
+    /// `PendingUpload::already_durable()` (a no-op) for replay handles, unpersisted execution, and
+    /// inline requests.
     pub(super) request_upload: PendingUpload,
     /// Replay-side resolver receiver; `Some` only for replay handles.
     pub(super) replay: Option<ReplayCallHandle>,
@@ -266,7 +266,7 @@ impl CallExecutionScope {
 /// Builds an *unregistered* atomic-region lease: it preserves the call's initiation-time region
 /// for trap/retry classification (matching the immutable capture used before leases existed) but
 /// is not a member of any region registry, so it never transfers or detaches on region close.
-/// Used for replay and snapshotting handles, which do not participate in the live in-flight
+/// Used for replay and unpersisted handles, which do not participate in the live in-flight
 /// member guard.
 pub(super) fn unregistered_atomic_lease(
     atomic_region: Option<OplogIndex>,
@@ -282,7 +282,7 @@ pub(super) fn unregistered_atomic_lease(
 
 struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
     is_live: bool,
-    snapshotting: bool,
+    unpersisted: bool,
     oplog: Arc<dyn Oplog>,
     public_state: PublicDurableWorkerState<Ctx>,
     replay_state: crate::durable_host::replay_state::ReplayState,
@@ -927,13 +927,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             observational_owner,
         };
         let is_live = durable_execution_state.is_live;
-        let snapshotting = durable_execution_state.snapshotting_mode;
+        let unpersisted = durable_execution_state.snapshotting_mode;
         let retry =
             InFunctionRetryController::new(function_type, durable_execution_state, Pair::FQFN);
         // A live persisted call initiated inside an open atomic region joins the region's member
         // registry: its lease starts owned by that region and follows the region's close
         // transitions (transfer to the enclosing region, or detachment at the outermost close).
-        let atomic_lease = if is_live && !snapshotting {
+        let atomic_lease = if is_live && !unpersisted {
             match atomic_region {
                 Some(begin_index) => Some(
                     ctx.state
@@ -956,7 +956,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let live_host_calls = ctx.state.live_host_call_counter();
         Ok(PreparedAccessStart {
             is_live,
-            snapshotting,
+            unpersisted,
             oplog: ctx.state.oplog.clone(),
             public_state: ctx.public_state.clone(),
             replay_state: ctx.state.replay_state.clone(),
@@ -1004,7 +1004,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let starts_scope = opens_accessor_scope(
             prepared.retry.function_type(),
             prepared.retry.durable_execution_state().assume_idempotence,
-            prepared.snapshotting,
+            prepared.unpersisted,
         );
         let scope_start = if starts_scope {
             Some(Self::execute_access_scope_start(&prepared).await?)
@@ -1051,7 +1051,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             })?;
 
         if is_live {
-            if prepared.snapshotting {
+            if prepared.unpersisted {
                 let start_idx = prepared.oplog.current_oplog_index().await;
                 let atomic_lease = unregistered_atomic_lease(
                     execution_scope.atomic_region,
@@ -3298,7 +3298,7 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (opens_scope, is_live, replay_handle, replay_state, oplog, public_state) =
+    let (opens_scope, is_live, snapshotting_mode, replay_handle, replay_state, oplog, public_state) =
         store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             let opens_scope = ctx.state.opens_durable_scope(&function_type);
@@ -3311,12 +3311,17 @@ where
             (
                 opens_scope,
                 is_live,
+                ctx.state.snapshotting_mode,
                 replay_handle,
                 ctx.state.replay_state.clone(),
                 ctx.state.oplog.clone(),
                 ctx.public_state.clone(),
             )
         });
+
+    if snapshotting_mode {
+        return Ok(());
+    }
 
     if opens_scope {
         if is_live {
@@ -3501,9 +3506,9 @@ fn is_accessor_supported_function_type(function_type: &DurableFunctionType) -> b
 fn opens_accessor_scope(
     function_type: &DurableFunctionType,
     assume_idempotence: bool,
-    snapshotting: bool,
+    unpersisted: bool,
 ) -> bool {
-    !snapshotting
+    !unpersisted
         && ((*function_type == DurableFunctionType::WriteRemote && !assume_idempotence)
             || matches!(function_type, DurableFunctionType::WriteRemoteBatched(None)))
 }
@@ -3563,6 +3568,37 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         ctx: &mut DurableWorkerCtx<Ctx>,
         request: Pair::Req,
     ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError> {
+        let request: HostRequest = request.into();
+        self.start_live_with_host_request_index(ctx, move |_| Ok(request))
+            .await
+    }
+
+    /// Second phase on the live path for requests whose durable identity depends on the exact
+    /// host-call `Start` index. The builder runs inside the oplog's serialized writer step after
+    /// that index is assigned and before the `Start` is appended.
+    pub(crate) async fn start_live_with_index<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        build_request: impl FnOnce(OplogIndex) -> Result<Pair::Req, WorkerExecutorError>
+        + Send
+        + 'static,
+    ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError>
+    where
+        Pair::Req: Send + 'static,
+    {
+        self.start_live_with_host_request_index(ctx, move |start_index| {
+            build_request(start_index).map(Into::into)
+        })
+        .await
+    }
+
+    async fn start_live_with_host_request_index<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+        build_request: impl FnOnce(OplogIndex) -> Result<HostRequest, WorkerExecutorError>
+        + Send
+        + 'static,
+    ) -> Result<DurableCallSession<Pair, P>, WorkerExecutorError> {
         debug_assert!(self.is_live(), "start_live() called on a replay handle");
         let snapshotting = self.retry.durable_execution_state().snapshotting_mode;
         // The host-call `Start` nests inside the enclosing durable scope captured at initiation
@@ -3570,15 +3606,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
         // never from the set of temporally-open sibling scopes. `None` for a top-level unscoped call.
         let parent_start_index = self.execution_scope.parent_start_index;
         let (start_idx, persisted, request_upload) = if snapshotting {
-            // Snapshotting mode persists nothing.
+            // Snapshotting persists no durable call records, but the request builder still runs so
+            // callers can derive the same in-memory identity shape as a persisted call.
             let oplog = ctx.state.oplog.clone();
-            (
-                oplog.current_oplog_index().await,
-                false,
-                PendingUpload::already_durable(),
-            )
+            let start_idx = oplog.current_oplog_index().await;
+            let _ = build_request(start_idx)?;
+            (start_idx, false, PendingUpload::already_durable())
         } else {
-            let request: HostRequest = request.into();
             let function_type = self.retry.function_type().clone();
             let oplog = ctx.state.oplog.clone();
             let observational_owner = self.execution_scope.observational_owner;
@@ -3589,8 +3623,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             // the `Start`, which is what keeps concurrent calls' `Start` entries in initiation
             // order. The returned upload is awaited before this call's `End` / `Cancelled`.
             let (idx, request_upload) = oplog
-                .add_start_with_reserved_payload(request, move |request_payload| {
-                    OplogEntry::Start {
+                .add_start_with_indexed_reserved_payload(
+                    move |start_index| {
+                        build_request(start_index).map_err(|error| error.to_string())
+                    },
+                    move |request_payload| OplogEntry::Start {
                         timestamp: Timestamp::now_utc(),
                         parent_start_index,
                         function_name: Pair::HOST_FUNCTION_NAME,
@@ -3598,8 +3635,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                         observational_owner,
                         request: Some(request_payload),
                         durable_function_type: function_type,
-                    }
-                })
+                    },
+                )
                 .await
                 .map_err(|err| {
                     WorkerExecutorError::runtime(format!(
@@ -3624,7 +3661,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                 None
             }
         } else {
-            // Snapshotting persists nothing; keep the initiation-time region for trap/retry
+            // Snapshotting writes nothing; keep the initiation-time region for trap/retry
             // classification without joining the live in-flight member guard.
             unregistered_atomic_lease(
                 self.execution_scope.atomic_region,
@@ -3720,7 +3757,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> 
                     self.drop_sink.as_ref(),
                 );
             }
-            // Not persisted (snapshotting): there is nothing on disk to reconcile.
+            // Not persisted: there is nothing on disk to reconcile.
         } else {
             if opens_replay_durable_scope(
                 self.retry.function_type(),

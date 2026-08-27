@@ -288,7 +288,7 @@ pub(crate) struct OpenCustomInvocationScope {
 #[derive(Debug)]
 pub struct LiveCustomDurableInvocation {
     scope_id: u64,
-    start_index: OplogIndex,
+    start_index: Option<OplogIndex>,
 }
 
 /// Classification of host function failures for semantic retry decisions
@@ -1320,7 +1320,7 @@ fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
         };
         let resource = access.get().table().push(LiveCustomDurableInvocation {
             scope_id,
-            start_index,
+            start_index: Some(start_index),
         })?;
         access.get().state.custom_invocation_scopes.insert(
             scope_id,
@@ -1350,12 +1350,15 @@ fn open_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
 fn close_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
     access: &mut Access<'_, U, HasSelf<DurableWorkerCtx<Ctx>>>,
     resource: Resource<LiveCustomDurableInvocation>,
-) -> anyhow::Result<OplogIndex> {
+) -> anyhow::Result<Option<OplogIndex>> {
+    let resource_rep = resource.rep();
+    let invocation = access.get().table().delete(resource)?;
+    let Some(start_index) = invocation.start_index else {
+        return Ok(None);
+    };
     let current = access
         .as_context_mut()
         .guest_task_context::<CustomInvocationContext>()?;
-    let resource_rep = resource.rep();
-    let invocation = access.get().table().delete(resource)?;
     let registered = access
         .get()
         .state
@@ -1367,9 +1370,7 @@ fn close_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
                 invocation.scope_id
             )
         })?;
-    if registered.owner_start_index != invocation.start_index
-        || registered.resource_rep != resource_rep
-    {
+    if registered.owner_start_index != start_index || registered.resource_rep != resource_rep {
         return Err(anyhow::anyhow!(
             "custom invocation scope {} has stale attribution",
             invocation.scope_id
@@ -1399,7 +1400,7 @@ fn close_live_custom_durable_invocation<U: Send + 'static, Ctx: WorkerCtx>(
             .as_context_mut()
             .set_guest_task_context(Arc::new(next))?;
     }
-    Ok(invocation.start_index)
+    Ok(Some(start_index))
 }
 
 impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocationWithStore<U>
@@ -1409,12 +1410,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
         mut access: Access<'_, U, Self>,
         resource: Resource<LiveCustomDurableInvocation>,
     ) -> anyhow::Result<()> {
-        let start_index = close_live_custom_durable_invocation(&mut access, resource)?;
-        access
-            .get()
-            .state
-            .active_custom_invocations
-            .remove(&start_index);
+        if let Some(start_index) = close_live_custom_durable_invocation(&mut access, resource)? {
+            access
+                .get()
+                .state
+                .active_custom_invocations
+                .remove(&start_index);
+        }
         Ok(())
     }
 
@@ -1424,9 +1426,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
         response: golem_common::schema::wit::wire::TypedSchemaValue,
         forced_commit: bool,
     ) -> anyhow::Result<()> {
-        let (start_index, response, oplog, worker) = accessor.with(|mut access| {
+        let invocation = accessor.with(|mut access| {
             let start_index = close_live_custom_durable_invocation(&mut access, resource)?;
             let ctx = access.get();
+            let Some(start_index) = start_index else {
+                golem_common::schema::wit::decode_typed_rejecting_quota_with(response, ctx)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to decode durable function response schema value: {e}"
+                        )
+                    })?;
+                return Ok::<_, anyhow::Error>(None);
+            };
             let invocation = ctx
                 .state
                 .active_custom_invocations
@@ -1459,8 +1470,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
             })?;
             let oplog = ctx.state.oplog.clone();
             let worker = ctx.public_state.worker();
-            Ok::<_, anyhow::Error>((start_index, response, oplog, worker))
+            Ok::<_, anyhow::Error>(Some((start_index, response, oplog, worker)))
         })?;
+        let Some((start_index, response, oplog, worker)) = invocation else {
+            return Ok(());
+        };
 
         concurrent::drain_dropped_call_events_access(accessor, accessor.getter())
             .await
@@ -1812,7 +1826,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
 
     fn durable_execution_state(&self) -> DurableExecutionState {
         DurableExecutionState {
-            is_live: self.state.is_live() || self.state.snapshotting_mode,
+            is_live: self.state.is_live() || self.state.durability_is_suppressed(),
             snapshotting_mode: self.state.snapshotting_mode,
             assume_idempotence: self.state.assume_idempotence,
             max_in_function_retry_delay: self.state.config.max_in_function_retry_delay,
@@ -1835,7 +1849,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
     ) {
-        if self.state.snapshotting_mode {
+        if self.state.durability_is_suppressed() {
             return;
         }
 

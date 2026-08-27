@@ -182,7 +182,12 @@ impl OplogEntry {
             | OplogEntry::CardTransferred { .. }
             | OplogEntry::CardRevokedCascade { .. }
             | OplogEntry::CardTransferConfirmed { .. }
-            | OplogEntry::HostStreamFrame { .. } => true,
+            | OplogEntry::HostStreamFrame { .. }
+            | OplogEntry::StreamRegistered { .. }
+            | OplogEntry::StreamItems { .. }
+            | OplogEntry::StreamEnd { .. }
+            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamSession { .. } => true,
         }
     }
 
@@ -265,7 +270,12 @@ impl OplogEntry {
             | OplogEntry::CardTransferred { .. }
             | OplogEntry::CardRevokedCascade { .. }
             | OplogEntry::CardTransferConfirmed { .. }
-            | OplogEntry::HostStreamFrame { .. } => None,
+            | OplogEntry::HostStreamFrame { .. }
+            | OplogEntry::StreamRegistered { .. }
+            | OplogEntry::StreamItems { .. }
+            | OplogEntry::StreamEnd { .. }
+            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamSession { .. } => None,
         }
     }
 }
@@ -420,7 +430,12 @@ impl OplogScopeProjection {
             | OplogEntry::CardTransferStarted { .. }
             | OplogEntry::CardTransferred { .. }
             | OplogEntry::CardRevokedCascade { .. }
-            | OplogEntry::CardTransferConfirmed { .. } => false,
+            | OplogEntry::CardTransferConfirmed { .. }
+            | OplogEntry::StreamRegistered { .. }
+            | OplogEntry::StreamItems { .. }
+            | OplogEntry::StreamEnd { .. }
+            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamSession { .. } => false,
         };
         self.previous_index = Some(index);
         self.previous_included_start = included_start.then_some(index);

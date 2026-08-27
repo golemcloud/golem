@@ -16,8 +16,8 @@ use crate::model::ExecutionStatus;
 use crate::model::event::InternalWorkerEvent;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{
-    CommitLevel, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor, OplogService,
-    OrderedOplogStart,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
+    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -323,8 +323,13 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                         .config
                         .clone()
                         .into_iter()
-                        .map(Into::into)
-                        .collect(),
+                        .map(TryInto::try_into)
+                        .collect::<Result<_, String>>()
+                        .map_err(|error| {
+                            WorkerExecutorError::unknown(format!(
+                                "failed converting agent configuration: {error}"
+                            ))
+                        })?,
                     created_by: Some(worker_metadata.created_by.into()),
                     component_revision: latest_status.component_revision.into(),
                     status: Into::<golem_api_grpc::proto::golem::worker::AgentStatus>::into(
@@ -837,6 +842,10 @@ enum ForwardingJob {
         entry: OplogEntry,
         done: tokio::sync::oneshot::Sender<OplogIndex>,
     },
+    AddDurableStreamBatch {
+        make_batch: DurableStreamBatchBuilder,
+        done: tokio::sync::oneshot::Sender<Result<Vec<(OplogIndex, OplogEntry)>, String>>,
+    },
     AddPair {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
@@ -844,7 +853,11 @@ enum ForwardingJob {
     },
     AddStart {
         serialized_request: Vec<u8>,
-        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        build_start: ReservedRawStartBuilder,
+        done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
+    },
+    AddIndexedStart {
+        build_request: IndexedReservedStartBuilder,
         done: tokio::sync::oneshot::Sender<Result<OrderedOplogStart, String>>,
     },
     Commit {
@@ -934,6 +947,18 @@ impl ForwardingOplog {
                         let idx = state.inner.add(entry).await;
                         let _ = done.send(idx);
                     }
+                    ForwardingJob::AddDurableStreamBatch { make_batch, done } => {
+                        let result = state.inner.add_durable_stream_batch(make_batch).await;
+                        if let Ok(entries) = &result {
+                            state
+                                .buffer
+                                .extend(entries.iter().map(|(_, entry)| entry.clone()));
+                            if let Some((last_index, _)) = entries.last() {
+                                state.last_oplog_idx = *last_index;
+                            }
+                        }
+                        let _ = done.send(result);
+                    }
                     ForwardingJob::AddPair {
                         start,
                         make_second,
@@ -966,6 +991,20 @@ impl ForwardingOplog {
                         if let Ok(ordered) = &result {
                             state.buffer.push_back(ordered.entry.clone());
                             state.last_oplog_idx = state.last_oplog_idx.next();
+                        }
+                        let _ = done.send(result);
+                    }
+                    ForwardingJob::AddIndexedStart {
+                        build_request,
+                        done,
+                    } => {
+                        let result = state
+                            .inner
+                            .add_start_with_indexed_reserved_raw_payload(build_request)
+                            .await;
+                        if let Ok(ordered) = &result {
+                            state.buffer.push_back(ordered.entry.clone());
+                            state.last_oplog_idx = ordered.index;
                         }
                         let _ = done.send(result);
                     }
@@ -1114,6 +1153,14 @@ impl Oplog for ForwardingOplog {
         })
     }
 
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        self.run_job(|done| ForwardingJob::AddDurableStreamBatch { make_batch, done })
+            .await
+    }
+
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.inner.drop_prefix(last_dropped_id).await
     }
@@ -1175,11 +1222,22 @@ impl Oplog for ForwardingOplog {
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
-        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        build_start: ReservedRawStartBuilder,
     ) -> Result<OrderedOplogStart, String> {
         self.run_job(|done| ForwardingJob::AddStart {
             serialized_request,
             build_start,
+            done,
+        })
+        .await
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        self.run_job(|done| ForwardingJob::AddIndexedStart {
+            build_request,
             done,
         })
         .await
@@ -2309,10 +2367,28 @@ mod tests {
         async fn add_start_with_reserved_raw_payload(
             &self,
             serialized_request: Vec<u8>,
-            build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+            build_start: ReservedRawStartBuilder,
         ) -> Result<OrderedOplogStart, String> {
             let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
             let index = self.add(entry.clone()).await;
+            Ok(OrderedOplogStart {
+                index,
+                entry,
+                pending_upload: crate::services::oplog::PendingUpload::already_durable(),
+            })
+        }
+
+        async fn add_start_with_indexed_reserved_raw_payload(
+            &self,
+            build_request: IndexedReservedStartBuilder,
+        ) -> Result<OrderedOplogStart, String> {
+            let mut entries = self.entries.lock().unwrap();
+            let mut idx = self.current_idx.lock().unwrap();
+            let index = idx.next();
+            let (serialized_request, build_start) = build_request(index)?;
+            let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
+            *idx = index;
+            entries.push(entry.clone());
             Ok(OrderedOplogStart {
                 index,
                 entry,

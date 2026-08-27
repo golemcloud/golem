@@ -29,6 +29,7 @@ pub mod deploy_validation_warning;
 pub mod deployment;
 pub mod diff;
 pub mod domain_registration;
+pub mod durable_stream;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod error;
@@ -52,6 +53,7 @@ pub mod tool;
 pub mod worker;
 pub mod worker_filter;
 
+pub use durable_stream::*;
 pub use worker_filter::*;
 
 use crate::base_model::component::ComponentId;

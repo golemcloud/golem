@@ -22,8 +22,9 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
 use crate::services::oplog::{
-    CommitLevel, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor, OplogService,
-    OrderedOplogStart, downcast_oplog, scan_modes,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
+    OplogAddReceipt, OplogConstructor, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
+    downcast_oplog, scan_modes,
 };
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
@@ -1144,6 +1145,17 @@ impl Oplog for MultiLayerOplog {
         })
     }
 
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        let result = self.primary.add_durable_stream_batch(make_batch).await?;
+        if let Some((last_index, _)) = result.last() {
+            self.last_oplog_index.set(*last_index);
+        }
+        Ok(result)
+    }
+
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         let dropped_entries = self.primary.drop_prefix(last_dropped_id).await;
         self.last_transfer_point.max(last_dropped_id);
@@ -1271,13 +1283,25 @@ impl Oplog for MultiLayerOplog {
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
-        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        build_start: ReservedRawStartBuilder,
     ) -> Result<OrderedOplogStart, String> {
         // Delegate to the primary (which owns the Start-ordering critical section) and mirror the
         // assigned index into `last_oplog_index`, like `add`/`add_pair` do.
         let ordered = self
             .primary
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await?;
+        self.last_oplog_index.set(ordered.index);
+        Ok(ordered)
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        let ordered = self
+            .primary
+            .add_start_with_indexed_reserved_raw_payload(build_request)
             .await?;
         self.last_oplog_index.set(ordered.index);
         Ok(ordered)

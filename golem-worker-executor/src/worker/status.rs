@@ -543,6 +543,11 @@ fn calculate_latest_worker_status(
             OplogEntry::CardRevoked { .. } => {}
             OplogEntry::CardExpired { .. } => {}
             OplogEntry::HostStreamFrame { .. } => {}
+            OplogEntry::StreamRegistered { .. }
+            | OplogEntry::StreamItems { .. }
+            | OplogEntry::StreamEnd { .. }
+            | OplogEntry::StreamCancel { .. }
+            | OplogEntry::StreamSession { .. } => {}
             OplogEntry::Error { .. } => {
                 // .. handled separately
             }

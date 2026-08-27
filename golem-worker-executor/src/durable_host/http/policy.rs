@@ -65,7 +65,7 @@ pub(crate) fn is_http_request_idempotent(
 pub(crate) enum HttpRetryDisallowedReason {
     /// Worker is in replay mode (not live).
     NotLive,
-    /// Worker is in snapshotting mode.
+    /// Worker is executing a snapshot load/save function.
     Snapshotting,
     /// Worker is inside a user-defined atomic region; a failure must escalate
     /// to trap+replay so the whole region re-executes.

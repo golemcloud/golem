@@ -130,6 +130,11 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     ),
     registry_entry!("InvokeResultView", "agent.invoke", arb_agent_invoke_result),
     registry_entry!(
+        "AgentInvocationSessionEvent",
+        "agent.invoke-session",
+        arb_agent_invocation_session_event
+    ),
+    registry_entry!(
         "AgentsMetadataResponseView",
         "agent.list",
         arb_agent_list_result
@@ -2820,6 +2825,71 @@ fn arb_agent_stream_event() -> OutputDocumentStrategy {
                 },
             ),
     )
+}
+
+fn arb_agent_invocation_session_event() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            arb_agent_invocation_session_event_kind(),
+            arb_small_string(),
+            proptest::option::of(arb_small_string()),
+            proptest::option::of(arb_small_u64()),
+            (
+                proptest::option::of(arb_small_string()),
+                proptest::option::of(arb_small_string()),
+                proptest::option::of(arb_small_string()),
+                proptest::option::of(arb_small_u64()),
+            ),
+            (
+                proptest::option::of(arb_small_u64()),
+                proptest::option::of(arb_small_string()),
+                proptest::option::of(arb_small_u64()),
+                proptest::option::of(arb_json_value(1)),
+            ),
+        )
+            .prop_map(
+                |(
+                    kind,
+                    idempotency_key,
+                    agent_id,
+                    component_revision,
+                    (outcome, reason, error, stream_id),
+                    (parent_stream_id, path, offset, value),
+                )| {
+                    crate::model::agent::invocation_session::AgentInvocationSessionEvent {
+                        kind,
+                        idempotency_key,
+                        agent_id,
+                        component_revision,
+                        outcome,
+                        reason,
+                        error,
+                        stream_id,
+                        parent_stream_id,
+                        path,
+                        offset,
+                        value,
+                    }
+                },
+            ),
+    )
+}
+
+fn arb_agent_invocation_session_event_kind()
+-> BoxedStrategy<crate::model::agent::invocation_session::AgentInvocationSessionEventKind> {
+    use crate::model::agent::invocation_session::AgentInvocationSessionEventKind;
+
+    prop_oneof![
+        Just(AgentInvocationSessionEventKind::Accepted),
+        Just(AgentInvocationSessionEventKind::Rejected),
+        Just(AgentInvocationSessionEventKind::Result),
+        Just(AgentInvocationSessionEventKind::Item),
+        Just(AgentInvocationSessionEventKind::End),
+        Just(AgentInvocationSessionEventKind::StreamError),
+        Just(AgentInvocationSessionEventKind::StreamCancel),
+        Just(AgentInvocationSessionEventKind::Finished),
+    ]
+    .boxed()
 }
 
 fn arb_agent_stream_event_kind() -> BoxedStrategy<crate::model::agent::stream::AgentStreamEventKind>

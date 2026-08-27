@@ -119,7 +119,8 @@ use golem_worker_executor::services::golem_config::{
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
-    CommitLevel, Oplog, OplogAddReceipt, OplogService, OrderedOplogStart,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
+    OplogService, OrderedOplogStart,
 };
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
@@ -168,7 +169,7 @@ use tower::ServiceBuilder;
 use tracing::{Level, debug, info};
 use uuid::{Uuid, uuid};
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
-use wasmtime::{AsContextMut, Engine, MemoryKind, ResourceLimiterAsync};
+use wasmtime::{Engine, MemoryKind, ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
 
 #[cfg(test)]
@@ -1438,7 +1439,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     }
 
     async fn resume_replay(
-        store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
+        store: &mut Store<TestWorkerCtx>,
         instance: &Instance,
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
@@ -1449,7 +1450,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
-        store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
+        store: &mut Store<TestWorkerCtx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(agent_id, instance, store).await
     }
@@ -2395,7 +2396,10 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
-        golem_schema::schema::wit::wire::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+        golem_schema::schema::wit::wire::add_to_linker::<
+            _,
+            golem_worker_executor::durable_host::CoreTypesHost<Context>,
+        >(
             &mut linker,
             <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
@@ -2922,6 +2926,13 @@ impl Oplog for TestOplog {
         })
     }
 
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        self.oplog.add_durable_stream_batch(make_batch).await
+    }
+
     async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
         self.check_oplog_add(&entry).await?;
         self.oplog.fallible_add(entry).await
@@ -2993,6 +3004,34 @@ impl Oplog for TestOplog {
         let ordered = self
             .oplog
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await?;
+        if matches!(
+            &ordered.entry,
+            OplogEntry::Start {
+                function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
+                ..
+            }
+        ) && self
+            .additional_test_deps
+            .consume_body_chunk_end_gate(&self.owned_agent_id.agent_id)
+            .await
+            .is_some()
+        {
+            self.consume_body_chunk_starts
+                .lock()
+                .unwrap()
+                .insert(ordered.index);
+        }
+        Ok(ordered)
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        let ordered = self
+            .oplog
+            .add_start_with_indexed_reserved_raw_payload(build_request)
             .await?;
         if matches!(
             &ordered.entry,

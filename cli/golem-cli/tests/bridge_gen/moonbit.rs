@@ -446,6 +446,7 @@ fn guest_mode_generates_wasm_rpc_project_layout() {
     assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/agents""#));
     assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/rpc""#));
     assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/schema_model" @model"#));
+    assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/schema_model_host" @model_host"#));
     assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/interface/golem/agent/common" @common"#));
     assert!(moon_pkg.contains(r#""golemcloud/golem_sdk/interface/golem/core/types" @types"#));
     assert!(

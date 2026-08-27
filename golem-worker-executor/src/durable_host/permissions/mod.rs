@@ -72,12 +72,12 @@ use golem_common::model::oplog::{
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId, PendingCardEventRef, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
 use golem_schema::schema::schema_value::PermissionCardValuePayload;
-use golem_schema::schema::wit::wire::HostPermissionCard;
+use golem_schema::schema::wit::wire::{HostPermissionCard, HostPermissionCardWithStore};
 use golem_schema::schema::wit::{PermissionCardHandleRep, PermissionCardResolver};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeSet;
 use uuid::Uuid;
-use wasmtime::component::Resource;
+use wasmtime::component::{Accessor, Resource};
 
 #[derive(Clone, Debug)]
 enum PermissionCardEntry {
@@ -2322,12 +2322,22 @@ async fn revoke_and_persist_card<Ctx: WorkerCtx>(
     }
 }
 
-impl<Ctx: WorkerCtx> HostPermissionCard for DurableWorkerCtx<Ctx> {
-    async fn drop(&mut self, rep: Resource<PermissionCardHandleRep>) -> anyhow::Result<()> {
-        DurabilityHost::observe_function_call(self, "golem::core::permission-card", "drop");
-        self.state.invocation_scope_handles.remove(&rep.rep());
-        self.table().delete(rep)?;
-        Ok(())
+impl<Ctx: WorkerCtx> HostPermissionCard for DurableWorkerCtx<Ctx> {}
+
+impl<T: Send + 'static, Ctx: WorkerCtx> HostPermissionCardWithStore<T>
+    for crate::durable_host::schema_value_stream::CoreTypesHost<Ctx>
+{
+    async fn drop(
+        accessor: &Accessor<T, Self>,
+        rep: Resource<PermissionCardHandleRep>,
+    ) -> anyhow::Result<()> {
+        accessor.with(|mut access| {
+            let ctx = access.get();
+            DurabilityHost::observe_function_call(ctx, "golem::core::permission-card", "drop");
+            ctx.state.invocation_scope_handles.remove(&rep.rep());
+            ctx.table().delete(rep)?;
+            Ok(())
+        })
     }
 }
 

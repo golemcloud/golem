@@ -406,6 +406,7 @@ impl MoonBitBridgeGenerator {
                   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock,
                   "golemcloud/golem_sdk/rpc",
                   "golemcloud/golem_sdk/schema_model" @model,
+                  "golemcloud/golem_sdk/schema_model_host" @model_host,
                 }}
                 "#},
         };
@@ -1448,7 +1449,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 writer.indent();
                 writer.line("Some(tree) => {");
                 writer.indent();
-                writer.line("let value = @model.schema_value_from_wit(tree) catch {");
+                writer.line("let value = @model_host.schema_value_from_wit(tree) catch {");
                 writer.indent();
                 writer.line(format!(
                     "error => raise @common.AgentError::InvalidType({} + error.to_string())",
@@ -2925,6 +2926,12 @@ fn moonbit_string_literal(value: &str) -> String {
     }
     escaped.push('"');
     escaped
+}
+
+fn moonbit_char_option_literal(value: Option<char>) -> String {
+    value
+        .map(|value| format!("Some('\\u{{{:x}}}')", value as u32))
+        .unwrap_or_else(|| "None".to_string())
 }
 
 /// Whether a (ref-resolved) schema type becomes a generated MoonBit definition

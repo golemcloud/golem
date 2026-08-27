@@ -21,6 +21,14 @@ use crate::schema::{
 
 pub trait Schema {
     fn get_type() -> StructuredSchema;
+
+    #[doc(hidden)]
+    fn contains_stream() -> bool {
+        match Self::get_type() {
+            StructuredSchema::Default(graph) => schema_contains_stream(&graph),
+            StructuredSchema::AutoInject(_) => false,
+        }
+    }
     fn to_schema_value(self) -> Result<SchemaValue, String>
     where
         Self: Sized;
@@ -34,6 +42,75 @@ pub trait Schema {
     {
         Err("Principal can only be injected into Principal parameters".to_string())
     }
+
+    #[doc(hidden)]
+    fn into_agent_invocation_result(self) -> Result<super::AgentInvocationResult, String>
+    where
+        Self: Sized,
+    {
+        self.to_schema_value()
+            .map(|value| super::AgentInvocationResult { value: Some(value) })
+    }
+}
+
+fn schema_contains_stream(graph: &SchemaGraph) -> bool {
+    fn visit(
+        ty: &SchemaType,
+        defs: &std::collections::HashMap<&str, &SchemaType>,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        match ty {
+            SchemaType::Stream { .. } => true,
+            SchemaType::Ref { id, .. } => {
+                visiting.insert(id.0.clone())
+                    && defs
+                        .get(id.as_str())
+                        .is_some_and(|body| visit(body, defs, visiting))
+            }
+            SchemaType::Record { fields, .. } => fields
+                .iter()
+                .any(|field| visit(&field.body, defs, visiting)),
+            SchemaType::Variant { cases, .. } => cases
+                .iter()
+                .filter_map(|case| case.payload.as_ref())
+                .any(|payload| visit(payload, defs, visiting)),
+            SchemaType::Tuple { elements, .. } => elements
+                .iter()
+                .any(|element| visit(element, defs, visiting)),
+            SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+                visit(element, defs, visiting)
+            }
+            SchemaType::Map { key, value, .. } => {
+                visit(key, defs, visiting) || visit(value, defs, visiting)
+            }
+            SchemaType::Option { inner, .. } => visit(inner, defs, visiting),
+            SchemaType::Result { spec, .. } => {
+                spec.ok
+                    .as_deref()
+                    .is_some_and(|value| visit(value, defs, visiting))
+                    || spec
+                        .err
+                        .as_deref()
+                        .is_some_and(|value| visit(value, defs, visiting))
+            }
+            SchemaType::Union { spec, .. } => spec
+                .branches
+                .iter()
+                .any(|branch| visit(&branch.body, defs, visiting)),
+            SchemaType::Secret { spec, .. } => visit(&spec.inner, defs, visiting),
+            SchemaType::Future { inner, .. } => inner
+                .as_deref()
+                .is_some_and(|value| visit(value, defs, visiting)),
+            _ => false,
+        }
+    }
+
+    let defs = graph
+        .defs
+        .iter()
+        .map(|definition| (definition.id.as_str(), &definition.body))
+        .collect();
+    visit(&graph.root, &defs, &mut std::collections::HashSet::new())
 }
 
 #[allow(clippy::large_enum_variant)]

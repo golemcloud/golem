@@ -1,0 +1,23 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/schema_model_host"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/schema_model",
+}
+
+// Values
+pub fn resource_drops() -> @schema_model.SchemaValueResourceDrops
+
+pub fn schema_value_from_wit(@types.SchemaValueTree) -> @schema_model.SchemaValue raise @schema_model.SchemaModelError
+
+pub fn typed_schema_value_from_wit(@types.TypedSchemaValue) -> @schema_model.TypedSchemaValue raise @schema_model.SchemaModelError
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

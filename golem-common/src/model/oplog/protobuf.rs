@@ -28,6 +28,10 @@ use super::{
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
+use crate::base_model::durable_stream::{
+    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
+    StreamSessionRecordV1,
+};
 use crate::base_model::oplog::{
     CardInstallFailure, PublicQueuedCardEvent, PublicQueuedCardEventTransfer,
     PublicQueuedCardEventTransferReceived, QueuedCardEvent, QueuedCardEventCard,
@@ -58,8 +62,9 @@ use crate::model::oplog::public_oplog_entry::{
     OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
     RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams,
-    SuspendParams,
+    SetSpanAttributeParams, SnapshotParams, StartParams, StartSpanParams, StreamCancelParams,
+    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
@@ -77,14 +82,16 @@ use golem_api_grpc::proto::golem::worker::{
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
 
-impl From<PublicTypedAgentConfigEntry>
+impl TryFrom<PublicTypedAgentConfigEntry>
     for golem_api_grpc::proto::golem::worker::PublicTypedAgentConfigEntry
 {
-    fn from(value: PublicTypedAgentConfigEntry) -> Self {
-        Self {
+    type Error = String;
+
+    fn try_from(value: PublicTypedAgentConfigEntry) -> Result<Self, Self::Error> {
+        Ok(Self {
             path: value.path,
-            value: Some(value.value.into()),
-        }
+            value: Some(value.value.try_into()?),
+        })
     }
 }
 
@@ -1333,6 +1340,36 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     payload: params.payload.ok_or("Missing payload field")?.try_into()?,
                 }))
             }
+            oplog_entry::Entry::StreamRegistered(params) => {
+                Ok(PublicOplogEntry::StreamRegistered(StreamRegisteredParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    record: params.record.ok_or("Missing record field")?.try_into()?,
+                }))
+            }
+            oplog_entry::Entry::StreamItems(params) => {
+                Ok(PublicOplogEntry::StreamItems(StreamItemsParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    record: params.record.ok_or("Missing record field")?.try_into()?,
+                }))
+            }
+            oplog_entry::Entry::StreamEnd(params) => {
+                Ok(PublicOplogEntry::StreamEnd(StreamEndParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    record: params.record.ok_or("Missing record field")?.try_into()?,
+                }))
+            }
+            oplog_entry::Entry::StreamCancel(params) => {
+                Ok(PublicOplogEntry::StreamCancel(StreamCancelParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    record: params.record.ok_or("Missing record field")?.try_into()?,
+                }))
+            }
+            oplog_entry::Entry::StreamSession(params) => {
+                Ok(PublicOplogEntry::StreamSession(StreamSessionParams {
+                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
+                    record: params.record.ok_or("Missing record field")?.try_into()?,
+                }))
+            }
         }
     }
 }
@@ -1356,8 +1393,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         config: create
                             .local_agent_config
                             .into_iter()
-                            .map(Into::into)
-                            .collect(),
+                            .map(TryInto::try_into)
+                            .collect::<Result<_, _>>()?,
                         created_by: Some(create.created_by.into()),
                         environment_id: Some(create.environment_id.into()),
                         parent: create.parent.map(Into::into),
@@ -1384,7 +1421,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             observational_owner: start
                                 .observational_owner
                                 .map(|id| id.as_u64()),
-                            request: start.request.map(Into::into),
+                            request: start.request.map(TryInto::try_into).transpose()?,
                             durable_function_type: Some(start.durable_function_type.into()),
                         },
                     )),
@@ -1395,7 +1432,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::EndParameters {
                         timestamp: Some(end.timestamp.into()),
                         start_index: end.start_index.as_u64(),
-                        response: end.response.map(Into::into),
+                        response: end.response.map(TryInto::try_into).transpose()?,
                         forced_commit: end.forced_commit,
                     },
                 )),
@@ -1406,7 +1443,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::CancelledParameters {
                             timestamp: Some(cancelled.timestamp.into()),
                             start_index: cancelled.start_index.as_u64(),
-                            partial: cancelled.partial.map(Into::into),
+                            partial: cancelled.partial.map(TryInto::try_into).transpose()?,
                         },
                     )),
                 }
@@ -2002,7 +2039,57 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(params.timestamp.into()),
                             parent_start_index: params.parent_start_index.as_u64(),
                             kind: host_stream_kind_to_proto(params.kind) as i32,
-                            payload: Some(params.payload.into()),
+                            payload: Some(params.payload.try_into()?),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::StreamRegistered(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::StreamRegistered(
+                        golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            record: Some(params.record.try_into()?),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::StreamItems(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::StreamItems(
+                        golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            record: Some(params.record.try_into()?),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::StreamEnd(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::StreamEnd(
+                        golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            record: Some(params.record.try_into()?),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::StreamCancel(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::StreamCancel(
+                        golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            record: Some(params.record.try_into()?),
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::StreamSession(params) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::StreamSession(
+                        golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
+                            timestamp: Some(params.timestamp.into()),
+                            record: Some(params.record.try_into()?),
                         },
                     )),
                 }
@@ -2253,7 +2340,7 @@ impl TryFrom<PublicAgentInvocation>
                 Invocation::AgentInitialization(
                     golem_api_grpc::proto::golem::worker::PublicAgentInitializationInvocation {
                         idempotency_key: Some(init.idempotency_key.into()),
-                        constructor_parameters: Some(init.constructor_parameters.into()),
+                        constructor_parameters: Some(init.constructor_parameters.try_into()?),
                         trace_id: init.trace_id.to_string(),
                         trace_states: init.trace_states,
                         invocation_context,
@@ -2266,7 +2353,7 @@ impl TryFrom<PublicAgentInvocation>
                     golem_api_grpc::proto::golem::worker::PublicAgentMethodInvocation {
                         idempotency_key: Some(method.idempotency_key.into()),
                         method_name: method.method_name,
-                        function_input: Some(method.function_input.into()),
+                        function_input: Some(method.function_input.try_into()?),
                         trace_id: method.trace_id.to_string(),
                         trace_states: method.trace_states,
                         invocation_context,
@@ -2461,10 +2548,10 @@ impl TryFrom<PublicAgentInvocationResult>
         use golem_api_grpc::proto::golem::worker::public_agent_invocation_result::Result as ProtoResult;
         let result = match value {
             PublicAgentInvocationResult::AgentInitialization(output) => {
-                ProtoResult::AgentInitializationOutput(output.output.into())
+                ProtoResult::AgentInitializationOutput(output.output.try_into()?)
             }
             PublicAgentInvocationResult::AgentMethod(output) => {
-                ProtoResult::AgentMethodOutput(output.output.into())
+                ProtoResult::AgentMethodOutput(output.output.try_into()?)
             }
             PublicAgentInvocationResult::ManualUpdate(_) => {
                 ProtoResult::ManualUpdate(golem_api_grpc::proto::golem::common::Empty {})
@@ -3239,6 +3326,51 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     crate::model::oplog::payload::HostRequest::from(p.payload),
                 )),
             }),
+            PublicOplogEntry::StreamRegistered(p) => {
+                use crate::schema::FromSchema as _;
+                Ok(OplogEntry::StreamRegistered {
+                    timestamp: p.timestamp,
+                    record: OplogPayload::Inline(Box::new(StreamRegisteredRecordV1::from_value(
+                        p.record.value(),
+                    ).map_err(|error| error.to_string())?)),
+                })
+            }
+            PublicOplogEntry::StreamItems(p) => {
+                use crate::schema::FromSchema as _;
+                Ok(OplogEntry::StreamItems {
+                    timestamp: p.timestamp,
+                    record: OplogPayload::Inline(Box::new(StreamItemsRecordV1::from_value(
+                        p.record.value(),
+                    ).map_err(|error| error.to_string())?)),
+                })
+            }
+            PublicOplogEntry::StreamEnd(p) => {
+                use crate::schema::FromSchema as _;
+                Ok(OplogEntry::StreamEnd {
+                    timestamp: p.timestamp,
+                    record: OplogPayload::Inline(Box::new(StreamEndRecordV1::from_value(
+                        p.record.value(),
+                    ).map_err(|error| error.to_string())?)),
+                })
+            }
+            PublicOplogEntry::StreamCancel(p) => {
+                use crate::schema::FromSchema as _;
+                Ok(OplogEntry::StreamCancel {
+                    timestamp: p.timestamp,
+                    record: OplogPayload::Inline(Box::new(StreamCancelRecordV1::from_value(
+                        p.record.value(),
+                    ).map_err(|error| error.to_string())?)),
+                })
+            }
+            PublicOplogEntry::StreamSession(p) => {
+                use crate::schema::FromSchema as _;
+                Ok(OplogEntry::StreamSession {
+                    timestamp: p.timestamp,
+                    record: OplogPayload::Inline(Box::new(StreamSessionRecordV1::from_value(
+                        p.record.value(),
+                    ).map_err(|error| error.to_string())?)),
+                })
+            }
         }
     }
 }
@@ -3606,8 +3738,9 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             RawCardTransferConfirmedParameters, RawCardTransferStartedParameters,
             RawCardTransferredParameters, RawCompletionDeliveredParameters,
             RawCompletionDiscardedParameters, RawCreateParameters, RawCreateResourceParameters,
-            RawDeactivatePluginParameters, RawDropResourceParameters, RawEndAtomicRegionParameters,
-            RawEndParameters, RawEnvVar, RawErrorParameters, RawFailedUpdateParameters,
+            RawDeactivatePluginParameters, RawDropResourceParameters,
+            RawDurableStreamRecordParameters, RawEndAtomicRegionParameters, RawEndParameters,
+            RawEnvVar, RawErrorParameters, RawFailedUpdateParameters,
             RawFilesystemStorageUsageUpdateParameters, RawFinishSpanParameters,
             RawGrowMemoryParameters, RawHostStreamFrameParameters, RawJumpParameters,
             RawLogParameters, RawOplogProcessorCheckpointParameters, RawOplogRegion,
@@ -4121,6 +4254,31 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 kind: host_stream_kind_to_proto(kind) as i32,
                 payload: Some(oplog_payload_to_proto(payload)?),
             }),
+            OplogEntry::StreamRegistered { record, .. } => {
+                Entry::StreamRegistered(RawDurableStreamRecordParameters {
+                    record: Some(oplog_payload_to_proto(record)?),
+                })
+            }
+            OplogEntry::StreamItems { record, .. } => {
+                Entry::StreamItems(RawDurableStreamRecordParameters {
+                    record: Some(oplog_payload_to_proto(record)?),
+                })
+            }
+            OplogEntry::StreamEnd { record, .. } => {
+                Entry::StreamEnd(RawDurableStreamRecordParameters {
+                    record: Some(oplog_payload_to_proto(record)?),
+                })
+            }
+            OplogEntry::StreamCancel { record, .. } => {
+                Entry::StreamCancel(RawDurableStreamRecordParameters {
+                    record: Some(oplog_payload_to_proto(record)?),
+                })
+            }
+            OplogEntry::StreamSession { record, .. } => {
+                Entry::StreamSession(RawDurableStreamRecordParameters {
+                    record: Some(oplog_payload_to_proto(record)?),
+                })
+            }
         };
 
         Ok(golem_api_grpc::proto::golem::worker::RawOplogEntry {
@@ -4656,6 +4814,26 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 parent_start_index: crate::base_model::OplogIndex::from_u64(p.parent_start_index),
                 kind: host_stream_kind_from_proto(p.kind)?,
                 payload: oplog_payload_from_proto(p.payload.ok_or("Missing payload")?)?,
+            }),
+            Entry::StreamRegistered(p) => Ok(OplogEntry::StreamRegistered {
+                timestamp,
+                record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
+            }),
+            Entry::StreamItems(p) => Ok(OplogEntry::StreamItems {
+                timestamp,
+                record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
+            }),
+            Entry::StreamEnd(p) => Ok(OplogEntry::StreamEnd {
+                timestamp,
+                record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
+            }),
+            Entry::StreamCancel(p) => Ok(OplogEntry::StreamCancel {
+                timestamp,
+                record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
+            }),
+            Entry::StreamSession(p) => Ok(OplogEntry::StreamSession {
+                timestamp,
+                record: oplog_payload_from_proto(p.record.ok_or("Missing record")?)?,
             }),
         }
     }

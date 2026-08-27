@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::schema_value_stream::{StoreValueResolver, contains_stream};
 use crate::metrics::wasm::{record_invocation, record_invocation_consumption};
 use crate::model::TrapType;
 use crate::preview2::exports::golem::agent::guest as guest_exports;
@@ -26,13 +27,15 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
 use golem_common::schema::SchemaValue;
+#[cfg(test)]
+use golem_common::schema::agent::InputSchema;
 use golem_common::schema::agent::wit::decode_agent_error_rejecting_quota_with;
-use golem_common::schema::agent::{AgentTypeSchema, FieldSource, InputSchema};
+use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema, contains_stream_in_graph};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
-use golem_common::schema::validation::value::{validate_record_fields, validate_value};
+use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
-use golem_schema::schema::wit::{decode_value_with, encode_value_with};
+use golem_schema::schema::wit::{decode_value_with, encode_value_with, encode_value_with_streams};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use tracing::{Instrument, Level, debug, span};
 use wasmtime::component::Accessor;
@@ -395,18 +398,29 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         } => {
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = run_guest_call_settled(store, async |accessor| {
-                guest
-                    .call_invoke(accessor, method_name, input, principal)
+            let result = if expected_output.uses_streams() {
+                store
+                    .as_context_mut()
+                    .run_concurrent(async |accessor| {
+                        guest
+                            .call_invoke(accessor, method_name, input, principal)
+                            .await
+                    })
                     .await
-            })
-            .await
+            } else {
+                run_guest_call_settled(store, async |accessor| {
+                    guest
+                        .call_invoke(accessor, method_name, input, principal)
+                        .await
+                })
+                .await
+            }
             .and_then(|result| result);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
-                Ok(Ok(maybe_output)) => {
-                    let output = decode_invoke_output(store, maybe_output)?;
+                Ok(Ok(invoke_output)) => {
+                    let output = decode_invoke_output(store, invoke_output)?;
                     validate_invoke_output(display_name, &expected_output, &output)?;
                     Ok(InvokeResult::Succeeded {
                         consumed_fuel,
@@ -569,26 +583,46 @@ fn invoke_result_from_agent_error<Ctx: WorkerCtx>(
     })
 }
 
-/// Decodes the `option<schema-value-tree>` output of `invoke` into the
-/// schema-native [`SchemaValue`] carried across the gRPC / oplog boundary.
+/// Decodes the optional value returned by `invoke` into the schema-native
+/// [`SchemaValue`] carried across the gRPC / oplog boundary.
 ///
 /// A `none` result (the declared `unit` output) is represented by the
 /// canonical empty tuple, matching the `unit` projection used on the caller
 /// side ([`schema_value_to_wire_output`](crate::durable_host::wasm_rpc)).
 fn decode_invoke_output<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
-    maybe_output: Option<core_wire::SchemaValueTree>,
+    output: Option<core_wire::SchemaValueTree>,
 ) -> Result<SchemaValue, WorkerExecutorError> {
-    match maybe_output {
+    match output {
         // `none` is the declared `unit` output.
         None => Ok(SchemaValue::Tuple {
             elements: Vec::new(),
         }),
-        // The output is a guest-owned value tree, so any `quota-token` handles
-        // it carries are lifted into trusted snapshots (and consumed) here.
-        Some(tree) => decode_value_with(tree, store.data_mut().durable_ctx_mut()).map_err(|e| {
-            WorkerExecutorError::runtime(format!("Failed to decode agent method output: {e}"))
-        }),
+        // Quota-token handles are lifted into trusted snapshots. Durable stream
+        // sessions materialize stream handles before the invocation result is
+        // committed.
+        Some(tree) => {
+            let output =
+                decode_value_with(tree, store.data_mut().durable_ctx_mut()).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to decode agent method output: {e}"
+                    ))
+                })?;
+            Ok(output)
+        }
+    }
+}
+
+#[cfg(test)]
+fn reject_stream_at_materializing_boundary(
+    value: SchemaValue,
+) -> Result<SchemaValue, WorkerExecutorError> {
+    if crate::durable_host::schema_value_stream::contains_stream(&value) {
+        Err(WorkerExecutorError::runtime(
+            "live stream at a materializing invocation boundary without a durable Stream Session",
+        ))
+    } else {
+        Ok(value)
     }
 }
 
@@ -604,6 +638,12 @@ pub struct ExpectedInvokeOutput {
     /// The method's declared output type; the canonical empty tuple for
     /// `unit` outputs (see [`decode_invoke_output`]).
     root: SchemaType,
+}
+
+impl ExpectedInvokeOutput {
+    fn uses_streams(&self) -> bool {
+        contains_stream_in_graph(&self.graph, &self.root)
+    }
 }
 
 /// Validates the decoded output of an agent method invocation against the
@@ -961,12 +1001,14 @@ fn materialize_call<Ctx: WorkerCtx>(
             principal,
             expected_output,
         } => {
-            let input =
-                encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
+            let input = {
+                let mut resolver = StoreValueResolver::new(store);
+                encode_value_with_streams(&input, &mut resolver).map_err(|e| {
                     WorkerExecutorError::runtime(format!(
                         "Failed to encode agent method input: {e}"
                     ))
-                })?;
+                })?
+            };
             PreparedCall::Invoke {
                 method_name,
                 input,
@@ -1043,12 +1085,7 @@ pub fn lower_invocation(
                 })?;
 
             let read_only_method = method.read_only.is_some().then(|| method_name.clone());
-            validate_schema_input_against_method_schema(
-                &input,
-                agent_type,
-                &method.input_schema,
-                &method_name,
-            )?;
+            validate_method_invocation(agent_type, method, &input, &method_name)?;
 
             let expected_output = Box::new(ExpectedInvokeOutput {
                 graph: agent_type.schema.clone(),
@@ -1125,51 +1162,49 @@ pub fn lower_invocation(
     }
 }
 
-fn validate_schema_input_against_method_schema(
-    input: &SchemaValue,
-    agent_type: &AgentTypeSchema,
-    input_schema: &InputSchema,
+pub fn validate_agent_method_invocation(
+    component_metadata: &ComponentMetadata,
+    agent_id: Option<&ParsedAgentId>,
     method_name: &str,
-) -> Result<(), WorkerExecutorError> {
-    let SchemaValue::Record { fields } = input else {
-        return Err(WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}': expected input parameter record"
-        )));
-    };
-
-    // Auto-injected fields (e.g. the principal) are supplied by the host to the
-    // guest export separately from the caller-provided input record, so they
-    // are excluded from both the parameter count and the value validation here.
-    let user_fields: Vec<_> = input_schema
-        .fields()
+    input: &SchemaValue,
+) -> Result<bool, WorkerExecutorError> {
+    let agent_type = resolve_agent_type(component_metadata, agent_id)?;
+    let method = agent_type
+        .methods
         .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-        .collect();
-    if fields.len() != user_fields.len() {
-        return Err(WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}': expected {} parameters, got {}",
-            user_fields.len(),
-            fields.len()
-        )));
-    }
+        .find(|method| method.name == method_name)
+        .ok_or_else(|| {
+            WorkerExecutorError::invalid_request(format!(
+                "Agent method '{method_name}' not found in agent type '{}'",
+                agent_type.type_name
+            ))
+        })?;
 
-    validate_record_fields(
-        &agent_type.schema,
-        user_fields
-            .iter()
-            .map(|field| (field.name.as_str(), &field.schema)),
-        fields,
-    )
-    .map_err(|errors| {
-        WorkerExecutorError::invalid_request(format!(
-            "Method '{method_name}': invalid input parameter value: {}",
-            errors
-                .into_iter()
-                .map(|error| error.to_string())
-                .collect::<Vec<_>>()
-                .join("; ")
-        ))
-    })
+    validate_method_invocation(agent_type, method, input, method_name)
+}
+
+pub fn method_uses_streams(
+    agent_type: &AgentTypeSchema,
+    method: &AgentMethodSchema,
+    input: &SchemaValue,
+) -> bool {
+    contains_stream(input) || method.uses_streams(&agent_type.schema)
+}
+
+pub fn validate_method_invocation(
+    agent_type: &AgentTypeSchema,
+    method: &AgentMethodSchema,
+    input: &SchemaValue,
+    method_name: &str,
+) -> Result<bool, WorkerExecutorError> {
+    method
+        .validate_input(&agent_type.schema, input)
+        .map_err(|error| {
+            WorkerExecutorError::invalid_request(format!(
+                "Method '{method_name}': invalid input parameter value: {error}"
+            ))
+        })?;
+    Ok(method_uses_streams(agent_type, method, input))
 }
 
 /// Resolves the [`AgentTypeSchema`] an invocation targets: by name when an agent id
@@ -1222,6 +1257,15 @@ mod tests {
     const AGENT_TYPE: &str = "test-agent";
     const METHOD_NAME: &str = "do-work";
 
+    #[test]
+    async fn live_streaming_response_is_published_exactly_once() {
+        let value = SchemaValue::U64(42);
+        assert_eq!(
+            reject_stream_at_materializing_boundary(value.clone()).unwrap(),
+            value
+        );
+    }
+
     /// Component metadata with one agent type whose `do-work` method takes two
     /// user-supplied parameters (`count: u32`, `label: string`) plus an
     /// auto-injected `principal` field.
@@ -1243,6 +1287,10 @@ mod tests {
             http_endpoint: Vec::new(),
             read_only: None,
         };
+        metadata_with_method(method)
+    }
+
+    fn metadata_with_method(method: AgentMethodSchema) -> ComponentMetadata {
         let at = AgentTypeSchema {
             type_name: AgentTypeName(AGENT_TYPE.to_string()),
             description: String::new(),
@@ -1315,7 +1363,7 @@ mod tests {
             panic!("non-record input must be rejected");
         };
         assert!(
-            err.to_string().contains("expected input parameter record"),
+            err.to_string().contains("expected record, found u32"),
             "unexpected error: {err}"
         );
     }
@@ -1333,7 +1381,7 @@ mod tests {
             panic!("arity mismatch must be rejected");
         };
         assert!(
-            err.to_string().contains("expected 2 parameters, got 1"),
+            err.to_string().contains("has 1 field(s), expected 2"),
             "unexpected error: {err}"
         );
     }
@@ -1353,6 +1401,89 @@ mod tests {
         assert!(
             err.to_string().contains("invalid input parameter value"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn streaming_output_is_accepted_at_the_invocation_boundary() {
+        let metadata = metadata_with_method(AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(Vec::new()),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::stream(Some(
+                SchemaType::u32(),
+            )))),
+            http_endpoint: Vec::new(),
+            read_only: None,
+        });
+        let result = lower_invocation(
+            method_invocation(SchemaValue::Record { fields: Vec::new() }),
+            &metadata,
+            Some(&agent_id()),
+        );
+        if let Err(error) = result {
+            panic!("unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn streaming_method_is_classified_while_stream_free_method_is_not() {
+        let streaming = metadata_with_method(AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(Vec::new()),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::stream(Some(
+                SchemaType::u32(),
+            )))),
+            http_endpoint: Vec::new(),
+            read_only: None,
+        });
+        let empty_input = SchemaValue::Record { fields: Vec::new() };
+
+        assert!(
+            validate_agent_method_invocation(
+                &streaming,
+                Some(&agent_id()),
+                METHOD_NAME,
+                &empty_input,
+            )
+            .unwrap()
+        );
+        assert!(
+            !validate_agent_method_invocation(
+                &metadata_with_method(AgentMethodSchema {
+                    name: METHOD_NAME.to_string(),
+                    description: String::new(),
+                    prompt_hint: None,
+                    input_schema: InputSchema::Parameters(Vec::new()),
+                    output_schema: OutputSchema::Unit,
+                    http_endpoint: Vec::new(),
+                    read_only: None,
+                }),
+                Some(&agent_id()),
+                METHOD_NAME,
+                &empty_input,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn materializing_boundary_rejects_a_real_stream_handle() {
+        let stream = golem_common::schema::stream::SchemaValueStream::from_host_endpoint(());
+        let output = SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(stream)],
+        };
+
+        let error = reject_stream_at_materializing_boundary(output)
+            .expect_err("a live stream reaching materialization is a contract violation");
+        assert!(
+            error
+                .to_string()
+                .contains("live stream at a materializing invocation boundary"),
+            "unexpected error: {error}"
         );
     }
 

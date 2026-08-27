@@ -127,7 +127,7 @@ pub(crate) fn take_http_background_retry_fallback(
 pub enum InlineRetryIneligible {
     /// Worker is in replay mode (not live).
     NotLive,
-    /// Worker is in snapshotting mode.
+    /// Worker is executing a snapshot load/save function.
     Snapshotting,
     /// Worker is inside a user-defined atomic region; a failure must escalate
     /// to trap+replay so the whole region re-executes.
@@ -1550,7 +1550,7 @@ pub(crate) enum StatusRetryOutcome {
 /// This is invoked from `HostFutureIncomingResponse::get` *after* the response has
 /// arrived (so its status is known) but *before* the response is exposed to guest
 /// code or persisted. Behavior:
-/// - In replay mode, snapshotting mode, or inside an atomic region
+/// - In replay mode, unpersisted execution, snapshotting, or inside an atomic region
 ///   the function is a no-op (`NoRetry`) — by design (atomic-region semantics: skip
 ///   in v1, the user-land throw triggers atomic-region replay).
 /// - Otherwise eligibility is checked using the same rules as

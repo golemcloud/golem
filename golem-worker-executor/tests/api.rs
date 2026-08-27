@@ -1798,7 +1798,7 @@ async fn delete_interrupts_long_rpc_call(
         .invoke_agent(
             &component,
             &agent_id,
-            "long-rpc-call",
+            "longRpcCall",
             data_value!(600000f64), // 10 minutes
         )
         .await?;
@@ -3471,7 +3471,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 
     // trying to invoke the previously created worker
     let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
         .await;
 
     let err = result.expect_err("Expected ComponentParseFailed error");

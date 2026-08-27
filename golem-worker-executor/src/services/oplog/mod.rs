@@ -22,6 +22,10 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::card::InvocationWalletPin;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::durable_stream::{
+    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
+    StreamSessionRecordV1,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
@@ -399,6 +403,73 @@ pub struct OrderedOplogStart {
     pub pending_upload: PendingUpload,
 }
 
+pub enum DurableStreamOplogRecord {
+    Registered(StreamRegisteredRecordV1),
+    Items(StreamItemsRecordV1),
+    End(StreamEndRecordV1),
+    Cancel(StreamCancelRecordV1),
+    Session(Box<StreamSessionRecordV1>),
+    InlineEntry(OplogEntry),
+}
+
+impl DurableStreamOplogRecord {
+    fn serialize(&self) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Registered(record) => serialize(record),
+            Self::Items(record) => serialize(record),
+            Self::End(record) => serialize(record),
+            Self::Cancel(record) => serialize(record),
+            Self::Session(record) => serialize(record),
+            Self::InlineEntry(_) => Ok(Vec::new()),
+        }
+    }
+
+    fn into_entry(self, raw: RawOplogPayload) -> Result<OplogEntry, String> {
+        match self {
+            Self::Registered(record) => Ok(OplogEntry::stream_registered(
+                raw.into_payload_with_cache(Arc::new(record))?,
+            )),
+            Self::Items(record) => Ok(OplogEntry::stream_items(
+                raw.into_payload_with_cache(Arc::new(record))?,
+            )),
+            Self::End(record) => Ok(OplogEntry::stream_end(
+                raw.into_payload_with_cache(Arc::new(record))?,
+            )),
+            Self::Cancel(record) => Ok(OplogEntry::stream_cancel(
+                raw.into_payload_with_cache(Arc::new(record))?,
+            )),
+            Self::Session(record) => Ok(OplogEntry::stream_session(
+                raw.into_payload_with_cache(Arc::from(record))?,
+            )),
+            Self::InlineEntry(entry) => Ok(entry),
+        }
+    }
+
+    pub fn into_inline_entry(self) -> OplogEntry {
+        match self {
+            Self::Registered(record) => {
+                OplogEntry::stream_registered(OplogPayload::Inline(Box::new(record)))
+            }
+            Self::Items(record) => OplogEntry::stream_items(OplogPayload::Inline(Box::new(record))),
+            Self::End(record) => OplogEntry::stream_end(OplogPayload::Inline(Box::new(record))),
+            Self::Cancel(record) => {
+                OplogEntry::stream_cancel(OplogPayload::Inline(Box::new(record)))
+            }
+            Self::Session(record) => OplogEntry::stream_session(OplogPayload::Inline(record)),
+            Self::InlineEntry(entry) => entry,
+        }
+    }
+}
+
+pub type DurableStreamBatchBuilder =
+    Box<dyn FnOnce(OplogIndex) -> Vec<DurableStreamOplogRecord> + Send>;
+
+pub type ReservedRawStartBuilder =
+    Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>;
+
+pub type IndexedReservedStartBuilder =
+    Box<dyn FnOnce(OplogIndex) -> Result<(Vec<u8>, ReservedRawStartBuilder), String> + Send>;
+
 /// A single oplog append that has already been synchronously enqueued in the oplog's ordering
 /// domain. Creating this receipt reserves the entry's position; awaiting it returns the assigned
 /// index after the append finishes.
@@ -420,6 +491,34 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// domain as [`Self::add`] before this method returns; they must not implement it by merely
     /// boxing an unpolled call to `add`.
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt;
+
+    /// Atomically appends producer-stream records built from the first assigned index. A production
+    /// leaf externalizes each large record before committing any entry, and commit-threshold checks
+    /// run only after the complete batch is buffered. The checked default is for serialized test
+    /// oplogs only.
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        let first_index = self.current_oplog_index().await.next();
+        let records = make_batch(first_index);
+        let mut result = Vec::with_capacity(records.len());
+        for record in records {
+            let expected_index = result
+                .last()
+                .map_or(first_index, |(index, _): &(OplogIndex, OplogEntry)| {
+                    index.next()
+                });
+            let entry = record.into_inline_entry();
+            let index = self.add(entry.clone()).await;
+            assert_eq!(
+                index, expected_index,
+                "oplog add_durable_stream_batch default observed a concurrent writer"
+            );
+            result.push((index, entry));
+        }
+        Ok(result)
+    }
 
     /// A variant of add that can inject failures in tests. TO BE REMOVED
     async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
@@ -521,7 +620,16 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
-        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        build_start: ReservedRawStartBuilder,
+    ) -> Result<OrderedOplogStart, String>;
+
+    /// Like [`Self::add_start_with_reserved_raw_payload`], but builds the request after the leaf
+    /// oplog has assigned the exact `Start` index. The leaf must invoke `build_request` and append
+    /// the resulting `Start` in the same serialized writer step, so the supplied index is exactly
+    /// the one returned in [`OrderedOplogStart`].
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
     ) -> Result<OrderedOplogStart, String>;
 
     /// Atomically appends a `Start` entry and a second entry (its `End` or
@@ -649,6 +757,34 @@ pub trait OplogOps: Oplog {
                     Ok(build_start(payload))
                 }),
             )
+            .await?;
+        Ok((ordered.index, ordered.pending_upload))
+    }
+
+    /// Typed convenience wrapper over
+    /// [`Oplog::add_start_with_indexed_reserved_raw_payload`]. The request builder receives the
+    /// exact index that will identify the durable host call.
+    async fn add_start_with_indexed_reserved_payload<T>(
+        &self,
+        build_request: impl FnOnce(OplogIndex) -> Result<T, String> + Send + 'static,
+        build_start: impl FnOnce(OplogPayload<T>) -> OplogEntry + Send + 'static,
+    ) -> Result<(OplogIndex, PendingUpload), String>
+    where
+        T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
+    {
+        let ordered = self
+            .add_start_with_indexed_reserved_raw_payload(Box::new(move |start_index| {
+                let request = build_request(start_index)?;
+                let bytes = serialize(&request)?;
+                let cached = Arc::new(request);
+                Ok((
+                    bytes,
+                    Box::new(move |raw| {
+                        let payload = raw.into_payload_with_cache(cached)?;
+                        Ok(build_start(payload))
+                    }),
+                ))
+            }))
             .await?;
         Ok((ordered.index, ordered.pending_upload))
     }

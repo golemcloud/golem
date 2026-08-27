@@ -21,12 +21,14 @@ use crate::schema::schema_value::{
 };
 use crate::schema::wit::{
     DecodeError, EncodeError, PermissionCardHandleRep, PermissionCardResolver, QuotaTokenHandleRep,
-    QuotaTokenResolver, SecretHandleRep, SecretResolver, decode_graph, decode_typed,
-    decode_typed_rejecting_quota_with, decode_value, decode_value_rejecting_quota_with,
-    decode_value_with, encode_graph, encode_typed, encode_value, encode_value_with, wire,
+    QuotaTokenResolver, SchemaValueStreamResolver, SecretHandleRep, SecretResolver, decode_graph,
+    decode_typed, decode_typed_rejecting_quota_with, decode_value,
+    decode_value_rejecting_quota_with, decode_value_with, encode_graph, encode_typed, encode_value,
+    encode_value_with, encode_value_with_streams, wire,
 };
 use chrono::{TimeZone, Utc};
 use golem_schema::model::EnvironmentId;
+use golem_schema::schema::{SchemaValueStream, SchemaValueStreamHandleRep};
 use proptest::prelude::*;
 use strategies::{
     schema_graph_strategy, transportable_schema_value_strategy,
@@ -403,6 +405,34 @@ impl SecretResolver for TableResolver {
     }
 }
 
+impl SchemaValueStreamResolver for TableResolver {
+    type Error = anyhow::Error;
+
+    fn handle_from_stream(
+        &mut self,
+        stream: SchemaValueStream,
+    ) -> Result<Resource<SchemaValueStreamHandleRep>, Self::Error> {
+        let handle = self.table.push(SchemaValueStreamHandleRep::new(stream))?;
+        self.live += 1;
+        Ok(handle)
+    }
+
+    fn stream_from_handle(
+        &mut self,
+        handle: Resource<SchemaValueStreamHandleRep>,
+    ) -> Result<SchemaValueStream, Self::Error> {
+        let stream = self.table.delete(handle)?.into_stream();
+        self.live -= 1;
+        Ok(stream)
+    }
+
+    fn drop_stream_handle(&mut self, handle: Resource<SchemaValueStreamHandleRep>) {
+        if self.table.delete(handle).is_ok() {
+            self.live -= 1;
+        }
+    }
+}
+
 impl PermissionCardResolver for TableResolver {
     type Error = anyhow::Error;
 
@@ -464,12 +494,62 @@ fn secret_round_trips_through_resolver() {
 }
 
 #[test]
+fn stream_decodes_through_the_standard_resolver_path() {
+    let stream = SchemaValueStream::from_host_endpoint(42_u32);
+    let mut resolver = TableResolver::new();
+    let handle = resolver.handle_from_stream(stream).unwrap();
+    let tree = wire::SchemaValueTree {
+        value_nodes: vec![wire::SchemaValueNode::StreamValue(handle)],
+        root: 0,
+    };
+
+    let decoded = decode_value_with(tree, &mut resolver).expect("decode stream");
+    let SchemaValue::Stream(decoded) = decoded else {
+        panic!("expected stream value");
+    };
+
+    assert_eq!(decoded.take_host_endpoint::<u32>().unwrap(), 42);
+    assert_eq!(resolver.live, 0);
+}
+
+#[test]
 fn permission_card_round_trips_through_resolver() {
     let value = SchemaValue::PermissionCard(sample_permission_card_snapshot());
     let mut resolver = TableResolver::new();
     let wire = encode_value_with(&value, &mut resolver).expect("encode_with");
     let back = decode_value_with(wire, &mut resolver).expect("decode_with");
     assert_eq!(value, back);
+    assert_eq!(resolver.live, 0);
+}
+
+#[test]
+fn stream_and_permission_card_round_trip_together_through_stream_aware_resolver() {
+    let permission_card = sample_permission_card_snapshot();
+    let value = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::PermissionCard(permission_card.clone()),
+            SchemaValue::List {
+                elements: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                    42_u32,
+                ))],
+            },
+        ],
+    };
+    let mut resolver = TableResolver::new();
+
+    let wire = encode_value_with_streams(&value, &mut resolver).expect("stream-aware encode");
+    let back = decode_value_with(wire, &mut resolver).expect("stream-aware decode");
+    let SchemaValue::Record { fields } = back else {
+        panic!("expected record value");
+    };
+    assert_eq!(fields[0], SchemaValue::PermissionCard(permission_card));
+    let SchemaValue::List { elements } = &fields[1] else {
+        panic!("expected nested stream list");
+    };
+    let SchemaValue::Stream(stream) = &elements[0] else {
+        panic!("expected nested stream value");
+    };
+    assert_eq!(stream.take_host_endpoint::<u32>().unwrap(), 42);
     assert_eq!(resolver.live, 0);
 }
 

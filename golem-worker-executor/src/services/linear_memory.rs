@@ -42,13 +42,20 @@ struct Inner {
     startup_bytes_remaining: AtomicU64,
     pending_growth_prepaid: AtomicU64,
     growth_has_pending_grant: AtomicBool,
-    pending_growth_grants: Mutex<Vec<MemoryGrant>>,
+    pending_growth_grants: Mutex<Vec<PendingGrowthGrant>>,
+    transient_growth_grants: Mutex<Vec<MemoryGrant>>,
     retained_growth_grant: Arc<Mutex<MemoryGrant>>,
     reconciling: AtomicBool,
     replaying: AtomicBool,
     transitions: Mutex<()>,
     resource_entry: Arc<AtomicResourceEntry>,
     meter: AgentMemoryMeter,
+}
+
+#[derive(Debug)]
+struct PendingGrowthGrant {
+    grant: MemoryGrant,
+    transient: bool,
 }
 
 impl LinearMemoryTracker {
@@ -70,6 +77,7 @@ impl LinearMemoryTracker {
                 pending_growth_prepaid: AtomicU64::new(0),
                 growth_has_pending_grant: AtomicBool::new(false),
                 pending_growth_grants: Mutex::new(Vec::new()),
+                transient_growth_grants: Mutex::new(Vec::new()),
                 retained_growth_grant,
                 reconciling: AtomicBool::new(true),
                 replaying: AtomicBool::new(replaying),
@@ -146,8 +154,16 @@ impl LinearMemoryTracker {
             .store(0, Ordering::Release);
         let pending_grants = std::mem::take(&mut *self.inner.pending_growth_grants.lock().unwrap());
         let mut retained_grant = self.inner.retained_growth_grant.lock().unwrap();
-        for grant in pending_grants {
-            retained_grant.merge(grant);
+        for pending in pending_grants {
+            if pending.transient {
+                self.inner
+                    .transient_growth_grants
+                    .lock()
+                    .unwrap()
+                    .push(pending.grant);
+            } else {
+                retained_grant.merge(pending.grant);
+            }
         }
         self.inner
             .growth_has_pending_grant
@@ -162,13 +178,21 @@ impl LinearMemoryTracker {
             .inner
             .growth_has_pending_grant
             .swap(false, Ordering::AcqRel)
-            && let Some(grant) = self.inner.pending_growth_grants.lock().unwrap().pop()
+            && let Some(pending) = self.inner.pending_growth_grants.lock().unwrap().pop()
         {
-            self.inner
-                .retained_growth_grant
-                .lock()
-                .unwrap()
-                .merge(grant);
+            if pending.transient {
+                self.inner
+                    .transient_growth_grants
+                    .lock()
+                    .unwrap()
+                    .push(pending.grant);
+            } else {
+                self.inner
+                    .retained_growth_grant
+                    .lock()
+                    .unwrap()
+                    .merge(pending.grant);
+            }
         }
         let reconciling = self.inner.reconciling.load(Ordering::Acquire);
         let prepaid = self
@@ -248,8 +272,16 @@ impl LinearMemoryTracker {
     }
 
     pub(crate) fn retain_growth_grant(&self, grant: MemoryGrant) {
+        self.retain_pending_growth_grant(grant, false);
+    }
+
+    fn retain_pending_growth_grant(&self, grant: MemoryGrant, transient: bool) {
         let _transition = self.inner.transitions.lock().unwrap();
-        self.inner.pending_growth_grants.lock().unwrap().push(grant);
+        self.inner
+            .pending_growth_grants
+            .lock()
+            .unwrap()
+            .push(PendingGrowthGrant { grant, transient });
         self.inner
             .growth_has_pending_grant
             .store(true, Ordering::Release);

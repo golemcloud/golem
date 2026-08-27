@@ -15,7 +15,8 @@
 use crate::metrics::oplog::record_oplog_rate_limited;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{
-    CommitLevel, Oplog, OplogAddReceipt, OplogService, OrderedOplogStart,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
+    OplogService, OrderedOplogStart, ReservedRawStartBuilder,
 };
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
@@ -188,6 +189,15 @@ impl Oplog for RateLimitedOplog {
         })
     }
 
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        let result = self.inner.add_durable_stream_batch(make_batch).await;
+        self.apply_rate_limit().await;
+        result
+    }
+
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.inner.drop_prefix(last_dropped_id).await
     }
@@ -246,7 +256,7 @@ impl Oplog for RateLimitedOplog {
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
-        build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        build_start: ReservedRawStartBuilder,
     ) -> Result<OrderedOplogStart, String> {
         // Order the `Start` first (the inner oplog assigns its index), then throttle. Applying
         // back-pressure before delegating would reorder concurrent calls' `Start` entries relative
@@ -254,6 +264,18 @@ impl Oplog for RateLimitedOplog {
         let ordered = self
             .inner
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
+            .await?;
+        self.apply_rate_limit().await;
+        Ok(ordered)
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        build_request: IndexedReservedStartBuilder,
+    ) -> Result<OrderedOplogStart, String> {
+        let ordered = self
+            .inner
+            .add_start_with_indexed_reserved_raw_payload(build_request)
             .await?;
         self.apply_rate_limit().await;
         Ok(ordered)

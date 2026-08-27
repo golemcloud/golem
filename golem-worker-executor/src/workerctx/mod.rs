@@ -66,7 +66,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use uuid::Uuid;
 use wasmtime::component::Instance;
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
+use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::p2::WasiHttpCtxView;
 use wasmtime_wasi_http::p3::WasiHttpView;
@@ -485,7 +485,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// hasn't reached the end of the replay (which is usually last index in oplog)
     /// resume_replay will ensure to start replay from the last replayed index.
     async fn resume_replay(
-        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        store: &mut Store<Ctx>,
         instance: &Instance,
         refresh_replay_target: bool,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
@@ -503,7 +503,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn prepare_instance(
         agent_id: &AgentId,
         instance: &Instance,
-        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        store: &mut Store<Ctx>,
     ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
 
     /// Callback called when the executor's shard assignment has been changed

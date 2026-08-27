@@ -194,14 +194,14 @@ where
     .await
 }
 
-struct SuspendableWaitRegistration {
+pub(crate) struct SuspendableWaitRegistration {
     wait_id: u64,
     deadline: Option<DateTime<Utc>>,
     suspendable_waits: Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>>,
 }
 
 impl SuspendableWaitRegistration {
-    fn new(
+    pub(crate) fn new(
         wait_id: u64,
         deadline: Option<DateTime<Utc>>,
         suspendable_waits: Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>>,
@@ -412,6 +412,13 @@ mod tests {
         ) -> Result<OrderedOplogStart, String> {
             unreachable!("oplog is unused by this test")
         }
+
+        async fn add_start_with_indexed_reserved_raw_payload(
+            &self,
+            _build_request: crate::services::oplog::IndexedReservedStartBuilder,
+        ) -> Result<OrderedOplogStart, String> {
+            unreachable!("oplog is unused by this test")
+        }
     }
 
     fn unused_wakeup_scheduler() -> WakeupScheduler {
@@ -559,6 +566,13 @@ mod tests {
             &self,
             _serialized_request: Vec<u8>,
             _build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
+        ) -> Result<OrderedOplogStart, String> {
+            unreachable!("oplog is unused by this test")
+        }
+
+        async fn add_start_with_indexed_reserved_raw_payload(
+            &self,
+            _build_request: crate::services::oplog::IndexedReservedStartBuilder,
         ) -> Result<OrderedOplogStart, String> {
             unreachable!("oplog is unused by this test")
         }

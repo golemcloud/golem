@@ -20,7 +20,12 @@ impl QuantityUnit for TestBytesUnit with fn allowed_suffixes() {
 fn[T : IntoSchema + FromSchema] rich_roundtrip(v : T) -> T raise {
   let typed = try_into_typed_schema_value(v)
   let wit = @model.typed_schema_value_to_wit(typed)
-  let back = @model.typed_schema_value_from_wit(wit)
+  let back = @model.typed_schema_value_from_wit(wit, {
+    drop_secret: fn(_) {  },
+    drop_quota_token: fn(_) {  },
+    drop_stream: fn(_) {  },
+    drop_native_stream: fn(_) {  },
+  })
   assert_eq(back.graph, typed.graph)
   T::from_value(back.value)
 }
