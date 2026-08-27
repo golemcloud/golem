@@ -28,6 +28,7 @@ use crate::durable_host::stream_session::{
     preflight_recursive_stream_value, remap_recursive_stream_references,
 };
 use crate::durable_host::stream_transport::{LiveStreamEndpoint, SourceLifecycle};
+use crate::durable_host::suspendable_wait::SuspendableWaitRegistration;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::rpc::Rpc;
 use crate::workerctx::WorkerCtx;
@@ -2049,11 +2050,6 @@ impl DurableSessionStreams {
                 Ok(canonical_handle_index)
             })?;
 
-        self.producer
-            .validate_new_session_stream_count(&self.session_key, pending.len())
-            .await
-            .map_err(|error| error.to_string())?;
-
         let session_mapping = StreamSessionMappingV1 {
             session_key: self.session_key.clone(),
             attachment_id: golem_common::model::durable_stream::AttachmentId::primary(
@@ -2081,6 +2077,29 @@ impl DurableSessionStreams {
             })
             .collect::<Vec<_>>();
         self.recover_session_mappings().await?;
+        let mut new_stream_count = pending
+            .iter()
+            .filter(|pending| {
+                pending.forwarded_handle.as_ref().is_some_and(|handle| {
+                    self.mapping_for_handle(handle, SessionStreamRoleV1::Output)
+                        .is_none()
+                })
+            })
+            .count();
+        for request in &requests {
+            if self
+                .producer
+                .handle_for_coordinate(&request.coordinate)
+                .await
+                .is_none()
+            {
+                new_stream_count += 1;
+            }
+        }
+        self.producer
+            .validate_new_session_stream_count(&self.session_key, new_stream_count)
+            .await
+            .map_err(|error| error.to_string())?;
         let mut transport_stream_ids = Vec::with_capacity(pending.len());
         let mut request_index = 0usize;
         for pending in &pending {
@@ -3707,12 +3726,11 @@ impl AttachedDurableCatchUpReader {
             }
             let events = match self
                 .source
-                .read_attached_segment(
+                .wait_for_attached_segment(
                     &self.attachment,
                     &self.handle,
                     Timestamp::now_utc().to_millis(),
                     self.after,
-                    None,
                 )
                 .await
             {
@@ -3725,11 +3743,7 @@ impl AttachedDurableCatchUpReader {
                     return Err(error);
                 }
             };
-            if events.is_empty() {
-                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            } else {
-                self.buffered.extend(events);
-            }
+            self.buffered.extend(events);
         }
     }
 }
@@ -3780,7 +3794,15 @@ impl DurableInputProducer {
         }
     }
 
+    #[cfg(test)]
     fn begin_receive(&mut self) {
+        self.begin_receive_with_registration(None);
+    }
+
+    fn begin_receive_with_registration(
+        &mut self,
+        source_wait: Option<SuspendableWaitRegistration>,
+    ) {
         let mut reader = self.reader.take();
         let journaled_event = self.journal.pop_front();
         let streams = self.streams.clone();
@@ -3791,12 +3813,15 @@ impl DurableInputProducer {
             let mut journaled = journaled_event.is_some();
             let event = match journaled_event {
                 Some(event) => Some(event),
-                None => reader
-                    .as_mut()
-                    .expect("durable input reader is missing")
-                    .next()
-                    .await
-                    .map_err(|error| error.to_string())?,
+                None => {
+                    let result = reader
+                        .as_mut()
+                        .expect("durable input reader is missing")
+                        .next()
+                        .await;
+                    drop(source_wait);
+                    result.map_err(|error| error.to_string())?
+                }
             };
             if event.as_ref().is_some_and(|event| {
                 matches!(
@@ -3976,7 +4001,14 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
             }
         }
         if self.pending.is_none() {
-            self.begin_receive();
+            let source_wait = self.journal.is_empty().then(|| {
+                store
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .register_passive_suspendable_wait()
+            });
+            self.begin_receive_with_registration(source_wait);
         }
         let (reader, event, mut endpoints, _journaled) =
             match self.pending.as_mut().unwrap().as_mut().poll(cx) {
@@ -4293,19 +4325,29 @@ mod tests {
             request: golem_common::base_model::durable_stream::AttachedStreamSegmentRequestV1,
             _auth_ctx: &AuthCtx,
         ) -> Result<Vec<u8>, RpcError> {
-            let events = self
-                .producer
-                .read_attached_segment(
-                    &request.attachment,
-                    &request.mapping.handle,
-                    113,
-                    request.after,
-                    request.through,
-                )
-                .await
-                .map_err(|error| RpcError::ProtocolError {
-                    details: error.to_string(),
-                })?;
+            let events = if request.wait_for_events {
+                self.producer
+                    .wait_for_attached_segment(
+                        &request.attachment,
+                        &request.mapping.handle,
+                        113,
+                        request.after,
+                    )
+                    .await
+            } else {
+                self.producer
+                    .read_attached_segment(
+                        &request.attachment,
+                        &request.mapping.handle,
+                        113,
+                        request.after,
+                        request.through,
+                    )
+                    .await
+            }
+            .map_err(|error| RpcError::ProtocolError {
+                details: error.to_string(),
+            })?;
             golem_common::serialization::serialize(&events).map_err(|error| {
                 RpcError::ProtocolError {
                     details: error.to_string(),

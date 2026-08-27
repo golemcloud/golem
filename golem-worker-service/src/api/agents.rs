@@ -1622,7 +1622,7 @@ mod tests {
         let mut websocket_stream =
             tokio_stream::iter([Ok(Message::binary(request.encode_to_vec()))]);
         let delivered = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        let (permit_sender, permit_receiver) = tokio::sync::mpsc::channel(2);
+        let (permit_sender, permit_receiver) = tokio::sync::mpsc::channel(1);
         let sink = Box::pin(gated_websocket_sink(permit_receiver, delivered.clone()));
         let (websocket_sender, websocket_receiver) = tokio::sync::mpsc::channel(2);
         let writer = tokio::spawn(forward_websocket_messages(
@@ -1648,24 +1648,14 @@ mod tests {
         );
 
         permit_sender.send(()).await.unwrap();
-        permit_sender.send(()).await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(2), writer)
             .await
             .expect("pre-start writer did not drain after output progress resumed")
             .unwrap();
 
         let delivered = delivered.lock().await;
-        assert_eq!(delivered.len(), 2);
-        let Message::Binary(rejected) = &delivered[0] else {
-            panic!("rejection was not delivered first")
-        };
-        assert!(matches!(
-            InvocationResponse::decode(rejected.as_slice())
-                .unwrap()
-                .response,
-            Some(invocation_response::Response::Rejected(_))
-        ));
-        assert!(matches!(delivered[1], Message::Close(_)));
+        assert_eq!(delivered.len(), 1);
+        assert!(matches!(delivered[0], Message::Close(_)));
     }
 
     #[test]

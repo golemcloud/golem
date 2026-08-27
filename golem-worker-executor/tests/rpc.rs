@@ -1028,7 +1028,6 @@ async fn durable_streaming_input_recovers_after_executor_restart(
         .map_err(anyhow::Error::msg)?;
     requests.send(end).await?;
     drop(requests);
-    drop(responses);
 
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -1048,7 +1047,8 @@ async fn durable_streaming_input_recovers_after_executor_restart(
         }
     })
     .await
-    .map_err(|_| anyhow::anyhow!("invocation did not finish after the terminal ACK was lost"))??;
+    .map_err(|_| anyhow::anyhow!("invocation did not finish with its terminal ACK unread"))??;
+    drop(responses);
     drop(executor);
 
     let executor = golem_worker_executor_test_utils::start(deps, &context).await?;

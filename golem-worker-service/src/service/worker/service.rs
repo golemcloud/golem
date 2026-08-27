@@ -3029,7 +3029,7 @@ mod tests {
         invocation_session_resumes: Mutex<Vec<(AgentId, ResumeAttach)>>,
         effects: Mutex<Vec<&'static str>>,
         invocation_output: AgentInvocationOutput,
-        metadata_component_revision: Option<ComponentRevision>,
+        metadata_component_revision: Mutex<Option<ComponentRevision>>,
         fingerprint: AgentFingerprint,
     }
 
@@ -3044,7 +3044,7 @@ mod tests {
                 invocation_session_resumes: Mutex::new(Vec::new()),
                 effects: Mutex::new(Vec::new()),
                 invocation_output,
-                metadata_component_revision: None,
+                metadata_component_revision: Mutex::new(None),
                 fingerprint: AgentFingerprint::new(),
             }
         }
@@ -3062,9 +3062,13 @@ mod tests {
                 invocation_session_resumes: Mutex::new(Vec::new()),
                 effects: Mutex::new(Vec::new()),
                 invocation_output,
-                metadata_component_revision: Some(component_revision),
+                metadata_component_revision: Mutex::new(Some(component_revision)),
                 fingerprint: AgentFingerprint::new(),
             }
+        }
+
+        fn set_metadata_component_revision(&self, component_revision: ComponentRevision) {
+            *self.metadata_component_revision.lock().unwrap() = Some(component_revision);
         }
 
         fn created_agent_id(&self) -> AgentId {
@@ -3172,7 +3176,8 @@ mod tests {
             environment_id: EnvironmentId,
             _: AuthCtx,
         ) -> WorkerResult<AgentMetadataDto> {
-            match self.metadata_component_revision {
+            self.effects.lock().unwrap().push("metadata");
+            match *self.metadata_component_revision.lock().unwrap() {
                 Some(component_revision) => Ok(AgentMetadataDto {
                     agent_id: agent_id.clone(),
                     environment_id,
@@ -4109,6 +4114,9 @@ mod tests {
     #[test]
     async fn plugin_lifecycle_resolves_and_authorizes_the_concrete_plugin_name() {
         let harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
         let agent_id = build_public_agent_id(
             harness.component_id,
             harness.agent_type_name.clone(),

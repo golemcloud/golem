@@ -297,6 +297,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     let mut stdin_open = has_input;
     let mut input_terminal = !has_input;
     let mut pending_input_items = 0_usize;
+    let mut pending_input_terminal = false;
     let mut acknowledged_input_offset = 0_u64;
     let mut pending_input_request = None;
     let mut fatal_input_failure = None;
@@ -397,6 +398,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 }
                 if matches!(request.request, Some(public_invocation_request::Request::InputEnd(_))) {
                     input_terminal = true;
+                    pending_input_terminal = true;
                 }
                 permit.send(encode_request(request)?);
             }
@@ -512,7 +514,10 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     _ => {}
                 }
                 if let Some(invocation_response::Response::InputAck(ack)) = response.response.as_ref() {
-                    pending_input_items = pending_input_items.checked_sub(1).ok_or_else(|| anyhow!("received an input acknowledgement without a pending item"))?;
+                    record_input_acknowledgement(
+                        &mut pending_input_items,
+                        &mut pending_input_terminal,
+                    )?;
                     acknowledged_input_offset = ack.highest_contiguous_sequence.checked_add(1).ok_or_else(|| anyhow!("input acknowledgement offset overflow"))?;
                 }
                 if response_cancels_input(&response, input_stream_id) {
@@ -646,6 +651,20 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     }
     if failed {
         bail!(NonSuccessfulExit);
+    }
+    Ok(())
+}
+
+fn record_input_acknowledgement(
+    pending_items: &mut usize,
+    pending_terminal: &mut bool,
+) -> anyhow::Result<()> {
+    if *pending_items > 0 {
+        *pending_items -= 1;
+    } else if *pending_terminal {
+        *pending_terminal = false;
+    } else {
+        bail!("received an input acknowledgement without a pending item");
     }
     Ok(())
 }
@@ -2541,6 +2560,22 @@ mod tests {
         let actual = load_checkpoint(&path).unwrap();
         assert_eq!(actual.epoch, 2);
         assert_eq!(actual.cursors, expected.cursors);
+    }
+
+    #[test]
+    fn terminal_input_acknowledgement_does_not_consume_item_capacity() {
+        let mut pending_items = 1;
+        let mut pending_terminal = true;
+
+        record_input_acknowledgement(&mut pending_items, &mut pending_terminal).unwrap();
+        assert_eq!(pending_items, 0);
+        assert!(pending_terminal);
+
+        record_input_acknowledgement(&mut pending_items, &mut pending_terminal).unwrap();
+        assert_eq!(pending_items, 0);
+        assert!(!pending_terminal);
+
+        assert!(record_input_acknowledgement(&mut pending_items, &mut pending_terminal).is_err());
     }
 
     #[test]

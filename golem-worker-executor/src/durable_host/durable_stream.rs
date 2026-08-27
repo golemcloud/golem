@@ -2417,7 +2417,7 @@ impl DurableStreamProducer {
             return Err(DurableStreamProducerError::ValueStreamLimit);
         }
         let index = self.index.lock().await;
-        if index.finished_sessions.contains(session_key) {
+        if new_stream_count != 0 && index.finished_sessions.contains(session_key) {
             return Err(DurableStreamProducerError::SessionFinished(
                 session_key.clone(),
             ));
@@ -3472,7 +3472,7 @@ impl DurableStreamProducer {
         fields(stream_id = %handle.stream_id, has_cursor = after.is_some())
     )]
     pub(crate) async fn catch_up(
-        self: &Arc<Self>,
+        &self,
         handle: DurableStreamHandleV1,
         after: Option<StreamOffsetV1>,
     ) -> Result<DurableCatchUpReader, DurableStreamProducerError> {
@@ -3710,6 +3710,14 @@ pub(crate) trait AttachedStreamSegmentSource: Send + Sync {
         after: Option<StreamOffsetV1>,
         through: Option<StreamOffsetV1>,
     ) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamProducerError>;
+
+    async fn wait_for_attached_segment(
+        &self,
+        attachment: &StreamAttachmentKeyV1,
+        handle: &DurableStreamHandleV1,
+        now_millis: u64,
+        after: Option<StreamOffsetV1>,
+    ) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamProducerError>;
 }
 
 #[async_trait]
@@ -3795,6 +3803,36 @@ impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
                     mapping: self.mapping.clone(),
                     after,
                     through,
+                    wait_for_events: false,
+                },
+                &self.auth_ctx,
+            )
+            .await
+            .map_err(|error| DurableStreamProducerError::Oplog(error.to_string()))?;
+        golem_common::serialization::deserialize(&payload)
+            .map_err(DurableStreamProducerError::CorruptHistory)
+    }
+
+    async fn wait_for_attached_segment(
+        &self,
+        attachment: &StreamAttachmentKeyV1,
+        handle: &DurableStreamHandleV1,
+        _now_millis: u64,
+        after: Option<StreamOffsetV1>,
+    ) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamProducerError> {
+        if self.mapping.handle != *handle {
+            return Err(DurableStreamProducerError::InvalidHandle);
+        }
+        let payload = self
+            .rpc
+            .read_durable_stream_segment(
+                AttachedStreamSegmentRequestV1 {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    attachment: attachment.clone(),
+                    mapping: self.mapping.clone(),
+                    after,
+                    through: None,
+                    wait_for_events: true,
                 },
                 &self.auth_ctx,
             )
@@ -5147,6 +5185,26 @@ impl AttachedStreamSegmentSource for DurableStreamProducer {
             _ => return Err(DurableStreamProducerError::InvalidAttachmentState),
         }
         read_segment_from_index(&index, handle, after, through)
+    }
+
+    async fn wait_for_attached_segment(
+        &self,
+        attachment: &StreamAttachmentKeyV1,
+        handle: &DurableStreamHandleV1,
+        now_millis: u64,
+        after: Option<StreamOffsetV1>,
+    ) -> Result<Vec<CommittedProducerStreamEventV1>, DurableStreamProducerError> {
+        let events = self
+            .read_attached_segment(attachment, handle, now_millis, after, None)
+            .await?;
+        if !events.is_empty() {
+            return Ok(events);
+        }
+        let mut reader = self.catch_up(handle.clone(), after).await?;
+        match tokio::time::timeout(std::time::Duration::from_secs(1), reader.next()).await {
+            Ok(event) => Ok(event?.into_iter().collect()),
+            Err(_) => Ok(Vec::new()),
+        }
     }
 }
 

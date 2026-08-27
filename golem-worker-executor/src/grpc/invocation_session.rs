@@ -140,7 +140,6 @@ enum AcceptanceRace<A, O, R> {
         early_output: Option<O>,
         early_inbound: Option<R>,
     },
-    AcceptanceSenderDropped,
     InvocationFinished(O),
     InboundBeforeAcceptance(R),
 }
@@ -170,7 +169,7 @@ where
                     early_output,
                     early_inbound,
                 },
-                Err(_) => AcceptanceRace::AcceptanceSenderDropped,
+                Err(_) => AcceptanceRace::InvocationFinished(invocation.await),
             },
             committed = &mut *acceptance_committed, if !commit_observed && commit_channel_open => {
                 match committed {
@@ -186,7 +185,7 @@ where
                         early_inbound,
                     },
                     Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                        return AcceptanceRace::AcceptanceSenderDropped;
+                        return AcceptanceRace::InvocationFinished(output);
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }
@@ -213,7 +212,7 @@ where
                         early_inbound: Some(request),
                     },
                     Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                        return AcceptanceRace::AcceptanceSenderDropped;
+                        return AcceptanceRace::InvocationFinished(invocation.await);
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }
@@ -751,16 +750,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 early_output,
                 early_inbound,
             } => (acceptance, early_output, early_inbound),
-            AcceptanceRace::AcceptanceSenderDropped => {
-                send_rejection(
-                    &responses,
-                    InvocationRejectionReason::Internal,
-                    "invocation ended without reaching acceptance".to_string(),
-                    &start,
-                )
-                .await;
-                return;
-            }
             AcceptanceRace::InvocationFinished(result) => {
                 let (reason, error) = match result {
                     Ok(_) => (
@@ -1019,7 +1008,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     return;
                 }
             };
-
             if responses
                 .send(InvocationResponse {
                     response: Some(invocation_response::Response::Result(
@@ -1055,7 +1043,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             while completed_output.is_none() || !output_pump_finished {
                 tokio::select! {
                     output = &mut invocation, if completed_output.is_none() => match output {
-                        Ok(output) => completed_output = Some(Ok(output)),
+                        Ok(output) => {
+                            completed_output = Some(Ok(output));
+                        },
                         Err(error) => {
                             let details = error.to_string();
                             if let Err(finish_error) = durable_streams
@@ -1084,7 +1074,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None => Err("durable output pump task stopped unexpectedly".to_string()),
                         };
                         match result {
-                            Ok(()) => output_pump_finished = true,
+                            Ok(()) => {
+                                output_pump_finished = true;
+                            },
                             Err(error) => {
                                 if let Err(finish_error) = durable_streams
                                     .fail_protocol(error.clone())
@@ -2866,6 +2858,33 @@ mod freshness_tests {
                 early_output: None,
                 early_inbound: Some("transport closed"),
             }
+        ));
+    }
+
+    #[test]
+    async fn dropped_acceptance_sender_preserves_invocation_output() {
+        let (acceptance_committed_tx, mut acceptance_committed_rx) =
+            tokio::sync::oneshot::channel();
+        let (accepted_tx, mut accepted_rx) = tokio::sync::oneshot::channel::<()>();
+        let invocation = async move {
+            drop(accepted_tx);
+            tokio::task::yield_now().await;
+            drop(acceptance_committed_tx);
+            "invocation error"
+        };
+        tokio::pin!(invocation);
+
+        let race = race_invocation_acceptance(
+            &mut accepted_rx,
+            &mut acceptance_committed_rx,
+            invocation.as_mut(),
+            future::pending::<()>(),
+        )
+        .await;
+
+        assert!(matches!(
+            race,
+            AcceptanceRace::InvocationFinished("invocation error")
         ));
     }
 }

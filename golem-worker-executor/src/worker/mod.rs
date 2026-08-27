@@ -936,11 +936,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await
                 .expect("Failed enqueuing initial agent invocations to worker");
         };
-        if !worker
-            .durable_stream_producer()
-            .await?
-            .deletion_started()
-            .await
+        if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS
+            && !worker
+                .durable_stream_producer()
+                .await?
+                .deletion_started()
+                .await
         {
             worker.reconcile_durable_stream_attachments().await?;
             worker.recover_durable_stream_topologies().await?;
@@ -4164,6 +4165,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut attached_sessions = HashMap::new();
         let mut session_authorities = HashMap::new();
         let mut pending_invocations = HashMap::new();
+        let mut finalized_attachments = HashSet::new();
+        let mut finished_sessions = HashSet::new();
         let mut consumer_deleting = false;
         for (oplog_index, entry) in self
             .oplog
@@ -4266,6 +4269,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 {
                     consumer_deleting = true;
                 }
+                StreamSessionRecordV1::AttachmentFinalized(record) => {
+                    finalized_attachments.insert(record.key);
+                }
                 StreamSessionRecordV1::TopologyPrepared(record) => {
                     let slot = (
                         record.session_key.clone(),
@@ -4304,10 +4310,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         ));
                     }
                 }
+                StreamSessionRecordV1::Finished(record) => {
+                    finished_sessions.insert(record.session_key);
+                }
                 _ => {}
             }
         }
-        if consumer_deleting {
+        topologies.retain(|(session_key, _, _, _, _, _), (attachment, _)| {
+            let local_session_authority = session_key.callee_environment_id
+                == self.owned_agent_id.environment_id
+                && session_key.callee == self.owned_agent_id.agent_id
+                && session_key.callee_fingerprint == self.initial_worker_metadata.fingerprint;
+            !(local_session_authority && finished_sessions.contains(session_key))
+                && !finalized_attachments.contains(attachment)
+        });
+        if consumer_deleting || topologies.is_empty() {
             return Ok(());
         }
         let producer = self.durable_stream_producer().await?;
@@ -4561,16 +4578,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "consumer durable topology does not authorize this stream read",
             ));
         }
-        producer
-            .read_attached_segment(
-                key,
-                &request.mapping.handle,
-                Timestamp::now_utc().to_millis(),
-                request.after,
-                request.through,
-            )
-            .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+        let events = if request.wait_for_events {
+            producer
+                .wait_for_attached_segment(
+                    key,
+                    &request.mapping.handle,
+                    Timestamp::now_utc().to_millis(),
+                    request.after,
+                )
+                .await
+        } else {
+            producer
+                .read_attached_segment(
+                    key,
+                    &request.mapping.handle,
+                    Timestamp::now_utc().to_millis(),
+                    request.after,
+                    request.through,
+                )
+                .await
+        };
+        events.map_err(|error| WorkerExecutorError::runtime(error.to_string()))
     }
 
     pub(crate) fn start_durable_stream_attachment_reconciler(this: &Arc<Self>) {

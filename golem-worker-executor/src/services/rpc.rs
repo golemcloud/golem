@@ -1225,6 +1225,16 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Ensuring local target worker exists");
 
+            self.direct_invocation_auth
+                .check(
+                    self_created_by,
+                    owned_agent_id,
+                    AgentVerb::Invoke,
+                    AgentResourcePattern::Method(AgentMethodName(method_name.to_string())),
+                    auth_ctx,
+                )
+                .await?;
+
             let worker = Worker::get_or_create_running(
                 self,
                 owned_agent_id,

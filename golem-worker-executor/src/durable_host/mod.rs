@@ -9970,6 +9970,14 @@ impl PrivateDurableWorkerState {
         self.next_suspendable_wait_id.fetch_add(1, Ordering::AcqRel)
     }
 
+    fn register_passive_suspendable_wait(&self) -> suspendable_wait::SuspendableWaitRegistration {
+        suspendable_wait::SuspendableWaitRegistration::new(
+            self.next_suspendable_wait_id(),
+            None,
+            self.suspendable_waits(),
+        )
+    }
+
     fn safe_to_suspend(&self) -> bool {
         Self::suspend_admissible(
             self.live_host_calls.load(Ordering::Acquire),

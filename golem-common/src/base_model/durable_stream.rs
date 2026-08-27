@@ -652,13 +652,17 @@ impl StreamAttachmentControlRequestV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(
+    feature = "full",
+    desert(evolution(FieldAdded("wait_for_events", false)))
+)]
 pub struct AttachedStreamSegmentRequestV1 {
     pub format_version: u8,
     pub attachment: StreamAttachmentKeyV1,
     pub mapping: StreamSessionMappingRecordV1,
     pub after: Option<StreamOffsetV1>,
     pub through: Option<StreamOffsetV1>,
+    pub wait_for_events: bool,
 }
 
 impl AttachedStreamSegmentRequestV1 {
@@ -666,6 +670,7 @@ impl AttachedStreamSegmentRequestV1 {
         self.format_version == DURABLE_STREAM_FORMAT_VERSION
             && self.attachment.is_well_formed()
             && topology_mapping_matches(&self.attachment, &self.mapping)
+            && (!self.wait_for_events || self.through.is_none())
     }
 }
 

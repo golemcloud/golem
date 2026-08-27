@@ -119,8 +119,8 @@ use golem_worker_executor::services::golem_config::{
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
-    CommitLevel, IndexedReservedStartBuilder, Oplog, OplogAddReceipt, OplogService,
-    OrderedOplogStart,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
+    OplogService, OrderedOplogStart,
 };
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
@@ -2899,6 +2899,13 @@ impl Oplog for TestOplog {
             }
             index
         })
+    }
+
+    async fn add_durable_stream_batch(
+        &self,
+        make_batch: DurableStreamBatchBuilder,
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+        self.oplog.add_durable_stream_batch(make_batch).await
     }
 
     async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {

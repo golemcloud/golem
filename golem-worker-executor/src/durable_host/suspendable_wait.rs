@@ -194,14 +194,14 @@ where
     .await
 }
 
-struct SuspendableWaitRegistration {
+pub(crate) struct SuspendableWaitRegistration {
     wait_id: u64,
     deadline: Option<DateTime<Utc>>,
     suspendable_waits: Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>>,
 }
 
 impl SuspendableWaitRegistration {
-    fn new(
+    pub(crate) fn new(
         wait_id: u64,
         deadline: Option<DateTime<Utc>>,
         suspendable_waits: Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>>,

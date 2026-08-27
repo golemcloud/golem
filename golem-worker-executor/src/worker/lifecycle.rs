@@ -207,8 +207,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             await_interruption.recv().await.unwrap();
         }
 
-        // Dropping the resident worker also closes live connections associated with it.
-        worker.remove_from_active_agents().await;
+        if decision == InterruptDecision::Interrupt {
+            // Dropping the resident worker also closes live connections associated with it.
+            worker.remove_from_active_agents().await;
+        }
         Ok(())
     }
 
