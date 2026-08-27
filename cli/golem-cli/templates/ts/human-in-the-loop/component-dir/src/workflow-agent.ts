@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import { defineAgent, method, http, clientFor, createPromise, awaitPromise } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, http, createPromise, awaitPromise } from '@golemcloud/golem-ts-sdk';
 import { HumanAgent, encodePromiseId } from './human-agent.js';
 
 // A typed RPC client factory for the remote HumanAgent (wasm-RPC under the hood).
-const humanClient = clientFor(HumanAgent);
+const humanClient = HumanAgent.client;
 
 // The workflow side of the loop: it creates a promise, hands it to a human for
 // approval, then PAUSES until the promise is completed — the classic
@@ -26,7 +26,7 @@ export const WorkflowAgentImpl = WorkflowAgent.implement({
 
       // 2. Register the pending approval with the human (remote agent call).
       //    Normally you would surface this in a UI, email, etc.
-      await humanClient({ username: approver }).requestApproval({
+      await humanClient.get({ username: approver }).requestApproval({
         workflowId: this.workflowId,
         promiseId: encodePromiseId(approvalPromiseId),
       });

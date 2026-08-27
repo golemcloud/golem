@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineAgent, method, http, s, clientFor } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, http, s } from '@golemcloud/golem-ts-sdk';
 
 import * as common from 'common/lib';
 
@@ -48,7 +48,7 @@ export const BenchmarkAgentImpl = BenchmarkAgent.implement({
     },
 });
 
-const benchmarkClient = clientFor(BenchmarkAgent);
+const benchmarkClient = BenchmarkAgent.client;
 
 export const RpcBenchmarkAgent = defineAgent({
     name: 'RpcBenchmarkAgent',
@@ -65,16 +65,16 @@ export const RpcBenchmarkAgentImpl = RpcBenchmarkAgent.implement({
     init: ({ id }) => ({ name: id.name }),
     methods: {
         async echo({ message }) {
-            return await benchmarkClient({ name: this.name }).echo({ message });
+            return await benchmarkClient.get({ name: this.name }).echo({ message });
         },
         async largeInput({ input }) {
-            return await benchmarkClient({ name: this.name }).largeInput({ input });
+            return await benchmarkClient.get({ name: this.name }).largeInput({ input });
         },
         async cpuIntensive({ length }) {
-            return await benchmarkClient({ name: this.name }).cpuIntensive({ length });
+            return await benchmarkClient.get({ name: this.name }).cpuIntensive({ length });
         },
         async oplogHeavy({ length }) {
-            return await benchmarkClient({ name: this.name }).oplogHeavy({ length });
+            return await benchmarkClient.get({ name: this.name }).oplogHeavy({ length });
         },
     },
 });

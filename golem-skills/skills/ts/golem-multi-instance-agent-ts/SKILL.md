@@ -23,21 +23,20 @@ agent-type(param1, param2)
 
 ## Creating and Addressing Phantom Agents (RPC)
 
-You address another agent with a typed RPC client built from its `defineAgent` definition via `clientFor(Def)`. The returned factory takes the id record and an **optional phantom UUID**:
+You address another agent through the typed client factory attached to its `defineAgent` definition:
 
 ```typescript
-clientFor(Def)(id)                       // non-phantom: same agent for the same id
-clientFor(Def)(id, phantomUuid)          // phantom: addressed by id + a specific UUID
-clientFor(Def)(id, phantomUuid, config)  // + per-call non-secret config overrides (config-on-RPC)
-clientFor(Def).newPhantom(id, config?)    // new phantom with a generated UUID
+Def.client.get(id, config?)                         // non-phantom
+Def.client.getPhantom(id, phantomUuid, config?)     // known phantom
+Def.client.newPhantom(id, config?)                  // new phantom with generated identity
 ```
 
 | Call | Description |
 |--------|-------------|
-| `client(id)` | Get or create a **non-phantom** agent identified solely by its id record |
-| `client.newPhantom(id)` | Create a **new phantom** agent and return `{ client, phantomId }` |
-| `client(id, savedUuid)` | Get or create a phantom agent with a **specific** UUID |
-| `client(id, undefined, { foo })` | Override the target's non-secret config for this call (secrets stay host-provisioned) |
+| `Def.client.get(id)` | Get or create a **non-phantom** agent identified solely by its id record |
+| `Def.client.newPhantom(id)` | Create a **new phantom** agent and return `{ client, agentId, phantomId }` |
+| `Def.client.getPhantom(id, savedUuid)` | Get or create a phantom agent with a **specific** UUID |
+| `Def.client.get(id, { foo })` | Override the target's non-secret config for this call (secrets stay host-provisioned) |
 
 Each method on the client has, besides the awaited call: `.trigger(input)` (fire-and-forget) and `.schedule(at, input) → CancellationToken`. Cancel an awaited invocation with the normal call shape's trailing `{ signal }` option: `method(input, { signal })`, or `method({ signal })` for a method with no input.
 
@@ -45,7 +44,7 @@ Each method on the client has, besides the awaited call: `.trigger(input)` (fire
 
 ```typescript
 import { z } from 'zod';
-import { defineAgent, method, clientFor, Uuid } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method, Uuid } from '@golemcloud/golem-ts-sdk';
 
 export const Counter = defineAgent({
     name: 'Counter',
@@ -64,10 +63,10 @@ Counter.implement({
 });
 
 // --- In another agent, using the RPC client factory: ---
-const counters = clientFor(Counter);
+const counters = Counter.client;
 
 // Non-phantom: always the same agent for the same name
-const shared = counters({ name: 'shared' });
+const shared = counters.get({ name: 'shared' });
 await shared.increment();
 
 // New phantom: the factory returns the client and its generated UUID.
@@ -78,10 +77,10 @@ const { client: phantom2 } = counters.newPhantom({ name: 'shared' });
 // phantom1 and phantom2 are different agents, both with name="shared"
 
 // Reconnect to an existing phantom by its UUID.
-const samePhantom = counters({ name: 'shared' }, phantomId1);
+const samePhantom = counters.getPhantom({ name: 'shared' }, phantomId1);
 
 // A persisted UUID string can be restored later.
-const restoredPhantom = counters(
+const restoredPhantom = counters.getPhantom(
     { name: 'shared' },
     Uuid.parse(savedUuidString),
 );
@@ -92,7 +91,7 @@ Persist the phantom UUID yourself (as a string via `uuid.toString()`, reparsed w
 ### Phantoms in Another Component
 
 A generated durable guest client uses static `get`, `getPhantom`, and
-`newPhantom` methods, with flattened id parameters rather than the `clientFor`
+`newPhantom` methods, with flattened id parameters rather than the definition-client
 id record. For example:
 
 ```typescript
@@ -104,8 +103,8 @@ const freshPhantom = CounterAgent.newPhantom('shared');
 When the target declares local config, the generated client also provides
 `getWithConfig`, `getPhantomWithConfig`, and `newPhantomWithConfig`. See the
 `golem-call-another-agent-ts` skill for cross-component manifest, TypeScript
-source-path, and import setup. The `clientFor` forms above remain correct within
-the component that defines the agent.
+source-path, and import setup. The definition-client forms above are for calls
+within the component that defines the agent.
 
 ## Querying the Phantom ID from Inside an Agent
 
