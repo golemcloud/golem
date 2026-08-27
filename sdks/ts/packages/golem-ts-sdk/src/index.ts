@@ -199,7 +199,7 @@ export {
   ReflectedAgentClientFactory,
   ReflectedAgentMethod,
   dynamicClient,
-  getAgentTypeFor,
+  getAgentTypeByAgentId,
   getAllAgentTypes,
   getAgentType as getReflectedAgentType,
 } from './reflection';

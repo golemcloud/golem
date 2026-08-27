@@ -11,9 +11,9 @@ declare module 'golem:agent/host@2.0.0' {
    */
   export function getAgentType(agentTypeName: string): RegisteredAgentType | undefined;
   /**
-   * Gets the registered agent type associated with an existing agent instance.
+   * Gets the registered agent type used by an existing agent, identified by its agent ID.
    */
-  export function getAgentTypeFor(agentId: AgentId): RegisteredAgentType | undefined;
+  export function getAgentTypeByAgentId(agentId: AgentId): RegisteredAgentType | undefined;
   /**
    * Constructs a string agent-id from the agent type and its constructor parameters
    * and an optional phantom ID.
@@ -40,17 +40,18 @@ declare module 'golem:agent/host@2.0.0' {
   export function getConfigValue(key: string[], expected: SchemaGraph): SchemaValueTree;
   export class WasmRpc {
     /**
-     * Creates a fail-fast RPC client connecting to the given target agent.
-     * This constructor is intended for statically generated clients, where a
-     * mismatch between the generated client and the deployed agent is a
-     * terminal failure rather than a recoverable result.
+     * Creates an RPC client connecting to the given target agent.
+     * `constructor` is a value tree whose root encodes the target agent
+     * constructor's parameter list. This fail-fast form traps if the client
+     * cannot be created and is intended for statically generated clients.
      */
     constructor(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]);
     /**
      * Creates an RPC client connecting to the given target agent.
      * `constructor` is a value tree whose root encodes the target agent
-     * constructor's parameter list. This fallible form is intended for
-     * reflective and other dynamic clients that can adapt to the error.
+     * constructor's parameter list. This fallible form returns an RPC error
+     * if the client cannot be created and is intended for reflective and
+     * other dynamic clients.
      * @throws RpcError
      */
     static create(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]): WasmRpc;

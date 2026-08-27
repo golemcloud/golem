@@ -30,14 +30,15 @@ use golem_common::model::agent::{
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::oplog::host_functions::{
-    GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAgentTypeFor,
+    GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAgentTypeByAgentId,
     GolemAgentGetAllAgentTypes, GolemAgentGetConfigValue,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestGolemAgentGetAgentTypeFor,
-    HostRequestGolemAgentGetConfigValue, HostRequestGolemApiPromiseId, HostRequestNoInput,
-    HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
-    HostResponseGolemAgentGetConfigValue, HostResponseGolemAgentWebhookUrl,
+    DurableFunctionType, HostRequestGolemAgentGetAgentType,
+    HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemAgentGetConfigValue,
+    HostRequestGolemApiPromiseId, HostRequestNoInput, HostResponseGolemAgentAgentType,
+    HostResponseGolemAgentAgentTypes, HostResponseGolemAgentGetConfigValue,
+    HostResponseGolemAgentWebhookUrl,
 };
 use golem_common::model::{AgentId, OwnedAgentId, PromiseId};
 use golem_common::schema::agent::wit::{encode_registered_agent_type, wire};
@@ -405,18 +406,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Durable lookup of the registered agent type associated with an existing
     /// agent instance. The worker's persisted component revision selects the
     /// schema without exposing revision identifiers through the host API.
-    pub(crate) async fn get_agent_type_for_schema_model(
+    pub(crate) async fn get_agent_type_by_agent_id(
         &mut self,
         agent_id: AgentId,
     ) -> anyhow::Result<Option<RegisteredAgentTypeSchema>> {
-        let mut handle = DurableCallSession::<GolemAgentGetAgentTypeFor, NotCancellable>::start(
-            self,
-            HostRequestGolemAgentGetAgentTypeFor {
-                agent_id: agent_id.clone(),
-            },
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let mut handle =
+            DurableCallSession::<GolemAgentGetAgentTypeByAgentId, NotCancellable>::start(
+                self,
+                HostRequestGolemAgentGetAgentTypeByAgentId {
+                    agent_id: agent_id.clone(),
+                },
+                DurableFunctionType::ReadRemote,
+            )
+            .await?;
 
         let response = 'result: {
             if !handle.is_live() {
@@ -547,11 +549,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .transpose()
     }
 
-    async fn get_agent_type_for(
+    async fn get_agent_type_by_agent_id(
         &mut self,
         agent_id: core_wire::AgentId,
     ) -> anyhow::Result<Option<wire::RegisteredAgentType>> {
-        self.get_agent_type_for_schema_model(agent_id.into())
+        DurableWorkerCtx::get_agent_type_by_agent_id(self, agent_id.into())
             .await?
             .map(encode_registered_agent_type_schema_wire)
             .transpose()
