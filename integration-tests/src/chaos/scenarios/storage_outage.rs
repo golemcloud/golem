@@ -425,8 +425,8 @@ pub async fn run(
     }
     if skipped > 0 {
         attention_extra.push(Note::attention(format!(
-            "S16 skipped {skipped} registration ticks because targets still had their budget of \
-             {} in flight — the offered rate was clamped by the platform, so the phase counts \
+            "{code} skipped {skipped} registration ticks because targets still had their budget \
+             of {} in flight — the offered rate was clamped by the platform, so the phase counts \
              understate what the run intended to submit",
             scheduled::MAX_IN_FLIGHT_PER_TARGET
         )));
