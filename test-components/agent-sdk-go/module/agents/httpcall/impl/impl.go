@@ -12,6 +12,7 @@ import (
 	"agent-sdk-go/agents/httpcall"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/retry"
 )
 
 type state struct{}
@@ -27,6 +28,13 @@ var agent = golem.Implement(httpcall.Agent, func(httpcall.Id) *state { return &s
 
 func init() {
 	golem.Handle(agent, httpcall.Callback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
+		return fetch(in.Payload)
+	})
+	golem.Handle(agent, httpcall.RetryCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
+		// Retry the request while the endpoint answers 500; the host re-issues it
+		// transparently, so the handler just sees the eventual success.
+		pol := retry.Immediate().MaxRetries(10).OnlyWhen(retry.StatusCode.OneOf(500))
+		defer retry.With(retry.Named("flaky-endpoint", pol).WithPriority(10))()
 		return fetch(in.Payload)
 	})
 	golem.Handle(agent, httpcall.AtomicCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {

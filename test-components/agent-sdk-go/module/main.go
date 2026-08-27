@@ -17,6 +17,7 @@ import (
 	_ "agent-sdk-go/agents/richtypes/impl"
 	_ "agent-sdk-go/agents/rpccaller/impl"
 	_ "agent-sdk-go/agents/saga/impl"
+	_ "agent-sdk-go/agents/scheduler/impl"
 	_ "agent-sdk-go/agents/snapstate/impl"
 	_ "agent-sdk-go/agents/wsecho/impl"
 
