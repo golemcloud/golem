@@ -26,3 +26,4 @@ export * from './builder';
 export * from './wit';
 export * from './validation';
 export * from './fingerprint';
+export * from './freeze';

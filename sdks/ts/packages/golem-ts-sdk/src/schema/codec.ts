@@ -24,6 +24,7 @@ import {
   SchemaGraph,
   SchemaType,
   SchemaValue,
+  freezeSchemaValue,
 } from '../internal/schema-model';
 import { GuestSecretHandle } from '../internal/schema-model/secretHandle';
 import { SECRET_INTERNAL } from '../internal/schema-model/secretInternal';
@@ -121,7 +122,7 @@ function freezeCodec(
   if (seenCodecs.has(codec)) return;
   seenCodecs.add(codec);
 
-  freezeGraphValue(codec.graph, seenGraphValues);
+  freezeSchemaValue(codec.graph, seenGraphValues);
   if (codec.fields) {
     codec.fields.forEach((entry) => {
       freezeCodec(entry.codec, seenCodecs, seenGraphValues);
@@ -135,36 +136,6 @@ function freezeCodec(
     },
   );
   Object.freeze(codec);
-}
-
-function freezeGraphValue(value: unknown, seen: WeakSet<object>): void {
-  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return;
-  if (seen.has(value)) return;
-  seen.add(value);
-
-  if (value instanceof Map) {
-    value.forEach((entryValue, key) => {
-      freezeGraphValue(key, seen);
-      freezeGraphValue(entryValue, seen);
-    });
-    Object.defineProperties(value, {
-      set: { value: immutableMapMutation },
-      delete: { value: immutableMapMutation },
-      clear: { value: immutableMapMutation },
-    });
-    Object.freeze(value);
-    return;
-  }
-
-  Reflect.ownKeys(value).forEach((key) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor && 'value' in descriptor) freezeGraphValue(descriptor.value, seen);
-  });
-  Object.freeze(value);
-}
-
-function immutableMapMutation(): never {
-  throw new TypeError('Cannot mutate an immutable codec map');
 }
 
 /**
