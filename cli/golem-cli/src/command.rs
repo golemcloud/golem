@@ -1599,8 +1599,9 @@ pub mod worker {
             /// `/data/state.json`). Always starts with `/`.
             path: String,
             /// Local (host) path (including filename) to save the file contents
-            /// to. If omitted, the file is saved in the current directory using
-            /// the guest file basename, or output.bin if no basename is available.
+            /// to. Use `-` to write the raw bytes to stdout. If omitted, the file
+            /// is saved in the current directory using the guest file basename,
+            /// or output.bin if no basename is available.
             #[arg(long)]
             output: Option<String>,
         },

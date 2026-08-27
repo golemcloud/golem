@@ -353,6 +353,9 @@ pub const AGENT_FILE_CONTENTS: &str = "Examples:
   # Save the contents to a local file
   golem-cli agent file-contents 'CounterAgent(\"c1\")' /data/log.txt --output ./log.txt
 
+  # Stream the raw file bytes to stdout
+  golem-cli agent file-contents 'CounterAgent(\"c1\")' /data/log.txt --output -
+
   # Machine-readable metadata about the saved file
   golem-cli --format json agent file-contents 'CounterAgent(\"c1\")' /data/log.txt --output ./log.txt";
 
