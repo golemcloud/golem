@@ -283,6 +283,7 @@ async fn proxy_public_invocation_session(
     };
 
     let state = Arc::new(tokio::sync::Mutex::new(state));
+    let request_guard = request_sender.clone();
     let requests = tokio::spawn(forward_public_requests(
         websocket_stream,
         request_sender,
@@ -296,7 +297,7 @@ async fn proxy_public_invocation_session(
     ));
     drop(websocket_sender);
 
-    supervise_public_invocation_session(requests, responses, writer).await;
+    supervise_public_invocation_session(requests, responses, writer, request_guard).await;
 }
 
 async fn receive_public_invocation_start_while_writing<S>(
@@ -419,37 +420,100 @@ async fn forward_websocket_messages<S>(
 }
 
 async fn supervise_public_invocation_session(
-    mut requests: tokio::task::JoinHandle<()>,
+    requests: tokio::task::JoinHandle<bool>,
+    responses: tokio::task::JoinHandle<()>,
+    writer: tokio::task::JoinHandle<()>,
+    request_guard: tokio::sync::mpsc::Sender<InvocationRequest>,
+) {
+    supervise_public_invocation_session_with_grace_period(
+        requests,
+        responses,
+        writer,
+        request_guard,
+        INVOCATION_SESSION_STAGING_ADMISSION_TIMEOUT,
+    )
+    .await;
+}
+
+async fn supervise_public_invocation_session_with_grace_period(
+    mut requests: tokio::task::JoinHandle<bool>,
     mut responses: tokio::task::JoinHandle<()>,
     mut writer: tokio::task::JoinHandle<()>,
+    request_guard: tokio::sync::mpsc::Sender<InvocationRequest>,
+    response_grace_period: std::time::Duration,
 ) {
     enum CompletedPump {
-        Requests,
+        Requests(bool),
         Responses,
         Writer,
     }
     let completed = tokio::select! {
-        _ = &mut requests => CompletedPump::Requests,
+        result = &mut requests => CompletedPump::Requests(result.unwrap_or(false)),
         _ = &mut responses => CompletedPump::Responses,
         _ = &mut writer => CompletedPump::Writer,
     };
     match completed {
-        CompletedPump::Requests => {
-            responses.abort();
-            let _ = responses.await;
+        CompletedPump::Requests(forwarded_cancellation) => {
+            finish_internal_session_after_request_pump(
+                forwarded_cancellation,
+                &mut responses,
+                request_guard,
+                response_grace_period,
+            )
+            .await;
             let _ = writer.await;
         }
         CompletedPump::Responses => {
+            drop(request_guard);
             requests.abort();
             let _ = requests.await;
             let _ = writer.await;
         }
         CompletedPump::Writer => {
-            requests.abort();
-            responses.abort();
-            let _ = requests.await;
-            let _ = responses.await;
+            let forwarded_cancellation = match tokio::time::timeout(
+                INVOCATION_SESSION_STAGING_ADMISSION_TIMEOUT,
+                &mut requests,
+            )
+            .await
+            {
+                Ok(Ok(forwarded_cancellation)) => forwarded_cancellation,
+                Ok(Err(_)) => false,
+                Err(_) => {
+                    requests.abort();
+                    let _ = requests.await;
+                    false
+                }
+            };
+            finish_internal_session_after_request_pump(
+                forwarded_cancellation,
+                &mut responses,
+                request_guard,
+                response_grace_period,
+            )
+            .await;
         }
+    }
+}
+
+async fn finish_internal_session_after_request_pump(
+    forwarded_cancellation: bool,
+    responses: &mut tokio::task::JoinHandle<()>,
+    request_guard: tokio::sync::mpsc::Sender<InvocationRequest>,
+    response_grace_period: std::time::Duration,
+) {
+    if !forwarded_cancellation {
+        drop(request_guard);
+        responses.abort();
+        let _ = responses.await;
+        return;
+    }
+    let response_completed = tokio::time::timeout(response_grace_period, &mut *responses)
+        .await
+        .is_ok();
+    drop(request_guard);
+    if !response_completed {
+        responses.abort();
+        let _ = responses.await;
     }
 }
 
@@ -458,7 +522,8 @@ async fn forward_public_requests<S>(
     request_sender: tokio::sync::mpsc::Sender<InvocationRequest>,
     websocket_sender: tokio::sync::mpsc::Sender<Message>,
     state: Arc<tokio::sync::Mutex<InvocationSessionState>>,
-) where
+) -> bool
+where
     S: futures::Stream<Item = std::io::Result<Message>> + Unpin,
 {
     forward_public_requests_with_timeout(
@@ -468,7 +533,7 @@ async fn forward_public_requests<S>(
         state,
         INVOCATION_SESSION_STAGING_ADMISSION_TIMEOUT,
     )
-    .await;
+    .await
 }
 
 async fn forward_public_requests_with_timeout<S>(
@@ -477,11 +542,13 @@ async fn forward_public_requests_with_timeout<S>(
     websocket_sender: tokio::sync::mpsc::Sender<Message>,
     state: Arc<tokio::sync::Mutex<InvocationSessionState>>,
     staging_admission_timeout: std::time::Duration,
-) where
+) -> bool
+where
     S: futures::Stream<Item = std::io::Result<Message>> + Unpin,
 {
     let (staging_sender, mut staging_receiver) =
         tokio::sync::mpsc::channel(INVOCATION_SESSION_CHANNEL_CAPACITY);
+    let forwarded_cancellation = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let read_requests = read_public_requests(
         websocket_stream,
         staging_sender,
@@ -489,8 +556,13 @@ async fn forward_public_requests_with_timeout<S>(
         state,
         staging_admission_timeout,
     );
+    let forwarder_cancellation = forwarded_cancellation.clone();
     let forward_requests = async move {
         while let Some(request) = staging_receiver.recv().await {
+            let is_cancellation = matches!(
+                &request.request,
+                Some(invocation_request::Request::StreamCancel(_))
+            );
             if request_sender.send(request).await.is_err() {
                 try_queue_websocket_close(
                     &websocket_sender,
@@ -499,13 +571,23 @@ async fn forward_public_requests_with_timeout<S>(
                 );
                 return;
             }
+            if is_cancellation {
+                forwarder_cancellation.store(true, std::sync::atomic::Ordering::Release);
+            }
         }
     };
     tokio::pin!(read_requests, forward_requests);
     tokio::select! {
-        _ = &mut read_requests => {}
+        _ = &mut read_requests => {
+            let _ = tokio::time::timeout(
+                staging_admission_timeout,
+                &mut forward_requests,
+            )
+            .await;
+        }
         _ = &mut forward_requests => {}
     }
+    forwarded_cancellation.load(std::sync::atomic::Ordering::Acquire)
 }
 
 async fn read_public_requests<S>(
@@ -574,8 +656,13 @@ async fn read_public_requests<S>(
             }
             next = websocket_stream.next() => {
                 match next {
-                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return,
-                    Some(message) => pending_message = Some(message),
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => {
+                        let _ = admission.await;
+                        return;
+                    }
+                    Some(message) => {
+                        pending_message = Some(message);
+                    }
                 }
                 if !matches!(admission.await, Ok(Ok(()))) {
                     return;
@@ -592,6 +679,7 @@ async fn forward_internal_responses<S>(
 ) where
     S: futures::Stream<Item = std::result::Result<InvocationResponse, tonic::Status>> + Unpin,
 {
+    let mut websocket_open = true;
     while let Some(response) = responses.next().await {
         let response = match response {
             Ok(response) => response,
@@ -610,25 +698,31 @@ async fn forward_internal_responses<S>(
                 return;
             }
         };
-        if websocket_sender
-            .send(Message::binary(response.encode_to_vec()))
-            .await
-            .is_err()
+        if websocket_open
+            && websocket_sender
+                .send(Message::binary(response.encode_to_vec()))
+                .await
+                .is_err()
         {
-            return;
+            websocket_open = false;
         }
         if complete {
-            queue_websocket_close(&websocket_sender, CloseCode::Normal, "session complete").await;
+            if websocket_open {
+                queue_websocket_close(&websocket_sender, CloseCode::Normal, "session complete")
+                    .await;
+            }
             return;
         }
     }
 
-    queue_websocket_close(
-        &websocket_sender,
-        CloseCode::Error,
-        "internal invocation response stream ended before session completion",
-    )
-    .await;
+    if websocket_open {
+        queue_websocket_close(
+            &websocket_sender,
+            CloseCode::Error,
+            "internal invocation response stream ended before session completion",
+        )
+        .await;
+    }
 }
 
 async fn queue_websocket_close(
@@ -809,7 +903,8 @@ mod tests {
         forward_public_requests_with_timeout, forward_websocket_messages,
         invocation_session_websocket_config, queue_invocation_response,
         receive_public_invocation_start, receive_public_invocation_start_while_writing,
-        rejection_reason, supervise_public_invocation_session, trusted_tail_request,
+        rejection_reason, supervise_public_invocation_session,
+        supervise_public_invocation_session_with_grace_period, trusted_tail_request,
     };
     use crate::service::worker::WorkerServiceError;
     use futures::StreamExt;
@@ -906,6 +1001,64 @@ mod tests {
                     test_mapping(*stream_id, StreamMappingRole::Input, &idempotency_key)
                 })
                 .collect(),
+        }
+    }
+
+    fn accepted_public_input_state(stream_id: u64) -> InvocationSessionState {
+        use golem_api_grpc::proto::golem::schema::{
+            SchemaValue, SchemaValueStreamReference, schema_value,
+        };
+
+        let idempotency_key = IdempotencyKey {
+            value: "cancel-before-close".to_string(),
+        };
+        let start = PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::Start(
+                PublicInvocationStart {
+                    application_name: "app".to_string(),
+                    environment_name: "env".to_string(),
+                    agent_type_name: "agent".to_string(),
+                    constructor_parameters: Some(SchemaValue {
+                        value: Some(schema_value::Value::RecordValue(Default::default())),
+                    }),
+                    method_name: "run".to_string(),
+                    method_parameters: Some(SchemaValue {
+                        value: Some(schema_value::Value::StreamReference(
+                            SchemaValueStreamReference { stream_id },
+                        )),
+                    }),
+                    idempotency_key: Some(idempotency_key.clone()),
+                    ..Default::default()
+                },
+            )),
+        };
+        let accepted = InvocationResponse {
+            response: Some(invocation_response::Response::Accepted(test_acceptance(
+                test_agent_id("agent"),
+                idempotency_key,
+                &[stream_id],
+            ))),
+        };
+        let mut state = InvocationSessionState::default();
+        state.validate_public_request(&start).unwrap();
+        state.validate_response(&accepted).unwrap();
+        state
+    }
+
+    fn malformed_input_cancellation(stream_id: u64) -> PublicInvocationRequest {
+        PublicInvocationRequest {
+            request: Some(public_invocation_request::Request::StreamCancel(
+                StreamCancel {
+                    transport_stream_id: stream_id,
+                    producer_sequence: 0,
+                    role: StreamCancelRole::InputProducer as i32,
+                    reason: StreamCancelReason::Protocol as i32,
+                    details: Some("malformed stdin".to_string()),
+                    durable_stream_id: Some(test_uuid(100 + stream_id)),
+                    epoch: 1,
+                    durable_offset: Vec::new(),
+                },
+            )),
         }
     }
 
@@ -1128,6 +1281,189 @@ mod tests {
             .await
             .expect("saturated WebSocket output hid the client disconnect")
             .unwrap();
+    }
+
+    #[test]
+    async fn websocket_close_drains_an_admitted_input_cancellation() {
+        let stream_id = 7;
+        let (websocket_client, websocket_stream) =
+            futures::channel::mpsc::unbounded::<std::io::Result<Message>>();
+        let (internal_sender, mut internal_receiver) = tokio::sync::mpsc::channel(1);
+        let (websocket_sender, _websocket_receiver) = tokio::sync::mpsc::channel(1);
+        let requests = tokio::spawn(forward_public_requests(
+            websocket_stream,
+            internal_sender,
+            websocket_sender,
+            Arc::new(tokio::sync::Mutex::new(accepted_public_input_state(
+                stream_id,
+            ))),
+        ));
+        websocket_client
+            .unbounded_send(Ok(Message::binary(
+                malformed_input_cancellation(stream_id).encode_to_vec(),
+            )))
+            .unwrap();
+        websocket_client
+            .unbounded_send(Ok(Message::close()))
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), requests)
+            .await
+            .expect("request pump did not close after draining cancellation")
+            .unwrap();
+        let forwarded = internal_receiver
+            .recv()
+            .await
+            .expect("admitted input cancellation was dropped on WebSocket close");
+        assert!(matches!(
+            forwarded.request,
+            Some(invocation_request::Request::StreamCancel(StreamCancel {
+                transport_stream_id: actual_stream_id,
+                role,
+                reason,
+                ..
+            })) if actual_stream_id == stream_id
+                && role == StreamCancelRole::InputProducer as i32
+                && reason == StreamCancelReason::Protocol as i32
+        ));
+        assert!(internal_receiver.recv().await.is_none());
+    }
+
+    #[test]
+    async fn websocket_close_keeps_the_internal_session_alive_until_cancellation_is_consumed() {
+        let stream_id = 7;
+        let (websocket_client, websocket_stream) =
+            futures::channel::mpsc::unbounded::<std::io::Result<Message>>();
+        let (internal_sender, mut internal_receiver) = tokio::sync::mpsc::channel(1);
+        let request_guard = internal_sender.clone();
+        let (websocket_sender, _websocket_receiver) = tokio::sync::mpsc::channel(1);
+        let requests = tokio::spawn(forward_public_requests(
+            websocket_stream,
+            internal_sender,
+            websocket_sender,
+            Arc::new(tokio::sync::Mutex::new(accepted_public_input_state(
+                stream_id,
+            ))),
+        ));
+        websocket_client
+            .unbounded_send(Ok(Message::binary(
+                malformed_input_cancellation(stream_id).encode_to_vec(),
+            )))
+            .unwrap();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            websocket_client
+                .unbounded_send(Ok(Message::close()))
+                .unwrap();
+        });
+
+        let (consumed_sender, consumed_receiver) = tokio::sync::oneshot::channel();
+        let responses = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            let forwarded = internal_receiver
+                .recv()
+                .await
+                .expect("the internal request stream closed before cancellation");
+            assert!(matches!(
+                forwarded.request,
+                Some(invocation_request::Request::StreamCancel(StreamCancel {
+                    transport_stream_id: actual_stream_id,
+                    ..
+                })) if actual_stream_id == stream_id
+            ));
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            assert!(
+                !internal_receiver.is_closed(),
+                "the internal request transport closed before cancellation took effect"
+            );
+            let _ = consumed_sender.send(());
+        });
+        let writer = tokio::spawn(async {});
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            supervise_public_invocation_session(requests, responses, writer, request_guard),
+        )
+        .await
+        .expect("session supervision did not drain the internal request stream");
+        consumed_receiver
+            .await
+            .expect("request completion cancelled internal cancellation delivery");
+    }
+
+    #[test]
+    async fn websocket_close_returns_after_forwarded_cancellation_is_consumed() {
+        let stream_id = 7;
+        let (websocket_client, websocket_stream) =
+            futures::channel::mpsc::unbounded::<std::io::Result<Message>>();
+        let (internal_sender, mut internal_receiver) = tokio::sync::mpsc::channel(1);
+        let request_guard = internal_sender.clone();
+        let (websocket_sender, _websocket_receiver) = tokio::sync::mpsc::channel(1);
+        let requests = tokio::spawn(forward_public_requests(
+            websocket_stream,
+            internal_sender,
+            websocket_sender,
+            Arc::new(tokio::sync::Mutex::new(accepted_public_input_state(
+                stream_id,
+            ))),
+        ));
+        websocket_client
+            .unbounded_send(Ok(Message::binary(
+                malformed_input_cancellation(stream_id).encode_to_vec(),
+            )))
+            .unwrap();
+        websocket_client
+            .unbounded_send(Ok(Message::close()))
+            .unwrap();
+
+        let cancellation_consumed = tokio::spawn(async move {
+            let request = internal_receiver
+                .recv()
+                .await
+                .expect("cancellation was not forwarded");
+            assert!(matches!(
+                request.request,
+                Some(invocation_request::Request::StreamCancel(_))
+            ));
+        });
+        let responses = tokio::spawn(std::future::pending());
+        let writer = tokio::spawn(async {});
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            supervise_public_invocation_session_with_grace_period(
+                requests,
+                responses,
+                writer,
+                request_guard,
+                std::time::Duration::from_millis(25),
+            ),
+        )
+        .await
+        .expect("transport detach waited forever after cancellation was consumed");
+        cancellation_consumed.await.unwrap();
+    }
+
+    #[test]
+    async fn request_completion_without_cancellation_does_not_wait_for_internal_responses() {
+        let (request_sender, _request_receiver) = tokio::sync::mpsc::channel(1);
+        let request_guard = request_sender.clone();
+        let (websocket_sender, _websocket_receiver) = tokio::sync::mpsc::channel(1);
+        let requests = tokio::spawn(forward_public_requests(
+            tokio_stream::empty(),
+            request_sender,
+            websocket_sender,
+            Arc::new(tokio::sync::Mutex::new(InvocationSessionState::default())),
+        ));
+        let responses = tokio::spawn(std::future::pending());
+        let writer = tokio::spawn(async {});
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            supervise_public_invocation_session(requests, responses, writer, request_guard),
+        )
+        .await
+        .expect("a plain WebSocket close left the proxy waiting for internal responses");
     }
 
     #[test]
@@ -1767,9 +2103,13 @@ mod tests {
                 .await
                 .unwrap();
         });
+        let (request_guard, _request_receiver) = tokio::sync::mpsc::channel(1);
 
         let supervisor = tokio::spawn(supervise_public_invocation_session(
-            requests, responses, writer,
+            requests,
+            responses,
+            writer,
+            request_guard,
         ));
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
         assert!(
@@ -1837,10 +2177,11 @@ mod tests {
                 .await
                 .unwrap();
         });
+        let (request_guard, _request_receiver) = tokio::sync::mpsc::channel(1);
 
         tokio::time::timeout(
             std::time::Duration::from_millis(500),
-            supervise_public_invocation_session(requests, responses, writer),
+            supervise_public_invocation_session(requests, responses, writer, request_guard),
         )
         .await
         .expect("permanently stalled writer exceeded its progress deadline");

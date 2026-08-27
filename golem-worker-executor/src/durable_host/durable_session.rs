@@ -1499,12 +1499,12 @@ impl DurableSessionStreams {
         first_sequence: u64,
         payload: StreamItemsPayloadV1,
     ) -> Result<
-        (
+        Option<(
             u64,
             u64,
             golem_common::model::durable_stream::StreamOffsetV1,
             Vec<StreamSessionMappingRecordV1>,
-        ),
+        )>,
         String,
     > {
         let _session_guard = self.session_lock.lock().await;
@@ -1620,7 +1620,7 @@ impl DurableSessionStreams {
             }
             StreamItemsPayloadV1::PackedU8(bytes) => StreamItemsPayloadV1::PackedU8(bytes.clone()),
         };
-        let outcome = self
+        let outcome = match self
             .producer
             .write_items_with_nested(
                 handle.stream_id,
@@ -1629,7 +1629,13 @@ impl DurableSessionStreams {
                 nested_requests,
             )
             .await
-            .map_err(|error| error.to_string())?;
+        {
+            Ok(outcome) => outcome,
+            Err(error) if discards_input_after_terminal(&error, &self.session_key) => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error.to_string()),
+        };
         let mut nested_mappings = Vec::with_capacity(nested_transport_ids.len());
         if !nested_transport_ids.is_empty() {
             let nested_handles = self
@@ -1677,29 +1683,33 @@ impl DurableSessionStreams {
         let highest_contiguous_sequence = first_sequence
             .checked_add(logical_item_count - 1)
             .ok_or_else(|| "durable input sequence overflow".to_string())?;
-        Ok((
+        Ok(Some((
             highest_contiguous_sequence,
             logical_item_count,
             resulting_offset,
             nested_mappings,
-        ))
+        )))
     }
 
     pub(crate) async fn end_input(
         &self,
         transport_stream_id: u64,
         sequence: u64,
-    ) -> Result<golem_common::model::durable_stream::StreamOffsetV1, String> {
+    ) -> Result<Option<golem_common::model::durable_stream::StreamOffsetV1>, String> {
         let _session_guard = self.session_lock.lock().await;
         self.ensure_current_attachment().await?;
         let handle = self
             .handle(transport_stream_id)
             .ok_or_else(|| format!("unknown durable input stream {transport_stream_id}"))?;
-        self.producer
+        match self
+            .producer
             .end(handle.stream_id, sequence, StreamEndResultV1::Ok)
             .await
-            .map(|outcome| outcome.value)
-            .map_err(|error| error.to_string())
+        {
+            Ok(outcome) => Ok(Some(outcome.value)),
+            Err(error) if discards_input_after_terminal(&error, &self.session_key) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     pub(crate) async fn cancel_stream(
@@ -4058,13 +4068,27 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                 ))));
             }
             CommittedProducerStreamEventPayloadV1::Cancel {
-                role,
+                role: StreamCancelRoleV1::InputProducer | StreamCancelRoleV1::OutputProducer,
+                ..
+            } => {
+                self.finished = true;
+                return Poll::Ready(Ok(StreamResult::Dropped));
+            }
+            CommittedProducerStreamEventPayloadV1::Cancel {
+                role: StreamCancelRoleV1::InputConsumer | StreamCancelRoleV1::OutputConsumer,
+                ..
+            } => {
+                self.finished = true;
+                return Poll::Ready(Ok(StreamResult::Cancelled));
+            }
+            CommittedProducerStreamEventPayloadV1::Cancel {
+                role: StreamCancelRoleV1::System,
                 reason,
                 details,
             } => {
                 self.finished = true;
                 return Poll::Ready(Err(wasmtime::Error::msg(format!(
-                    "durable stream cancelled ({role:?}, {reason:?}): {}",
+                    "durable stream cancelled (System, {reason:?}): {}",
                     details.unwrap_or_default()
                 ))));
             }
@@ -4219,6 +4243,24 @@ pub(crate) fn strip_streams(value: SchemaValue) -> SchemaValue {
         }
         other => other,
     }
+}
+
+fn discards_input_after_terminal(
+    error: &DurableStreamProducerError,
+    session_key: &StreamSessionKeyV1,
+) -> bool {
+    matches!(
+        error,
+        DurableStreamProducerError::SessionFinished(finished) if finished == session_key
+    ) || matches!(
+        error,
+        DurableStreamProducerError::FencedByTerminal(
+            CommittedProducerStreamEventPayloadV1::Cancel {
+                role: StreamCancelRoleV1::InputConsumer,
+                ..
+            }
+        )
+    )
 }
 
 fn collect_stream_paths(
@@ -4416,6 +4458,31 @@ mod tests {
                 ],
             }),
         })
+    }
+
+    #[test]
+    fn late_input_is_discarded_after_the_session_or_consumer_terminates() {
+        let session_key = identity().invocation;
+        assert!(discards_input_after_terminal(
+            &DurableStreamProducerError::SessionFinished(session_key.clone()),
+            &session_key,
+        ));
+        assert!(discards_input_after_terminal(
+            &DurableStreamProducerError::FencedByTerminal(
+                CommittedProducerStreamEventPayloadV1::Cancel {
+                    role: StreamCancelRoleV1::InputConsumer,
+                    reason: StreamCancelReasonV1::GuestDrop,
+                    details: None,
+                },
+            ),
+            &session_key,
+        ));
+        assert!(!discards_input_after_terminal(
+            &DurableStreamProducerError::FencedByTerminal(
+                CommittedProducerStreamEventPayloadV1::End(StreamEndResultV1::Ok),
+            ),
+            &session_key,
+        ));
     }
 
     #[test]

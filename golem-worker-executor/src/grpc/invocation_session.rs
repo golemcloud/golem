@@ -2515,26 +2515,27 @@ async fn route_durable_request(
             streams
                 .write_input(item.transport_stream_id, item.sequence, payload)
                 .await
-                .map(
-                    |(
-                        highest_contiguous_sequence,
-                        logical_item_count,
-                        resulting_offset,
-                        new_stream_mappings,
-                    )| InputStreamAck {
-                        transport_stream_id: item.transport_stream_id,
-                        highest_contiguous_sequence,
-                        logical_item_count,
-                        durable_stream_id: Some(handle.stream_id.0.into()),
-                        resulting_offset: resulting_offset.0.to_vec(),
-                        epoch: streams.attachment_epoch(),
-                        new_stream_mappings: new_stream_mappings
-                            .iter()
-                            .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
-                            .collect(),
-                    },
-                )
-                .map(Some)?
+                .map(|outcome| {
+                    outcome.map(
+                        |(
+                            highest_contiguous_sequence,
+                            logical_item_count,
+                            resulting_offset,
+                            new_stream_mappings,
+                        )| InputStreamAck {
+                            transport_stream_id: item.transport_stream_id,
+                            highest_contiguous_sequence,
+                            logical_item_count,
+                            durable_stream_id: Some(handle.stream_id.0.into()),
+                            resulting_offset: resulting_offset.0.to_vec(),
+                            epoch: streams.attachment_epoch(),
+                            new_stream_mappings: new_stream_mappings
+                                .iter()
+                                .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
+                                .collect(),
+                        },
+                    )
+                })?
         }
         invocation_request::Request::InputEnd(end) => {
             let handle = streams
@@ -2548,7 +2549,7 @@ async fn route_durable_request(
             let resulting_offset = streams
                 .end_input(end.transport_stream_id, end.sequence)
                 .await?;
-            Some(InputStreamAck {
+            resulting_offset.map(|resulting_offset| InputStreamAck {
                 transport_stream_id: end.transport_stream_id,
                 highest_contiguous_sequence: end.sequence,
                 logical_item_count: 1,

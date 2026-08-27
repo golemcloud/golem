@@ -44,7 +44,7 @@ use golem_common::schema::{BinaryValuePayload, SchemaGraph, SchemaType, SchemaVa
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -263,13 +263,37 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
 
     let (input_tx, mut input_rx) = mpsc::channel::<PublicInvocationRequest>(PIPELINE_CAPACITY);
     let (input_failure_tx, mut input_failure_rx) = oneshot::channel::<InputFailure>();
-    let mut input_failure_tx = Some(input_failure_tx);
     let input_cancelled = CancellationToken::new();
+    let input_discarded = CancellationToken::new();
     let input_failed = CancellationToken::new();
     let stdin_format = args.stdin_format;
+    let validate_discarded_input =
+        stdin_format == InvocationStdinFormat::Value && !std::io::stdin().is_terminal();
     let has_input = input_binding.is_some();
     let mut input_failure_open = has_input;
     let mut input_binding = input_binding;
+    if let Some(binding) = input_binding.clone() {
+        let reader_cancelled = input_cancelled.clone();
+        let reader_discarded = input_discarded.clone();
+        let reader_failed = input_failed.clone();
+        let reader_source_language = source_language.clone();
+        let reader_graph = args.agent_type.schema.clone();
+        let reader_tx = input_tx.clone();
+        std::thread::spawn(move || {
+            if let Err(failure) = read_stdin(
+                binding,
+                stdin_format,
+                reader_source_language,
+                reader_graph,
+                &reader_tx,
+                &reader_cancelled,
+                &reader_discarded,
+            ) && input_failure_tx.send(failure).is_ok()
+            {
+                reader_failed.cancel();
+            }
+        });
+    }
 
     let format = ctx.format();
     let structured = format.is_structured() && args.stdout_format == InvocationStdoutFormat::Value;
@@ -298,6 +322,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     let mut input_terminal = !has_input;
     let mut pending_input_items = 0_usize;
     let mut pending_input_terminal = false;
+    let mut input_sequence_offset = 0_u64;
     let mut acknowledged_input_offset = 0_u64;
     let mut pending_input_request = None;
     let mut fatal_input_failure = None;
@@ -312,9 +337,10 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
             _ = interrupt.cancelled() => {
                 input_cancelled.cancel();
                 input_rx.close();
-                cancel_open_streams(
+                for request in cancel_open_streams(
                     &mut state,
-                    &wire_tx,
+                    &durable_streams,
+                    attachment_epoch,
                     if accepted && !input_terminal {
                         input_stream_id.map(|stream_id| (stream_id, acknowledged_input_offset))
                     } else {
@@ -323,7 +349,9 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     &output_streams,
                     StreamCancelReason::Cancelled,
                     "invocation interrupted by the client",
-                );
+                ) {
+                    try_send_request(&wire_tx, request);
+                }
                 drop(wire_tx);
                 if !wire_complete && tokio::time::timeout(Duration::from_secs(3), &mut wire_writer).await.is_err() {
                     wire_writer.abort();
@@ -334,7 +362,9 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 input_failure_open = false;
                 if let Ok(failure) = failure {
                     fatal_input_failure = Some(failure);
-                    break 'session;
+                    if accepted {
+                        break 'session;
+                    }
                 }
             }
             result = &mut wire_writer, if !wire_complete => {
@@ -358,9 +388,10 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     Ok(Err(error)) if error.downcast_ref::<PipedExitCode>().is_some_and(|exit| exit.0 == 0) => {
                         input_cancelled.cancel();
                         input_rx.close();
-                        cancel_open_streams(
+                        for request in cancel_open_streams(
                             &mut state,
-                            &wire_tx,
+                            &durable_streams,
+                            attachment_epoch,
                             if accepted && !input_terminal {
                                 input_stream_id.map(|stream_id| (stream_id, acknowledged_input_offset))
                             } else {
@@ -369,7 +400,9 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                             &output_streams,
                             StreamCancelReason::Cancelled,
                             "invocation output was closed by the consumer",
-                        );
+                        ) {
+                            try_send_request(&wire_tx, request);
+                        }
                         drop(wire_tx);
                         if !wire_complete && tokio::time::timeout(Duration::from_secs(3), &mut wire_writer).await.is_err() {
                             wire_writer.abort();
@@ -391,7 +424,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 let mut request = pending_input_request
                     .take()
                     .expect("wire send selected without a pending input request");
-                bind_durable_request(&mut request, &durable_streams, attachment_epoch)?;
+                bind_durable_request(
+                    &mut request,
+                    &durable_streams,
+                    attachment_epoch,
+                    input_sequence_offset,
+                )?;
                 state.validate_public_request(&request).map_err(anyhow::Error::msg)?;
                 if matches!(request.request, Some(public_invocation_request::Request::InputItem(_))) {
                     pending_input_items += 1;
@@ -403,11 +441,16 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 permit.send(encode_request(request)?);
             }
             frame = socket_stream.next() => {
+                let response_input_failed = if fatal_input_failure.is_some() && !accepted {
+                    CancellationToken::new()
+                } else {
+                    input_failed.clone()
+                };
                 let response = match receive_response(
                     frame,
                     &wire_tx,
                     &interrupt,
-                    &input_failed,
+                    &response_input_failed,
                 ).await {
                     Ok(Some(response)) => response,
                     Ok(None) => continue,
@@ -450,33 +493,14 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                             input_rx.close();
                             input_failure_open = false;
                             input_failure_rx.close();
-                            input_failure_tx = None;
                             stdin_open = false;
                             input_terminal = true;
                         } else {
-                            let reader_cancelled = input_cancelled.clone();
-                            let reader_failed = input_failed.clone();
-                            let reader_source_language = source_language.clone();
-                            let reader_graph = args.agent_type.schema.clone();
-                            let reader_tx = input_tx.clone();
-                            let failure_tx = input_failure_tx
-                                .take()
-                                .expect("stdin failure sender was already consumed");
-                            std::thread::spawn(move || {
-                                if let Err(failure) = read_stdin(
-                                    binding,
-                                    stdin_format,
-                                    reader_source_language,
-                                    reader_graph,
-                                    initial_offset,
-                                    &reader_tx,
-                                    &reader_cancelled,
-                                ) && failure_tx.send(failure).is_ok()
-                                {
-                                    reader_failed.cancel();
-                                }
-                            });
+                            input_sequence_offset = initial_offset;
                         }
+                    }
+                    if fatal_input_failure.is_some() {
+                        break 'session;
                     }
                 }
                 match response.response.as_ref() {
@@ -521,12 +545,18 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     acknowledged_input_offset = ack.highest_contiguous_sequence.checked_add(1).ok_or_else(|| anyhow!("input acknowledgement offset overflow"))?;
                 }
                 if response_cancels_input(&response, input_stream_id) {
-                    input_cancelled.cancel();
+                    if validate_discarded_input {
+                        input_discarded.cancel();
+                    } else {
+                        input_cancelled.cancel();
+                    }
                     input_rx.close();
                     while input_rx.try_recv().is_ok() {}
                     pending_input_request = None;
-                    input_failure_open = false;
-                    input_failure_rx.close();
+                    if !validate_discarded_input {
+                        input_failure_open = false;
+                        input_failure_rx.close();
+                    }
                     stdin_open = false;
                     input_terminal = true;
                 }
@@ -558,9 +588,10 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         input_cancelled.cancel();
         input_rx.close();
         while input_rx.try_recv().is_ok() {}
-        cancel_open_streams(
+        let cancellation_requests = cancel_open_streams(
             &mut state,
-            &wire_tx,
+            &durable_streams,
+            attachment_epoch,
             if accepted && !input_terminal {
                 input_stream_id.map(|stream_id| (stream_id, acknowledged_input_offset))
             } else {
@@ -570,6 +601,11 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
             failure.reason,
             &failure.error.to_string(),
         );
+        for request in cancellation_requests {
+            if send_request(&wire_tx, request, &interrupt).await.is_err() {
+                break;
+            }
+        }
         drop(wire_tx);
         if !wire_complete
             && tokio::time::timeout(Duration::from_secs(3), &mut wire_writer)
@@ -591,9 +627,10 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
     {
         input_cancelled.cancel();
         input_rx.close();
-        cancel_open_streams(
+        for request in cancel_open_streams(
             &mut state,
-            &wire_tx,
+            &durable_streams,
+            attachment_epoch,
             if accepted && !input_terminal {
                 input_stream_id.map(|stream_id| (stream_id, acknowledged_input_offset))
             } else {
@@ -602,7 +639,9 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
             &output_streams,
             StreamCancelReason::Cancelled,
             "invocation session stopped while waiting for the server to close",
-        );
+        ) {
+            try_send_request(&wire_tx, request);
+        }
         drop(wire_tx);
         if !wire_complete
             && tokio::time::timeout(Duration::from_secs(3), &mut wire_writer)
@@ -614,6 +653,12 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         return Err(error);
     }
 
+    let discarded_input_failure = if input_discarded.is_cancelled() && input_failure_open {
+        input_failure_open = false;
+        (&mut input_failure_rx).await.ok()
+    } else {
+        None
+    };
     input_cancelled.cancel();
     drop(wire_tx);
     drop(output_tx);
@@ -646,6 +691,9 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         }
     }
 
+    if let Some(failure) = discarded_input_failure {
+        return Err(failure.error);
+    }
     if input_failure_open && let Ok(failure) = input_failure_rx.try_recv() {
         return Err(failure.error);
     }
@@ -1091,11 +1139,11 @@ fn read_stdin(
     format: InvocationStdinFormat,
     source_language: SourceLanguage,
     graph: SchemaGraph,
-    initial_offset: u64,
     tx: &mpsc::Sender<PublicInvocationRequest>,
     cancelled: &CancellationToken,
+    discarded: &CancellationToken,
 ) -> Result<(), InputFailure> {
-    let mut offset = initial_offset;
+    let mut offset = 0_u64;
     match format {
         InvocationStdinFormat::Value => {
             let mut stdin = BufReader::new(std::io::stdin().lock());
@@ -1154,9 +1202,16 @@ fn read_stdin(
                             reason: StreamCancelReason::Protocol,
                         }
                     })?;
-                if tx.blocking_send(request).is_err() {
+                if !discarded.is_cancelled() && tx.blocking_send(request).is_err() {
                     if cancelled.is_cancelled() {
                         return Ok(());
+                    }
+                    if discarded.is_cancelled() {
+                        offset = offset.checked_add(1).ok_or_else(|| InputFailure {
+                            error: anyhow!("stdin stream offset overflow"),
+                            reason: StreamCancelReason::Protocol,
+                        })?;
+                        continue;
                     }
                     return Err(InputFailure {
                         error: anyhow!("invocation session ended while reading stdin"),
@@ -1173,13 +1228,13 @@ fn read_stdin(
             let mut stdin = std::io::stdin().lock();
             let mut buffer = vec![0_u8; RAW_CHUNK_SIZE];
             loop {
-                if cancelled.is_cancelled() {
+                if cancelled.is_cancelled() || discarded.is_cancelled() {
                     return Ok(());
                 }
                 let mut count = 0;
                 let mut eof = false;
                 while count < RAW_CHUNK_SIZE {
-                    if cancelled.is_cancelled() {
+                    if cancelled.is_cancelled() || discarded.is_cancelled() {
                         return Ok(());
                     }
                     match stdin.read(&mut buffer[count..]) {
@@ -1189,7 +1244,7 @@ fn read_stdin(
                         }
                         Ok(read) => {
                             count += read;
-                            if cancelled.is_cancelled() {
+                            if cancelled.is_cancelled() || discarded.is_cancelled() {
                                 return Ok(());
                             }
                         }
@@ -1237,7 +1292,7 @@ fn read_stdin(
                     })
                     .is_err()
                 {
-                    if cancelled.is_cancelled() {
+                    if cancelled.is_cancelled() || discarded.is_cancelled() {
                         return Ok(());
                     }
                     return Err(InputFailure {
@@ -1262,7 +1317,7 @@ fn read_stdin(
             }
         }
     }
-    if cancelled.is_cancelled() {
+    if cancelled.is_cancelled() || discarded.is_cancelled() {
         return Ok(());
     }
     if tx
@@ -1277,7 +1332,7 @@ fn read_stdin(
         })
         .is_err()
     {
-        if cancelled.is_cancelled() {
+        if cancelled.is_cancelled() || discarded.is_cancelled() {
             return Ok(());
         }
         return Err(InputFailure {
@@ -1312,18 +1367,31 @@ fn bind_durable_request(
     request: &mut PublicInvocationRequest,
     streams: &HashMap<u64, golem_api_grpc::proto::golem::common::Uuid>,
     epoch: u64,
+    input_sequence_offset: u64,
 ) -> anyhow::Result<()> {
     let (transport_stream_id, durable_stream_id, frame_epoch) = match request.request.as_mut() {
-        Some(public_invocation_request::Request::InputItem(item)) => (
-            item.transport_stream_id,
-            &mut item.durable_stream_id,
-            &mut item.epoch,
-        ),
-        Some(public_invocation_request::Request::InputEnd(end)) => (
-            end.transport_stream_id,
-            &mut end.durable_stream_id,
-            &mut end.epoch,
-        ),
+        Some(public_invocation_request::Request::InputItem(item)) => {
+            item.sequence = item
+                .sequence
+                .checked_add(input_sequence_offset)
+                .ok_or_else(|| anyhow!("input stream sequence overflow"))?;
+            (
+                item.transport_stream_id,
+                &mut item.durable_stream_id,
+                &mut item.epoch,
+            )
+        }
+        Some(public_invocation_request::Request::InputEnd(end)) => {
+            end.sequence = end
+                .sequence
+                .checked_add(input_sequence_offset)
+                .ok_or_else(|| anyhow!("input stream sequence overflow"))?;
+            (
+                end.transport_stream_id,
+                &mut end.durable_stream_id,
+                &mut end.epoch,
+            )
+        }
         Some(public_invocation_request::Request::StreamCancel(cancel)) => (
             cancel.transport_stream_id,
             &mut cancel.durable_stream_id,
@@ -1378,16 +1446,20 @@ fn output_cancel_request(
 
 fn cancel_open_streams(
     state: &mut InvocationSessionState,
-    wire_tx: &mpsc::Sender<Message>,
+    durable_streams: &HashMap<u64, golem_api_grpc::proto::golem::common::Uuid>,
+    attachment_epoch: u64,
     input: Option<(u64, u64)>,
     output_streams: &HashMap<u64, OutputStream>,
     reason: StreamCancelReason,
     details: &str,
-) {
+) -> Vec<PublicInvocationRequest> {
+    let mut requests = Vec::new();
     if let Some((stream_id, offset)) = input {
-        let request = input_cancel_request(stream_id, offset, reason, details.to_string());
-        if state.validate_public_request(&request).is_ok() {
-            try_send_request(wire_tx, request);
+        let mut request = input_cancel_request(stream_id, offset, reason, details.to_string());
+        if bind_durable_request(&mut request, durable_streams, attachment_epoch, 0).is_ok()
+            && state.validate_public_request(&request).is_ok()
+        {
+            requests.push(request);
         }
     }
 
@@ -1399,11 +1471,14 @@ fn cancel_open_streams(
         .collect::<Vec<_>>();
     open_outputs.sort_unstable_by_key(|(stream_id, _)| *stream_id);
     for (stream_id, offset) in open_outputs {
-        let request = output_cancel_request(stream_id, offset, reason, details.to_string());
-        if state.validate_public_request(&request).is_ok() {
-            try_send_request(wire_tx, request);
+        let mut request = output_cancel_request(stream_id, offset, reason, details.to_string());
+        if bind_durable_request(&mut request, durable_streams, attachment_epoch, 0).is_ok()
+            && state.validate_public_request(&request).is_ok()
+        {
+            requests.push(request);
         }
     }
+    requests
 }
 
 fn input_value_request(
@@ -2576,6 +2651,42 @@ mod tests {
         assert!(!pending_terminal);
 
         assert!(record_input_acknowledgement(&mut pending_items, &mut pending_terminal).is_err());
+    }
+
+    #[test]
+    fn durable_binding_offsets_preparsed_input_sequences() {
+        let durable_stream_id = uuid::Uuid::from_u128(5).into();
+        let streams = HashMap::from([(7, durable_stream_id)]);
+        let mut request = input_value_request(7, 3, SchemaValue::U32(1)).unwrap();
+
+        bind_durable_request(&mut request, &streams, 4, 10).unwrap();
+
+        let Some(public_invocation_request::Request::InputItem(item)) = request.request else {
+            panic!("expected input item");
+        };
+        assert_eq!(item.sequence, 13);
+        assert_eq!(item.durable_stream_id, Some(durable_stream_id));
+        assert_eq!(item.epoch, 4);
+    }
+
+    #[test]
+    fn durable_binding_attaches_input_cancellation_authority() {
+        let durable_stream_id = uuid::Uuid::from_u128(5).into();
+        let streams = HashMap::from([(7, durable_stream_id)]);
+        let mut request = input_cancel_request(
+            7,
+            3,
+            StreamCancelReason::Protocol,
+            "invalid input".to_string(),
+        );
+
+        bind_durable_request(&mut request, &streams, 4, 0).unwrap();
+
+        let Some(public_invocation_request::Request::StreamCancel(cancel)) = request.request else {
+            panic!("expected input cancellation");
+        };
+        assert_eq!(cancel.durable_stream_id, Some(durable_stream_id));
+        assert_eq!(cancel.epoch, 4);
     }
 
     #[test]

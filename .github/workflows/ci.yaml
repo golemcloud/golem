@@ -160,6 +160,7 @@ jobs:
           - name: group1
           - name: group2
           - name: group3
+          - name: group4
     name: worker-tests-${{ matrix.group.name }}
     steps:
       - uses: actions/checkout@v5
