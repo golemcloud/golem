@@ -96,6 +96,22 @@ vi.mock('golem:core/types@2.0.0', () => ({
   },
 }));
 
+vi.mock('golem:api/host@1.5.0', () => ({
+  getSelfMetadata: vi.fn(() => ({
+    agentId: {
+      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
+      agentId: 'TestAgent()',
+    },
+    args: [],
+    env: [],
+    config: [],
+    status: 'idle',
+    componentRevision: 0n,
+    retryCount: 0n,
+    environmentId: { uuid: { highBits: 0n, lowBits: 2n } },
+  })),
+}));
+
 vi.mock('golem:api/oplog@1.5.0', () => ({
   GetOplog: vi.fn(),
   SearchOplog: vi.fn(),

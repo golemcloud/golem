@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Wasm-RPC client. `clientFor(def)(id)` returns a typed proxy that calls a
-// remote agent declared with the same `defineAgent` definition. The wire encoding
+// Wasm-RPC clients attached to agent definitions. `def.client.get(id)` returns a
+// typed proxy that calls a remote agent declared with the same definition. The wire encoding
 // is built from the LOCAL def's `SchemaCodec`s — the exact codecs the exported
 // component uses to decode (see runtime.ts `invoke`) — so the two sides are
 // symmetric by construction. Reuses the host `WasmRpc` resource (no decorator
@@ -29,13 +29,15 @@ import { v } from './internal/schema-model';
 import type { SchemaGraph, SchemaType, SchemaValue } from './internal/schema-model';
 import { compileConfig, ConfigDeclaration } from './config';
 import { Uuid } from './uuid';
+import { AgentId } from './agentId';
+import { getSelfMetadata } from './host/hostapi';
 import { compileSchema } from './schema/adapter';
 import { SchemaCodec } from './schema/codec';
 import { StandardSchemaV1 } from './schema/standardSchema';
-import type { MarkerKindOf } from './schema/markers';
 import type {
   AgentClientContract,
   AgentClientDefinition,
+  CallerInput,
   ConfigSpec,
   IdRecord,
   MethodsRecord,
@@ -47,28 +49,12 @@ import {
   RemoteCallError,
   type AgentConfigEntry,
 } from './bridge/agent';
-import { registerClientIdentity } from './clientIdentity';
 
 export { RemoteCallError } from './bridge/agent';
 
 type InferRecord<R extends Record<string, StandardSchemaV1>> = {
   [K in keyof R]: StandardSchemaV1.InferOutput<R[K]>;
 };
-
-/** Keys of `C` that are auto-injected `s.principal()` params (host-supplied). */
-type AutoInjectedKeys<C> = {
-  [K in keyof C & string]: [MarkerKindOf<C[K]>] extends ['principal'] ? K : never;
-}[keyof C & string];
-
-/**
- * Caller-facing input for a remote method: the declared params MINUS any
- * auto-injected `s.principal()` param. The callee's host injects the caller's
- * principal, so the RPC caller neither supplies nor encodes it.
- */
-type CallerInput<Input extends Record<string, StandardSchemaV1>> = Omit<
-  Input,
-  AutoInjectedKeys<Input>
->;
 
 /** The async remote signature for a durable method spec (no-arg when caller input is empty). */
 type DurableRemoteMethodFor<M> =
@@ -135,17 +121,12 @@ export type RemoteClient<
 /** A newly generated phantom client together with its reusable phantom id. */
 export interface PhantomClientDetails<Methods extends MethodsRecord> {
   readonly client: RemoteClient<Methods>;
+  readonly agentId: AgentId;
   readonly phantomId: Uuid;
 }
 
 /** Address existing agents or create a fresh phantom agent client. */
 export interface RemoteClientFactory<Id extends IdRecord, Methods extends MethodsRecord> {
-  /** Legacy shorthand for `getPhantom` when a phantom id is supplied, or `get` otherwise. */
-  (
-    id: InferRecord<CallerInput<Id>>,
-    phantomId?: Uuid,
-    config?: Record<string, unknown>,
-  ): RemoteClient<Methods>;
   /** Address the durable agent with this constructor identity. */
   get(id: InferRecord<CallerInput<Id>>, config?: Record<string, unknown>): RemoteClient<Methods>;
   /** Address a known phantom instance. */
@@ -215,7 +196,7 @@ export function defineAgentClient<
     config: spec.config,
     mode: (spec.mode ?? 'durable') as Mode,
   };
-  return Object.freeze({ ...contract, client: buildClientFactory(contract, true) });
+  return Object.freeze({ ...contract, ...buildAgentClientSurface(contract, true) });
 }
 
 interface NamedCodec {
@@ -294,30 +275,8 @@ function encodeConfigOverrides(
   return out;
 }
 
-/**
- * Build a typed RPC client factory for a remote agent definition.
- *
- * ```ts
- * const counter = clientFor(CounterDef);
- * const c1 = counter({ name: 'c1' });
- * const next = await c1.increment({ by: 5 });
- * c1.increment.trigger({ by: 1 }); // fire-and-forget
- * ```
- */
-export function clientFor<
-  Id extends IdRecord,
-  Methods extends MethodsRecord,
-  Config extends ConfigSpec,
-  Mode extends 'durable' | 'ephemeral',
->(
-  def: AgentClientContract<Id, Methods, Config, Mode>,
-): Mode extends 'ephemeral'
-  ? EphemeralRemoteClientFactory<Id, Methods>
-  : RemoteClientFactory<Id, Methods> {
-  return buildClientFactory(def, false);
-}
-
-function buildClientFactory<
+/** @internal Build the identity and typed-client surface attached to a definition. */
+export function buildAgentClientSurface<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec,
@@ -325,9 +284,14 @@ function buildClientFactory<
 >(
   def: AgentClientContract<Id, Methods, Config, Mode>,
   fallible: boolean,
-): Mode extends 'ephemeral'
-  ? EphemeralRemoteClientFactory<Id, Methods>
-  : RemoteClientFactory<Id, Methods> {
+): {
+  client: Mode extends 'ephemeral'
+    ? EphemeralRemoteClientFactory<Id, Methods>
+    : RemoteClientFactory<Id, Methods>;
+  agentId: Mode extends 'ephemeral'
+    ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => AgentId
+    : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => AgentId;
+} {
   // Compile the def's id + method codecs once (cached in this closure).
   const idCodecs: NamedCodec[] = Object.keys(def.id)
     .map((k) => ({ name: k, codec: compileSchema(def.id[k]) }))
@@ -348,6 +312,14 @@ function buildClientFactory<
   });
 
   const configDecls: ConfigDeclaration[] = compileConfig(def.config);
+
+  const createAgentId = (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid): AgentId =>
+    AgentId.create({
+      componentId: getSelfMetadata().agentId.componentId,
+      typeName: def.name,
+      constructorValue: encodeRecord(idCodecs, id as Record<string, unknown>),
+      phantomId,
+    });
 
   const createClient = (
     id: InferRecord<CallerInput<Id>>,
@@ -410,11 +382,10 @@ function buildClientFactory<
         },
       });
     }
-    registerClientIdentity(client, { agentId, phantomId });
     return client as RemoteClient<Methods, Mode>;
   };
 
-  createClient.newPhantom = (
+  const newPhantom = (
     id: InferRecord<CallerInput<Id>>,
     config?: Record<string, unknown>,
   ): PhantomClientDetails<Methods> | RemoteClient<Methods, 'ephemeral'> => {
@@ -422,23 +393,35 @@ function buildClientFactory<
       return createClient(id, undefined, config) as RemoteClient<Methods, 'ephemeral'>;
     }
     const phantomId = Uuid.generate();
-    return { client: createClient(id, phantomId, config) as RemoteClient<Methods>, phantomId };
+    return {
+      client: createClient(id, phantomId, config) as RemoteClient<Methods>,
+      agentId: createAgentId(id, phantomId),
+      phantomId,
+    };
   };
 
+  let client;
   if (def.mode === 'ephemeral') {
-    (createClient as unknown as EphemeralRemoteClientFactory<Id, Methods>).getPhantom = (
-      id,
-      phantomId,
-      config,
-    ) => createClient(id, phantomId, config) as RemoteClient<Methods, 'ephemeral'>;
+    client = {
+      getPhantom: (id, phantomId, config) =>
+        createClient(id, phantomId, config) as RemoteClient<Methods, 'ephemeral'>,
+      newPhantom,
+    } as EphemeralRemoteClientFactory<Id, Methods>;
   } else {
-    const durable = createClient as RemoteClientFactory<Id, Methods>;
-    durable.get = (id, config) => createClient(id, undefined, config) as RemoteClient<Methods>;
-    durable.getPhantom = (id, phantomId, config) =>
-      createClient(id, phantomId, config) as RemoteClient<Methods>;
+    client = {
+      get: (id, config) => createClient(id, undefined, config) as RemoteClient<Methods>,
+      getPhantom: (id, phantomId, config) =>
+        createClient(id, phantomId, config) as RemoteClient<Methods>,
+      newPhantom,
+    } as RemoteClientFactory<Id, Methods>;
   }
 
-  return createClient as Mode extends 'ephemeral'
-    ? EphemeralRemoteClientFactory<Id, Methods>
-    : RemoteClientFactory<Id, Methods>;
+  return {
+    client: client as Mode extends 'ephemeral'
+      ? EphemeralRemoteClientFactory<Id, Methods>
+      : RemoteClientFactory<Id, Methods>,
+    agentId: createAgentId as Mode extends 'ephemeral'
+      ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => AgentId
+      : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => AgentId,
+  };
 }

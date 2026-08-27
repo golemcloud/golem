@@ -59,12 +59,12 @@ import type {
 
 import { Uuid } from '../uuid';
 import { ComponentId, AccountId, EnvironmentId } from '../ids';
-import type { AgentId } from './hostapi';
+import type { AgentId } from '../agentId';
 
 // Re-export enriched types for convenience
 export { Uuid } from '../uuid';
 export { ComponentId, AccountId, EnvironmentId } from '../ids';
-export type { AgentId } from './hostapi';
+export type { AgentId } from '../agentId';
 
 // Re-export types that don't contain UUID-based types
 export type {

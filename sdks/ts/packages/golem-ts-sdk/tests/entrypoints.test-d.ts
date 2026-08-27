@@ -15,7 +15,13 @@
 // Type-only coverage for values crossing the package's public entrypoints.
 // Checked by the package typecheck script; NOT executed by vitest.
 
-import { ParsedAgentId } from '../dist/index.mjs';
+import { AgentId, ComponentId, Uuid } from '../dist/index.mjs';
 import { v } from '../dist/schema.mjs';
 
-ParsedAgentId.make('ExampleAgent', v.record([v.string('example')]));
+const componentId = new ComponentId(new Uuid(1n, 2n));
+const id = AgentId.create({
+  componentId,
+  typeName: 'ExampleAgent',
+  constructorValue: v.record([v.string('example')]),
+});
+AgentId.parse(id);
