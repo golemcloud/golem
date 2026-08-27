@@ -51,7 +51,7 @@ object ToolClientSpec extends ZIOSpecDefault {
       stdin: Option[ToolInputStream]
     ): Future[Either[ToolRpcFailure, ToolInvokeResult]] =
       Future.successful(
-        Left(ToolRpcFailure.RemoteToolError(ToolInvokeError.Custom(stringPayload("bad flag"))))
+        Left(ToolRpcFailure.RemoteToolError(ToolInvokeError.Tool(stringPayload("bad flag"))))
       )
   }
 
@@ -77,7 +77,7 @@ object ToolClientSpec extends ZIOSpecDefault {
   def spec: Spec[Any, Any] = suite("ToolClientSpec")(
     test("custom_tool_error_payload_decodes_to_declared_error_variant") {
       val decoded = ToolClientRuntime.mapRemoteToolError(
-        ToolInvokeError.Custom(stringPayload("bad flag")),
+        ToolInvokeError.Tool(stringPayload("bad flag")),
         decodeCliError
       )
       assertTrue(decoded == ToolError.Tool(Usage("bad flag")))

@@ -365,12 +365,12 @@ jobs:
       - name: Sync WIT dependencies
         run: cargo make wit
 
-      - name: Restore agent_guest.wasm (built by build-golem-scala)
+      - name: Restore Scala guest runtime WASMs (built by build-golem-scala)
         uses: actions/cache/restore@v5
         with:
           path: |
-            sdks/scala/sbt/src/main/resources/golem/wasm/agent_guest.wasm
-            sdks/scala/mill/resources/golem/wasm/agent_guest.wasm
+            sdks/scala/sbt/src/main/resources/golem/wasm/*.wasm
+            sdks/scala/mill/resources/golem/wasm/*.wasm
             sdks/scala/wit/dts
           key: agent-guest-wasm-${{ github.run_id }}
           fail-on-cache-miss: true
@@ -463,7 +463,7 @@ jobs:
       - name: Sync WIT dependencies
         run: cargo make wit
 
-      - name: Build agent_guest.wasm
+      - name: Build Scala guest runtime WASMs
         working-directory: sdks/scala
         run: ./scripts/generate-agent-guest-wasm.sh
 
@@ -580,7 +580,7 @@ jobs:
       - name: Sync WIT dependencies
         run: cargo make wit
 
-      - name: Build agent_guest.wasm
+      - name: Build Scala guest runtime WASMs
         working-directory: sdks/scala
         run: ./scripts/generate-agent-guest-wasm.sh
 
@@ -595,19 +595,19 @@ jobs:
         working-directory: sdks/scala
         run: sbt "++2.12.21!; sbtPlugin/compile"
 
-      # Published for the it-cli shards to restore. Must run after agent_guest.wasm is built, since
-      # the sbt plugin jar embeds it.
+      # Published for the it-cli shards to restore. Must run after the guest role runtimes are built,
+      # since the sbt plugin jar embeds them.
       - name: Publish Scala SDK locally
         working-directory: sdks/scala
         run: |
           sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
 
-      - name: Cache agent_guest.wasm for it-cli
+      - name: Cache Scala guest runtime WASMs for it-cli
         uses: actions/cache/save@v5
         with:
           path: |
-            sdks/scala/sbt/src/main/resources/golem/wasm/agent_guest.wasm
-            sdks/scala/mill/resources/golem/wasm/agent_guest.wasm
+            sdks/scala/sbt/src/main/resources/golem/wasm/*.wasm
+            sdks/scala/mill/resources/golem/wasm/*.wasm
             sdks/scala/wit/dts
           key: agent-guest-wasm-${{ github.run_id }}
 

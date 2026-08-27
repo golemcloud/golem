@@ -1,0 +1,37 @@
+package build
+
+import mill.*
+import mill.api.BuildCtx
+import mill.meta.MillBuildRootModule
+import mill.scalalib.*
+
+object `package` extends MillBuildRootModule {
+  private def golemMillVersion = "1.1.8"
+  private def scalaJSVersion = "1.20.2"
+
+  private def repositorySources = Task.Sources(
+    BuildCtx.workspaceRoot / "src",
+    BuildCtx.workspaceRoot / os.up / "codegen" / "src" / "main" / "scala"
+  )
+
+  private def repositoryResources = Task.Sources(
+    BuildCtx.workspaceRoot / "resources"
+  )
+
+  override def sources = Task {
+    super.sources() ++ repositorySources()
+  }
+
+  override def resources = Task {
+    super.resources() ++ repositoryResources()
+  }
+
+  def mvnDeps = Seq(
+    mvn"com.lihaoyi::mill-libs:$golemMillVersion",
+    mvn"com.lihaoyi::mill-libs-scalajslib-config-1:$golemMillVersion",
+    mvn"org.scala-js:scalajs-linker_2.13:$scalaJSVersion",
+    mvn"org.scala-js:scalajs-js-envs_2.13:1.4.0",
+    mvn"org.scalameta::scalameta:4.14.7",
+    mvn"com.lihaoyi::ujson:3.1.0"
+  )
+}

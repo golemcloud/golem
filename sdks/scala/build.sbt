@@ -100,6 +100,8 @@ lazy val root = (project in file("."))
     codegen,
     sbtPlugin,
     testAgents,
+    emptyAutoRegisterFixture,
+    middlewareGuestLinkFixture,
     integrationTests
   )
   .settings(
@@ -233,6 +235,41 @@ lazy val testAgents = project
       "dev.zio"           %%% "zio-http"              % zioHttpVersion
     ),
     scalacOptions += "-Wconf:cat=unused:s"
+  )
+
+// --- empty auto-registration fixture (JS, not published) -------------------
+
+lazy val emptyAutoRegisterFixture = project
+  .in(file("test-empty-auto-register"))
+  .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin, golem.sbt.GolemPlugin)
+  .settings(
+    name := "golem-scala-empty-auto-register-fixture",
+    golem.sbt.GolemPlugin.autoImport.golemBasePackage := Some("emptyfixture"),
+    publish / skip := true,
+    scalaJSUseMainModuleInitializer := false,
+    scalaJSLinkerConfig ~= {
+      _.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
+    }
+  )
+
+// --- pure middleware guest link fixture (JS, not published) ----------------
+
+lazy val middlewareGuestLinkFixture = project
+  .in(file("test-middleware-guest-link"))
+  .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin)
+  .dependsOn(model.js, macros)
+  .settings(commonSettings)
+  .settings(jsSettings)
+  .settings(
+    name := "golem-scala-middleware-guest-link-fixture",
+    publish / skip := true,
+    Compile / unmanagedSourceDirectories +=
+      (ThisBuild / baseDirectory).value / "core" / "js" / "src" / "main" / "scala",
+    Compile / unmanagedSources / excludeFilter := HiddenFileFilter || "Guest.scala",
+    scalaJSUseMainModuleInitializer := false,
+    scalaJSLinkerConfig ~= {
+      _.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
+    }
   )
 
 // --- integration-tests (JVM, not published) --------------------------------

@@ -30,12 +30,14 @@ object AnnotationsSpec extends ZIOSpecDefault {
         assertTrue(DurabilityMode.fromWireValue("unknown").isEmpty)
       },
       test("annotation classes can be constructed") {
-        val a1 = new description("desc")
-        val a2 = new prompt("prompt")
-        val a3 = new agentImplementation()
-        val a6 = new agentDefinition("MyAgent", DurabilityMode.Durable)
-        val a7 = new agentDefinition()
-        val a8 = new agentDefinition("Custom")
+        val a1  = new description("desc")
+        val a2  = new prompt("prompt")
+        val a3  = new agentImplementation()
+        val a6  = new agentDefinition("MyAgent", DurabilityMode.Durable)
+        val a7  = new agentDefinition()
+        val a8  = new agentDefinition("Custom")
+        val a9  = new toolMiddleware("policy", Array("guard"))
+        val a10 = new universalToolMiddleware("audit", Array("observe"))
 
         assertTrue(
           a1.value == "desc",
@@ -46,7 +48,11 @@ object AnnotationsSpec extends ZIOSpecDefault {
           a7.typeName == "",
           a7.mode == DurabilityMode.Durable,
           a8.typeName == "Custom",
-          a8.mode == DurabilityMode.Durable
+          a8.mode == DurabilityMode.Durable,
+          a9.name == "policy",
+          a9.aliases.sameElements(Array("guard")),
+          a10.name == "audit",
+          a10.aliases.sameElements(Array("observe"))
         )
       }
     )

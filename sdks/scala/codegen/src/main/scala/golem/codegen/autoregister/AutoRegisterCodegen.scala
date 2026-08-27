@@ -25,12 +25,11 @@ import scala.meta.dialects.Scala3
 import scala.meta.parsers._
 
 /**
- * Pure, build-tool-agnostic code generator for Golem agent/tool
- * auto-registration.
+ * Pure, build-tool-agnostic code generator for Golem agent, tool, and tool
+ * middleware auto-registration.
  *
- * Scans Scala source text for `@agentImplementation` and `@toolImplementation`
- * annotated classes and produces Scala source files that register them via
- * `AgentImplementation.registerClass` and `ToolImplementation.registerClass`.
+ * Scans Scala source text for annotated implementation classes and produces
+ * Scala source files that register agents, tools, and tool middleware.
  *
  * All generated code is constructed as scalameta AST nodes and pretty-printed
  * via `.syntax`, following the project's code-generation conventions.
@@ -56,8 +55,8 @@ object AutoRegisterCodegen {
     s"golem.runtime.__generated.autoregister.${autoRegisterSuffix(basePackage)}"
 
   /**
-   * Generates auto-registration source files for all `@agentImplementation` and
-   * `@toolImplementation` classes found in the given sources.
+   * Generates auto-registration source files for all agent, tool, and tool
+   * middleware implementations found in the given sources.
    *
    * @param basePackage
    *   the user's base package (e.g. `"example"`)
@@ -98,35 +97,68 @@ object AutoRegisterCodegen {
         .distinct
         .sortBy(ti => (ti.pkg, ti.traitType, ti.implClass))
 
-    if (agentImpls.isEmpty && toolImpls.isEmpty) {
+    val toolMiddlewareImpls: List[ToolMiddlewareImpl] =
+      (discovered.toolMiddlewares.map(resolveToolMiddlewareImpl) ++
+        discovered.universalToolMiddlewares.map(resolveUniversalToolMiddlewareImpl)).toList.distinct
+        .sortBy(_.sortKey)
+
+    if (agentImpls.isEmpty && toolImpls.isEmpty && toolMiddlewareImpls.isEmpty) {
+      val baseTree = buildRegisterAgentsSource(genBasePkg, Nil)
       Result(
         generatedPackage = genBasePkg,
-        files = Seq.empty,
+        files = Seq(
+          GeneratedFile(
+            relativePath = packagePath(genBasePkg, "RegisterAgents.scala"),
+            content = baseTree.syntax
+          )
+        ),
         warnings = warnings,
         implCount = 0,
         packageCount = 0
       )
     } else {
-      val packages                               = (agentImpls.map(_.pkg) ++ toolImpls.map(_.pkg)).distinct.sorted
+      val packages =
+        (agentImpls.map(_.pkg) ++ toolImpls.map(_.pkg) ++ toolMiddlewareImpls.map(_.pkg)).distinct.sorted
+      val packageSuffixes: Map[String, String] =
+        packages
+          .groupBy(sanitizeSuffix)
+          .toSeq
+          .flatMap { case (suffix, collidingPackages) =>
+            val needsDisambiguation = collidingPackages.size > 1
+            collidingPackages.map { pkg =>
+              pkg -> (if (needsDisambiguation) s"${suffix}$$${sha256Hex(pkg)}" else suffix)
+            }
+          }
+          .toMap
       val byPkg: Map[String, List[Registration]] =
         packages.map { pkg =>
           val registrations =
             agentImpls.filter(_.pkg == pkg).map(Registration.Agent(_)) ++
-              toolImpls.filter(_.pkg == pkg).map(Registration.Tool(_))
+              toolImpls.filter(_.pkg == pkg).map(Registration.Tool(_)) ++
+              toolMiddlewareImpls.filter(_.pkg == pkg).map(Registration.ToolMiddleware(_))
           pkg -> registrations.sortBy {
-            case Registration.Agent(ai) => ("agent", ai.traitType, ai.implClass)
-            case Registration.Tool(ti)  => ("tool", ti.traitType, ti.implClass)
+            case Registration.Agent(ai)          => ("agent", ai.traitType, ai.implClass)
+            case Registration.Tool(ti)           => ("tool", ti.traitType, ti.implClass)
+            case Registration.ToolMiddleware(mi) =>
+              ("tool-middleware", mi.registrationKey, mi.implClass)
           }
         }.toMap
 
       val perPkgFiles: Seq[GeneratedFile] =
         byPkg.toSeq.sortBy(_._1).map { case (pkg, registrations) =>
-          val objSuffix = sanitizeSuffix(pkg)
+          val objSuffix = packageSuffixes(pkg)
           val tree      = buildPerPkgSource(
             genBasePkg,
             objSuffix,
             registrations,
-            surfaceFingerprint(registrations, discovered.traits, discovered.tools, discovered.sourceHashes)
+            surfaceFingerprint(
+              registrations,
+              discovered.traits,
+              discovered.tools,
+              discovered.toolMiddlewares,
+              discovered.universalToolMiddlewares,
+              discovered.sourceHashes
+            )
           )
           GeneratedFile(
             relativePath = packagePath(genBasePkg, s"__GolemAutoRegister_$objSuffix.scala"),
@@ -136,7 +168,7 @@ object AutoRegisterCodegen {
 
       val registerCallExprs: List[Stat] =
         byPkg.keys.toSeq.sorted.toList.map { pkg =>
-          val objSuffix = sanitizeSuffix(pkg)
+          val objSuffix = packageSuffixes(pkg)
           val objRef    = Term.Name(s"__GolemAutoRegister_$objSuffix")
           q"$objRef.register()"
         }
@@ -151,7 +183,7 @@ object AutoRegisterCodegen {
         generatedPackage = genBasePkg,
         files = perPkgFiles :+ baseFile,
         warnings = warnings,
-        implCount = agentImpls.length + toolImpls.length,
+        implCount = agentImpls.length + toolImpls.length + toolMiddlewareImpls.length,
         packageCount = byPkg.size
       )
     }
@@ -168,10 +200,23 @@ object AutoRegisterCodegen {
     val pkgRef  = parseTermRef(genBasePkg)
     val objName = Term.Name(s"__GolemAutoRegister_$objSuffix")
 
-    val registrationStats: List[Stat] = registrations.map {
-      case Registration.Agent(ai) => buildAgentRegistrationCall(ai)
-      case Registration.Tool(ti)  => buildToolRegistrationCall(ti)
+    val middlewareRegistrationMethods: List[Stat] =
+      registrations.collect { case Registration.ToolMiddleware(mi) => mi }.zipWithIndex.map {
+        case (middleware, index) =>
+          val method = Term.Name(s"__golemRegisterToolMiddleware$index")
+          val call   = buildToolMiddlewareRegistrationCall(middleware)
+          q"def $method(): Unit = $call"
+      }
+    var middlewareIndex               = 0
+    val registrationCalls: List[Stat] = registrations.map {
+      case Registration.Agent(ai)         => buildAgentRegistrationCall(ai)
+      case Registration.Tool(ti)          => buildToolRegistrationCall(ti)
+      case Registration.ToolMiddleware(_) =>
+        val method = Term.Name(s"__golemRegisterToolMiddleware$middlewareIndex")
+        middlewareIndex += 1
+        q"$method()"
     }
+    val registrationStats = middlewareRegistrationMethods ++ registrationCalls
 
     val imports: List[Stat] =
       List(
@@ -180,6 +225,9 @@ object AutoRegisterCodegen {
         else None,
         if (registrations.exists(_.isInstanceOf[Registration.Tool]))
           Some(parseMeta[Stat]("import golem.runtime.autowire.ToolImplementation"))
+        else None,
+        if (registrations.exists(_.isInstanceOf[Registration.ToolMiddleware]))
+          Some(parseMeta[Stat]("import golem.runtime.autowire.ToolMiddlewareImplementation"))
         else None
       ).flatten
 
@@ -246,6 +294,30 @@ object AutoRegisterCodegen {
     q"ToolImplementation.registerClass[$traitTpe, $implTpe]"
   }
 
+  private def buildToolMiddlewareRegistrationCall(mi: ToolMiddlewareImpl): Term =
+    mi match {
+      case monomorphic: MonomorphicToolMiddlewareImpl =>
+        val presentedName  = fqn(monomorphic.pkg, monomorphic.presentedToolType)
+        val expectedName   = fqn(monomorphic.pkg, monomorphic.expectedToolType)
+        val underlyingName = s"${expectedName}Underlying"
+        val surfaceName    =
+          if (monomorphic.transparent) s"${presentedName}Middleware"
+          else s"${presentedName}Middleware.Adapter[$underlyingName]"
+        val presented  = parseType(presentedName)
+        val expected   = parseType(expectedName)
+        val underlying = parseType(underlyingName)
+        val surface    = parseType(surfaceName)
+        val impl       = parseType(fqn(monomorphic.pkg, monomorphic.implClass))
+        val factory    = parseMeta[Term](s"$underlyingName.__golemFromRaw")
+        if (monomorphic.transparent)
+          q"ToolMiddlewareImplementation.registerTransparent[$presented, $underlying, $surface, $impl]($factory)"
+        else
+          q"ToolMiddlewareImplementation.registerAdapter[$presented, $expected, $underlying, $surface, $impl]($factory)"
+      case universal: UniversalToolMiddlewareImpl =>
+        val impl = parseType(fqn(universal.pkg, universal.implClass))
+        q"ToolMiddlewareImplementation.registerUniversal[$impl]"
+    }
+
   // ── Type/term reference helpers ────────────────────────────────────────────
 
   private def parseMeta[T](code: String)(implicit parse: Parse[T]): T =
@@ -268,10 +340,35 @@ object AutoRegisterCodegen {
 
   private final case class ToolImpl(pkg: String, implClass: String, traitType: String)
 
+  private sealed trait ToolMiddlewareImpl extends Product with Serializable {
+    def pkg: String
+    def implClass: String
+    def registrationKey: String
+    final def sortKey: (String, String, String) = (pkg, registrationKey, implClass)
+  }
+
+  private final case class MonomorphicToolMiddlewareImpl(
+    pkg: String,
+    implClass: String,
+    presentedToolType: String,
+    expectedToolType: String,
+    transparent: Boolean
+  ) extends ToolMiddlewareImpl {
+    def registrationKey: String = s"monomorphic:$presentedToolType:$expectedToolType"
+  }
+
+  private final case class UniversalToolMiddlewareImpl(
+    pkg: String,
+    implClass: String
+  ) extends ToolMiddlewareImpl {
+    def registrationKey: String = "universal"
+  }
+
   private sealed trait Registration extends Product with Serializable
   private object Registration {
-    final case class Agent(value: AgentImpl) extends Registration
-    final case class Tool(value: ToolImpl)   extends Registration
+    final case class Agent(value: AgentImpl)                   extends Registration
+    final case class Tool(value: ToolImpl)                     extends Registration
+    final case class ToolMiddleware(value: ToolMiddlewareImpl) extends Registration
   }
 
   private trait DiscoveredSurface {
@@ -410,10 +507,28 @@ object AutoRegisterCodegen {
     ToolImpl(impl.pkg, impl.implClass, resolvedTrait)
   }
 
+  private def resolveToolMiddlewareImpl(
+    impl: SourceDiscovery.ToolMiddlewareImpl
+  ): ToolMiddlewareImpl =
+    MonomorphicToolMiddlewareImpl(
+      impl.pkg,
+      impl.implClass,
+      normalizeTypeRef(impl.presentedToolType),
+      normalizeTypeRef(impl.expectedToolType),
+      impl.transparent
+    )
+
+  private def resolveUniversalToolMiddlewareImpl(
+    impl: SourceDiscovery.UniversalToolMiddlewareImpl
+  ): ToolMiddlewareImpl =
+    UniversalToolMiddlewareImpl(impl.pkg, impl.implClass)
+
   private def surfaceFingerprint(
     registrations: List[Registration],
     traits: Seq[SourceDiscovery.AgentTrait],
     tools: Seq[SourceDiscovery.ToolTrait],
+    toolMiddlewares: Seq[SourceDiscovery.ToolMiddlewareImpl],
+    universalToolMiddlewares: Seq[SourceDiscovery.UniversalToolMiddlewareImpl],
     sourceHashes: Seq[(String, String)]
   ): String = {
     val traitsByFqn  = traits.map(t => s"${t.pkg}.${t.name}" -> t).toMap
@@ -465,13 +580,52 @@ object AutoRegisterCodegen {
         }
 
         s"toolImpl=${impl.pkg}.${impl.implClass}|$toolSurface"
+      case Registration.ToolMiddleware(impl) =>
+        impl match {
+          case monomorphic: MonomorphicToolMiddlewareImpl =>
+            toolMiddlewares
+              .find(middleware => middleware.pkg == monomorphic.pkg && middleware.implClass == monomorphic.implClass)
+              .map(middleware =>
+                s"middleware=${middleware.pkg}.${middleware.implClass}|source=${middleware.sourceHash}|surface=${middleware.surfaceHash}"
+              )
+              .getOrElse(
+                s"middleware=${monomorphic.pkg}.${monomorphic.implClass}|presented=${monomorphic.presentedToolType}|expected=${monomorphic.expectedToolType}|transparent=${monomorphic.transparent}"
+              )
+          case universal: UniversalToolMiddlewareImpl =>
+            universalToolMiddlewares
+              .find(middleware => middleware.pkg == universal.pkg && middleware.implClass == universal.implClass)
+              .map(middleware =>
+                s"universalMiddleware=${middleware.pkg}.${middleware.implClass}|source=${middleware.sourceHash}|surface=${middleware.surfaceHash}"
+              )
+              .getOrElse(s"universalMiddleware=${universal.pkg}.${universal.implClass}")
+        }
     }.mkString("\n")
 
+    val registrationPackage = registrations.headOption.map {
+      case Registration.Agent(impl)          => impl.pkg
+      case Registration.Tool(impl)           => impl.pkg
+      case Registration.ToolMiddleware(impl) => impl.pkg
+    }
+    val middlewareSurface = registrationPackage.toList.flatMap { pkg =>
+      toolMiddlewares
+        .filter(_.pkg == pkg)
+        .map(middleware =>
+          s"middleware=${middleware.pkg}.${middleware.implClass}|source=${middleware.sourceHash}|surface=${middleware.surfaceHash}"
+        ) ++
+        universalToolMiddlewares
+          .filter(_.pkg == pkg)
+          .map(middleware =>
+            s"universalMiddleware=${middleware.pkg}.${middleware.implClass}|source=${middleware.sourceHash}|surface=${middleware.surfaceHash}"
+          )
+    }.sorted.mkString("\n")
+
     val sourceSurface =
-      if (registrations.exists(_.isInstanceOf[Registration.Tool]))
+      if (registrations.exists(_.isInstanceOf[Registration.Tool]) || middlewareSurface.nonEmpty)
         sourceHashes.map { case (path, hash) => s"source=$path:$hash" }.mkString("\n")
       else ""
-    val surface = s"$registeredSurface\n$sourceSurface"
+    val surface =
+      if (middlewareSurface.isEmpty) s"$registeredSurface\n$sourceSurface"
+      else s"$registeredSurface\n$middlewareSurface\n$sourceSurface"
 
     sha256Hex(surface)
   }
