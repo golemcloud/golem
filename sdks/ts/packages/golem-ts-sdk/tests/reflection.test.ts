@@ -31,7 +31,6 @@ import {
 } from '../src/internal/schema-model';
 import { dynamicClient, getAgentType, getAgentTypeByAgentId } from '../src/reflection';
 import { RemoteCallError } from '../src/client';
-import { clientIdentity } from '../src/clientIdentity';
 import { Uuid } from '../src/uuid';
 
 const stringGraph: SchemaGraph = { defs: new Map(), root: t.string() };
@@ -197,7 +196,11 @@ describe('agent reflection', () => {
     const known = reflected.client.getPhantom({ id: 'one' }, phantomId);
     const fresh = reflected.client.newPhantom({ id: 'two' });
 
-    expect(clientIdentity(known)).toEqual({ agentId: 'ReflectedEcho', phantomId });
+    expect(reflected.agentId({ id: 'one' }, phantomId)).toMatchObject({
+      agentId: 'MockAgent()',
+      componentId: reflected.implementedBy,
+    });
+    expect(known.agentId).toEqual(reflected.agentId({ id: 'one' }, phantomId));
     expect(fresh).toBeInstanceOf(Object);
     expect('client' in fresh).toBe(false);
   });

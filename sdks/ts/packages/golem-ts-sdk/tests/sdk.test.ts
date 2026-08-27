@@ -19,8 +19,7 @@ import type { CancellationToken, Datetime } from 'golem:agent/host@2.0.0';
 import { defineAgent } from '../src/defineAgent';
 import type { AgentSpec } from '../src/defineAgent';
 import { method } from '../src/method';
-import { clientFor, defineAgentClient, RemoteCallError } from '../src/client';
-import { clientIdentity } from '../src/clientIdentity';
+import { defineAgentClient, RemoteCallError } from '../src/client';
 import { compileSchema } from '../src/schema/adapter';
 import type { StandardSchemaV1 } from '../src/schema/standardSchema';
 import { s } from '../src/schema/markers';
@@ -44,9 +43,10 @@ function remoteClientTypeChecks(): void {
       add: method({ input: { by: z.number() }, returns: z.number() }),
     },
   });
-  const factory = clientFor(def);
-  const client = factory({ name: 'counter' });
+  const factory = def.client;
+  const client = factory.get({ name: 'counter' });
   const definitionClient = def.client.get({ name: 'counter' });
+  const agentId = def.agentId({ name: 'counter' });
   const controller = new AbortController();
   void client.ping({ signal: controller.signal });
   void client.add({ by: 1 }, { signal: controller.signal });
@@ -68,20 +68,23 @@ function remoteClientTypeChecks(): void {
     id: { name: z.string() },
     methods: { ping: method({ input: {}, returns: z.string() }) },
   });
-  const ephemeralFactory = clientFor(ephemeralDef);
+  const ephemeralFactory = ephemeralDef.client;
   const ephemeral = ephemeralFactory.newPhantom({ name: 'counter' });
   void ephemeral.ping().then(({ metadata, value }) => ({ metadata, value }));
   const ephemeralMetadata = ephemeral.ping.trigger();
   const ephemeralReceipt = ephemeral.ping.schedule(at);
   const knownEphemeral = ephemeralDef.client.getPhantom({ name: 'counter' }, new Uuid(1n, 2n));
+  const ephemeralAgentId = ephemeralDef.agentId({ name: 'counter' }, new Uuid(1n, 2n));
   void knownEphemeral.ping();
   // @ts-expect-error ephemeral factories cannot address a stable agent directly
-  ephemeralFactory({ name: 'counter' });
+  ephemeralFactory.get({ name: 'counter' });
   // @ts-expect-error ephemeral clients have no reusable pre-invocation phantom id
   void ephemeral.phantomId;
   void pingToken;
   void addToken;
   void phantomId;
+  void agentId;
+  void ephemeralAgentId;
   void ephemeralMetadata;
   void ephemeralReceipt;
 
@@ -565,7 +568,7 @@ describe('RPC client', () => {
     expect(() => definition.client.get({})).toThrow(RemoteCallError);
   });
 
-  it('reads client identity externally even when method names would collide', () => {
+  it('constructs identity on the definition even when a method name would collide', () => {
     const phantomId = new Uuid(1n, 2n);
     const def = defineAgentClient({
       name: 'ClientIdentityAgent',
@@ -575,15 +578,16 @@ describe('RPC client', () => {
     const client = def.client.getPhantom({}, phantomId);
 
     expect(client.agentId).toBeTypeOf('function');
-    expect(clientIdentity(client)).toEqual({ agentId: 'MockAgent()', phantomId });
+    expect(def.agentId({}, phantomId)).toMatchObject({ agentId: 'MockAgent()' });
   });
 
   it('creates a fresh phantom client and exposes the generated id', () => {
     const phantomId = new Uuid(1n, 2n);
     const generate = vi.spyOn(Uuid, 'generate').mockReturnValue(phantomId);
-    const phantom = clientFor(clientDef).newPhantom({ name: 'counter' }, { greeting: 'hello' });
+    const phantom = clientDef.client.newPhantom({ name: 'counter' }, { greeting: 'hello' });
 
     expect(phantom.phantomId).toBe(phantomId);
+    expect(phantom.agentId).toEqual(clientDef.agentId({ name: 'counter' }, phantomId));
     expect(phantom.client.ping).toBeTypeOf('function');
     const constructorArgs = vi.mocked(WasmRpc).mock.calls.at(-1)!;
     expect(constructorArgs[2]).toBe(phantomId);
@@ -599,14 +603,14 @@ describe('RPC client', () => {
         phantomId: method({ input: {}, returns: z.string() }),
       },
     });
-    const phantom = clientFor(def).newPhantom({});
+    const phantom = def.client.newPhantom({});
 
     expect(typeof phantom.client.phantomId).toBe('function');
     expect(phantom.phantomId).toBeInstanceOf(Uuid);
   });
 
   it('returns cancellation tokens from schedule and removes the old operations', () => {
-    const client = clientFor(clientDef)({ name: 'counter' });
+    const client = clientDef.client.get({ name: 'counter' });
     const rpc = latestRpc();
     const token = { cancel: vi.fn() };
     rpc.scheduleCancelableInvocation.mockReturnValue({
@@ -631,7 +635,7 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
     const makeAgentIdCalls = vi.mocked(makeAgentId).mock.calls.length;
-    const client = clientFor(ephemeralDef).newPhantom({ name: 'counter' });
+    const client = ephemeralDef.client.newPhantom({ name: 'counter' });
     const rpc = latestRpc();
     const metadata = { agentId: 'final-agent-id', idempotencyKey: 'key' };
     const future = {
@@ -660,7 +664,7 @@ describe('RPC client', () => {
     const phantomId = new Uuid(1n, 2n);
     const agentId = 'MissingSingleOutputAgent(1)[00000000-0000-0001-0000-000000000002]';
     vi.mocked(makeAgentId).mockReturnValueOnce(agentId);
-    const client = clientFor(def)({ id: 1n }, phantomId);
+    const client = def.client.getPhantom({ id: 1n }, phantomId);
     const rpc = latestRpc();
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
@@ -688,7 +692,7 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
     vi.mocked(makeAgentId).mockReturnValueOnce('MismatchedSingleOutputAgent()');
-    const client = clientFor(def)({});
+    const client = def.client.get({});
     const rpc = latestRpc();
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'agent-id', idempotencyKey: 'key' },
@@ -709,7 +713,7 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
     vi.mocked(makeAgentId).mockReturnValueOnce('BigintRemoteErrorAgent()');
-    const client = clientFor(def)({});
+    const client = def.client.get({});
     const rpc = latestRpc();
     const errorCodec = compileSchema(s.u64());
     rpc.asyncInvokeAndAwait.mockReturnValue({
@@ -739,13 +743,18 @@ describe('RPC client', () => {
       id: { tenant: z.string(), caller: s.principal() },
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
-    const factory = clientFor(def);
+    const factory = def.client;
 
-    expect(() =>
-      (factory as unknown as (id: { tenant: string }) => unknown)({ tenant: 'acme' }),
-    ).not.toThrow();
+    expect(() => factory.get({ tenant: 'acme' })).not.toThrow();
     const constructorTree = vi.mocked(WasmRpc).mock.calls.at(-1)![1];
     expect(schemaValueFromWit(constructorTree)).toEqual({
+      tag: 'record',
+      fields: [{ tag: 'string', value: 'acme' }],
+    });
+
+    expect(() => def.agentId({ tenant: 'acme' })).not.toThrow();
+    const identityTree = vi.mocked(makeAgentId).mock.calls.at(-1)![1];
+    expect(schemaValueFromWit(identityTree)).toEqual({
       tag: 'record',
       fields: [{ tag: 'string', value: 'acme' }],
     });
@@ -759,7 +768,7 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
 
-    clientFor(def)({}, undefined, {});
+    def.client.get({}, {});
 
     expect(vi.mocked(WasmRpc).mock.calls.at(-1)![3]).toEqual([]);
   });
@@ -772,11 +781,11 @@ describe('RPC client', () => {
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
 
-    expect(() => clientFor(def)({}, undefined, { nested: 'not-an-object' })).toThrow();
+    expect(() => def.client.get({}, { nested: 'not-an-object' })).toThrow();
   });
 
   it('accepts cancellation options on input and zero-input calls', async () => {
-    const client = clientFor(clientDef)({ name: 'counter' });
+    const client = clientDef.client.get({ name: 'counter' });
     const rpc = latestRpc();
     const controller = new AbortController();
     controller.abort('cancelled');

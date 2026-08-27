@@ -17,7 +17,6 @@ import {
   getAgentType as hostGetAgentType,
   getAgentTypeByAgentId as hostGetAgentTypeByAgentId,
   parseAgentId,
-  type AgentId,
   type CancelableScheduledInvocationReceipt,
   type Datetime,
   type InvocationMetadata,
@@ -40,10 +39,8 @@ import {
 } from './internal/schema-model';
 import { SchemaRef, type JsonValue } from './schema/ref';
 import { Uuid } from './uuid';
-import { registerClientIdentity } from './clientIdentity';
-
-export { clientIdentity } from './clientIdentity';
-export type { AgentClientIdentity } from './clientIdentity';
+import { ComponentId } from './ids';
+import { AgentId } from './agentId';
 
 export interface ReflectedInvocation<T> {
   readonly metadata: InvocationMetadata;
@@ -93,9 +90,25 @@ export class AgentType {
   method(name: string): AgentMethod | undefined {
     return this.methods.find((method) => method.name === name);
   }
+
+  /** Construct an agent identity from canonical JSON constructor input. */
+  agentId(input: JsonValue, phantomId?: Uuid): AgentId {
+    return this.agentIdValue(this.constructorInput.packJson(input), phantomId);
+  }
+
+  /** Construct an agent identity from an already packed constructor value. */
+  agentIdValue(input: SchemaValue, phantomId?: Uuid): AgentId {
+    return AgentId.create({
+      componentId: ComponentId.from(this.implementedBy),
+      typeName: this.name,
+      constructorValue: input,
+      phantomId,
+    });
+  }
 }
 
 export interface ReflectedPhantomClient {
+  readonly agentId: AgentId;
   readonly phantomId: Uuid;
   readonly client: ReflectedAgentClient;
 }
@@ -128,17 +141,19 @@ export class ReflectedAgentClientFactory {
   newPhantomValue(input: SchemaValue): ReflectedPhantomClient | ReflectedAgentClient {
     if (this.agentType.mode === 'ephemeral') return this.create(input);
     const phantomId = Uuid.generate();
+    const agentId = this.agentType.agentIdValue(input, phantomId);
     return {
+      agentId,
       phantomId,
-      client: this.create(input, phantomId),
+      client: this.create(input, phantomId, agentId),
     };
   }
 
-  private create(input: SchemaValue, phantomId?: Uuid): ReflectedAgentClient {
+  private create(input: SchemaValue, phantomId?: Uuid, agentId?: AgentId): ReflectedAgentClient {
     return new ReflectedAgentClient(
       this.agentType,
       resolveRemoteAgentFallibly(this.agentType.name, input, phantomId, [], this.agentType.mode),
-      phantomId,
+      agentId ?? this.agentType.agentIdValue(input, phantomId),
     );
   }
 
@@ -150,15 +165,14 @@ export class ReflectedAgentClientFactory {
 }
 
 export class ReflectedAgentClient {
-  readonly agentId: string;
+  readonly agentId: AgentId;
 
   constructor(
     private readonly agentType: AgentType,
     private readonly remote: RemoteAgentHandle,
-    phantomId?: Uuid,
+    agentId: AgentId,
   ) {
-    this.agentId = remote.agentId;
-    registerClientIdentity(this, { agentId: this.agentId, phantomId });
+    this.agentId = agentId;
   }
 
   method(name: string): ReflectedAgentMethod {
@@ -228,10 +242,6 @@ export class DynamicAgentClient {
       schemaValueFromWit(constructorValue.value),
       phantomId === undefined ? undefined : Uuid.from(phantomId),
     );
-    registerClientIdentity(this, {
-      agentId: agentId.agentId,
-      phantomId: phantomId === undefined ? undefined : Uuid.from(phantomId),
-    });
   }
 
   method(name: string): DynamicAgentMethod {

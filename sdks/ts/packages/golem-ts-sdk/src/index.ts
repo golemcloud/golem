@@ -51,7 +51,8 @@ import './schema/effect';
 
 export { Uuid } from './uuid';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
-export { ParsedAgentId } from './agentId';
+export { AgentId } from './agentId';
+export type { AgentIdCreateOptions, AgentIdParts } from './agentId';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
@@ -169,10 +170,8 @@ export type {
   UniversalToolUnderlyingInvoke,
 } from './tool';
 export type { ToolCallErrorCause, ToolClientOptions } from './toolClient';
-export { clientFor, defineAgentClient, RemoteCallError } from './client';
+export { defineAgentClient, RemoteCallError } from './client';
 export type {
-  AgentClientFactory,
-  AgentClientSpec,
   AgentClientFactory,
   AgentClientSpec,
   EphemeralInvocationResult,
@@ -186,8 +185,6 @@ export {
   golemTool010ToolMiddlewareGuest,
   toolMiddlewareGuest,
 } from './internal/tool/middlewareGuest';
-export { clientIdentity } from './clientIdentity';
-export type { AgentClientIdentity } from './clientIdentity';
 export * from './keyvalue';
 export * from './blobstore';
 export * from './websocket';
