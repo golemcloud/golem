@@ -541,7 +541,7 @@ pub struct DbPostgresConfig {
     ///
     /// `None` leaves sqlx's own default (30s) in place. Deliberately not shortened here: this
     /// struct is shared by every Postgres pool in the workspace, and a pool whose caller does not
-    /// retry is better off waiting out a load spike than failing six times sooner.
+    /// retry is better off waiting out a load spike than failing N times sooner.
     ///
     /// Shortening it is worthwhile only where something above the pool retries, because a retry
     /// loop cannot make progress while a single attempt is still parked - see the key-value
