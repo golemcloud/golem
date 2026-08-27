@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
+import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
 export const SelfRpcAgent = defineAgent({
     name: 'SelfRpcAgent',
@@ -10,7 +10,7 @@ export const SelfRpcAgent = defineAgent({
     },
 });
 
-const selfClient = clientFor(SelfRpcAgent);
+const selfClient = SelfRpcAgent.client;
 
 export const SelfRpcAgentImpl = SelfRpcAgent.implement({
     init: ({ id }) => ({ name: id.name }),
@@ -19,7 +19,7 @@ export const SelfRpcAgentImpl = SelfRpcAgent.implement({
             return;
         },
         async selfRpc() {
-            return selfClient({ name: this.name }).doWork();
+            return selfClient.get({ name: this.name }).doWork();
         },
     },
 });

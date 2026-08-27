@@ -1878,7 +1878,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
         &component_source_code_main_file,
         indoc! { r#"
             import { z } from 'zod';
-            import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
             export const TargetAgent = defineAgent({
               name: 'TargetAgent',
@@ -1897,7 +1897,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
               },
             });
 
-            const targetClient = clientFor(TargetAgent);
+            const targetClient = TargetAgent.client;
 
             export const CallerAgent = defineAgent({
               name: 'CallerAgent',
@@ -1911,7 +1911,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
               init: ({ id }) => ({ id: id.id }),
               methods: {
                 async callTarget({ targetId }) {
-                  return await targetClient({ id: targetId }).ping();
+                  return await targetClient.get({ id: targetId }).ping();
                 },
               },
             });

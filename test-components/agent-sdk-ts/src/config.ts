@@ -3,7 +3,6 @@ import {
   defineAgent,
   method,
   s,
-  clientFor,
   awaitPromise,
   createPromise,
 } from '@golemcloud/golem-ts-sdk';
@@ -258,10 +257,10 @@ export const NestedRequiredGroupConfigAgentImpl = NestedRequiredGroupConfigAgent
 });
 
 // `RpcLocalConfigAgent` invokes `LocalConfigAgent` with per-call config
-// overrides via the config-on-RPC form `clientFor(def)(id, phantomId?, config)`:
+// overrides via `definition.client.get(id, config)`:
 // the non-secret override leaves present in `config` are encoded into the target
 // `WasmRpc`'s `agentConfig` list (see `agent_config/rpc.rs`).
-const localConfigClient = clientFor(LocalConfigAgent);
+const localConfigClient = LocalConfigAgent.client;
 
 export const RpcLocalConfigAgent = defineAgent({
   name: 'RpcLocalConfigAgent',
@@ -287,7 +286,7 @@ export const RpcLocalConfigAgentImpl = RpcLocalConfigAgent.implement({
       if (config.nested_a !== undefined) {
         overrides.nested = { a: config.nested_a };
       }
-      const client = localConfigClient({ _name: this.name }, undefined, overrides);
+      const client = localConfigClient.get({ _name: this.name }, overrides);
       return await client.echoLocalConfig();
     },
   },

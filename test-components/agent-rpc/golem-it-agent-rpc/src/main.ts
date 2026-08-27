@@ -3,7 +3,6 @@ import {
     defineAgent,
     method,
     s,
-    clientFor,
     createPromise,
     awaitPromise,
 } from '@golemcloud/golem-ts-sdk';
@@ -34,7 +33,7 @@ export const ChildAgent = defineAgent({
     },
 });
 
-const childClient = clientFor(ChildAgent);
+const childClient = ChildAgent.client;
 
 export const ChildAgentImpl = ChildAgent.implement({
     init: ({ id }) => ({ id: id.id }),
@@ -78,13 +77,13 @@ export const TestAgentImpl = TestAgent.implement({
             const result: number[] = [];
             for (const chunk of chunks) {
                 console.log(`Processing chunk ${chunk}`);
-                const promises = chunk.map(async (id) => await childClient({ id }).process());
+                const promises = chunk.map(async (id) => await childClient.get({ id }).process());
                 result.push(...(await Promise.all(promises)));
             }
             return result;
         },
         async envVarTest() {
-            const child = await childClient({ id: 0 }).envVars();
+            const child = await childClient.get({ id: 0 }).envVars();
             const parent = Object.entries(process.env).map(([key, value]) => ({ key, value: value ?? '' }));
             return {
                 parent,
@@ -92,7 +91,7 @@ export const TestAgentImpl = TestAgent.implement({
             };
         },
         async longRpcCall({ durationInMillis }) {
-            await childClient({ id: 1000 }).longRpcCall({ durationInMillis });
+            await childClient.get({ id: 1000 }).longRpcCall({ durationInMillis });
         },
     },
 });
@@ -123,7 +122,7 @@ export const SelfRpcAgent = defineAgent({
     },
 });
 
-const selfRpcClient = clientFor(SelfRpcAgent);
+const selfRpcClient = SelfRpcAgent.client;
 
 export const SelfRpcAgentImpl = SelfRpcAgent.implement({
     init: ({ id }) => ({ name: id.name }),
@@ -132,7 +131,7 @@ export const SelfRpcAgentImpl = SelfRpcAgent.implement({
             return;
         },
         async selfRpc() {
-            return selfRpcClient({ name: this.name }).doWork();
+            return selfRpcClient.get({ name: this.name }).doWork();
         },
     },
 });
@@ -195,8 +194,8 @@ export const TsBlockingAgentImpl = TsBlockingAgent.implement({
     },
 });
 
-const tsCounterClient = clientFor(TsCounter);
-const tsBlockingClient = clientFor(TsBlockingAgent);
+const tsCounterClient = TsCounter.client;
+const tsBlockingClient = TsBlockingAgent.client;
 
 export const TsCancelTester = defineAgent({
     name: 'TsCancelTester',
@@ -215,7 +214,7 @@ export const TsCancelTesterImpl = TsCancelTester.implement({
          * short delay, and returns "aborted" if the AbortError is caught.
          */
         async testAbortBeforeAwait({ counterName }) {
-            const counter = tsCounterClient({ name: counterName });
+            const counter = tsCounterClient.get({ name: counterName });
             const controller = new AbortController();
 
             // Abort after 100ms — slowIncBy takes 5000ms so it is still pending.
@@ -240,7 +239,7 @@ export const TsCancelTesterImpl = TsCancelTester.implement({
          * Returns the counter value.
          */
         async testAbortAfterComplete({ counterName }) {
-            const counter = tsCounterClient({ name: counterName });
+            const counter = tsCounterClient.get({ name: counterName });
             const controller = new AbortController();
 
             // Completes quickly.
@@ -270,7 +269,7 @@ export const TsCancelCallerAgentImpl = TsCancelCallerAgent.implement({
     init: ({ id }) => ({ name: id.name, lastOutcome: 'none' }),
     methods: {
         async callAndAbort({ targetName, delayMs }) {
-            const blocker = tsBlockingClient({ name: targetName });
+            const blocker = tsBlockingClient.get({ name: targetName });
             const controller = new AbortController();
 
             const timer = setTimeout(() => controller.abort('cancelled by test'), delayMs);

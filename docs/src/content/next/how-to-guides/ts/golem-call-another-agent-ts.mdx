@@ -1,23 +1,22 @@
 # Calling Another Agent (TypeScript)
 
-There are two typed RPC APIs. Use `clientFor` when both agents are defined in the
+There are two typed RPC APIs. Use a definition's `.client` when both agents are defined in the
 same component. Use a generated guest client when the target is in another
 component (including a component written in another language).
 
-## Same Component: `clientFor`
+## Same Component: Definition Client
 
-Pass the agent's **definition** (the value returned by `defineAgent`) to
-`clientFor`, then call the returned factory with the target agent's **id record**:
+Use the `.client` attached to the agent's **definition** (the value returned by
+`defineAgent`), then call `.get` with the target agent's **id record**:
 
 ```typescript
-import { clientFor } from '@golemcloud/golem-ts-sdk';
 import { Counter } from './counter-agent.js';
 
 // Build the factory once (module scope is fine — it caches the codecs).
-const counterClient = clientFor(Counter);
+const counterClient = Counter.client;
 
 // Get a handle to a specific instance by its id record.
-const c1 = counterClient({ name: 'my-counter' });
+const c1 = counterClient.get({ name: 'my-counter' });
 ```
 
 The id argument is the record declared in the target agent's `id: { … }` (for a
@@ -39,10 +38,10 @@ call throws a `RemoteCallError`.
 
 ## Phantom Agents
 
-`clientFor(Def)` accepts an optional second `phantomId` argument to address a
-specific phantom instance that shares the same id record. To create a fresh
-phantom, call `clientFor(Def).newPhantom(id)`; the returned details contain the
-typed client and generated `phantomId`, which can be saved and reused. See the
+Call `Def.client.getPhantom(id, phantomId)` to address a specific phantom
+instance that shares the same id record. To create a fresh phantom, call
+`Def.client.newPhantom(id)`; the returned details contain the typed client, full
+`agentId`, and generated `phantomId`, which can be saved and reused. See the
 [`golem-multi-instance-agent-ts`](/next/how-to-guides/ts/golem-multi-instance-agent-ts) guide.
 
 ## Different Component: Generated Guest Client
