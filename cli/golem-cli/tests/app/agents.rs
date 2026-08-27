@@ -1897,8 +1897,6 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
               },
             });
 
-            const targetClient = TargetAgent.client;
-
             export const CallerAgent = defineAgent({
               name: 'CallerAgent',
               id: { id: z.string() },
@@ -1911,7 +1909,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
               init: ({ id }) => ({ id: id.id }),
               methods: {
                 async callTarget({ targetId }) {
-                  return await targetClient.get({ id: targetId }).ping();
+                  return await TargetAgent.client.get({ id: targetId }).ping();
                 },
               },
             });

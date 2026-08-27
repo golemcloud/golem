@@ -64,8 +64,6 @@ export const QuotaRpcReceiverImpl = QuotaRpcReceiver.implement({
   },
 });
 
-const receiverClient = QuotaRpcReceiver.client;
-
 export const QuotaRpcSender = defineAgent({
   name: 'QuotaRpcSender',
   id: { name: z.string() },
@@ -92,7 +90,7 @@ export const QuotaRpcSenderImpl = QuotaRpcSender.implement({
       const childToken = split(token, BigInt(childExpectedUse));
 
       const receiverName = `${this.name}-receiver`;
-      receiverClient.get({ _name: receiverName }).reserveAndCallInLoop.trigger({
+      QuotaRpcReceiver.client.get({ _name: receiverName }).reserveAndCallInLoop.trigger({
         childToken,
         host,
         port,

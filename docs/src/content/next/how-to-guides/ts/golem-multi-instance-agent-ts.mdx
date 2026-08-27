@@ -18,7 +18,7 @@ agent-type(param1, param2)
 
 ## Creating and Addressing Phantom Agents (RPC)
 
-You address another agent through the typed client factory attached to its `defineAgent` definition:
+You address another agent through the typed `client` namespace attached to its `defineAgent` definition:
 
 ```typescript
 Def.client.get(id, config?)                         // non-phantom
@@ -57,25 +57,22 @@ Counter.implement({
     },
 });
 
-// --- In another agent, using the RPC client factory: ---
-const counters = Counter.client;
-
 // Non-phantom: always the same agent for the same name
-const shared = counters.get({ name: 'shared' });
+const shared = Counter.client.get({ name: 'shared' });
 await shared.increment();
 
-// New phantom: the factory returns the client and its generated UUID.
-const { client: phantom1, phantomId: phantomId1 } = counters.newPhantom({
+// New phantom: the call returns the client and its generated UUID.
+const { client: phantom1, phantomId: phantomId1 } = Counter.client.newPhantom({
     name: 'shared',
 });
-const { client: phantom2 } = counters.newPhantom({ name: 'shared' });
+const { client: phantom2 } = Counter.client.newPhantom({ name: 'shared' });
 // phantom1 and phantom2 are different agents, both with name="shared"
 
 // Reconnect to an existing phantom by its UUID.
-const samePhantom = counters.getPhantom({ name: 'shared' }, phantomId1);
+const samePhantom = Counter.client.getPhantom({ name: 'shared' }, phantomId1);
 
 // A persisted UUID string can be restored later.
-const restoredPhantom = counters.getPhantom(
+const restoredPhantom = Counter.client.getPhantom(
     { name: 'shared' },
     Uuid.parse(savedUuidString),
 );

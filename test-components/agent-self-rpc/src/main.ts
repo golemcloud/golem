@@ -10,8 +10,6 @@ export const SelfRpcAgent = defineAgent({
     },
 });
 
-const selfClient = SelfRpcAgent.client;
-
 export const SelfRpcAgentImpl = SelfRpcAgent.implement({
     init: ({ id }) => ({ name: id.name }),
     methods: {
@@ -19,7 +17,7 @@ export const SelfRpcAgentImpl = SelfRpcAgent.implement({
             return;
         },
         async selfRpc() {
-            return selfClient.get({ name: this.name }).doWork();
+            return SelfRpcAgent.client.get({ name: this.name }).doWork();
         },
     },
 });
