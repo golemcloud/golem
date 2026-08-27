@@ -169,7 +169,10 @@ where
                     early_output,
                     early_inbound,
                 },
-                Err(_) => AcceptanceRace::InvocationFinished(invocation.await),
+                Err(_) => AcceptanceRace::InvocationFinished(match early_output {
+                    Some(output) => output,
+                    None => invocation.await,
+                }),
             },
             committed = &mut *acceptance_committed, if !commit_observed && commit_channel_open => {
                 match committed {
@@ -212,7 +215,10 @@ where
                         early_inbound: Some(request),
                     },
                     Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                        return AcceptanceRace::InvocationFinished(invocation.await);
+                        return AcceptanceRace::InvocationFinished(match early_output.take() {
+                            Some(output) => output,
+                            None => invocation.await,
+                        });
                     }
                     Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }
@@ -903,29 +909,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
             let mut completed_output = early_output;
-            if let Some(Err(error)) = completed_output.take() {
-                let details = error.to_string();
-                if let Err(finish_error) = durable_streams.fail_invocation(details).await {
-                    send_protocol_failure(&responses, finish_error).await;
-                    return;
-                }
-                let _ = durable_streams.pump_input_cancellations(&responses).await;
-                let _ = durable_streams.pump_output_streams(&responses).await;
-                send_worker_failure(&responses, error).await;
-                return;
-            }
-
             let persisted_result = match durable_streams.persisted_result().await {
-                Ok(Some(result)) => result,
-                Ok(None) if completed_output.is_some() => {
-                    send_protocol_failure(
-                        &responses,
-                        "durable invocation completed without a persisted session result"
-                            .to_string(),
-                    )
-                    .await;
-                    return;
-                }
+                Ok(Some(result)) => Some(result),
+                Ok(None) if completed_output.is_some() => None,
                 Ok(None) => {
                     let result = durable_streams.wait_persisted_result();
                     tokio::pin!(result);
@@ -933,7 +919,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         tokio::select! {
                             biased;
                             result = &mut result => match result {
-                                Ok(result) => break result,
+                                Ok(result) => break Some(result),
                                 Err(error) => {
                                     send_protocol_failure(&responses, error).await;
                                     return;
@@ -943,14 +929,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 Ok(output) => {
                                     completed_output = Some(Ok(output));
                                     match durable_streams.persisted_result().await {
-                                        Ok(Some(result)) => break result,
-                                        Ok(None) => {
-                                            send_protocol_failure(
-                                                &responses,
-                                                "durable invocation completed without a persisted session result".to_string(),
-                                            ).await;
-                                            return;
-                                        }
+                                        Ok(result) => break result,
                                         Err(error) => {
                                             send_protocol_failure(&responses, error).await;
                                             return;
@@ -958,20 +937,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     }
                                 }
                                 Err(error) => {
-                                    let details = error.to_string();
-                                    if let Err(finish_error) = durable_streams
-                                        .fail_invocation(details)
-                                        .await
-                                    {
-                                        send_protocol_failure(&responses, finish_error).await;
-                                        return;
+                                    completed_output = Some(Err(error));
+                                    match durable_streams.persisted_result().await {
+                                        Ok(result) => break result,
+                                        Err(error) => {
+                                            send_protocol_failure(&responses, error).await;
+                                            return;
+                                        }
                                     }
-                                    let _ = durable_streams
-                                        .pump_input_cancellations(&responses)
-                                        .await;
-                                    let _ = durable_streams.pump_output_streams(&responses).await;
-                                    send_worker_failure(&responses, error).await;
-                                    return;
                                 }
                             },
                             request = inbound.message() => match request {
@@ -1007,6 +980,30 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     send_protocol_failure(&responses, error).await;
                     return;
                 }
+            };
+            if matches!(completed_output, Some(Err(_))) {
+                let Some(Err(error)) = completed_output.take() else {
+                    unreachable!("completed output was checked to contain an error");
+                };
+                let details = error.to_string();
+                if let Err(finish_error) = durable_streams.fail_invocation(details).await {
+                    send_protocol_failure(&responses, finish_error).await;
+                    return;
+                }
+                if persisted_result.is_none() {
+                    let _ = durable_streams.pump_input_cancellations(&responses).await;
+                    send_worker_failure(&responses, error).await;
+                    return;
+                }
+                completed_output = Some(Err(error));
+            }
+            let Some(persisted_result) = persisted_result else {
+                send_protocol_failure(
+                    &responses,
+                    "durable invocation completed without a persisted session result".to_string(),
+                )
+                .await;
+                return;
             };
             if responses
                 .send(InvocationResponse {
@@ -1123,6 +1120,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
                     }
                 }
+            }
+            if let Some(Err(error)) = completed_output.take() {
+                let _ = durable_streams.pump_input_cancellations(&responses).await;
+                send_worker_failure(&responses, error).await;
+                return;
             }
             if let Err(error) = durable_streams.pump_input_cancellations(&responses).await {
                 send_protocol_failure(&responses, error).await;
@@ -2886,6 +2888,36 @@ mod freshness_tests {
         assert!(matches!(
             race,
             AcceptanceRace::InvocationFinished("invocation error")
+        ));
+    }
+
+    #[test]
+    async fn dropped_acceptance_sender_does_not_repoll_cached_invocation_output() {
+        let (acceptance_committed_tx, mut acceptance_committed_rx) =
+            tokio::sync::oneshot::channel();
+        let (accepted_tx, mut accepted_rx) = tokio::sync::oneshot::channel::<()>();
+        let actor = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            drop(accepted_tx);
+        });
+        let invocation = async move {
+            acceptance_committed_tx.send(()).unwrap();
+            "invocation output"
+        };
+        tokio::pin!(invocation);
+
+        let race = race_invocation_acceptance(
+            &mut accepted_rx,
+            &mut acceptance_committed_rx,
+            invocation.as_mut(),
+            future::pending::<()>(),
+        )
+        .await;
+        actor.await.unwrap();
+
+        assert!(matches!(
+            race,
+            AcceptanceRace::InvocationFinished("invocation output")
         ));
     }
 }

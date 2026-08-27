@@ -1520,11 +1520,12 @@ mod tests {
             .await
             .unwrap();
         let (websocket_sender, mut websocket_receiver) = tokio::sync::mpsc::channel(2);
-        let requests = tokio::spawn(forward_public_requests(
+        let requests = tokio::spawn(forward_public_requests_with_timeout(
             websocket_stream,
             internal_sender,
             websocket_sender.clone(),
             state.clone(),
+            std::time::Duration::from_millis(25),
         ));
         let input = PublicInvocationRequest {
             request: Some(public_invocation_request::Request::InputItem(
