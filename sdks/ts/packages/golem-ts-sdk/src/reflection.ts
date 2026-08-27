@@ -42,6 +42,14 @@ import { Uuid } from './uuid';
 import { ComponentId } from './ids';
 import { AgentId } from './agentId';
 
+export {
+  isRemoteCallError,
+  RemoteCallError,
+  RemoteOutputError,
+  type RemoteAgentError,
+  type RemoteCallErrorCause,
+} from './bridge/agent';
+
 export interface ReflectedInvocation<T> {
   readonly metadata: InvocationMetadata;
   readonly value?: T;

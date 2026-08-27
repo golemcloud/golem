@@ -144,13 +144,15 @@ export type {
   ToolResult,
   ToolSubtreeModel,
 } from './tool';
-export { defineAgentClient, RemoteCallError } from './client';
+export { defineAgentClient, isRemoteCallError, RemoteCallError, RemoteOutputError } from './client';
 export type {
   AgentClientFactory,
   AgentClientSpec,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
   PhantomClientDetails,
+  RemoteAgentError,
+  RemoteCallErrorCause,
   RemoteCallOptions,
   RemoteClient,
   RemoteClientFactory,

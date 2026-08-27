@@ -14,22 +14,54 @@ import { awaitAbortable, throwIfAborted } from '../internal/pollableUtils';
 import {
   schemaValueFromWit,
   schemaValueToWit,
+  typedSchemaValueFromWit,
   typedSchemaValueToWit,
   type SchemaValue,
   type TypedSchemaValue,
 } from '../internal/schema-model';
 import type { Uuid } from '../uuid';
 
+export type RemoteAgentError =
+  | { readonly tag: 'invalid-input'; readonly details: string }
+  | { readonly tag: 'invalid-method'; readonly details: string }
+  | { readonly tag: 'invalid-type'; readonly details: string }
+  | { readonly tag: 'invalid-agent-id'; readonly details: string }
+  | { readonly tag: 'custom-error'; readonly value: TypedSchemaValue };
+
+export type RemoteCallErrorCause =
+  | { readonly tag: 'protocol-error'; readonly details: string }
+  | { readonly tag: 'denied'; readonly details: string }
+  | { readonly tag: 'not-found'; readonly details: string }
+  | { readonly tag: 'remote-internal-error'; readonly details: string }
+  | { readonly tag: 'remote-agent-error'; readonly error: RemoteAgentError };
+
 export class RemoteCallError extends Error {
   readonly _tag = 'RemoteCallError';
+  override readonly cause: RemoteCallErrorCause;
 
-  constructor(
-    message: string,
-    public readonly rpcError?: RpcError,
-    options?: ErrorOptions,
-  ) {
-    super(message, { cause: options?.cause ?? rpcError });
+  constructor(context: string, cause: RemoteCallErrorCause) {
+    super(`${context}: ${formatRemoteCallErrorCause(cause)}`, { cause });
     this.name = 'RemoteCallError';
+    this.cause = cause;
+  }
+}
+
+export function isRemoteCallError(error: unknown): error is RemoteCallError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { _tag?: unknown })._tag === 'RemoteCallError' &&
+    typeof (error as { message?: unknown }).message === 'string' &&
+    isRemoteCallErrorCause((error as { cause?: unknown }).cause)
+  );
+}
+
+export class RemoteOutputError extends Error {
+  readonly _tag = 'RemoteOutputError';
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'RemoteOutputError';
   }
 }
 export interface RemoteInvocationResult {
@@ -65,12 +97,72 @@ function isRpcError(error: unknown): error is RpcError {
 }
 
 function remoteCallError(context: string, error: RpcError): RemoteCallError {
-  return new RemoteCallError(
-    `${context}: ${JSON.stringify(error, (_, value) =>
-      typeof value === 'bigint' ? value.toString() : value,
-    )}`,
-    error,
-  );
+  return new RemoteCallError(context, mapRemoteCallErrorCause(error));
+}
+
+function mapRemoteCallErrorCause(error: RpcError): RemoteCallErrorCause {
+  switch (error.tag) {
+    case 'protocol-error':
+    case 'denied':
+    case 'not-found':
+    case 'remote-internal-error':
+      return { tag: error.tag, details: error.val };
+    case 'remote-agent-error':
+      return { tag: error.tag, error: mapRemoteAgentError(error.val) };
+  }
+}
+
+function isRemoteCallErrorCause(cause: unknown): cause is RemoteCallErrorCause {
+  if (typeof cause !== 'object' || cause === null) return false;
+  const tagged = cause as { tag?: unknown; details?: unknown; error?: unknown };
+  switch (tagged.tag) {
+    case 'protocol-error':
+    case 'denied':
+    case 'not-found':
+    case 'remote-internal-error':
+      return typeof tagged.details === 'string';
+    case 'remote-agent-error':
+      return isRemoteAgentError(tagged.error);
+    default:
+      return false;
+  }
+}
+
+function isRemoteAgentError(error: unknown): error is RemoteAgentError {
+  if (typeof error !== 'object' || error === null) return false;
+  const tagged = error as { tag?: unknown; details?: unknown; value?: unknown };
+  switch (tagged.tag) {
+    case 'invalid-input':
+    case 'invalid-method':
+    case 'invalid-type':
+    case 'invalid-agent-id':
+      return typeof tagged.details === 'string';
+    case 'custom-error':
+      return typeof tagged.value === 'object' && tagged.value !== null;
+    default:
+      return false;
+  }
+}
+
+function mapRemoteAgentError(
+  error: Extract<RpcError, { tag: 'remote-agent-error' }>['val'],
+): RemoteAgentError {
+  switch (error.tag) {
+    case 'invalid-input':
+    case 'invalid-method':
+    case 'invalid-type':
+    case 'invalid-agent-id':
+      return { tag: error.tag, details: error.val };
+    case 'custom-error':
+      return { tag: error.tag, value: typedSchemaValueFromWit(error.val) };
+  }
+}
+
+function formatRemoteCallErrorCause(cause: RemoteCallErrorCause): string {
+  if (cause.tag !== 'remote-agent-error') return `${cause.tag}: ${cause.details}`;
+  return cause.error.tag === 'custom-error'
+    ? 'remote-agent-error: custom-error'
+    : `remote-agent-error: ${cause.error.tag}: ${cause.error.details}`;
 }
 
 function mapRpcError<T>(context: string, operation: () => T): T {
@@ -190,8 +282,9 @@ function resolveRemoteAgentWith(
         value: result === undefined ? undefined : schemaValueFromWit(result),
       };
     } catch (error) {
-      throw new RemoteCallError(
+      throw new RemoteOutputError(
         `Remote agent ${agentId}.${method} returned an invalid schema value: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
       );
     }
   };

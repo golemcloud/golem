@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-import { WasmRpc } from 'golem:agent/host@2.0.0';
+import { WasmRpc, type RpcError as AgentRpcError } from 'golem:agent/host@2.0.0';
 import { ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
 import { bridge } from '../src';
@@ -367,8 +367,78 @@ describe('public bridge runtime', () => {
       },
     });
     await expect(remote.invokeAndAwait('broken', bridge.v.tuple([]))).rejects.toMatchObject({
-      _tag: 'RemoteCallError',
+      _tag: 'RemoteOutputError',
       message: expect.stringContaining('.broken returned an invalid schema value'),
+    });
+  });
+
+  it.each<{
+    raw: AgentRpcError;
+    mapped: bridge.RemoteCallErrorCause;
+  }>([
+    {
+      raw: { tag: 'protocol-error', val: 'bad protocol' },
+      mapped: { tag: 'protocol-error', details: 'bad protocol' },
+    },
+    {
+      raw: { tag: 'denied', val: 'not allowed' },
+      mapped: { tag: 'denied', details: 'not allowed' },
+    },
+    {
+      raw: { tag: 'not-found', val: 'missing target' },
+      mapped: { tag: 'not-found', details: 'missing target' },
+    },
+    {
+      raw: { tag: 'remote-internal-error', val: 'remote failure' },
+      mapped: { tag: 'remote-internal-error', details: 'remote failure' },
+    },
+    {
+      raw: { tag: 'remote-agent-error', val: { tag: 'invalid-input', val: 'bad input' } },
+      mapped: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-input', details: 'bad input' },
+      },
+    },
+    {
+      raw: { tag: 'remote-agent-error', val: { tag: 'invalid-method', val: 'bad method' } },
+      mapped: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-method', details: 'bad method' },
+      },
+    },
+    {
+      raw: { tag: 'remote-agent-error', val: { tag: 'invalid-type', val: 'bad type' } },
+      mapped: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-type', details: 'bad type' },
+      },
+    },
+    {
+      raw: {
+        tag: 'remote-agent-error',
+        val: { tag: 'invalid-agent-id', val: 'bad agent id' },
+      },
+      mapped: {
+        tag: 'remote-agent-error',
+        error: { tag: 'invalid-agent-id', details: 'bad agent id' },
+      },
+    },
+  ])('maps $raw.tag agent RPC failures to the public cause model', async ({ raw, mapped }) => {
+    const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
+      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+    };
+    rpc.asyncInvokeAndAwait.mockReturnValue({
+      metadata: { agentId: 'example', idempotencyKey: 'key' },
+      future: {
+        get: vi.fn().mockRejectedValue(raw),
+        cancel: vi.fn(),
+      },
+    });
+
+    await expect(remote.invokeAndAwait('broken', bridge.v.tuple([]))).rejects.toMatchObject({
+      _tag: 'RemoteCallError',
+      cause: mapped,
     });
   });
 

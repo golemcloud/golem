@@ -46,11 +46,17 @@ import { MethodSpec } from './method';
 import {
   resolveRemoteAgent,
   resolveRemoteAgentFallibly,
-  RemoteCallError,
+  RemoteOutputError,
   type AgentConfigEntry,
 } from './bridge/agent';
 
-export { RemoteCallError } from './bridge/agent';
+export {
+  isRemoteCallError,
+  RemoteCallError,
+  RemoteOutputError,
+  type RemoteAgentError,
+  type RemoteCallErrorCause,
+} from './bridge/agent';
 
 type InferRecord<R extends Record<string, StandardSchemaV1>> = {
   [K in keyof R]: StandardSchemaV1.InferOutput<R[K]>;
@@ -339,7 +345,7 @@ export function buildAgentClientSurface<
     const decodeOutput = (mc: CompiledRemoteMethod, val: unknown): unknown => {
       if (mc.output.tag === 'unit') return undefined;
       if (val === undefined) {
-        throw new RemoteCallError(
+        throw new RemoteOutputError(
           `Remote agent ${agentId}.${mc.name} returned no value for a non-unit output`,
         );
       }
@@ -348,8 +354,9 @@ export function buildAgentClientSurface<
         assertValueMatchesType(decoded, mc.output.codec.graph.root, mc.output.codec.graph);
         return mc.output.codec.fromValue(decoded);
       } catch (error) {
-        throw new RemoteCallError(
+        throw new RemoteOutputError(
           `Remote agent ${agentId}.${mc.name} returned an invalid output: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
         );
       }
     };
