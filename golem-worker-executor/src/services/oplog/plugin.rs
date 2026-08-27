@@ -762,14 +762,28 @@ impl OplogService for ForwardingOplogService {
         self.inner.delete(owned_agent_id, agent_mode).await
     }
 
-    async fn read(
+    async fn read_exact(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.inner.read(owned_agent_id, agent_mode, idx, n).await
+        self.inner
+            .read_exact(owned_agent_id, agent_mode, idx, n)
+            .await
+    }
+
+    async fn read_source(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner
+            .read_source(owned_agent_id, agent_mode, idx, n)
+            .await
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
@@ -1186,8 +1200,20 @@ impl Oplog for ForwardingOplog {
         self.inner.read(oplog_index).await
     }
 
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.inner.read_many(oplog_index, n).await
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner.read_exact(oplog_index, n).await
+    }
+
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner.read_source(oplog_index, n).await
     }
 
     async fn length(&self) -> u64 {
@@ -1478,17 +1504,6 @@ impl ForwardingOplogState {
         let batch_count = (batch_end.as_u64() - batch_start.as_u64() + 1) as usize;
         let entries = self.read_batch(batch_start, batch_count).await;
 
-        if entries.len() != batch_count {
-            tracing::error!(
-                "Expected {batch_count} entries for plugin {grant_id} [{batch_start}..{batch_end}], got {}",
-                entries.len()
-            );
-            if let Some(s) = self.plugin_state.get_mut(&grant_id) {
-                s.send_in_progress = false;
-            }
-            return;
-        }
-
         // If ALL entries are checkpoint entries, skip — nothing meaningful to deliver.
         // Advance the cursor past them so we don't re-read the same range forever.
         if entries
@@ -1693,7 +1708,7 @@ impl ForwardingOplogState {
         }
 
         self.inner
-            .read_many(start, count as u64)
+            .read_exact(start, count as u64)
             .await
             .into_values()
             .collect()
@@ -2310,7 +2325,7 @@ mod tests {
     /// A minimal in-memory oplog for testing ForwardingOplog behavior.
     ///
     /// Entry `i` (1-based [`OplogIndex`]) is stored at `entries[i - 1]`, so the indices returned
-    /// by `add`/`add_pair` agree with `read`/`read_many` — the forwarding wrapper's mirrored
+    /// by `add`/`add_pair` agree with `read`/`read_exact` — the forwarding wrapper's mirrored
     /// buffer relies on this. `commit` returns the newly committed suffix, like the production
     /// leaf oplogs, so the forwarding actor's `last_committed_idx` tracking is exercised.
     #[allow(dead_code)]
@@ -2426,13 +2441,7 @@ mod tests {
             true
         }
 
-        async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-            let entries = self.entries.lock().unwrap();
-            let idx: u64 = oplog_index.into();
-            entries[(idx - 1) as usize].clone()
-        }
-
-        async fn read_many(
+        async fn read_exact(
             &self,
             oplog_index: OplogIndex,
             n: u64,
@@ -2441,9 +2450,13 @@ mod tests {
             let start: u64 = oplog_index.into();
             let mut result = BTreeMap::new();
             for i in start..(start + n) {
-                if let Some(entry) = entries.get((i - 1) as usize) {
-                    result.insert(OplogIndex::from_u64(i), entry.clone());
-                }
+                let entry = entries.get((i - 1) as usize).unwrap_or_else(|| {
+                    panic!(
+                        "Missing oplog entry in exact range [{oplog_index}..={}]",
+                        OplogIndex::from_u64(start + n - 1)
+                    )
+                });
+                result.insert(OplogIndex::from_u64(i), entry.clone());
             }
             result
         }
@@ -2610,7 +2623,7 @@ mod tests {
         );
         let inner: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
 
-        // Pre-populate the inner oplog so read_many can return entries
+        // Pre-populate the inner oplog so read_exact can return entries
         let entry1 = OplogEntry::GrowMemory {
             timestamp: Timestamp::now_utc(),
             delta: 100,

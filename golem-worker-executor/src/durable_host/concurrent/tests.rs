@@ -1033,13 +1033,7 @@ impl Oplog for InMemoryOplog {
         true
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        let entries = self.entries.lock().await;
-        let idx: u64 = oplog_index.into();
-        entries[(idx - 1) as usize].clone()
-    }
-
-    async fn read_many(
+    async fn read_exact(
         &self,
         oplog_index: OplogIndex,
         n: u64,
@@ -1048,9 +1042,13 @@ impl Oplog for InMemoryOplog {
         let start: u64 = oplog_index.into();
         let mut result = std::collections::BTreeMap::new();
         for i in start..(start + n) {
-            if let Some(entry) = entries.get((i - 1) as usize) {
-                result.insert(OplogIndex::from_u64(i), entry.clone());
-            }
+            let entry = entries.get((i - 1) as usize).unwrap_or_else(|| {
+                panic!(
+                    "Missing oplog entry in exact range [{oplog_index}..={}]",
+                    OplogIndex::from_u64(start + n - 1)
+                )
+            });
+            result.insert(OplogIndex::from_u64(i), entry.clone());
         }
         result
     }

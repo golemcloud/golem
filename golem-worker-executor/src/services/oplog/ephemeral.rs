@@ -15,7 +15,10 @@
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
     BackgroundTransferMessage, InstrumentedOplogArchive, MultiLayerOplogService, OplogArchive,
-    TransferFiber, WrappedOplogArchive,
+    TransferFiber, WrappedOplogArchive, transfer_between_lower_layers,
+};
+use crate::services::oplog::reader::{
+    OplogRead, OplogReadError, OplogReadSource, checked_range_end, fail_stop,
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
@@ -150,7 +153,7 @@ impl EphemeralOplogState {
             self.last_committed_idx = oplog_idx;
         }
 
-        self.target.append(pairs).await;
+        self.target.append(&pairs).await;
         result
     }
 }
@@ -417,25 +420,12 @@ impl EphemeralOplog {
                         );
                         debug!("Reading entries from ephemeral oplog layer {source}");
 
-                        let source_layer = lower[source].clone();
-                        let target_layer = lower[source + 1].clone();
-
-                        let entries: Vec<_> = source_layer
-                            .read_prefix(last_transferred_idx)
-                            .await
-                            .into_iter()
-                            .collect();
-
-                        match entries.last() {
-                            Some(last_entry) => {
-                                let last_dropped_id = last_entry.0;
-                                let _ = target_layer.append(entries).await;
-                                source_layer.drop_prefix(last_dropped_id).await;
-                            }
-                            None => {
-                                warn!("No entries to transfer from ephemeral oplog layer {source}");
-                            }
-                        }
+                        transfer_between_lower_layers(
+                            source,
+                            last_transferred_idx,
+                            lower.clone(),
+                        )
+                        .await;
 
                         if drain && let Some(oplog) = keep_alive.as_ref() {
                             let _ = EphemeralOplog::try_archive_background(oplog).await;
@@ -680,23 +670,15 @@ impl Oplog for EphemeralOplog {
         false
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        record_oplog_call("read");
-        self.read_many(oplog_index, 1)
-            .await
-            .remove(&oplog_index)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Missing oplog entry {oplog_index} for ephemeral oplog of {:?}",
-                    self.owned_agent_id
-                )
-            })
-    }
-
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
-        record_oplog_call("read_many");
-        if n == 0 {
-            return BTreeMap::new();
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        record_oplog_call("read_exact");
+        let mut read = fail_stop(OplogRead::new(oplog_index, n));
+        if read.next_range().is_none() {
+            return fail_stop(read.finish());
         }
 
         // A consistent snapshot of the uncommitted buffer and commit watermark is enough: a
@@ -707,9 +689,29 @@ impl Oplog for EphemeralOplog {
             .await;
 
         let req_start: u64 = oplog_index.into();
-        let req_end: u64 = oplog_index.range_end(n).into();
+        let req_end = fail_stop(checked_range_end(oplog_index, n))
+            .unwrap()
+            .as_u64();
+        let snapshot_end = fail_stop(
+            snapshot
+                .last_committed_idx
+                .as_u64()
+                .checked_add(snapshot.buffer.len() as u64)
+                .ok_or_else(|| {
+                    OplogReadError::corruption(
+                        OplogReadSource::EphemeralBuffer,
+                        "snapshot tail exceeds the oplog index range",
+                    )
+                }),
+        );
+        if req_end > snapshot_end {
+            fail_stop::<()>(Err(OplogReadError::Gap {
+                start: OplogIndex::from_u64(max(req_start, snapshot_end + 1)),
+                end: OplogIndex::from_u64(req_end),
+            }));
+        }
 
-        let mut result = BTreeMap::new();
+        let mut buffered = BTreeMap::new();
 
         // First, fill from the in-memory buffer (uncommitted entries)
         if !snapshot.buffer.is_empty() {
@@ -725,48 +727,22 @@ impl Oplog for EphemeralOplog {
                 for i in 0..count {
                     let idx = OplogIndex::from_u64(overlap_start + i as u64);
                     let entry = snapshot.buffer[offset + i].clone();
-                    result.insert(idx, entry);
+                    buffered.insert(idx, entry);
                 }
             }
         }
+        fail_stop(read.add_source(OplogReadSource::EphemeralBuffer, buffered));
 
-        // Check if the buffer already satisfied the full request
-        let full_match = match result.first_key_value() {
-            Some((first_idx, _)) => *first_idx == oplog_index && result.len() as u64 >= n,
-            None => false,
-        };
-
-        // Read remaining entries from committed lower layers, stopping as soon as
-        // the requested range starting at oplog_index is fully covered.
-        if !full_match {
-            let committed_end: u64 = snapshot.last_committed_idx.into();
-            if committed_end >= req_start {
-                let storage_end = min(req_end, committed_end);
-                // Buffered entries always start after the committed range, so they do not reduce
-                // how many committed entries we still need to load from the archive layers.
-                let mut remaining = storage_end - req_start + 1;
-
-                for layer in &self.lower {
-                    if remaining == 0 {
-                        break;
-                    }
-                    let partial = layer.read(oplog_index, remaining).await;
-                    let layer_full_match = match partial.first_key_value() {
-                        None => false,
-                        Some((first_idx, _)) => {
-                            remaining -= partial.len() as u64;
-                            *first_idx == oplog_index
-                        }
-                    };
-                    result.extend(partial);
-                    if layer_full_match {
-                        break;
-                    }
-                }
+        for (level, layer) in self.lower.iter().enumerate() {
+            if let Some((start, count)) = read.next_range() {
+                let entries = layer.read_source(start, count).await;
+                fail_stop(read.add_source(OplogReadSource::Archive(level), entries));
+            } else {
+                break;
             }
         }
 
-        result
+        fail_stop(read.finish())
     }
 
     async fn length(&self) -> u64 {

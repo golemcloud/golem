@@ -2974,10 +2974,22 @@ impl Oplog for TestOplog {
         self.oplog.read(oplog_index).await
     }
 
-    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn read_exact(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         self.additional_test_deps
-            .record_oplog_call(&self.owned_agent_id, "read_many");
-        self.oplog.read_many(oplog_index, n).await
+            .record_oplog_call(&self.owned_agent_id, "read_exact");
+        self.oplog.read_exact(oplog_index, n).await
+    }
+
+    async fn read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.oplog.read_source(oplog_index, n).await
     }
 
     async fn length(&self) -> u64 {

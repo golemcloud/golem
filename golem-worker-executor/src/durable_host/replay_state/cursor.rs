@@ -64,7 +64,7 @@ impl ReplayCursor {
         idx: OplogIndex,
         n: u64,
     ) -> Vec<(OplogIndex, OplogEntry)> {
-        self.oplog.read_many(idx, n).await.into_iter().collect()
+        self.oplog.read_exact(idx, n).await.into_iter().collect()
     }
 
     pub(super) fn hash_log_entry(level: LogLevel, context: &str, message: &str) -> (u64, u64) {
@@ -75,10 +75,10 @@ impl ReplayCursor {
         hasher.finish128()
     }
 
-    /// Forward-scans the oplog from `start` up to `replay_target`, skipping entries inside deleted
-    /// regions, running `end_check`/`for_all_intermediate` (and `update_state`) over the rest. This
-    /// is the shared core for replay scans that need to inspect entries without advancing the
-    /// cursor.
+    /// Forward-scans the oplog from `start` up to, but not including, `end`, skipping entries
+    /// inside deleted regions and running `end_check`/`for_all_intermediate` (and `update_state`)
+    /// over the rest. This is the shared core for replay scans that need to inspect entries without
+    /// advancing the cursor.
     ///
     /// It only reads the oplog (via [`Self::read_oplog`]); it never touches [`Self::state`], so it is
     /// safe to call both from inside a held [`CursorTx`] (passing a borrow of the transaction's skip
@@ -89,7 +89,7 @@ impl ReplayCursor {
     pub(super) async fn scan_oplog<State>(
         &self,
         mut start: OplogIndex,
-        replay_target: OplogIndex,
+        end: OplogIndex,
         skipped_regions: &DeletedRegions,
         mut current_next_skip_region: Option<OplogRegion>,
         begin_idx: OplogIndex,
@@ -102,8 +102,9 @@ impl ReplayCursor {
 
         let mut violation = false;
 
-        while start < replay_target {
-            let entries = self.read_oplog(start, CHUNK_SIZE).await;
+        while start < end {
+            let available = end.as_u64() - start.as_u64();
+            let entries = self.read_oplog(start, CHUNK_SIZE.min(available)).await;
             for (idx, entry) in &entries {
                 if current_next_skip_region
                     .as_ref()
@@ -138,7 +139,7 @@ impl ReplayCursor {
                     violation = true;
                 }
             }
-            start = start.range_end(entries.len() as u64).next();
+            start = entries.last().unwrap().0.next();
         }
 
         OplogEntryLookupResult::NotFound {
@@ -213,21 +214,6 @@ impl CursorTx<'_> {
                 .await
                 .into_iter()
                 .collect();
-
-            // Snapshot/cache churn can make a cross-layer batch start after the requested index.
-            if self
-                .st
-                .replay_buffer
-                .front()
-                .is_none_or(|(idx, _)| *idx != read_idx)
-            {
-                self.st.replay_buffer = self
-                    .cursor
-                    .read_oplog(read_idx, 1)
-                    .await
-                    .into_iter()
-                    .collect();
-            }
         }
 
         let oplog_entry = if let Some((idx, oplog_entry)) = self.st.replay_buffer.pop_front()
@@ -916,11 +902,9 @@ impl CursorTx<'_> {
             let entries = self
                 .cursor
                 .oplog
-                .read_many(next, CHUNK_SIZE.min(remaining))
+                .read_exact(next, CHUNK_SIZE.min(remaining))
                 .await;
-            let Some(last_read) = entries.keys().next_back().copied() else {
-                break;
-            };
+            let last_read = *entries.last_key_value().unwrap().0;
             for entry in entries.into_values() {
                 match entry {
                     OplogEntry::CardInstalled {
@@ -1533,10 +1517,8 @@ impl ReplayState {
         let mut next = from;
         while next <= to {
             let available = u64::from(to) - u64::from(next) + 1;
-            let entries = oplog.read_many(next, CHUNK_SIZE.min(available)).await;
-            let Some(last_read) = entries.keys().next_back().copied() else {
-                break;
-            };
+            let entries = oplog.read_exact(next, CHUNK_SIZE.min(available)).await;
+            let last_read = *entries.last_key_value().unwrap().0;
             for (marker_idx, entry) in entries {
                 if marker_idx > to {
                     break;
@@ -1779,17 +1761,12 @@ impl ReplayState {
         let mut next = start_index.next();
         while next <= replay_target {
             let available = u64::from(replay_target) - u64::from(next) + 1;
-            let mut entries = self
+            let entries = self
                 .cursor
                 .oplog
-                .read_many(next, CHUNK_SIZE.min(available))
+                .read_exact(next, CHUNK_SIZE.min(available))
                 .await;
-            if entries.keys().next().copied() != Some(next) {
-                entries = self.cursor.oplog.read_many(next, 1).await;
-            }
-            let Some(last_read) = entries.keys().next_back().copied() else {
-                return false;
-            };
+            let last_read = *entries.last_key_value().unwrap().0;
             if entries.into_iter().any(|(index, entry)| {
                 index <= replay_target
                     && !skipped_regions.is_in_deleted_region(index)
@@ -1856,19 +1833,11 @@ impl ReplayState {
             let mut next = root;
             while next <= head {
                 let available = u64::from(head) - u64::from(next) + 1;
-                let mut entries = cursor
+                let entries = cursor
                     .oplog
-                    .read_many(next, CHUNK_SIZE.min(available))
+                    .read_exact(next, CHUNK_SIZE.min(available))
                     .await;
-                if entries.keys().next().copied() != Some(next) {
-                    entries = cursor.oplog.read_many(next, 1).await;
-                }
-                let Some(last_read) = entries.keys().next_back().copied() else {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        format!("entity invocation subtree rooted at {root}"),
-                        format!("missing oplog entry at {next} while inspecting stalled replay"),
-                    ));
-                };
+                let last_read = *entries.last_key_value().unwrap().0;
 
                 for (index, entry) in entries {
                     if index > head {
@@ -2241,10 +2210,7 @@ impl ReplayState {
         let cursor = &*self.cursor;
         // The snapshot is taken on an owned task (see `run_owned_cursor_op`): this lookup is
         // called from accessor futures (e.g. the replay-side remote-write scope checks), which
-        // must never queue on the cursor mutex directly. On task cancellation (runtime shutdown)
-        // the conservative `NotFound { violates_for_all: true }` answer is returned: callers
-        // treat it as "cannot prove the scope completed cleanly" and fail the operation rather
-        // than fabricating success.
+        // must never queue on the cursor mutex directly.
         let snapshot = self
             .run_owned_cursor_op(|state| async move {
                 let cursor = &*state.cursor;
@@ -2268,7 +2234,7 @@ impl ReplayState {
         cursor
             .scan_oplog(
                 start,
-                cursor.replay_target(),
+                cursor.replay_target().next(),
                 &skipped_regions,
                 next_skipped_region,
                 begin_idx,

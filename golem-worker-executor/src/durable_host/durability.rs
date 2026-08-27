@@ -2262,7 +2262,7 @@ pub async fn count_oplog_errors_for(
     if len == 0 {
         return 0;
     }
-    let entries = oplog.read_many(OplogIndex::INITIAL, len).await;
+    let entries = oplog.read_exact(OplogIndex::INITIAL, len).await;
     let mut count: u32 = 0;
     for entry in entries.values() {
         if let OplogEntry::Error { retry_from, .. } = entry

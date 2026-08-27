@@ -1456,7 +1456,7 @@ async fn source_transfer_progress<Ctx: WorkerCtx>(
     let entries = ctx
         .state
         .oplog
-        .read_many(
+        .read_exact(
             start_index,
             current_index.as_u64() - start_index.as_u64() + 1,
         )
@@ -1845,7 +1845,7 @@ async fn pending_source_transfer_progress(
     while next_index <= current_index {
         let remaining = current_index.as_u64() - next_index.as_u64() + 1;
         let count = remaining.min(1024);
-        let entries = oplog.read_many(next_index, count).await;
+        let entries = oplog.read_exact(next_index, count).await;
 
         for entry in entries.values() {
             match entry {

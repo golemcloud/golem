@@ -381,7 +381,7 @@ mod tests {
             unreachable!("oplog is unused by this test")
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             _oplog_index: OplogIndex,
             _n: u64,
@@ -538,7 +538,7 @@ mod tests {
             unreachable!("oplog is unused by this test")
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             _oplog_index: OplogIndex,
             _n: u64,

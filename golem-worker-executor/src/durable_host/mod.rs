@@ -1950,7 +1950,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .unread_range(current_idx);
 
         if let Some((start, count)) = unread_range {
-            let entries = oplog.read_many(start, count).await;
+            let entries = oplog.read_exact(start, count).await;
             self.state
                 .card_event_boundary_scan
                 .as_mut()
@@ -8534,7 +8534,12 @@ async fn last_error<T: HasOplogService + HasConfig>(
         let window_start = backward_scan_window_start(window_end);
         let entries = this
             .oplog_service()
-            .read_range(owned_agent_id, agent_mode, window_start, window_end)
+            .read_exact(
+                owned_agent_id,
+                agent_mode,
+                window_start,
+                window_end.as_u64() - window_start.as_u64() + 1,
+            )
             .await;
 
         let mut idx = window_end;
@@ -8635,7 +8640,12 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
         let window_start = backward_scan_window_start(window_end);
         let entries = this
             .oplog_service()
-            .read_range(owned_agent_id, agent_mode, window_start, window_end)
+            .read_exact(
+                owned_agent_id,
+                agent_mode,
+                window_start,
+                window_end.as_u64() - window_start.as_u64() + 1,
+            )
             .await;
 
         let mut idx = window_end;

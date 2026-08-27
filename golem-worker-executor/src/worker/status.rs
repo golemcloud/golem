@@ -197,11 +197,11 @@ where
 
     let new_entries: BTreeMap<OplogIndex, OplogEntry> = this
         .oplog_service()
-        .read_range(
+        .read_exact(
             owned_agent_id,
             agent_mode,
             baseline.oplog_idx.next(),
-            last_oplog_index,
+            last_oplog_index.as_u64() - baseline.oplog_idx.as_u64(),
         )
         .await;
 
@@ -2738,7 +2738,7 @@ mod test {
     struct TestCase {
         owned_agent_id: OwnedAgentId,
         entries: Vec<TestEntry>,
-        /// Records the `start_idx` of every `read`/`read_range` so tests can assert which baseline
+        /// Records the `start_idx` of every exact read so tests can assert which baseline
         /// a recompute folded from. Shared across `self.clone()`s handed out by `oplog_service()`.
         read_starts: Arc<std::sync::Mutex<Vec<u64>>>,
     }
@@ -2818,7 +2818,7 @@ mod test {
             unreachable!()
         }
 
-        async fn read(
+        async fn read_exact(
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
@@ -2828,10 +2828,23 @@ mod test {
             let mut result = BTreeMap::new();
             let idx_u64: u64 = idx.into();
             self.read_starts.lock().unwrap().push(idx_u64);
-            for i in idx_u64..(idx_u64 + n) {
-                if let Some(entry) = self.entries.get((i - 1) as usize) {
-                    result.insert(OplogIndex::from_u64(i), entry.oplog_entry.clone());
-                }
+            if n == 0 {
+                return result;
+            }
+            let end = idx_u64.checked_add(n - 1).unwrap_or_else(|| {
+                panic!("Invalid oplog range starting at {idx} with {n} entries")
+            });
+            for i in idx_u64..=end {
+                let entry = i
+                    .checked_sub(1)
+                    .and_then(|offset| self.entries.get(offset as usize))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Missing oplog entry in exact range [{idx}..={}]",
+                            OplogIndex::from_u64(end)
+                        )
+                    });
+                result.insert(OplogIndex::from_u64(i), entry.oplog_entry.clone());
             }
             result
         }

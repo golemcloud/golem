@@ -307,10 +307,7 @@ impl DebugServiceDefault {
         let mut index = OplogIndex::INITIAL;
         while index <= scan_end {
             let available = u64::from(scan_end) - u64::from(index) + 1;
-            let entries = raw_oplog.read_many(index, CHUNK_SIZE.min(available)).await;
-            if entries.is_empty() {
-                break;
-            }
+            let entries = raw_oplog.read_exact(index, CHUNK_SIZE.min(available)).await;
             for (idx, entry) in &entries {
                 match entry {
                     OplogEntry::Start { function_name, .. } => {
@@ -329,7 +326,10 @@ impl DebugServiceDefault {
                     _ => {}
                 }
             }
-            index = entries.last_key_value().map(|(idx, _)| idx.next())?;
+            index = entries
+                .last_key_value()
+                .map(|(idx, _)| idx.next())
+                .expect("non-empty exact oplog read");
         }
 
         unmatched.pop_first()
@@ -369,10 +369,7 @@ impl DebugServiceDefault {
         let mut index = OplogIndex::INITIAL;
         while index <= scan_end {
             let available = u64::from(scan_end) - u64::from(index) + 1;
-            let entries = raw_oplog.read_many(index, CHUNK_SIZE.min(available)).await;
-            if entries.is_empty() {
-                break;
-            }
+            let entries = raw_oplog.read_exact(index, CHUNK_SIZE.min(available)).await;
             for (idx, entry) in &entries {
                 match entry {
                     OplogEntry::End { start_index, .. } if *idx <= target_index => {
@@ -397,7 +394,10 @@ impl DebugServiceDefault {
                     _ => {}
                 }
             }
-            index = entries.last_key_value().map(|(idx, _)| idx.next())?;
+            index = entries
+                .last_key_value()
+                .map(|(idx, _)| idx.next())
+                .expect("non-empty exact oplog read");
         }
 
         markers.into_iter().find_map(|(marker_idx, start_idx)| {
@@ -1273,10 +1273,13 @@ mod tests {
         }
 
         async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-            self.entries[(u64::from(oplog_index) - 1) as usize].clone()
+            self.entries
+                .get((u64::from(oplog_index) - 1) as usize)
+                .cloned()
+                .unwrap_or_else(|| panic!("Missing oplog entry at index {oplog_index}"))
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             oplog_index: OplogIndex,
             n: u64,
@@ -1284,9 +1287,6 @@ mod tests {
             let mut result = BTreeMap::new();
             let mut current = oplog_index;
             for _ in 0..n {
-                if u64::from(current) > self.entries.len() as u64 {
-                    break;
-                }
                 result.insert(current, self.read(current).await);
                 current = current.next();
             }
@@ -1403,7 +1403,7 @@ mod tests {
             }
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             oplog_index: OplogIndex,
             n: u64,
