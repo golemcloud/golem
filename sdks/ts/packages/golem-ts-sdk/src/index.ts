@@ -66,6 +66,7 @@ export * from './host/durable';
 export { defineAgent } from './defineAgent';
 export type {
   AgentDefinition,
+  AgentClientDefinition,
   AgentImpl,
   AgentImplementation,
   AgentSpec,
@@ -142,8 +143,10 @@ export type {
   ToolResult,
   ToolSubtreeModel,
 } from './tool';
-export { clientFor, RemoteCallError } from './client';
+export { clientFor, defineAgentClient, RemoteCallError } from './client';
 export type {
+  AgentClientFactory,
+  AgentClientSpec,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
   PhantomClientDetails,
@@ -151,6 +154,8 @@ export type {
   RemoteClient,
   RemoteClientFactory,
 } from './client';
+export { clientIdentity } from './clientIdentity';
+export type { AgentClientIdentity } from './clientIdentity';
 export * from './keyvalue';
 export * from './blobstore';
 export * from './websocket';
