@@ -571,7 +571,7 @@ impl ExternalOperations<Context> for Context {
         agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         worker_status_record: &AgentStatusRecord,
-    ) -> Result<Option<LastError>, WorkerExecutorError> {
+    ) -> Option<LastError> {
         DurableWorkerCtx::<Context>::get_last_error_and_retry_count(
             this,
             agent_id,

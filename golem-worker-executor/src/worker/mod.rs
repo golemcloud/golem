@@ -610,7 +610,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 agent_mode,
                 last_known_status,
             )
-            .await?
+            .await
             .ok_or_else(|| {
                 WorkerExecutorError::runtime(format!(
                     "Failed to calculate status for existing worker {owned_agent_id}"
@@ -1799,7 +1799,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         pending: &PendingInvocationRef,
     ) -> Result<TimestampedAgentInvocation, WorkerExecutorError> {
-        let entry = self.oplog.read(pending.oplog_index).await?;
+        let entry = self.oplog.read(pending.oplog_index).await;
         match entry {
             OplogEntry::PendingAgentInvocation {
                 timestamp,
@@ -1841,7 +1841,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         pending: &PendingUpdateRef,
     ) -> Result<TimestampedUpdateDescription, WorkerExecutorError> {
-        let entry = self.oplog.read(pending.oplog_index).await?;
+        let entry = self.oplog.read(pending.oplog_index).await;
         match entry {
             OplogEntry::PendingUpdate {
                 timestamp,
@@ -3179,7 +3179,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             region_end,
             &last_known_status.skipped_regions,
         )
-        .await?
+        .await
         {
             Err(WorkerExecutorError::invalid_request(format!(
                 "Cannot revert worker to oplog index {last_oplog_index}: the cut point is inside {spanning}"
@@ -3662,7 +3662,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     agent_mode,
                     last_known_status,
                 )
-                .await?
+                .await
                 .ok_or_else(|| {
                     WorkerExecutorError::runtime(
                         "Failed to calculate worker status for existing worker",
@@ -4877,7 +4877,7 @@ impl InvocationResult {
     ) -> Result<(), WorkerExecutorError> {
         if let Self::Lazy { oplog_idx } = self {
             let oplog_idx = *oplog_idx;
-            let entry = services.oplog().read(oplog_idx).await?;
+            let entry = services.oplog().read(oplog_idx).await;
 
             let result = match entry {
                 OplogEntry::AgentInvocationFinished {
@@ -4915,8 +4915,7 @@ impl InvocationResult {
                     ..
                 } => {
                     let stderr =
-                        recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx)
-                            .await?;
+                        recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
                     Err(FailedInvocationResult {
                         trap_type: TrapType::Error {
                             error,

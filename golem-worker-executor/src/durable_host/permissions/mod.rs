@@ -1465,7 +1465,7 @@ async fn source_transfer_progress<Ctx: WorkerCtx>(
             start_index,
             current_index.as_u64() - start_index.as_u64() + 1,
         )
-        .await?;
+        .await;
     let source_card_id = transfer.source_card.card_id();
     let installed_card_id = transfer.installed_card.card_id();
     let source_holder = transfer.source_holder(ctx);
@@ -1611,7 +1611,7 @@ async fn load_card_transfer_request<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     start_index: OplogIndex,
 ) -> Result<HostRequestPermissionCardTransfer, WorkerExecutorError> {
-    let entry = ctx.state.oplog.read(start_index).await?;
+    let entry = ctx.state.oplog.read(start_index).await;
     let (function_name, request) = match entry {
         OplogEntry::Start {
             function_name,
@@ -1850,7 +1850,7 @@ async fn pending_source_transfer_progress(
     while next_index <= current_index {
         let remaining = current_index.as_u64() - next_index.as_u64() + 1;
         let count = remaining.min(1024);
-        let entries = oplog.read_exact(next_index, count).await?;
+        let entries = oplog.read_exact(next_index, count).await;
 
         for entry in entries.values() {
             match entry {

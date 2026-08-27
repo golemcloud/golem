@@ -21,10 +21,10 @@ use crate::services::oplog::ephemeral::EphemeralOplog;
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
-use crate::services::oplog::reader::{OplogRead, OplogReadSource};
+use crate::services::oplog::reader::{OplogRead, OplogReadError, OplogReadSource, fail_stop};
 use crate::services::oplog::{
-    CommitLevel, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor, OplogReadError,
-    OplogService, OrderedOplogStart, downcast_oplog, scan_modes,
+    CommitLevel, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor, OplogService,
+    OrderedOplogStart, downcast_oplog, scan_modes,
 };
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
@@ -48,7 +48,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::Sender;
-use tracing::{Instrument, Level, debug, error, info, warn};
+use tracing::{Instrument, Level, debug, info, warn};
 
 pub(crate) type TransferFiber = Arc<Mutex<TransferFiberState>>;
 type TransferFibers = Arc<Mutex<HashMap<AgentId, Weak<Mutex<TransferFiberState>>>>>;
@@ -91,7 +91,7 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError>;
+    ) -> BTreeMap<OplogIndex, OplogEntry>;
 
     /// Checks if an oplog archive exists for a worker
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
@@ -123,11 +123,7 @@ pub trait OplogArchiveService: Debug + Send + Sync {
 #[async_trait]
 pub trait OplogArchive: Debug {
     /// Reads the entries physically present in this archive within the requested range.
-    async fn read_source(
-        &self,
-        idx: OplogIndex,
-        n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError>;
+    async fn read_source(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry>;
 
     /// Append a new chunk of entries to the oplog.
     /// Returns the number of compressed bytes written to storage.
@@ -135,10 +131,7 @@ pub trait OplogArchive: Debug {
 
     /// Verifies that transferred entries can be read from persistent storage without consulting
     /// this archive handle's cache.
-    async fn verify_persisted(
-        &self,
-        entries: &[(OplogIndex, OplogEntry)],
-    ) -> Result<(), OplogReadError>;
+    async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]);
 
     /// Gets the last appended chunk's last index
     async fn current_oplog_index(&self) -> OplogIndex;
@@ -179,11 +172,7 @@ impl InstrumentedOplogArchive {
 
 #[async_trait]
 impl OplogArchive for InstrumentedOplogArchive {
-    async fn read_source(
-        &self,
-        idx: OplogIndex,
-        n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    async fn read_source(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
         self.inner.read_source(idx, n).await
     }
 
@@ -213,10 +202,7 @@ impl OplogArchive for InstrumentedOplogArchive {
         bytes
     }
 
-    async fn verify_persisted(
-        &self,
-        entries: &[(OplogIndex, OplogEntry)],
-    ) -> Result<(), OplogReadError> {
+    async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]) {
         self.inner.verify_persisted(entries).await
     }
 
@@ -667,29 +653,29 @@ impl OplogService for MultiLayerOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
-        let mut read = OplogRead::new(idx, n)?;
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        let mut read = fail_stop(OplogRead::new(idx, n));
 
         if let Some((start, count)) = read.next_range() {
             let entries = self
                 .primary
                 .read_source(owned_agent_id, agent_mode, start, count)
-                .await?;
-            read.add_source(OplogReadSource::Primary, entries)?;
+                .await;
+            fail_stop(read.add_source(OplogReadSource::Primary, entries));
         }
 
         for (level, layer) in self.lower.iter().enumerate() {
             if let Some((start, count)) = read.next_range() {
                 let entries = layer
                     .read_source(owned_agent_id, agent_mode, start, count)
-                    .await?;
-                read.add_source(OplogReadSource::Archive(level), entries)?;
+                    .await;
+                fail_stop(read.add_source(OplogReadSource::Archive(level), entries));
             } else {
                 break;
             }
         }
 
-        read.finish()
+        fail_stop(read.finish())
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
@@ -950,10 +936,7 @@ impl MultiLayerOplog {
                                 primary.clone(),
                                 lower.clone(),
                             );
-                            let result = transfer.run().await;
-                            if let Err(error) = result {
-                                error!("Failed to transfer entries from the primary oplog: {error}");
-                            }
+                            transfer.run().await;
                             let _ = keep_alive.take();
 
                             if let Some(done) = done {
@@ -985,16 +968,12 @@ impl MultiLayerOplog {
                         );
                         debug!("Reading entries from oplog layer {source}");
 
-                        let result = transfer_between_lower_layers(
+                        transfer_between_lower_layers(
                             source,
                             last_transferred_idx,
                             lower.clone(),
                         )
                         .await;
-
-                        if let Err(error) = result {
-                            error!("Failed to transfer entries from oplog layer {source}: {error}");
-                        }
                         let _ = keep_alive.take();
 
                         if let Some(done) = done {
@@ -1165,28 +1144,24 @@ impl Oplog for MultiLayerOplog {
         self.primary.wait_for_replicas(replicas, timeout).await
     }
 
-    async fn read_exact(
-        &self,
-        idx: OplogIndex,
-        n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
-        let mut read = OplogRead::new(idx, n)?;
+    async fn read_exact(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        let mut read = fail_stop(OplogRead::new(idx, n));
 
         if let Some((start, count)) = read.next_range() {
-            let entries = self.primary.read_source(start, count).await?;
-            read.add_source(OplogReadSource::Primary, entries)?;
+            let entries = self.primary.read_source(start, count).await;
+            fail_stop(read.add_source(OplogReadSource::Primary, entries));
         }
 
         for (level, layer) in self.lower.iter().enumerate() {
             if let Some((start, count)) = read.next_range() {
-                let entries = layer.read_source(start, count).await?;
-                read.add_source(OplogReadSource::Archive(level), entries)?;
+                let entries = layer.read_source(start, count).await;
+                fail_stop(read.add_source(OplogReadSource::Archive(level), entries));
             } else {
                 break;
             }
         }
 
-        read.finish()
+        fail_stop(read.finish())
     }
 
     async fn length(&self) -> u64 {
@@ -1261,33 +1236,24 @@ pub enum BackgroundTransferMessage {
 
 #[async_trait]
 trait BackgroundTransfer {
-    async fn read_source(&self) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogReadError>;
+    async fn read_source(&self) -> Vec<(OplogIndex, OplogEntry)>;
     async fn append_target(&self, entries: &[(OplogIndex, OplogEntry)]);
-    async fn verify_target(
-        &self,
-        entries: &[(OplogIndex, OplogEntry)],
-    ) -> Result<(), OplogReadError>;
+    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]);
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex);
 
-    async fn run(&self) -> Result<(), String> {
-        let entries = self
-            .read_source()
-            .await
-            .map_err(|error| error.to_string())?;
+    async fn run(&self) {
+        let entries = self.read_source().await;
         match entries.last() {
             Some(last_entry) => {
                 let last_dropped_id = last_entry.0;
                 self.append_target(&entries).await;
-                self.verify_target(&entries)
-                    .await
-                    .map_err(|error| error.to_string())?;
+                self.verify_target(&entries).await;
                 self.drop_source_prefix(last_dropped_id).await;
             }
             None => {
                 warn!("No entries to transfer from the primary oplog");
             }
         }
-        Ok(())
     }
 }
 
@@ -1337,11 +1303,7 @@ impl WrappedOplogArchive {
 
 #[async_trait]
 impl OplogArchive for WrappedOplogArchive {
-    async fn read_source(
-        &self,
-        idx: OplogIndex,
-        n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    async fn read_source(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
         self.archive.read_source(idx, n).await
     }
 
@@ -1373,10 +1335,7 @@ impl OplogArchive for WrappedOplogArchive {
         }
     }
 
-    async fn verify_persisted(
-        &self,
-        entries: &[(OplogIndex, OplogEntry)],
-    ) -> Result<(), OplogReadError> {
+    async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]) {
         self.archive.verify_persisted(entries).await
     }
 
@@ -1433,7 +1392,7 @@ impl BackgroundTransferFromPrimary {
 
 #[async_trait]
 impl BackgroundTransfer for BackgroundTransferFromPrimary {
-    async fn read_source(&self) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogReadError> {
+    async fn read_source(&self) -> Vec<(OplogIndex, OplogEntry)> {
         let entries = self
             .multi_layer_oplog_service
             .primary
@@ -1443,18 +1402,19 @@ impl BackgroundTransfer for BackgroundTransferFromPrimary {
                 OplogIndex::INITIAL,
                 self.last_transferred_idx.as_u64(),
             )
-            .await?;
-        validate_transfer_source(entries, self.last_transferred_idx, OplogReadSource::Primary)
+            .await;
+        fail_stop(validate_transfer_source(
+            entries,
+            self.last_transferred_idx,
+            OplogReadSource::Primary,
+        ))
     }
 
     async fn append_target(&self, entries: &[(OplogIndex, OplogEntry)]) {
         let _ = self.lower.first().append(entries).await;
     }
 
-    async fn verify_target(
-        &self,
-        entries: &[(OplogIndex, OplogEntry)],
-    ) -> Result<(), OplogReadError> {
+    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) {
         self.lower.first().verify_persisted(entries).await
     }
 
@@ -1490,7 +1450,7 @@ pub(crate) async fn transfer_between_lower_layers(
     source: usize,
     last_transferred_idx: OplogIndex,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
-) -> Result<(), String> {
+) {
     BackgroundTransferBetweenLowers::new(source, last_transferred_idx, lower)
         .run()
         .await
@@ -1498,26 +1458,23 @@ pub(crate) async fn transfer_between_lower_layers(
 
 #[async_trait]
 impl BackgroundTransfer for BackgroundTransferBetweenLowers {
-    async fn read_source(&self) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogReadError> {
+    async fn read_source(&self) -> Vec<(OplogIndex, OplogEntry)> {
         let entries = self
             .source_layer
             .read_source(OplogIndex::INITIAL, self.last_transferred_idx.as_u64())
-            .await?;
-        validate_transfer_source(
+            .await;
+        fail_stop(validate_transfer_source(
             entries,
             self.last_transferred_idx,
             OplogReadSource::Other("transfer source archive"),
-        )
+        ))
     }
 
     async fn append_target(&self, entries: &[(OplogIndex, OplogEntry)]) {
         let _ = self.target_layer.append(entries).await;
     }
 
-    async fn verify_target(
-        &self,
-        entries: &[(OplogIndex, OplogEntry)],
-    ) -> Result<(), OplogReadError> {
+    async fn verify_target(&self, entries: &[(OplogIndex, OplogEntry)]) {
         self.target_layer.verify_persisted(entries).await
     }
 

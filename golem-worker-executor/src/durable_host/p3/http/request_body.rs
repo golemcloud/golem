@@ -482,10 +482,7 @@ async fn load_recorded_frame(
     index: OplogIndex,
 ) -> Result<Frame<Bytes>, ErrorCode> {
     let internal = |message: String| ErrorCode::InternalError(Some(message));
-    let entry = oplog
-        .read(index)
-        .await
-        .map_err(|error| internal(error.to_string()))?;
+    let entry = oplog.read(index).await;
     let OplogEntry::HostStreamFrame { payload, .. } = entry else {
         return Err(internal(format!(
             "oplog entry at {index} is not a recorded request-body frame"
@@ -582,10 +579,7 @@ pub(super) async fn scan_recorded_request_body_frames(
     let mut next = parent_start_index.next();
     while next <= scan_end {
         let available = scan_end.as_u64() - next.as_u64() + 1;
-        let entries = oplog
-            .read_exact(next, SCAN_CHUNK.min(available))
-            .await
-            .map_err(|error| error.to_string())?;
+        let entries = oplog.read_exact(next, SCAN_CHUNK.min(available)).await;
         for (index, entry) in &entries {
             let OplogEntry::HostStreamFrame {
                 parent_start_index: frame_parent,

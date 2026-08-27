@@ -248,8 +248,7 @@ fn benchmark_fixture(
             |bencher, &count| {
                 bencher.iter(|| {
                     let entries: BTreeMap<OplogIndex, OplogEntry> = runtime
-                        .block_on(fixture.oplog.read_exact(black_box(start), black_box(count)))
-                        .expect("benchmark read must be contiguous");
+                        .block_on(fixture.oplog.read_exact(black_box(start), black_box(count)));
                     black_box(entries);
                 });
             },
@@ -276,9 +275,8 @@ fn benchmark_cold_fixture(
                 bencher.iter_batched(
                     || runtime.block_on(fixture.reopen()),
                     |oplog| {
-                        let entries: BTreeMap<OplogIndex, OplogEntry> = runtime
-                            .block_on(oplog.read_exact(black_box(start), black_box(count)))
-                            .expect("benchmark read must be contiguous");
+                        let entries: BTreeMap<OplogIndex, OplogEntry> =
+                            runtime.block_on(oplog.read_exact(black_box(start), black_box(count)));
                         black_box(entries);
                     },
                     BatchSize::SmallInput,

@@ -576,14 +576,14 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             source_oplog_end,
             &source_skipped_regions,
         )
-        .await?
+        .await
         {
             return Err(WorkerExecutorError::invalid_request(format!(
                 "Cannot fork worker at oplog index {oplog_index_cut_off}: the cut point is inside {spanning}"
             )));
         }
 
-        let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await?;
+        let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await;
 
         // Update the oplog initial entry with the new worker
         let target_initial_oplog_entry =
@@ -624,7 +624,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         for oplog_index in oplog_range {
             let entry = rewrite_forked_oplog_entry(
-                source_oplog.read(oplog_index).await?,
+                source_oplog.read(oplog_index).await,
                 &owned_source_agent_id.agent_id,
                 &owned_target_agent_id.agent_id,
             );
@@ -663,7 +663,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             if deleted_regions.is_in_deleted_region(oplog_index) {
                 continue;
             }
-            let entry = source_oplog.read(oplog_index).await?;
+            let entry = source_oplog.read(oplog_index).await;
             match &entry {
                 OplogEntry::PendingUpdate { description, .. } => {
                     pending_update_revisions.push(*description.target_revision());

@@ -545,7 +545,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
                 agent_mode,
                 last_known_status,
             )
-            .await?
+            .await
             .ok_or_else(|| {
                 WorkerExecutorError::runtime(
                     "Failed to calculate worker status for worker even though it is initialized",

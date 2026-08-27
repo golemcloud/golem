@@ -1299,14 +1299,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .replay_state
                     .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
                     .await
-                    .map_err(|err| {
-                        (
-                            err,
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        )
-                    })?
                     .is_none()
                 {
                     prepared.switch_to_live().await;
@@ -1335,15 +1327,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         ScopeScanState::new(begin_index),
                         OplogEntry::track_scope_membership,
                     )
-                    .await
-                    .map_err(|err| {
-                        (
-                            err,
-                            AccessStartCleanup {
-                                atomic_lease: prepared.atomic_lease.clone(),
-                            },
-                        )
-                    })?;
+                    .await;
 
                 match lookup_result {
                     OplogEntryLookupResult::Found { .. } => Ok(AccessOpenedScope {
@@ -1603,7 +1587,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     where
         Pair::Req: TryFrom<HostRequest, Error = String>,
     {
-        let entry = ctx.state.oplog.read(self.start_idx).await?;
+        let entry = ctx.state.oplog.read(self.start_idx).await;
         let OplogEntry::Start {
             request: Some(request),
             ..

@@ -113,8 +113,7 @@ pub async fn get_public_oplog_chunk(
             initial_oplog_index,
             (count as u64).min(available),
         )
-        .await
-        .map_err(|error| error.to_string())?;
+        .await;
 
     let mut entries = Vec::new();
     let mut current_component_revision = initial_component_revision;
@@ -232,7 +231,7 @@ pub async fn find_component_revision_at(
         // NOTE: could be reading in pages for optimization
         let entry = oplog_service
             .read_exact(owned_agent_id, agent_mode, current, 1)
-            .await?
+            .await
             .remove(&current);
 
         if let Some(revision) = entry.and_then(|entry| entry.specifies_component_revision()) {

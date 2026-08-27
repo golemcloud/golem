@@ -270,7 +270,7 @@ pub(crate) fn chrono_duration_to_nanos(duration: chrono::Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::oplog::{CommitLevel, Oplog, OplogReadError, OrderedOplogStart};
+    use crate::services::oplog::{CommitLevel, Oplog, OrderedOplogStart};
     use crate::services::promise::{PromiseHandle, PromiseService};
     use crate::services::scheduler::SchedulerService;
     use async_trait::async_trait;
@@ -377,7 +377,7 @@ mod tests {
             unreachable!("oplog is unused by this test")
         }
 
-        async fn read(&self, _oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
+        async fn read(&self, _oplog_index: OplogIndex) -> OplogEntry {
             unreachable!("oplog is unused by this test")
         }
 
@@ -385,7 +385,7 @@ mod tests {
             &self,
             _oplog_index: OplogIndex,
             _n: u64,
-        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
             unreachable!("oplog is unused by this test")
         }
 
@@ -527,7 +527,7 @@ mod tests {
             unreachable!("oplog is unused by this test")
         }
 
-        async fn read(&self, _oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
+        async fn read(&self, _oplog_index: OplogIndex) -> OplogEntry {
             unreachable!("oplog is unused by this test")
         }
 
@@ -535,7 +535,7 @@ mod tests {
             &self,
             _oplog_index: OplogIndex,
             _n: u64,
-        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
             unreachable!("oplog is unused by this test")
         }
 

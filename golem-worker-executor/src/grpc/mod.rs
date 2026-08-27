@@ -206,7 +206,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     agent_mode,
                     &metadata.last_known_status,
                 )
-                .await?;
+                .await;
                 if let Some(last_error) = error_and_retry_count {
                     Err(WorkerExecutorError::PreviousInvocationFailed {
                         error: last_error.error,
@@ -883,7 +883,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             metadata.agent_mode,
             &metadata.last_known_status,
         )
-        .await?;
+        .await;
 
         Self::create_proto_metadata(metadata, last_error_and_retry_count)
     }
@@ -962,7 +962,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 worker_metadata.agent_mode,
                 &worker_metadata.last_known_status,
             )
-            .await?;
+            .await;
             let metadata =
                 Self::create_proto_metadata(worker_metadata, last_error_and_retry_count)?;
             result.push(metadata);

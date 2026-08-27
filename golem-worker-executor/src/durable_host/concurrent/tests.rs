@@ -1019,23 +1019,20 @@ impl Oplog for InMemoryOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> Result<
-        std::collections::BTreeMap<OplogIndex, OplogEntry>,
-        crate::services::oplog::OplogReadError,
-    > {
+    ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
         let entries = self.entries.lock().await;
         let start: u64 = oplog_index.into();
         let mut result = std::collections::BTreeMap::new();
         for i in start..(start + n) {
-            let entry = entries.get((i - 1) as usize).ok_or(
-                crate::services::oplog::OplogReadError::Gap {
-                    start: oplog_index,
-                    end: OplogIndex::from_u64(start + n - 1),
-                },
-            )?;
+            let entry = entries.get((i - 1) as usize).unwrap_or_else(|| {
+                panic!(
+                    "Missing oplog entry in exact range [{oplog_index}..={}]",
+                    OplogIndex::from_u64(start + n - 1)
+                )
+            });
             result.insert(OplogIndex::from_u64(i), entry.clone());
         }
-        Ok(result)
+        result
     }
 
     async fn length(&self) -> u64 {

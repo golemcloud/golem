@@ -14,10 +14,10 @@
 
 use crate::metrics::oplog::record_oplog_storage_retry;
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
-use crate::services::oplog::reader::{OplogReadSource, verify_persisted_entries};
-use crate::services::oplog::{
-    OplogReadError, PrimaryOplogService, cursor_value, next_scan_cursor, scan_modes,
+use crate::services::oplog::reader::{
+    OplogReadError, OplogReadSource, fail_stop, verify_persisted_entries,
 };
+use crate::services::oplog::{PrimaryOplogService, cursor_value, next_scan_cursor, scan_modes};
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
     IndexedStorageNamespace,
@@ -162,7 +162,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         let archive = self.open(owned_agent_id, agent_mode).await;
         archive.read_source(idx, n).await
     }
@@ -408,9 +408,9 @@ impl OplogArchive for CompressedOplogArchive {
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<golem_common::model::oplog::OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<golem_common::model::oplog::OplogIndex, OplogEntry> {
         if n == 0 {
-            return Ok(BTreeMap::new());
+            return BTreeMap::new();
         }
 
         let mut result = BTreeMap::new();
@@ -438,7 +438,7 @@ impl OplogArchive for CompressedOplogArchive {
 
             // we encountered an entry that is not in our cache. fetch the chunk that contains the entry and use as much as we can from it.
             // after the end of the chunk
-            if let Some(chunk) = self.fetch_and_cache_range(idx, last_idx).await? {
+            if let Some(chunk) = fail_stop(self.fetch_and_cache_range(idx, last_idx).await) {
                 last_idx = last_idx.subtract(chunk.len() as u64);
                 for (index, entry) in chunk {
                     result.insert(index, entry);
@@ -450,7 +450,7 @@ impl OplogArchive for CompressedOplogArchive {
             }
         }
 
-        Ok(result)
+        result
     }
 
     async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> u64 {
@@ -510,12 +510,9 @@ impl OplogArchive for CompressedOplogArchive {
         total_bytes
     }
 
-    async fn verify_persisted(
-        &self,
-        entries: &[(OplogIndex, OplogEntry)],
-    ) -> Result<(), OplogReadError> {
+    async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]) {
         let Some((start, _)) = entries.first() else {
-            return Ok(());
+            return;
         };
         let uncached = Self::new(
             self.agent_id.clone(),
@@ -524,8 +521,12 @@ impl OplogArchive for CompressedOplogArchive {
             self.level,
             self.retry_config.clone(),
         );
-        let actual = uncached.read_source(*start, entries.len() as u64).await?;
-        verify_persisted_entries(OplogReadSource::Archive(self.level), entries, actual)
+        let actual = uncached.read_source(*start, entries.len() as u64).await;
+        fail_stop(verify_persisted_entries(
+            OplogReadSource::Archive(self.level),
+            entries,
+            actual,
+        ));
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {

@@ -566,7 +566,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 self.agent_mode,
                 None,
             )
-            .await?
+            .await
             .ok_or_else(|| {
                 WorkerExecutorError::runtime(format!(
                     "Failed to recompute status for existing worker {}",

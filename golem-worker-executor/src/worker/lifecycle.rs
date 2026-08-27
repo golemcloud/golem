@@ -231,7 +231,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     metadata.agent_mode,
                     &metadata.last_known_status,
                 )
-                .await?;
+                .await;
                 if let Some(last_error) = error_and_retry_count {
                     return Err(WorkerExecutorError::PreviousInvocationFailed {
                         error: last_error.error,
@@ -478,7 +478,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         loop {
             let entries = oplog_service
                 .read_exact(owned_agent_id, agent_mode, current, 1)
-                .await?;
+                .await;
             let entry = entries.get(&current).ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "Could not read oplog entry {current} while resolving revert"

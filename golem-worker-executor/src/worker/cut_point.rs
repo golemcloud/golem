@@ -85,21 +85,21 @@ impl Display for SpanningConstruct {
 /// Entries inside `skipped_regions` are ignored on both sides: a terminal inside an
 /// already-deleted region is dead, and a terminal whose referenced opening entry lies in a
 /// deleted region is an orphan that replay drains without effect.
-pub async fn find_construct_spanning_cut_point<Read, ReadFut, Error>(
+pub async fn find_construct_spanning_cut_point<Read, ReadFut>(
     read: Read,
     cut_point: OplogIndex,
     scan_end: OplogIndex,
     skipped_regions: &DeletedRegions,
-) -> Result<Option<SpanningConstruct>, Error>
+) -> Option<SpanningConstruct>
 where
     Read: Fn(OplogIndex) -> ReadFut,
-    ReadFut: Future<Output = Result<OplogEntry, Error>>,
+    ReadFut: Future<Output = OplogEntry>,
 {
     for idx in OplogIndexRange::new(cut_point.next(), scan_end) {
         if skipped_regions.is_in_deleted_region(idx) {
             continue;
         }
-        let entry = read(idx).await?;
+        let entry = read(idx).await;
         let spanning = match &entry {
             // Completion markers are hints, not second terminals, but they carry the delivery
             // status and timing of their call's `End`. A cut between the `End` and its marker
@@ -198,10 +198,10 @@ where
             && opening_index <= cut_point
             && !skipped_regions.is_in_deleted_region(opening_index)
         {
-            return Ok(Some(construct));
+            return Some(construct);
         }
     }
-    Ok(None)
+    None
 }
 
 #[cfg(test)]
@@ -239,14 +239,13 @@ mod tests {
                     .get(&u64::from(i))
                     .cloned()
                     .unwrap_or_else(OplogEntry::no_op);
-                async move { Ok::<_, std::convert::Infallible>(entry) }
+                async move { entry }
             },
             idx(cut),
             idx(end),
             skipped,
         )
         .await
-        .unwrap()
     }
 
     #[test]

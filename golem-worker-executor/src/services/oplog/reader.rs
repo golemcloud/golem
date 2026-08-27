@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use golem_common::model::oplog::OplogIndex;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -38,7 +37,7 @@ impl Display for OplogReadSource {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum OplogReadError {
+pub(crate) enum OplogReadError {
     InvalidRange {
         start: OplogIndex,
         count: u64,
@@ -97,10 +96,8 @@ impl Display for OplogReadError {
 
 impl Error for OplogReadError {}
 
-impl From<OplogReadError> for WorkerExecutorError {
-    fn from(error: OplogReadError) -> Self {
-        WorkerExecutorError::unexpected_oplog_entry("contiguous oplog range", error.to_string())
-    }
+pub(crate) fn fail_stop<T>(result: Result<T, OplogReadError>) -> T {
+    result.unwrap_or_else(|error| panic!("Oplog read failed: {error}"))
 }
 
 /// Merges contiguous suffixes returned by oplog storage tiers into one exact logical range.

@@ -123,7 +123,7 @@ impl EntityInvocationDurability {
         } else {
             let replay =
                 store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
-            if replay.has_visible_terminal(handle.start_index()).await? {
+            if replay.has_visible_terminal(handle.start_index()).await {
                 InvocationExecutionMode::ReplayingCompleted
             } else {
                 InvocationExecutionMode::ReplayingIncomplete

@@ -479,7 +479,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
-    ) -> Result<Option<LastError>, WorkerExecutorError>;
+    ) -> Option<LastError>;
 
     /// Resume the replay of a worker instance. Note that if the previous replay
     /// hasn't reached the end of the replay (which is usually last index in oplog)

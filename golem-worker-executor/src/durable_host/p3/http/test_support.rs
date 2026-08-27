@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::services::oplog::{
-    CommitLevel, Oplog, OplogAddReceipt, OplogReadError, OrderedOplogStart,
-};
+use crate::services::oplog::{CommitLevel, Oplog, OplogAddReceipt, OrderedOplogStart};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::payload::types::{
@@ -175,18 +173,20 @@ impl Oplog for FrameTestOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         let entries = self.entries.lock().unwrap();
         let start: u64 = oplog_index.into();
         let mut result = BTreeMap::new();
         for i in start..(start + n) {
-            let entry = entries.get((i - 1) as usize).ok_or(OplogReadError::Gap {
-                start: oplog_index,
-                end: OplogIndex::from_u64(start + n - 1),
-            })?;
+            let entry = entries.get((i - 1) as usize).unwrap_or_else(|| {
+                panic!(
+                    "Missing oplog entry in exact range [{oplog_index}..={}]",
+                    OplogIndex::from_u64(start + n - 1)
+                )
+            });
             result.insert(OplogIndex::from_u64(i), entry.clone());
         }
-        Ok(result)
+        result
     }
 
     async fn length(&self) -> u64 {

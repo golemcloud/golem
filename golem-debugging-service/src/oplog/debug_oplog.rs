@@ -16,7 +16,7 @@ use crate::debug_session::{DebugSessionId, DebugSessions};
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_worker_executor::services::oplog::{
-    CommitLevel, Oplog, OplogAddReceipt, OplogReadError, OrderedOplogStart, PendingUpload,
+    CommitLevel, Oplog, OplogAddReceipt, OrderedOplogStart, PendingUpload,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
@@ -46,9 +46,9 @@ impl DebugOplog {
         playback_overrides: HashMap<OplogIndex, OplogEntry>,
         oplog_index: OplogIndex,
         oplog: Arc<dyn Oplog + Send + Sync>,
-    ) -> Result<OplogEntry, OplogReadError> {
+    ) -> OplogEntry {
         if let Some(entry) = playback_overrides.get(&oplog_index) {
-            Ok(entry.clone())
+            entry.clone()
         } else {
             oplog.read(oplog_index).await
         }
@@ -152,7 +152,7 @@ impl Oplog for DebugOplog {
     // Reads never move the debug session's replay position: replay's single-entry reads are
     // speculative (progress is only committed via `on_replay_progress`), and other components
     // (for example P3 request-body reconstruction) perform unrelated point lookups.
-    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
+    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         let debug_session_data = self
             .oplog_state
             .debug_session
@@ -173,7 +173,7 @@ impl Oplog for DebugOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         // The read must be bounded by the debug session's view of the oplog end (the playback
         // target index, when one is set). Entries after that target exist in the underlying oplog
         // but must not be visible to this session, so a request extending past it is not exact. A
@@ -184,29 +184,19 @@ impl Oplog for DebugOplog {
             .await
             .min(self.inner.current_oplog_index().await);
         let mut result = BTreeMap::new();
-        if n == 0 || oplog_index > last_recorded {
-            return if n == 0 {
-                Ok(result)
-            } else {
-                Err(OplogReadError::Gap {
-                    start: oplog_index,
-                    end: oplog_index,
-                })
-            };
+        if n == 0 {
+            return result;
         }
-        let available = u64::from(last_recorded) - u64::from(oplog_index) + 1;
-        if n > available {
-            let end = u64::from(oplog_index)
-                .checked_add(n - 1)
-                .map(OplogIndex::from_u64)
-                .ok_or(OplogReadError::InvalidRange {
-                    start: oplog_index,
-                    count: n,
-                })?;
-            return Err(OplogReadError::Gap {
-                start: oplog_index,
-                end,
+        let end = u64::from(oplog_index)
+            .checked_add(n - 1)
+            .map(OplogIndex::from_u64)
+            .unwrap_or_else(|| {
+                panic!("Invalid oplog range starting at {oplog_index} with {n} entries")
             });
+        if oplog_index > last_recorded || end > last_recorded {
+            panic!(
+                "Missing oplog entry in exact range [{oplog_index}..={end}]; last recorded index is {last_recorded}"
+            );
         }
 
         // Like `read`, this never moves the debug session's replay position; it only applies the
@@ -219,7 +209,7 @@ impl Oplog for DebugOplog {
             .expect("Internal Error. Read failed. Debug session not found");
         let playback_overrides = debug_session_data.playback_overrides;
 
-        for (idx, entry) in self.inner.read_exact(oplog_index, n).await? {
+        for (idx, entry) in self.inner.read_exact(oplog_index, n).await {
             let entry = playback_overrides
                 .overrides
                 .get(&idx)
@@ -227,14 +217,14 @@ impl Oplog for DebugOplog {
                 .unwrap_or(entry);
             result.insert(idx, entry);
         }
-        Ok(result)
+        result
     }
 
     async fn read_source(
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         self.read_exact(oplog_index, n).await
     }
 

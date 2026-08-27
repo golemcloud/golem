@@ -237,7 +237,7 @@ impl DefaultWorkerEnumerationService {
                         worker_metadata.last_known_status,
                     )
                     .instrument(tracing::info_span!("calculate_last_known_status"))
-                    .await?
+                    .await
                     .ok_or_else(|| {
                         WorkerExecutorError::runtime(
                             "Failed to calculate worker status for existing worker",

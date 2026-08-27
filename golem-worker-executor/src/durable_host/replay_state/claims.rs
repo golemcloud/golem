@@ -501,7 +501,7 @@ impl ReplayState {
                                 None,
                                 |_, idx, index: &mut Option<OplogIndex>| *index = Some(idx),
                             )
-                            .await?;
+                            .await;
 
                         let result = match exact {
                             OplogEntryLookupResult::Found {
@@ -533,7 +533,7 @@ impl ReplayState {
                                             *index = Some(idx)
                                         },
                                     )
-                                    .await?;
+                                    .await;
                                 if let OplogEntryLookupResult::Found {
                                     index: duplicate_index,
                                     ..

@@ -1,6 +1,5 @@
 use super::claims::{StartClaim, recorded_request_payload_matches};
 use super::*;
-use crate::services::oplog::OplogReadError;
 
 impl ReplayCursor {
     /// Replaces the seen-log multiset and updates the `has_seen_logs` fast-path flag.
@@ -64,8 +63,8 @@ impl ReplayCursor {
         &self,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogReadError> {
-        Ok(self.oplog.read_exact(idx, n).await?.into_iter().collect())
+    ) -> Vec<(OplogIndex, OplogEntry)> {
+        self.oplog.read_exact(idx, n).await.into_iter().collect()
     }
 
     pub(super) fn hash_log_entry(level: LogLevel, context: &str, message: &str) -> (u64, u64) {
@@ -98,14 +97,14 @@ impl ReplayCursor {
         for_all_intermediate: impl Fn(&OplogEntry, OplogIndex, &State) -> bool,
         mut state: State,
         mut update_state: impl FnMut(&OplogEntry, OplogIndex, &mut State),
-    ) -> Result<OplogEntryLookupResult, WorkerExecutorError> {
+    ) -> OplogEntryLookupResult {
         const CHUNK_SIZE: u64 = 1024;
 
         let mut violation = false;
 
         while start < end {
             let available = end.as_u64() - start.as_u64();
-            let entries = self.read_oplog(start, CHUNK_SIZE.min(available)).await?;
+            let entries = self.read_oplog(start, CHUNK_SIZE.min(available)).await;
             for (idx, entry) in &entries {
                 if current_next_skip_region
                     .as_ref()
@@ -129,11 +128,11 @@ impl ReplayCursor {
                 update_state(entry, *idx, &mut state);
 
                 if end_check(entry, begin_idx, &state) {
-                    return Ok(OplogEntryLookupResult::Found {
+                    return OplogEntryLookupResult::Found {
                         index: *idx,
                         entry: Box::new(entry.clone()),
                         violates_for_all: violation,
-                    });
+                    };
                 }
 
                 if !for_all_intermediate(entry, begin_idx, &state) {
@@ -143,9 +142,9 @@ impl ReplayCursor {
             start = entries.last().unwrap().0.next();
         }
 
-        Ok(OplogEntryLookupResult::NotFound {
+        OplogEntryLookupResult::NotFound {
             violates_for_all: violation,
-        })
+        }
     }
 }
 
@@ -212,7 +211,7 @@ impl CursorTx<'_> {
             self.st.replay_buffer = self
                 .cursor
                 .read_oplog(read_idx, remaining.min(CHUNK_SIZE))
-                .await?
+                .await
                 .into_iter()
                 .collect();
         }
@@ -552,7 +551,7 @@ impl CursorTx<'_> {
         // speculative read of `read_idx` becomes globally observable. This also performs the
         // skipped-region jump for the next read via `get_out_of_skipped_region`, and must precede
         // `skip_forward` (which reads forward from the advanced cursor).
-        self.move_replay_idx(read_idx).await?;
+        self.move_replay_idx(read_idx).await;
         if matches!(entry, OplogEntry::CompletionDelivered { .. }) {
             self.st.skip_hints_after_delivery = true;
         } else {
@@ -605,7 +604,7 @@ impl CursorTx<'_> {
                     // Publish the advance past this hint (also performs the skipped-region jump for
                     // the next read). Leaving last_replayed_non_hint_index unchanged, because this is
                     // a hint entry.
-                    self.move_replay_idx(skip_to).await?;
+                    self.move_replay_idx(skip_to).await;
                 }
                 None => {
                     // We've found the first non-hint entry; the speculative peek advanced nothing, so
@@ -833,13 +832,10 @@ impl CursorTx<'_> {
     /// `move_replay_idx` runs until the replay target is grown (`set_replay_target`) or the cursor is
     /// reset (`new` / `drop_override_and_restart`), each of which starts a fresh replay epoch that
     /// emits its own `ReplayFinished` on completion.
-    pub(super) async fn move_replay_idx(
-        &mut self,
-        new_idx: OplogIndex,
-    ) -> Result<(), WorkerExecutorError> {
+    pub(super) async fn move_replay_idx(&mut self, new_idx: OplogIndex) {
         let was_replay = self.cursor.is_replay();
         self.cursor.position.last_replayed_index.set(new_idx);
-        self.get_out_of_skipped_region().await?;
+        self.get_out_of_skipped_region().await;
         if was_replay && self.cursor.is_live() {
             self.record_replay_event(ReplayEvent::ReplayFinished);
         }
@@ -851,10 +847,9 @@ impl CursorTx<'_> {
             .oplog
             .on_replay_progress(self.cursor.last_replayed_index())
             .await;
-        Ok(())
     }
 
-    pub(super) async fn get_out_of_skipped_region(&mut self) -> Result<(), WorkerExecutorError> {
+    pub(super) async fn get_out_of_skipped_region(&mut self) {
         let initial_snapshot_skip_end = self.st.initial_snapshot_skip_end.take();
         // Loop: after jumping a region, the freshly looked-up next region may start immediately
         // after the jump target (adjacent regions recorded separately), requiring another jump.
@@ -882,7 +877,7 @@ impl CursorTx<'_> {
                         None => Some(region),
                     };
                     if let Some(events_region) = events_region {
-                        self.record_card_events_in_region(&events_region).await?;
+                        self.record_card_events_in_region(&events_region).await;
                     }
 
                     // The lookup must start *after* the just-jumped region: `find_next_deleted_region`
@@ -898,13 +893,9 @@ impl CursorTx<'_> {
                 _ => break,
             }
         }
-        Ok(())
     }
 
-    async fn record_card_events_in_region(
-        &mut self,
-        region: &OplogRegion,
-    ) -> Result<(), WorkerExecutorError> {
+    async fn record_card_events_in_region(&mut self, region: &OplogRegion) {
         let mut next = region.start;
         while next <= region.end {
             let remaining = region.end.as_u64() - next.as_u64() + 1;
@@ -912,7 +903,7 @@ impl CursorTx<'_> {
                 .cursor
                 .oplog
                 .read_exact(next, CHUNK_SIZE.min(remaining))
-                .await?;
+                .await;
             let last_read = *entries.last_key_value().unwrap().0;
             for entry in entries.into_values() {
                 match entry {
@@ -1003,7 +994,6 @@ impl CursorTx<'_> {
             }
             next = last_read.next();
         }
-        Ok(())
     }
 
     /// Feeds the concurrent replay resolver when an `End`/`Cancelled` entry is *committed*
@@ -1127,7 +1117,7 @@ impl CursorTx<'_> {
                     None,
                     |_, index, current: &mut Option<OplogIndex>| *current = Some(index),
                 )
-                .await?;
+                .await;
             match scan {
                 OplogEntryLookupResult::Found { index, entry, .. } => match *entry {
                     OplogEntry::End {
@@ -1248,7 +1238,7 @@ impl CursorTx<'_> {
                     *state = Some(idx);
                 },
             )
-            .await?;
+            .await;
 
         match scan_result {
             OplogEntryLookupResult::Found { index, entry, .. } => {
@@ -1312,7 +1302,7 @@ impl CursorTx<'_> {
                         *state = Some(idx);
                     },
                 )
-                .await?;
+                .await;
 
             let OplogEntryLookupResult::Found { index, entry, .. } = scan_result else {
                 break;
@@ -1458,7 +1448,7 @@ impl CursorTx<'_> {
             .position
             .last_replayed_non_hint_index
             .set(OplogIndex::NONE);
-        self.move_replay_idx(OplogIndex::INITIAL).await?;
+        self.move_replay_idx(OplogIndex::INITIAL).await;
         self.skip_forward().await
     }
 }
@@ -1506,7 +1496,7 @@ impl ReplayState {
             // No concurrency during construction: the replay state is not shared yet, so driving the
             // cursor without anyone to notify is sound.
             let mut tx = cursor.tx().await?;
-            tx.move_replay_idx(OplogIndex::INITIAL).await?; // By this we handle initial skipped regions applied by manual updates correctly
+            tx.move_replay_idx(OplogIndex::INITIAL).await; // By this we handle initial skipped regions applied by manual updates correctly
             tx.skip_forward().await?;
         }
         Ok(Self {
@@ -1527,7 +1517,7 @@ impl ReplayState {
         let mut next = from;
         while next <= to {
             let available = u64::from(to) - u64::from(next) + 1;
-            let entries = oplog.read_exact(next, CHUNK_SIZE.min(available)).await?;
+            let entries = oplog.read_exact(next, CHUNK_SIZE.min(available)).await;
             let last_read = *entries.last_key_value().unwrap().0;
             for (marker_idx, entry) in entries {
                 if marker_idx > to {
@@ -1759,13 +1749,10 @@ impl ReplayState {
     /// Entity reconstruction uses this before starting its fresh Store so the invocation context
     /// distinguishes reconstruction of a completed body from repair of an incomplete Start. The
     /// scan is read-only and respects fork/revert deleted regions.
-    pub(crate) async fn has_visible_terminal(
-        &self,
-        start_index: OplogIndex,
-    ) -> Result<bool, WorkerExecutorError> {
+    pub(crate) async fn has_visible_terminal(&self, start_index: OplogIndex) -> bool {
         let replay_target = self.replay_target();
         if start_index >= replay_target {
-            return Ok(false);
+            return false;
         }
         let skipped_regions = {
             let state = self.cursor.state.lock().await;
@@ -1778,18 +1765,18 @@ impl ReplayState {
                 .cursor
                 .oplog
                 .read_exact(next, CHUNK_SIZE.min(available))
-                .await?;
+                .await;
             let last_read = *entries.last_key_value().unwrap().0;
             if entries.into_iter().any(|(index, entry)| {
                 index <= replay_target
                     && !skipped_regions.is_in_deleted_region(index)
                     && terminal_start_index(&entry) == Some(start_index)
             }) {
-                return Ok(true);
+                return true;
             }
             next = last_read.next();
         }
-        Ok(false)
+        false
     }
 
     /// Waits until the replay cursor is blocked on a record in `root`'s call tree that no still
@@ -1849,7 +1836,7 @@ impl ReplayState {
                 let entries = cursor
                     .oplog
                     .read_exact(next, CHUNK_SIZE.min(available))
-                    .await?;
+                    .await;
                 let last_read = *entries.last_key_value().unwrap().0;
 
                 for (index, entry) in entries {
@@ -2181,13 +2168,13 @@ impl ReplayState {
         &self,
         begin_idx: OplogIndex,
         check: impl Fn(&OplogEntry, OplogIndex) -> bool,
-    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+    ) -> Option<OplogIndex> {
         match self
             .lookup_oplog_entry_with_condition(begin_idx, check, |_, _| true)
-            .await?
+            .await
         {
-            OplogEntryLookupResult::Found { index, .. } => Ok(Some(index)),
-            OplogEntryLookupResult::NotFound { .. } => Ok(None),
+            OplogEntryLookupResult::Found { index, .. } => Some(index),
+            OplogEntryLookupResult::NotFound { .. } => None,
         }
     }
 
@@ -2196,7 +2183,7 @@ impl ReplayState {
         begin_idx: OplogIndex,
         end_check: impl Fn(&OplogEntry, OplogIndex) -> bool,
         for_all_intermediate: impl Fn(&OplogEntry, OplogIndex) -> bool,
-    ) -> Result<OplogEntryLookupResult, WorkerExecutorError> {
+    ) -> OplogEntryLookupResult {
         self.lookup_oplog_entry_with_condition_and_state(
             begin_idx,
             |entry, idx, ()| end_check(entry, idx),
@@ -2219,7 +2206,7 @@ impl ReplayState {
         for_all_intermediate: impl Fn(&OplogEntry, OplogIndex, &State) -> bool,
         state: State,
         update_state: impl FnMut(&OplogEntry, OplogIndex, &mut State),
-    ) -> Result<OplogEntryLookupResult, WorkerExecutorError> {
+    ) -> OplogEntryLookupResult {
         let cursor = &*self.cursor;
         // The snapshot is taken on an owned task (see `run_owned_cursor_op`): this lookup is
         // called from accessor futures (e.g. the replay-side remote-write scope checks), which
@@ -2235,7 +2222,15 @@ impl ReplayState {
                 ))
             })
             .await;
-        let (start, skipped_regions, next_skipped_region) = snapshot?;
+        let (start, skipped_regions, next_skipped_region) = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                warn!("oplog lookup cursor snapshot did not complete: {err}");
+                return OplogEntryLookupResult::NotFound {
+                    violates_for_all: true,
+                };
+            }
+        };
         cursor
             .scan_oplog(
                 start,

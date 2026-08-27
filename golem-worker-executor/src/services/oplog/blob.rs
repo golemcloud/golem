@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use crate::services::oplog::multilayer::OplogArchive;
-use crate::services::oplog::reader::{OplogReadSource, verify_persisted_entries};
+use crate::services::oplog::reader::{
+    OplogReadError, OplogReadSource, fail_stop, verify_persisted_entries,
+};
 use crate::services::oplog::{
-    CompressedOplogChunk, OplogArchiveService, OplogReadError, cursor_value, next_scan_cursor,
-    scan_modes,
+    CompressedOplogChunk, OplogArchiveService, cursor_value, next_scan_cursor, scan_modes,
 };
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
@@ -113,7 +114,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         let archive = self.open(owned_agent_id, agent_mode).await;
         archive.read_source(idx, n).await
     }
@@ -530,13 +531,9 @@ impl BlobOplogArchive {
 
 #[async_trait]
 impl OplogArchive for BlobOplogArchive {
-    async fn read_source(
-        &self,
-        idx: OplogIndex,
-        n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    async fn read_source(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
         if n == 0 {
-            return Ok(BTreeMap::new());
+            return BTreeMap::new();
         }
         let mut result = BTreeMap::new();
         let mut last_idx = idx.range_end(n);
@@ -563,7 +560,7 @@ impl OplogArchive for BlobOplogArchive {
 
             // we encountered an entry that is not in our cache. fetch the chunk that contains the entry and use as much as we can from it.
             // after the end of the chunk
-            if let Some(chunk) = self.fetch_and_cache_range(idx, last_idx).await? {
+            if let Some(chunk) = fail_stop(self.fetch_and_cache_range(idx, last_idx).await) {
                 last_idx = last_idx.subtract(chunk.len() as u64);
                 for (index, entry) in chunk {
                     result.insert(index, entry);
@@ -575,7 +572,7 @@ impl OplogArchive for BlobOplogArchive {
             }
         }
 
-        Ok(result)
+        result
     }
 
     async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> u64 {
@@ -630,12 +627,9 @@ impl OplogArchive for BlobOplogArchive {
         total_bytes
     }
 
-    async fn verify_persisted(
-        &self,
-        entries: &[(OplogIndex, OplogEntry)],
-    ) -> Result<(), OplogReadError> {
+    async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]) {
         let Some((start, _)) = entries.first() else {
-            return Ok(());
+            return;
         };
         let uncached = Self::new(
             self.owned_agent_id.clone(),
@@ -644,8 +638,12 @@ impl OplogArchive for BlobOplogArchive {
             self.level,
         )
         .await;
-        let actual = uncached.read_source(*start, entries.len() as u64).await?;
-        verify_persisted_entries(OplogReadSource::Archive(self.level), entries, actual)
+        let actual = uncached.read_source(*start, entries.len() as u64).await;
+        fail_stop(verify_persisted_entries(
+            OplogReadSource::Archive(self.level),
+            entries,
+            actual,
+        ));
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {

@@ -16,8 +16,8 @@ use crate::model::ExecutionStatus;
 use crate::model::event::InternalWorkerEvent;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{
-    CommitLevel, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor, OplogReadError,
-    OplogService, OrderedOplogStart,
+    CommitLevel, OpenOplogs, Oplog, OplogAddReceipt, OplogConstructor, OplogService,
+    OrderedOplogStart,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -763,7 +763,7 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         self.inner
             .read_exact(owned_agent_id, agent_mode, idx, n)
             .await
@@ -775,7 +775,7 @@ impl OplogService for ForwardingOplogService {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         self.inner
             .read_source(owned_agent_id, agent_mode, idx, n)
             .await
@@ -1149,7 +1149,7 @@ impl Oplog for ForwardingOplog {
         self.inner.wait_for_replicas(replicas, timeout).await
     }
 
-    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
+    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         self.inner.read(oplog_index).await
     }
 
@@ -1157,7 +1157,7 @@ impl Oplog for ForwardingOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         self.inner.read_exact(oplog_index, n).await
     }
 
@@ -1165,7 +1165,7 @@ impl Oplog for ForwardingOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         self.inner.read_source(oplog_index, n).await
     }
 
@@ -1444,18 +1444,7 @@ impl ForwardingOplogState {
         }
 
         let batch_count = (batch_end.as_u64() - batch_start.as_u64() + 1) as usize;
-        let entries = match self.read_batch(batch_start, batch_count).await {
-            Ok(entries) => entries,
-            Err(error) => {
-                tracing::error!(
-                    "Failed to read entries for plugin {grant_id} [{batch_start}..{batch_end}]: {error}"
-                );
-                if let Some(s) = self.plugin_state.get_mut(&grant_id) {
-                    s.send_in_progress = false;
-                }
-                return;
-            }
-        };
+        let entries = self.read_batch(batch_start, batch_count).await;
 
         // If ALL entries are checkpoint entries, skip — nothing meaningful to deliver.
         // Advance the cursor past them so we don't re-read the same range forever.
@@ -1639,13 +1628,9 @@ impl ForwardingOplogState {
 
     /// Read `count` entries starting at `start` from the buffer if available,
     /// otherwise fall back to the persisted oplog.
-    async fn read_batch(
-        &self,
-        start: OplogIndex,
-        count: usize,
-    ) -> Result<Vec<OplogEntry>, OplogReadError> {
+    async fn read_batch(&self, start: OplogIndex, count: usize) -> Vec<OplogEntry> {
         if count == 0 {
-            return Ok(Vec::new());
+            return Vec::new();
         }
 
         if !self.buffer.is_empty() && start >= self.buffer_start_idx {
@@ -1654,22 +1639,21 @@ impl ForwardingOplogState {
 
             if request_end_idx <= buffer_end_idx {
                 let offset = (start.as_u64() - self.buffer_start_idx.as_u64()) as usize;
-                return Ok(self
+                return self
                     .buffer
                     .iter()
                     .skip(offset)
                     .take(count)
                     .cloned()
-                    .collect());
+                    .collect();
             }
         }
 
-        Ok(self
-            .inner
+        self.inner
             .read_exact(start, count as u64)
-            .await?
+            .await
             .into_values()
-            .collect())
+            .collect()
     }
 
     /// Write an OplogProcessorCheckpoint entry, commit it, and update index tracking.
@@ -2385,18 +2369,20 @@ mod tests {
             &self,
             oplog_index: OplogIndex,
             n: u64,
-        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
             let entries = self.entries.lock().unwrap();
             let start: u64 = oplog_index.into();
             let mut result = BTreeMap::new();
             for i in start..(start + n) {
-                let entry = entries.get((i - 1) as usize).ok_or(OplogReadError::Gap {
-                    start: oplog_index,
-                    end: OplogIndex::from_u64(start + n - 1),
-                })?;
+                let entry = entries.get((i - 1) as usize).unwrap_or_else(|| {
+                    panic!(
+                        "Missing oplog entry in exact range [{oplog_index}..={}]",
+                        OplogIndex::from_u64(start + n - 1)
+                    )
+                });
                 result.insert(OplogIndex::from_u64(i), entry.clone());
             }
-            Ok(result)
+            result
         }
 
         async fn length(&self) -> u64 {

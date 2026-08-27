@@ -701,7 +701,7 @@ impl WorkerService for DefaultWorkerService {
         let initial_oplog_entry = self
             .oplog_service
             .read_exact(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
-            .await?
+            .await
             .into_iter()
             .next();
 
@@ -796,7 +796,7 @@ impl WorkerService for DefaultWorkerService {
                             None,
                             || self.read_status_checkpoint(owned_agent_id, agent_mode),
                         )
-                        .await?
+                        .await
                         .ok_or_else(|| {
                             WorkerExecutorError::runtime(format!(
                                 "Failed to recompute status for existing worker {owned_agent_id}"

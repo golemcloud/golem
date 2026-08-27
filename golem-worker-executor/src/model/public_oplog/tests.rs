@@ -436,8 +436,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             OplogIndex::INITIAL,
             Into::<u64>::into(last_index),
         )
-        .await
-        .unwrap();
+        .await;
 
     let components: Arc<dyn ComponentService> = Arc::new(PanicComponentService);
 

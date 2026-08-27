@@ -1,7 +1,5 @@
 use super::*;
-use crate::services::oplog::{
-    CommitLevel, OplogAddReceipt, OplogReadError, OrderedOplogStart, PendingUpload,
-};
+use crate::services::oplog::{CommitLevel, OplogAddReceipt, OrderedOplogStart, PendingUpload};
 use async_trait::async_trait;
 use golem_common::model::card::{
     AgentCardHolder, Card, CardHolder, CardId, InvocationWalletPin, StoredCard, WalletVersionToken,
@@ -124,18 +122,20 @@ impl Oplog for InMemoryOplog {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         let entries = self.entries.lock().unwrap();
         let start: u64 = oplog_index.into();
         let mut result = BTreeMap::new();
         for i in start..(start + n) {
-            let entry = entries.get((i - 1) as usize).ok_or(OplogReadError::Gap {
-                start: oplog_index,
-                end: OplogIndex::from_u64(start + n - 1),
-            })?;
+            let entry = entries.get((i - 1) as usize).unwrap_or_else(|| {
+                panic!(
+                    "Missing oplog entry in exact range [{oplog_index}..={}]",
+                    OplogIndex::from_u64(start + n - 1)
+                )
+            });
             result.insert(OplogIndex::from_u64(i), entry.clone());
         }
-        Ok(result)
+        result
     }
 
     async fn length(&self) -> u64 {
@@ -3419,9 +3419,7 @@ async fn visible_terminal_scan_crosses_multiple_chunks() {
     let rs = replay_state_over(entries).await;
 
     assert!(
-        rs.has_visible_terminal(OplogIndex::from_u64(2))
-            .await
-            .unwrap(),
+        rs.has_visible_terminal(OplogIndex::from_u64(2)).await,
         "entity execution mode classification must scan through the complete replay prefix"
     );
 }

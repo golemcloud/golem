@@ -666,7 +666,7 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
     assert!(after > before);
     let appended = owner_oplog
         .read_exact(before.next(), u64::from(after) - u64::from(before))
-        .await?;
+        .await;
     assert!(
         appended
             .values()
@@ -784,8 +784,7 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
                         before_sleep.next(),
                         u64::from(latest) - u64::from(before_sleep),
                     )
-                    .await
-                    .expect("newly appended oplog range must be contiguous");
+                    .await;
                 if entries
                     .values()
                     .any(|entry| matches!(entry, OplogEntry::Start { .. }))

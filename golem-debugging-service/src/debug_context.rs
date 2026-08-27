@@ -151,7 +151,7 @@ impl ExternalOperations<Self> for DebugContext {
         agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
-    ) -> Result<Option<LastError>, WorkerExecutorError> {
+    ) -> Option<LastError> {
         DurableWorkerCtx::<Self>::get_last_error_and_retry_count(
             this,
             agent_id,

@@ -39,7 +39,6 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 pub use ephemeral::EphemeralOplog;
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
-pub use reader::OplogReadError;
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
@@ -136,7 +135,7 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError>;
+    ) -> BTreeMap<OplogIndex, OplogEntry>;
 
     /// Reads the part of the requested range physically present in this service.
     ///
@@ -148,7 +147,7 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         self.read_exact(owned_agent_id, agent_mode, idx, n).await
     }
 
@@ -436,29 +435,25 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool;
 
     /// Reads exactly `n` contiguous entries starting at `oplog_index`.
-    async fn read_exact(
-        &self,
-        oplog_index: OplogIndex,
-        n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError>;
+    async fn read_exact(&self, oplog_index: OplogIndex, n: u64)
+    -> BTreeMap<OplogIndex, OplogEntry>;
 
     /// Reads the part of the requested range physically present in this oplog.
     async fn read_source(
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
         self.read_exact(oplog_index, n).await
     }
 
     /// Reads the entry at the given oplog index.
-    async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
+    async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         self.read_exact(oplog_index, 1)
-            .await?
+            .await
             .remove(&oplog_index)
-            .ok_or(OplogReadError::Gap {
-                start: oplog_index,
-                end: oplog_index,
+            .unwrap_or_else(|| {
+                panic!("Missing oplog entry {oplog_index} after an exact single-entry read")
             })
     }
 
