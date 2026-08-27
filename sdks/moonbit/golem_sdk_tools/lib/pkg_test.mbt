@@ -150,15 +150,22 @@ test "ensure_pkg_import accepts a matching deprecated alias" {
 }
 
 ///|
-test "ensure_pkg_import upgrades an existing import to the generated alias" {
+test "ensure_pkg_import rejects an existing package under a different alias" {
   let content =
     #|import {
     #|  "golemcloud/golem_sdk/tool" @sdk_tool,
     #|}
-  let result = @lib.ensure_pkg_import(
-    content, "golemcloud/golem_sdk/tool", "@tool",
+  let error = try
+    @lib.ensure_pkg_import(content, "golemcloud/golem_sdk/tool", "@tool")
+  catch {
+    @lib.ComponentRoleError(message) => message
+  } noraise {
+    _ => "NO ERROR"
+  }
+  inspect(
+    error,
+    content="moon.pkg package 'golemcloud/golem_sdk/tool' is already imported as '@sdk_tool'; generated source requires alias '@tool'",
   )
-  assert_true(result.contains("\"golemcloud/golem_sdk/tool\" @tool,"))
 }
 
 ///|
@@ -178,15 +185,19 @@ test "ensure_pkg_import matches an exact package path" {
 }
 
 ///|
-test "ensure_pkg_import does not mistake an alias prefix for the exact alias" {
+test "ensure_pkg_import rejects an alias prefix rather than rewriting it" {
   let content =
     #|import {
     #|  "golemcloud/golem_sdk/tool" @toolCommon,
     #|}
-  let result = @lib.ensure_pkg_import(
-    content, "golemcloud/golem_sdk/tool", "@tool",
-  )
-  assert_true(result.contains("\"golemcloud/golem_sdk/tool\" @tool,"))
+  let error = try
+    @lib.ensure_pkg_import(content, "golemcloud/golem_sdk/tool", "@tool")
+  catch {
+    @lib.ComponentRoleError(message) => message
+  } noraise {
+    _ => "NO ERROR"
+  }
+  assert_true(error.contains("is already imported as '@toolCommon'"))
 }
 
 ///|
@@ -202,14 +213,16 @@ test "ensure_pkg_import preserves an exact aliased import with a trailing commen
 }
 
 ///|
-test "ensure_pkg_import preserves tab indentation when upgrading an alias" {
+test "ensure_pkg_import does not rewrite a tab-indented user alias" {
   let content = "import {\n\t\"golemcloud/golem_sdk/tool\" @sdk_tool // keep this explanation\n}"
-  let result = @lib.ensure_pkg_import(
-    content, "golemcloud/golem_sdk/tool", "@tool",
-  )
-  assert_eq(
-    result, "import {\n\t\"golemcloud/golem_sdk/tool\" @tool, // keep this explanation\n}",
-  )
+  let error = try
+    @lib.ensure_pkg_import(content, "golemcloud/golem_sdk/tool", "@tool")
+  catch {
+    @lib.ComponentRoleError(message) => message
+  } noraise {
+    _ => "NO ERROR"
+  }
+  assert_true(error.contains("is already imported as '@sdk_tool'"))
 }
 
 ///|
@@ -390,6 +403,263 @@ test "ensure_pkg_import is idempotent across the generated tool imports" {
     twice = @lib.ensure_pkg_import(twice, path, import_alias)
   }
   assert_eq(twice, once)
+}
+
+///|
+test "ensure_role_gen_import replaces a previous role without duplicating @gen" {
+  let content =
+    #|import {
+    #|  "golemcloud/golem_sdk/gen" @gen,
+    #|  "some/pkg" @other,
+    #|}
+  let result = @lib.ensure_role_gen_import(
+    content, "golemcloud/golem_sdk/gen-tool-middleware",
+  )
+  inspect(
+    result,
+    content=(
+      #|import {
+      #|  "golemcloud/golem_sdk/gen-tool-middleware" @gen,
+      #|  "some/pkg" @other,
+      #|}
+    ),
+  )
+  assert_eq(
+    @lib.ensure_role_gen_import(
+      result, "golemcloud/golem_sdk/gen-tool-middleware",
+    ),
+    result,
+  )
+}
+
+///|
+test "ensure_role_gen_import normalizes an existing selected package alias" {
+  let content =
+    #|import {
+    #|  "golemcloud/golem_sdk/gen" @gen,
+    #|  "golemcloud/golem_sdk/gen-agent-tool-middleware" @combined,
+    #|}
+  inspect(
+    @lib.ensure_role_gen_import(
+      content, "golemcloud/golem_sdk/gen-agent-tool-middleware",
+    ),
+    content=(
+      #|import {
+      #|  "golemcloud/golem_sdk/gen-agent-tool-middleware" @gen,
+      #|}
+    ),
+  )
+}
+
+///|
+test "ensure_role_gen_import rejects unrelated @gen alias ownership" {
+  let content =
+    #|import {
+    #|  "some/generator" @gen,
+    #|}
+  let error = try
+    @lib.ensure_role_gen_import(content, "golemcloud/golem_sdk/gen")
+  catch {
+    @lib.ComponentRoleError(message) => message
+  } noraise {
+    _ => "NO ERROR"
+  }
+  inspect(
+    error,
+    content="moon.pkg import alias @gen is already used by unrelated package 'some/generator'",
+  )
+}
+
+///|
+test "ensure_role_tool_import preserves exact imports and rejects role conflicts" {
+  let content =
+    #|import {
+    #|  "golemcloud/golem_sdk/tool" @tool,
+    #|  "some/pkg" @other,
+    #|}
+  assert_eq(
+    @lib.ensure_role_tool_import(content, "golemcloud/golem_sdk/tool"),
+    content,
+  )
+  let error = try
+    @lib.ensure_role_tool_import(content, "golemcloud/golem_sdk/tool-core")
+  catch {
+    @lib.ComponentRoleError(message) => message
+  } noraise {
+    _ => "NO ERROR"
+  }
+  inspect(
+    error,
+    content="moon.pkg role tool package 'golemcloud/golem_sdk/tool' conflicts with required package 'golemcloud/golem_sdk/tool-core'",
+  )
+}
+
+///|
+test "ensure_role_tool_import rejects selected-package and unrelated alias conflicts" {
+  let content =
+    #|import {
+    #|  "golemcloud/golem_sdk/tool" @ambient,
+    #|}
+  let selected_error = try
+    @lib.ensure_role_tool_import(content, "golemcloud/golem_sdk/tool")
+  catch {
+    @lib.ComponentRoleError(message) => message
+  } noraise {
+    _ => "NO ERROR"
+  }
+  assert_true(selected_error.contains("is already imported as '@ambient'"))
+  let error = try
+    @lib.ensure_role_tool_import(
+      "import {\n  \"some/tool\" @tool,\n}", "golemcloud/golem_sdk/tool-core",
+    )
+  catch {
+    @lib.ComponentRoleError(message) => message
+  } noraise {
+    _ => "NO ERROR"
+  }
+  inspect(
+    error,
+    content="moon.pkg import alias @tool is already used by unrelated package 'some/tool'",
+  )
+}
+
+///|
+test "generated package imports are deterministic and stale owned entries are removed" {
+  let original =
+    #|import {
+    #|  "user/owned" @userOwned,
+    #|  "golemcloud/golem_sdk/schema" @schema,
+    #|}
+    #|
+    #|options(
+    #|  "is-main": true,
+    #|)
+  let monomorphic = [
+    ("golemcloud/golem_sdk/tool-middleware", "@toolMiddleware"),
+    ("golemcloud/golem_sdk/tool-core", "@tool"),
+    ("golemcloud/golem_sdk/schema", "@schema"),
+  ]
+  let once = @lib.reconcile_generated_pkg_imports(original, monomorphic)
+  assert_true(
+    once.contains(
+      "\"golemcloud/golem_sdk/tool-middleware\" @toolMiddleware, // Generated by golem_sdk_tools",
+    ),
+  )
+  assert_true(
+    once.contains(
+      "\"golemcloud/golem_sdk/tool-core\" @tool, // Generated by golem_sdk_tools",
+    ),
+  )
+  assert_false(
+    once.contains(
+      "\"golemcloud/golem_sdk/schema\" @schema, // Generated by golem_sdk_tools",
+    ),
+  )
+  assert_eq(@lib.reconcile_generated_pkg_imports(once, monomorphic), once)
+  let universal = [("golemcloud/golem_sdk/tool-middleware", "@toolMiddleware")]
+  let cleaned = @lib.reconcile_generated_pkg_imports(once, universal)
+  assert_true(cleaned.contains("\"user/owned\" @userOwned,"))
+  assert_true(cleaned.contains("\"golemcloud/golem_sdk/schema\" @schema,"))
+  assert_false(cleaned.contains("golemcloud/golem_sdk/tool-core"))
+  assert_eq(cleaned.split("// Generated by golem_sdk_tools").count() - 1, 1)
+}
+
+///|
+test "generated package imports switch owned tool roles without duplicate aliases" {
+  let pure = @lib.reconcile_generated_pkg_imports(
+    "options(\n  \"is-main\": true,\n)",
+    [("golemcloud/golem_sdk/tool-core", "@tool")],
+  )
+  let combined = @lib.reconcile_generated_pkg_imports(pure, [
+    ("golemcloud/golem_sdk/tool", "@tool"),
+  ])
+  assert_false(combined.contains("golemcloud/golem_sdk/tool-core"))
+  assert_eq(combined.split("@tool,").count() - 1, 1)
+  assert_true(
+    combined.contains(
+      "\"golemcloud/golem_sdk/tool\" @tool, // Generated by golem_sdk_tools",
+    ),
+  )
+}
+
+///|
+test "generated import reconciliation preserves user ownership and rejects conflicts" {
+  let custom_alias =
+    #|import {
+    #|  "golemcloud/golem_sdk/schema" @customSchema,
+    #|}
+  let path_error = try
+    @lib.reconcile_generated_pkg_imports(custom_alias, [
+      ("golemcloud/golem_sdk/schema", "@schema"),
+    ])
+  catch {
+    @lib.ComponentRoleError(message) => message
+  } noraise {
+    _ => "NO ERROR"
+  }
+  inspect(
+    path_error,
+    content="moon.pkg package 'golemcloud/golem_sdk/schema' is already imported as '@customSchema'; generated source requires alias '@schema'",
+  )
+  let alias_error = try
+    @lib.reconcile_generated_pkg_imports(
+      "import {\n  \"user/schema\" @schema,\n}",
+      [("golemcloud/golem_sdk/schema", "@schema")],
+    )
+  catch {
+    @lib.ComponentRoleError(message) => message
+  } noraise {
+    _ => "NO ERROR"
+  }
+  inspect(
+    alias_error,
+    content="moon.pkg import alias @schema is already used by unrelated package 'user/schema'",
+  )
+}
+
+///|
+test "pure generated imports reject ambient tool under every user alias" {
+  let error = try
+    @lib.reconcile_generated_pkg_imports(
+      "import {\n  \"golemcloud/golem_sdk/tool\" @customTool,\n}",
+      [("golemcloud/golem_sdk/tool-core", "@tool")],
+      forbid_ambient_tool=true,
+    )
+  catch {
+    @lib.ComponentRoleError(message) => message
+  } noraise {
+    _ => "NO ERROR"
+  }
+  inspect(
+    error,
+    content="Pure tool-middleware moon.pkg must not import ambient package 'golemcloud/golem_sdk/tool'",
+  )
+}
+
+///|
+test "pure role reconciliation removes only owned ambient tool imports" {
+  let content =
+    #|import {
+    #|  "user/owned" @userOwned,
+    #|  "golemcloud/golem_sdk/tool" @tool, // Generated by golem_sdk_tools
+    #|}
+  let reconciled = @lib.reconcile_pure_role_pkg_imports(content)
+  assert_true(reconciled.contains("\"user/owned\" @userOwned,"))
+  assert_false(reconciled.contains("golemcloud/golem_sdk/tool"))
+}
+
+///|
+test "generated import markers outside regular entries do not confer ownership" {
+  let content =
+    #|import {
+    #|  "user/owned" @userOwned, // Generated by golem_sdk_tools for documentation
+    #|}
+    #|
+    #|// Generated by golem_sdk_tools
+    #|options(
+    #|  "is-main": true,
+    #|)
+  assert_eq(@lib.reconcile_generated_pkg_imports(content, []), content)
 }
 
 ///|

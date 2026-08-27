@@ -1,7 +1,4 @@
 ///|
-pub(all) enum NoToolError {}
-
-///|
 pub(all) enum RpcError {
   Protocol(String)
   Denied(String)
@@ -13,12 +10,6 @@ pub(all) enum RpcError {
 pub(all) enum ToolError[E] {
   Rpc(RpcError)
   Tool(E)
-}
-
-///|
-pub(all) struct InvocationResult {
-  result : @model.TypedSchemaValue?
-  stdout : @async-core.Stream[Byte]?
 }
 
 ///|
@@ -85,15 +76,19 @@ pub async fn[E] invoke_and_await(
   stdin : @async-core.Stream[Byte]?,
   decode_error : (@model.TypedSchemaValue) -> Result[E, String],
 ) -> Result[InvocationResult, ToolError[E]] {
-  let wire_input = @model.typed_schema_value_to_wit(input) catch {
-    e => return Err(tool_protocol_error("failed to encode tool input: \{e}"))
+  let wire_input = match @toolCore.encode_typed_input(input) {
+    Ok(encoded) => encoded
+    Err(error) => return Err(tool_protocol_error(error))
   }
   let wire_result = match
     rpc.invoke_and_await(command_path, wire_input, stdin) {
     Ok(result) => result
     Err(e) => return Err(map_rpc_error(e, decode_error))
   }
-  decode_invocation_result(wire_result)
+  match @toolCore.decode_invocation_result(wire_result) {
+    Ok(result) => Ok(result)
+    Err(error) => Err(tool_protocol_error(error))
+  }
 }
 
 ///|
@@ -131,32 +126,12 @@ pub async fn invoke_and_await_no_tool_error(
 }
 
 ///|
-fn[E] decode_invocation_result(
-  result : @toolCommon.InvocationResult,
-) -> Result[InvocationResult, ToolError[E]] {
-  let decoded = match result.result {
-    Some(value) => {
-      let decoded_value = @model.typed_schema_value_from_wit(value) catch {
-        e =>
-          return Err(tool_protocol_error("failed to decode tool result: \{e}"))
-      }
-      Some(decoded_value)
-    }
-    None => None
-  }
-  Ok({ result: decoded, stdout: result.stdout })
-}
-
-///|
 pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(
   result : InvocationResult,
 ) -> Result[(T, @async-core.Stream[Byte]), ToolError[E]] {
-  let stdout = expect_stdout(result.stdout)
-  let value = decode_expected_value(result.result)
-  match (stdout, value) {
-    (Ok(stdout), Ok(value)) => Ok((value, stdout))
-    (Err(e), _) => Err(e)
-    (_, Err(e)) => Err(e)
+  match @toolCore.project_result_with_stdout(result) {
+    Ok(projected) => Ok(projected)
+    Err(error) => Err(tool_protocol_error(error))
   }
 }
 
@@ -164,9 +139,9 @@ pub fn[T : @schema.FromSchema, E] decode_result_with_stdout(
 pub fn[T : @schema.FromSchema, E] decode_result_value(
   result : InvocationResult,
 ) -> Result[T, ToolError[E]] {
-  match expect_no_stdout(result.stdout) {
-    Err(e) => Err(e)
-    Ok(_) => decode_expected_value(result.result)
+  match @toolCore.project_result_value(result) {
+    Ok(value) => Ok(value)
+    Err(error) => Err(tool_protocol_error(error))
   }
 }
 
@@ -174,11 +149,9 @@ pub fn[T : @schema.FromSchema, E] decode_result_value(
 pub fn[E] decode_result_stdout_only(
   result : InvocationResult,
 ) -> Result[@async-core.Stream[Byte], ToolError[E]] {
-  let stdout = expect_stdout(result.stdout)
-  match (stdout, expect_no_value(result.result)) {
-    (Ok(stdout), Ok(_)) => Ok(stdout)
-    (Err(e), _) => Err(e)
-    (_, Err(e)) => Err(e)
+  match @toolCore.project_result_stdout_only(result) {
+    Ok(stdout) => Ok(stdout)
+    Err(error) => Err(tool_protocol_error(error))
   }
 }
 
@@ -186,9 +159,9 @@ pub fn[E] decode_result_stdout_only(
 pub fn[E] decode_result_empty(
   result : InvocationResult,
 ) -> Result[Unit, ToolError[E]] {
-  match expect_no_stdout(result.stdout) {
-    Err(e) => Err(e)
-    Ok(_) => expect_no_value(result.result)
+  match @toolCore.project_result_empty(result) {
+    Ok(_) => Ok(())
+    Err(error) => Err(tool_protocol_error(error))
   }
 }
 
@@ -247,29 +220,10 @@ pub fn[E] tool_protocol_error(message : String) -> ToolError[E] {
 }
 
 ///|
-fn[T : @schema.FromSchema, E] decode_expected_value(
-  value : @model.TypedSchemaValue?,
-) -> Result[T, ToolError[E]] {
-  let value = match expect_value(value) {
-    Ok(value) => value
-    Err(e) => return Err(e)
-  }
-  try @schema.from_value_as(value.value) catch {
-    e => Err(tool_protocol_error("failed to decode tool result: \{e}"))
-  } noraise {
-    decoded => Ok(decoded)
-  }
-}
-
-///|
 fn[E : @schema.FromSchema] decode_custom_tool_error(
   value : @model.TypedSchemaValue,
 ) -> Result[E, String] {
-  try @schema.from_value_as(value.value) catch {
-    e => Err("failed to decode remote tool error: \{e}")
-  } noraise {
-    decoded => Ok(decoded)
-  }
+  @toolCore.decode_custom_error(value)
 }
 
 ///|
@@ -298,13 +252,17 @@ fn[E] map_remote_tool_error(
 ) -> ToolError[E] {
   match error {
     @toolCommon.ToolError::CustomError(value) => {
-      let decoded = @model.typed_schema_value_from_wit(value) catch {
-        e =>
-          return tool_protocol_error("failed to decode remote tool error: \{e}")
+      let decoded = match
+        @toolCore.decode_typed_value(value, "remote tool error") {
+        Ok(decoded) => decoded
+        Err(message) => return tool_protocol_error(message)
       }
       match decode_error(decoded) {
         Ok(error) => ToolError::Tool(error)
-        Err(message) => ToolError::Rpc(RpcError::Protocol(message))
+        Err(message) => {
+          @model.drop_owned_capabilities(decoded.value)
+          ToolError::Rpc(RpcError::Protocol(message))
+        }
       }
     }
     other =>

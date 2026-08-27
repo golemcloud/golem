@@ -28,20 +28,22 @@ jobs:
         working-directory: sdks/moonbit/golem_sdk
         run: |
           VERSION=${{ steps.get_version.outputs.version }}
-          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" moon.mod.json
+          sed -i "s/^version = \".*\"$/version = \"$VERSION\"/" moon.mod
+          test "$(grep -Fxc "version = \"$VERSION\"" moon.mod)" -eq 1
 
       - name: Set version in golem_sdk_tools
         working-directory: sdks/moonbit/golem_sdk_tools
         run: |
           VERSION=${{ steps.get_version.outputs.version }}
-          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" moon.mod.json
+          sed -i "s/^version = \".*\"$/version = \"$VERSION\"/" moon.mod
+          test "$(grep -Fxc "version = \"$VERSION\"" moon.mod)" -eq 1
 
       - name: Check SDK
         run: find . -name moon.pkg -exec dirname {} \; | xargs moon check --target wasm
         working-directory: sdks/moonbit/golem_sdk
 
       - name: Test SDK
-        run: find . -name moon.pkg -exec dirname {} \; | xargs moon test --target wasm
+        run: ./scripts/run-sdk-tests.sh
         working-directory: sdks/moonbit/golem_sdk
 
       - name: Install tools dependencies
