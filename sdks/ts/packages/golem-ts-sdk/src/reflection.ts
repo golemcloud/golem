@@ -18,7 +18,7 @@ import type {
   OutputSchema as HostOutputSchema,
 } from 'golem:agent/common@2.0.0';
 import type { SchemaGraph as WitSchemaGraph } from 'golem:core/types@2.0.0';
-import { resolveRemoteAgent, type RemoteAgentHandle } from './bridge/agent';
+import { resolveRemoteAgentFallibly, type RemoteAgentHandle } from './bridge/agent';
 import {
   field,
   schemaGraphFromWit,
@@ -124,7 +124,7 @@ export class ReflectedAgentClientFactory {
   private create(input: SchemaValue, phantomId?: Uuid): ReflectedAgentClient {
     return new ReflectedAgentClient(
       this.agentType,
-      resolveRemoteAgent(this.agentType.name, input, phantomId, [], this.agentType.mode),
+      resolveRemoteAgentFallibly(this.agentType.name, input, phantomId, [], this.agentType.mode),
     );
   }
 
@@ -207,7 +207,7 @@ export class DynamicAgentClient {
   constructor(agentId: AgentId) {
     this.agentId = agentId;
     const [typeName, constructorValue, phantomId] = parseAgentId(agentId.agentId);
-    this.remote = resolveRemoteAgent(
+    this.remote = resolveRemoteAgentFallibly(
       typeName,
       schemaValueFromWit(constructorValue.value),
       phantomId === undefined ? undefined : Uuid.from(phantomId),
