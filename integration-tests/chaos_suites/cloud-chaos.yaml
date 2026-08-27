@@ -975,13 +975,24 @@ scenarios:
       # which storage the run was about; the driver never resolves or contacts
       # it.
       endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
-      # The most of its baseline throughput the workload may keep during the
-      # outage for the fault to count as observed. Not zero: an operation
-      # submitted late in the fault window can still be waiting when the
-      # database returns, and then confirms into the window it was submitted in.
-      # At 100 ops/s over 180s that is a handful against a baseline of
-      # thousands, so anything near 15% means the partition did not take hold.
-      outageCeilingPercent: 15
+      # The least of the fault window every stream must answer nothing at all
+      # for, as a share of that window, for the outage to count as observed.
+      #
+      # This was a ceiling on during-fault throughput as a share of baseline.
+      # That number is still reported, but it cannot be the verdict: it is a
+      # rate averaged over the whole window, while an absorbed outage does all
+      # its serving in the few seconds at the window's edges. The same handful
+      # of edge confirmations reads as ~8% of a 180s window and ~26% of a 60s
+      # one, so the threshold tracked the window length rather than the
+      # platform, and shortening this window to 60s duly tripped it on a
+      # partition that had plainly landed (run 33099228775: quiet 58.0s of
+      # 62.3s on every stream, yet 25.79% against a 15% ceiling).
+      #
+      # Quiet time is measured against the window's own edges, so it means the
+      # same thing whatever the window is. 50% is far from both outcomes it has
+      # to tell apart: a landed outage is quiet for over 90% of the window, an
+      # undisturbed cluster for a few percent.
+      outageQuietFloorPercent: 50
       # What serving again may cost once the cluster is reachable. Recorded, not
       # asserted: this is really a measure of how long sqlx's pool takes to
       # notice, plus whatever recovery scan the executors run, and how long that

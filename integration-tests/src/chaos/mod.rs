@@ -671,20 +671,31 @@ pub struct StorageConfig {
     /// hostname. Chaos Mesh resolves it in the controller, so this is the same
     /// string that appears in the NetworkChaos manifest's `externalTargets`.
     pub endpoint: String,
-    /// The most of its baseline throughput the workload may keep during the
-    /// fault, as a percentage, for the outage to count as observed.
+    /// The least of the fault window every stream must answer nothing at all
+    /// for, as a percentage of that window, for the outage to count as
+    /// observed.
     ///
-    /// A run above this line did not take the storage away, whatever the fault
+    /// A run below this line did not take the storage away, whatever the fault
     /// status said, and every other number in the report then describes an
     /// undisturbed cluster. That is reported as inconclusive rather than clean:
     /// a healthy-looking result from a fault that never landed is the worst
     /// artifact this suite can produce.
     ///
-    /// It cannot be zero. Operations submitted in the last seconds before the
-    /// heal confirm just after it and are counted in the fault window they were
-    /// submitted in, so a genuine outage still leaves a small non-zero cell.
-    /// Read it together with `quietMs` — see [`crate::chaos::outage`].
-    pub outage_ceiling_percent: f64,
+    /// This used to be a ceiling on during-fault throughput as a share of
+    /// baseline, and that number is still recorded. It stopped being the
+    /// verdict because it is a rate averaged over the whole window while all
+    /// the serving in an absorbed outage happens in the seconds at its edges,
+    /// so the same handful of edge confirmations reads as 8% of a 180s window
+    /// and 26% of a 60s one. The threshold then tracks the window length rather
+    /// than the platform, and shortening S16's window to 60s duly tripped it on
+    /// a partition that had plainly landed.
+    ///
+    /// Quiet time has no such coupling: it is measured against the window's own
+    /// edges, so it means the same thing whatever the window is. Every stream
+    /// is judged rather than the aggregate, because a stream still answering is
+    /// a fault that did not land on it and must not be outvoted by quieter
+    /// ones.
+    pub outage_quiet_floor_percent: f64,
     /// What serving again may cost once the storage is reachable, and the
     /// number each stream's recovery gap is reported against. Recorded rather
     /// than asserted, like every other budget in the suite: how long a
@@ -947,18 +958,21 @@ impl ScenarioConfig {
                 self.code
             )
         })?;
-        // A zero ceiling can never be met: an operation submitted just before
-        // the heal confirms just after it and is counted in the fault window it
-        // was submitted in, so even a total outage leaves a small non-zero
-        // cell. Every run would then report the outage as not observed, and the
-        // one verdict that exists to catch a fault which never landed would be
-        // stuck on.
-        if config.outage_ceiling_percent <= 0.0 {
+        // A floor of 100% can never be met: a stream is only quiet between the
+        // answers it did give, and an operation submitted just before the heal
+        // confirms just after it, inside the window it was submitted in. Every
+        // run would then report the outage as not observed, and the one verdict
+        // that exists to catch a fault which never landed would be stuck on. A
+        // floor of zero is the opposite failure: every run passes, including
+        // the ones where nothing was ever cut off.
+        if !(0.0..100.0).contains(&config.outage_quiet_floor_percent)
+            || config.outage_quiet_floor_percent <= 0.0
+        {
             anyhow::bail!(
-                "chaos scenario {}: outageCeilingPercent is {}, which no real outage can meet, \
-                 so every run would report the fault as not observed",
+                "chaos scenario {}: outageQuietFloorPercent is {}, which is not a share of the \
+                 fault window a real outage could be judged by",
                 self.code,
-                config.outage_ceiling_percent
+                config.outage_quiet_floor_percent
             );
         }
         if config.endpoint.trim().is_empty() {
@@ -1241,7 +1255,7 @@ mod tests {
 
     fn storage_config(
         endpoint: &str,
-        ceiling: f64,
+        quiet_floor: f64,
         scheduled_agents: u32,
         scheduled_block: bool,
     ) -> ScenarioConfig {
@@ -1282,7 +1296,7 @@ mod tests {
             rollback: None,
             storage: Some(StorageConfig {
                 endpoint: endpoint.to_string(),
-                outage_ceiling_percent: ceiling,
+                outage_quiet_floor_percent: quiet_floor,
                 recovery_budget_secs: 120,
             }),
             revert: None,
@@ -1293,17 +1307,31 @@ mod tests {
         }
     }
 
-    /// A zero ceiling can never be met, so the one verdict that exists to catch
-    /// a fault which never landed would be stuck on for every run.
+    /// A floor of zero passes every run, including one where nothing was cut
+    /// off, so the verdict that exists to catch a fault which never landed
+    /// would never fire.
     #[test]
-    fn a_storage_outage_ceiling_of_zero_is_refused() {
+    fn a_storage_outage_quiet_floor_of_zero_is_refused() {
         let error = storage_config("db.example", 0.0, 0, true)
             .require_storage()
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("no real outage can meet"),
-            "the message has to say why, got: {error}"
+            error.contains("outageQuietFloorPercent"),
+            "the message has to name the knob, got: {error}"
+        );
+    }
+
+    /// A stream is only quiet between the answers it did give, so no real
+    /// outage can be quiet for the whole window and the verdict would be stuck
+    /// on for every run.
+    #[test]
+    fn a_storage_outage_quiet_floor_of_a_whole_window_is_refused() {
+        assert!(
+            storage_config("db.example", 100.0, 0, true)
+                .require_storage()
+                .is_err(),
+            "a floor of the whole window can never be met"
         );
     }
 
@@ -1312,7 +1340,7 @@ mod tests {
     #[test]
     fn a_storage_block_with_no_endpoint_is_refused() {
         assert!(
-            storage_config("   ", 15.0, 0, true)
+            storage_config("   ", 50.0, 0, true)
                 .require_storage()
                 .is_err()
         );

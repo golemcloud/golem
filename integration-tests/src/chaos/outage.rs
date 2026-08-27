@@ -239,12 +239,20 @@ pub struct StorageOutageReport {
     /// The thresholds from the suite YAML, recorded so an archived cell can be
     /// read years later against the numbers it was judged by rather than
     /// against today's config.
-    pub outage_ceiling_percent: f64,
+    pub outage_quiet_floor_percent: f64,
     pub recovery_budget_ms: u64,
     /// The whole workload's during-fault rate as a share of its own baseline.
     /// `None` for a run that never learned when the fault was.
+    ///
+    /// Recorded, no longer the verdict. It is a rate averaged over the whole
+    /// fault window, so it moves with the window length even when the platform
+    /// behaves identically. See `outage_quiet_floor_percent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_of_baseline_percent: Option<f64>,
+    /// The least any one stream stayed silent during the fault, as a share of
+    /// that window. This is what the verdict is drawn from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quietest_stream_percent: Option<f64>,
     pub cells: Vec<StreamThroughputCell>,
     /// What the outage began underneath, per stream. Empty for a run that never
     /// learned when the fault was.
@@ -285,7 +293,7 @@ impl StorageOutageReport {
         records: &[OperationRecord],
         fault: Option<FaultWindow>,
         endpoint: &str,
-        outage_ceiling_percent: f64,
+        outage_quiet_floor_percent: f64,
         recovery_budget: Duration,
     ) -> Self {
         let mut tallies: BTreeMap<(Stream, Window), Tally> = BTreeMap::new();
@@ -388,9 +396,10 @@ impl StorageOutageReport {
 
         let mut report = Self {
             endpoint: endpoint.to_string(),
-            outage_ceiling_percent,
+            outage_quiet_floor_percent,
             recovery_budget_ms: recovery_budget.as_millis().min(u64::MAX as u128) as u64,
             share_of_baseline_percent: None,
+            quietest_stream_percent: None,
             cells,
             caught_in_flight: caught_in_flight(records, fault),
             recovery: Vec::new(),
@@ -403,10 +412,25 @@ impl StorageOutageReport {
         report
     }
 
-    /// Did the outage land? Judged on the whole workload rather than per
-    /// stream: the claim under test is that the executors could not reach the
-    /// database, which is one claim about the cluster, and a low-volume stream
-    /// should not be able to flip it on its own.
+    /// Did the outage land?
+    ///
+    /// Judged on how long each stream answered *nothing*, as a share of the
+    /// fault window, and on the stream that managed it least. A stream still
+    /// serving is a fault that did not land on it, and averaging would let the
+    /// quiet ones outvote it.
+    ///
+    /// Quiet time rather than throughput because throughput is a rate over the
+    /// whole window while an absorbed outage does all its serving in the
+    /// seconds at the window's edges: the same handful of confirmations reads
+    /// as a small share of a long window and a large share of a short one, so a
+    /// throughput threshold tracks the window length rather than the platform.
+    /// Quiet time is measured against the window's own edges and does not move
+    /// when the window does. The share is still computed, and still reported,
+    /// as context.
+    ///
+    /// Streams with no before-fault serving are skipped. A stream the run never
+    /// got going says nothing about whether the storage went away, and the
+    /// driver's baseline gate already reports it.
     fn judge_outage(
         &mut self,
         fault: Option<FaultWindow>,
@@ -435,16 +459,41 @@ impl StorageOutageReport {
         if baseline <= 0.0 {
             return;
         }
-        let share = round2(total(Window::DuringFault) / baseline * 100.0);
-        self.share_of_baseline_percent = Some(share);
-        if share > self.outage_ceiling_percent {
+        self.share_of_baseline_percent =
+            Some(round2(total(Window::DuringFault) / baseline * 100.0));
+
+        let served_before: BTreeSet<Stream> = self
+            .cells
+            .iter()
+            .filter(|c| c.window == Window::BeforeFault && c.served > 0)
+            .map(|c| c.stream)
+            .collect();
+
+        let mut quiet: Vec<(Stream, f64)> = self
+            .cells
+            .iter()
+            .filter(|c| c.window == Window::DuringFault && c.window_secs > 0.0)
+            .filter(|c| served_before.contains(&c.stream))
+            .filter_map(|c| {
+                c.quiet_ms
+                    .map(|ms| (c.stream, round2(ms as f64 / (c.window_secs * 10.0))))
+            })
+            .collect();
+        quiet.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+        let Some(&(stream, quietest)) = quiet.first() else {
+            return;
+        };
+        self.quietest_stream_percent = Some(quietest);
+        if quietest < self.outage_quiet_floor_percent {
             self.findings.push(OutageFinding {
                 violation: OutageViolation::OutageNotObserved,
-                stream: None,
+                stream: Some(stream),
                 detail: format!(
-                    "the workload held {share}% of its baseline throughput while {} was supposed \
-                     to be unreachable, above the {}% ceiling; the executors could still reach it",
-                    self.endpoint, self.outage_ceiling_percent
+                    "{stream} kept answering through the fault window, silent for only \
+                     {quietest}% of it against a {}% floor, while {} was supposed to be \
+                     unreachable; the executors could still reach it",
+                    self.outage_quiet_floor_percent, self.endpoint
                 ),
             });
         }
@@ -538,10 +587,18 @@ impl StorageOutageReport {
     pub fn note_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
         if let Some(share) = self.share_of_baseline_percent {
+            let quiet = match self.quietest_stream_percent {
+                Some(q) => format!(
+                    "the least quiet stream answered nothing for {q}% of the fault window \
+                     (floor {}%)",
+                    self.outage_quiet_floor_percent
+                ),
+                None => "no stream had a before-fault baseline to be judged against".to_string(),
+            };
             lines.push(format!(
-                "Storage outage: the workload held {share}% of its baseline throughput while {} \
-                 was unreachable (ceiling {}%)",
-                self.endpoint, self.outage_ceiling_percent
+                "Storage outage: {quiet} while {} was unreachable, and the workload held {share}% \
+                 of its baseline throughput across that window",
+                self.endpoint
             ));
         } else {
             lines.push(format!(
@@ -684,7 +741,7 @@ mod tests {
     use test_r::test;
 
     const ENDPOINT: &str = "golem-postgres-dev-keyvalue.cluster-example.rds.amazonaws.com";
-    const CEILING: f64 = 15.0;
+    const QUIET_FLOOR: f64 = 50.0;
     const AGENT: &str = "chaos-s16-durable-0000";
 
     fn t0() -> DateTime<Utc> {
@@ -782,7 +839,7 @@ mod tests {
             records,
             Some(fault()),
             ENDPOINT,
-            CEILING,
+            QUIET_FLOOR,
             Duration::from_secs(120),
         )
     }
@@ -800,8 +857,9 @@ mod tests {
         );
         let during = report.cell(Stream::Durable, Window::DuringFault).unwrap();
         assert!(
-            during.share_of_baseline_percent.unwrap() < CEILING,
-            "the stream should have collapsed, got {during:?}"
+            report.quietest_stream_percent.unwrap() > QUIET_FLOOR,
+            "the streams should have gone silent, got {:?} from {during:?}",
+            report.quietest_stream_percent
         );
     }
 
@@ -824,16 +882,18 @@ mod tests {
             report.findings
         );
         assert!(
-            report.share_of_baseline_percent.unwrap() > CEILING,
-            "the aggregate share should be above the ceiling, got {:?}",
-            report.share_of_baseline_percent
+            report.quietest_stream_percent.unwrap() < QUIET_FLOOR,
+            "a stream answering every second is never quiet for long, got {:?}",
+            report.quietest_stream_percent
         );
     }
 
-    /// The verdict is on the whole workload rather than per stream, so a stream
-    /// the run barely drives cannot flip it on its own.
+    /// A stream the run barely drives cannot flip the verdict on its own. It is
+    /// judged on how long it was silent, not on its rate against a baseline, so
+    /// a trickle reads as the near-total silence it is rather than as a stream
+    /// holding up.
     #[test]
-    fn one_busy_stream_holding_up_cannot_be_outvoted_by_a_quiet_one() {
+    fn a_trickle_stream_does_not_make_the_outage_look_unobserved() {
         let mut records = history(0, true);
         // A trickle of a third stream that keeps working throughout: two
         // operations in the whole fault window against a baseline of hundreds.
@@ -852,6 +912,108 @@ mod tests {
                 .any(|f| f.violation == OutageViolation::OutageNotObserved),
             "a trickle should not make the outage look unobserved, got {:?}",
             report.findings
+        );
+    }
+
+    /// The inverse of the trickle case, and the one the old aggregate verdict
+    /// could miss. A single stream still answering all the way through is a
+    /// fault that did not land on it, and the silence of the others must not
+    /// vote it down.
+    #[test]
+    fn a_stream_still_answering_is_a_finding_even_when_the_others_are_silent() {
+        let mut records = history(0, true);
+        for second in 1..=10 {
+            records.push(op(Stream::Promise, -second, Outcome::Confirmed));
+        }
+        // Answering every second of the fault window, unlike durable and
+        // scheduled which say nothing at all.
+        for second in 0..180 {
+            records.push(op(Stream::Promise, second, Outcome::Confirmed));
+        }
+        let report = build(&records);
+
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.violation == OutageViolation::OutageNotObserved)
+            .expect("a stream answering throughout is a fault that did not land on it");
+        assert_eq!(finding.stream, Some(Stream::Promise));
+    }
+
+    /// An absorbed outage: silence across the window with the serving bunched
+    /// into the seconds at its two edges, which is the shape the platform
+    /// produces once storage failures are retried rather than fatal.
+    fn absorbed(fault_secs: i64) -> StorageOutageReport {
+        let mut records = Vec::new();
+        for second in 1..=300 {
+            for _ in 0..10 {
+                records.push(op(Stream::Durable, -second, Outcome::Confirmed));
+                records.push(op(Stream::Scheduled, -second, Outcome::Confirmed));
+            }
+        }
+        for edge in [0, fault_secs - 1] {
+            for _ in 0..60 {
+                records.push(op(Stream::Durable, edge, Outcome::Confirmed));
+                records.push(op(Stream::Scheduled, edge, Outcome::Confirmed));
+            }
+        }
+        for second in fault_secs + 1..=fault_secs + 240 {
+            records.push(op(Stream::Durable, second, Outcome::Confirmed));
+            records.push(op(Stream::Scheduled, second, Outcome::Confirmed));
+        }
+        StorageOutageReport::build(
+            &records,
+            Some(FaultWindow {
+                injected_at: t0(),
+                recovered_at: Some(t0() + TimeDelta::seconds(fault_secs)),
+            }),
+            ENDPOINT,
+            QUIET_FLOOR,
+            Duration::from_secs(120),
+        )
+    }
+
+    /// The regression this floor exists for.
+    ///
+    /// An absorbed outage does all its serving in the seconds at the window's
+    /// edges, so a during-fault *rate* divides one fixed burst by the window
+    /// length: identical platform behaviour reads as a small share of a long
+    /// window and a large share of a short one. Shortening S16's window from
+    /// 180s to 60s duly tripped the old 15% ceiling on a partition that had
+    /// plainly landed. Quiet time is measured against the window's own edges
+    /// and does not move with it.
+    #[test]
+    fn the_verdict_does_not_move_when_the_fault_window_does() {
+        let long = absorbed(180);
+        let short = absorbed(60);
+
+        for (secs, report) in [(180, &long), (60, &short)] {
+            assert!(
+                report
+                    .findings
+                    .iter()
+                    .all(|f| f.violation != OutageViolation::OutageNotObserved),
+                "a {secs}s absorbed outage did land, got {:?}",
+                report.findings
+            );
+            assert!(
+                report.quietest_stream_percent.unwrap() > QUIET_FLOOR,
+                "a {secs}s absorbed outage is silent for most of its window, got {:?}",
+                report.quietest_stream_percent
+            );
+        }
+
+        // And the number that used to decide it, kept as the demonstration:
+        // the same shape reads very differently at the two lengths, which is
+        // exactly why it could not stay the verdict.
+        let long_share = long.share_of_baseline_percent.unwrap();
+        let short_share = short.share_of_baseline_percent.unwrap();
+        // 15% was the old ceiling. The long window sits under it and the short
+        // one over it, on the same behaviour, which is the whole defect.
+        assert!(
+            long_share < 15.0 && short_share > 15.0,
+            "this test only means something if the old ceiling would have flipped between the \
+             two windows, got {long_share}% over 180s against {short_share}% over 60s"
         );
     }
 
@@ -923,7 +1085,7 @@ mod tests {
             &history(180, true),
             None,
             ENDPOINT,
-            CEILING,
+            QUIET_FLOOR,
             Duration::from_secs(120),
         );
 

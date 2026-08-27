@@ -451,15 +451,17 @@ pub async fn run(
         &records,
         fault_window,
         &storage_config.endpoint,
-        storage_config.outage_ceiling_percent,
+        storage_config.outage_quiet_floor_percent,
         storage_config.recovery_budget(),
     );
     info!(
-        "S16: storage account — the workload held {:?}% of its baseline throughput while {} was \
-         unreachable (ceiling {}%), {} findings",
-        outage.share_of_baseline_percent,
+        "S16: storage account — the least quiet stream answered nothing for {:?}% of the fault \
+         window (floor {}%) while {} was unreachable, holding {:?}% of baseline throughput, {} \
+         findings",
+        outage.quietest_stream_percent,
+        outage.outage_quiet_floor_percent,
         outage.endpoint,
-        outage.outage_ceiling_percent,
+        outage.share_of_baseline_percent,
         outage.findings.len()
     );
     for finding in &outage.findings {
