@@ -40,10 +40,16 @@ import type {
   PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
+  Secret,
+  QuotaToken,
+  PermissionCard,
 } from 'golem:core/types@2.0.0';
 import { GuestSecretHandle } from './secretHandle';
 import { GuestQuotaTokenHandle } from './quotaTokenHandle';
-import { GuestSchemaValueStreamHandle } from './schemaValueStreamHandle';
+import {
+  GuestSchemaValueStreamHandle,
+  type GuestSchemaValueStream,
+} from './schemaValueStreamHandle';
 import { GuestPermissionCardHandle } from './permissionCardHandle';
 
 export type {
@@ -437,17 +443,48 @@ export type SchemaValue =
   // Discriminated union
   | { tag: 'union'; unionTag: string; body: SchemaValue }
   // Capability nodes
-  | { tag: 'secret'; handle: GuestSecretHandle }
+  | { tag: 'secret'; handle: SchemaSecretHandle }
   // An opaque, affine owned `quota-token` handle. Carried by ownership; never
   // inspectable or forgeable from a guest. See `GuestQuotaTokenHandle`.
-  | { tag: 'quota-token'; handle: GuestQuotaTokenHandle }
-  | { tag: 'stream'; handle: GuestSchemaValueStreamHandle }
+  | { tag: 'quota-token'; handle: SchemaQuotaTokenHandle }
+  | { tag: 'stream'; handle: SchemaValueStreamHandle }
   // An opaque, affine owned `permission-card` handle.
-  | { tag: 'permission-card'; handle: GuestPermissionCardHandle };
+  | { tag: 'permission-card'; handle: SchemaPermissionCardHandle };
 
 export interface SchemaMapEntry {
   key: SchemaValue;
   value: SchemaValue;
+}
+
+// Schema values cross the package's main, /schema, and /reflection declaration
+// entrypoints. Describe capability carriers by their public behavior so those
+// independently bundled declarations remain structurally compatible. The SDK's
+// concrete Guest*Handle classes still keep the owned host resource in private
+// fields and are the only implementations produced by decoding.
+interface SchemaSecretHandle {
+  isPresent(): boolean;
+  take(): Secret | undefined;
+  withHandle<R>(f: (raw: Secret) => R): R | undefined;
+  toJSON(): never;
+}
+
+interface SchemaQuotaTokenHandle {
+  isPresent(): boolean;
+  take(): QuotaToken | undefined;
+  withHandle<R>(f: (raw: QuotaToken) => R): R | undefined;
+  toJSON(): never;
+}
+
+interface SchemaValueStreamHandle {
+  peek(): GuestSchemaValueStream | undefined;
+  take(): GuestSchemaValueStream | undefined;
+}
+
+interface SchemaPermissionCardHandle {
+  isPresent(): boolean;
+  take(): PermissionCard | undefined;
+  withHandle<R>(f: (raw: PermissionCard) => R): R | undefined;
+  toJSON(): never;
 }
 
 export type SchemaResult = { tag: 'ok'; value?: SchemaValue } | { tag: 'err'; value?: SchemaValue };
@@ -576,10 +613,10 @@ export const v = {
   duration: (nanoseconds: bigint): SchemaValue => ({ tag: 'duration', nanoseconds }),
   quantity: (value: QuantityValue): SchemaValue => ({ tag: 'quantity', value }),
   union: (unionTag: string, body: SchemaValue): SchemaValue => ({ tag: 'union', unionTag, body }),
-  secret: (handle: GuestSecretHandle): SchemaValue => ({ tag: 'secret', handle }),
-  quotaToken: (handle: GuestQuotaTokenHandle): SchemaValue => ({ tag: 'quota-token', handle }),
-  stream: (handle: GuestSchemaValueStreamHandle): SchemaValue => ({ tag: 'stream', handle }),
-  permissionCard: (handle: GuestPermissionCardHandle): SchemaValue => ({
+  secret: (handle: SchemaSecretHandle): SchemaValue => ({ tag: 'secret', handle }),
+  quotaToken: (handle: SchemaQuotaTokenHandle): SchemaValue => ({ tag: 'quota-token', handle }),
+  stream: (handle: SchemaValueStreamHandle): SchemaValue => ({ tag: 'stream', handle }),
+  permissionCard: (handle: SchemaPermissionCardHandle): SchemaValue => ({
     tag: 'permission-card',
     handle,
   }),

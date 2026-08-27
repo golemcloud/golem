@@ -173,6 +173,9 @@ export class QuotaToken {
     if (value.tag !== 'quota-token') {
       throw new Error(`Expected a quota-token schema value, got '${value.tag}'`);
     }
+    if (!(value.handle instanceof GuestQuotaTokenHandle)) {
+      throw new Error('Expected an SDK-owned quota-token handle');
+    }
     return new QuotaToken(value.handle);
   }
 

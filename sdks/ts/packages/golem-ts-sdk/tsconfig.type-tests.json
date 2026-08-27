@@ -4,5 +4,5 @@
     "declaration": false,
     "noEmit": true
   },
-  "include": ["tests/tool.test-d.ts", "types/**/*.d.ts"]
+  "include": ["tests/entrypoints.test-d.ts", "tests/tool.test-d.ts", "types/**/*.d.ts"]
 }
