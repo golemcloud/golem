@@ -677,6 +677,20 @@ impl FileSystemReading for Context {
 }
 
 impl HostWasmRpc for Context {
+    async fn new(
+        &mut self,
+        agent_type_name: String,
+        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
+        config: Vec<
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+        >,
+    ) -> anyhow::Result<Resource<WasmRpc>> {
+        self.durable_ctx
+            .new(agent_type_name, constructor, phantom_id, config)
+            .await
+    }
+
     async fn create(
         &mut self,
         agent_type_name: String,

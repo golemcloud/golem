@@ -209,6 +209,20 @@ where
 }
 
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
+    async fn new(
+        &mut self,
+        agent_type_name: String,
+        constructor: core_wire::SchemaValueTree,
+        phantom_id: Option<core_wire::Uuid>,
+        config: Vec<
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+        >,
+    ) -> anyhow::Result<Resource<WasmRpcEntry>> {
+        <Self as HostWasmRpc>::create(self, agent_type_name, constructor, phantom_id, config)
+            .await?
+            .map_err(|error| anyhow::anyhow!(InternalRpcError::from(error).to_string()))
+    }
+
     async fn create(
         &mut self,
         agent_type_name: String,

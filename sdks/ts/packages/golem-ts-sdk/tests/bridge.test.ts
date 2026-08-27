@@ -356,7 +356,7 @@ describe('public bridge runtime', () => {
 
   it('wraps malformed raw agent output with agent and method context', async () => {
     const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value as {
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({
@@ -374,7 +374,7 @@ describe('public bridge runtime', () => {
 
   it('returns scheduled invocation metadata when requested', () => {
     const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value as {
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
       scheduleInvocation: ReturnType<typeof vi.fn>;
     };
     const receipt = { metadata: { agentId: 'example', idempotencyKey: 'scheduled' } };
@@ -387,7 +387,7 @@ describe('public bridge runtime', () => {
 
   it('returns unit output from an awaited agent invocation', async () => {
     const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value as {
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({
@@ -403,7 +403,7 @@ describe('public bridge runtime', () => {
 
   it('cancels an agent future when the caller aborts', async () => {
     const remote = bridge.resolveRemoteAgent('Example', bridge.v.tuple([]));
-    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value as {
+    const rpc = vi.mocked(WasmRpc).mock.results.at(-1)!.value as {
       asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
     };
     const controller = new AbortController();

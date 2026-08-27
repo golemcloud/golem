@@ -11,6 +11,10 @@ declare module 'golem:agent/host@2.0.0' {
    */
   export function getAgentType(agentTypeName: string): RegisteredAgentType | undefined;
   /**
+   * Gets the registered agent type associated with an existing agent instance.
+   */
+  export function getAgentTypeFor(agentId: AgentId): RegisteredAgentType | undefined;
+  /**
    * Constructs a string agent-id from the agent type and its constructor parameters
    * and an optional phantom ID.
    * `input` is a value tree whose root encodes the constructor's parameter list.
@@ -36,9 +40,17 @@ declare module 'golem:agent/host@2.0.0' {
   export function getConfigValue(key: string[], expected: SchemaGraph): SchemaValueTree;
   export class WasmRpc {
     /**
+     * Creates a fail-fast RPC client connecting to the given target agent.
+     * This constructor is intended for statically generated clients, where a
+     * mismatch between the generated client and the deployed agent is a
+     * terminal failure rather than a recoverable result.
+     */
+    constructor(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]);
+    /**
      * Creates an RPC client connecting to the given target agent.
      * `constructor` is a value tree whose root encodes the target agent
-     * constructor's parameter list.
+     * constructor's parameter list. This fallible form is intended for
+     * reflective and other dynamic clients that can adapt to the error.
      * @throws RpcError
      */
     static create(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]): WasmRpc;
@@ -92,6 +104,7 @@ declare module 'golem:agent/host@2.0.0' {
      */
     cancel(): void;
   }
+  export type AgentId = golemCore200Types.AgentId;
   export type ComponentId = golemCore200Types.ComponentId;
   export type Uuid = golemCore200Types.Uuid;
   export type PromiseId = golemCore200Types.PromiseId;
@@ -145,7 +158,7 @@ declare module 'golem:agent/host@2.0.0' {
     tag: 'remote-internal-error'
     val: string
   } |
-  /** The remote endpoint returned an agent-domain error */
+  /** The remote agent operation was rejected with an agent-domain error */
   {
     tag: 'remote-agent-error'
     val: AgentError

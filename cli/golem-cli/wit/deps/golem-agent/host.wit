@@ -88,10 +88,18 @@ interface host {
 
     /// An RPC client for invoking remote agents
     resource wasm-rpc {
+      /// Creates a fail-fast RPC client connecting to the given target agent.
+      ///
+      /// This constructor is intended for statically generated clients, where a
+      /// mismatch between the generated client and the deployed agent is a
+      /// terminal failure rather than a recoverable result.
+      constructor(agent-type-name: string, %constructor: schema-value-tree, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>);
+
       /// Creates an RPC client connecting to the given target agent.
       ///
       /// `constructor` is a value tree whose root encodes the target agent
-      /// constructor's parameter list.
+      /// constructor's parameter list. This fallible form is intended for
+      /// reflective and other dynamic clients that can adapt to the error.
       create: static func(agent-type-name: string, %constructor: schema-value-tree, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>) -> result<wasm-rpc, rpc-error>;
 
       /// Invokes a remote method with the given parameters, and awaits the result.

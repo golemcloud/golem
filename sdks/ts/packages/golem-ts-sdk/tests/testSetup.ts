@@ -18,6 +18,18 @@ import { AgentClassName } from '../src/agentClassName';
 // The production runtime boundary now targets `golem:agent/host@2.0.0`. Mock its
 // registry and RPC surfaces; tests that inspect an agent ID configure the exact
 // canonical host result they expect.
+const makeWasmRpc = () => ({
+  invokeAndAwait: vi.fn(),
+  invoke: vi.fn(),
+  asyncInvokeAndAwait: vi.fn(),
+  scheduleInvocation: vi.fn(),
+  scheduleCancelableInvocation: vi.fn(),
+});
+
+const MockWasmRpc = Object.assign(vi.fn(makeWasmRpc), {
+  create: vi.fn(makeWasmRpc),
+});
+
 vi.mock('golem:agent/host@2.0.0', () => ({
   getAllAgentTypes: vi.fn(() => []),
   getAgentType: vi.fn((agentTypeName: string) => {
@@ -57,15 +69,7 @@ vi.mock('golem:agent/host@2.0.0', () => ({
     throw new Error('getConfigValue is not mocked in this test setup');
   },
   createWebhook: () => 'https://example.com/webhook',
-  WasmRpc: {
-    create: vi.fn(() => ({
-      invokeAndAwait: vi.fn(),
-      invoke: vi.fn(),
-      asyncInvokeAndAwait: vi.fn(),
-      scheduleInvocation: vi.fn(),
-      scheduleCancelableInvocation: vi.fn(),
-    })),
-  },
+  WasmRpc: MockWasmRpc,
 }));
 
 vi.mock('golem:tool/host@0.1.0', () => ({

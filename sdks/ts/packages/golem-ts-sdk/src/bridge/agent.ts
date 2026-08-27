@@ -41,6 +41,14 @@ export interface AgentConfigEntry {
   readonly value: TypedSchemaValue;
 }
 
+type RemoteAgentCreation = (
+  agentTypeName: string,
+  constructorTree: ReturnType<typeof schemaValueToWit>,
+  phantomId: Uuid | undefined,
+  config: Array<{ path: string[]; value: ReturnType<typeof typedSchemaValueToWit> }>,
+  agentId: string,
+) => WasmRpc;
+
 function isRpcError(error: unknown): error is RpcError {
   if (error === null || typeof error !== 'object') return false;
 
@@ -109,19 +117,57 @@ export function resolveRemoteAgent(
   configEntries: readonly AgentConfigEntry[] = [],
   mode: 'durable' | 'ephemeral' = 'durable',
 ): RemoteAgentHandle {
+  return resolveRemoteAgentWith(
+    agentTypeName,
+    constructorValue,
+    phantomId,
+    configEntries,
+    mode,
+    (typeName, constructorTree, phantom, config) =>
+      new WasmRpc(typeName, constructorTree, phantom, config),
+  );
+}
+
+export function resolveRemoteAgentFallibly(
+  agentTypeName: string,
+  constructorValue: SchemaValue,
+  phantomId?: Uuid,
+  configEntries: readonly AgentConfigEntry[] = [],
+  mode: 'durable' | 'ephemeral' = 'durable',
+): RemoteAgentHandle {
+  return resolveRemoteAgentWith(
+    agentTypeName,
+    constructorValue,
+    phantomId,
+    configEntries,
+    mode,
+    (typeName, constructorTree, phantom, config, agentId) =>
+      mapRpcError(`Failed to create remote agent client for ${agentId}`, () =>
+        WasmRpc.create(typeName, constructorTree, phantom, config),
+      ),
+  );
+}
+
+function resolveRemoteAgentWith(
+  agentTypeName: string,
+  constructorValue: SchemaValue,
+  phantomId: Uuid | undefined,
+  configEntries: readonly AgentConfigEntry[],
+  mode: 'durable' | 'ephemeral',
+  create: RemoteAgentCreation,
+): RemoteAgentHandle {
   const constructorTree = schemaValueToWit(constructorValue);
   const agentId =
     mode === 'ephemeral' ? agentTypeName : makeAgentId(agentTypeName, constructorTree, phantomId);
-  const rpc = mapRpcError(`Failed to create remote agent client for ${agentId}`, () =>
-    WasmRpc.create(
-      agentTypeName,
-      constructorTree,
-      phantomId,
-      configEntries.map((entry) => ({
-        path: [...entry.path],
-        value: typedSchemaValueToWit(entry.value),
-      })),
-    ),
+  const rpc = create(
+    agentTypeName,
+    constructorTree,
+    phantomId,
+    configEntries.map((entry) => ({
+      path: [...entry.path],
+      value: typedSchemaValueToWit(entry.value),
+    })),
+    agentId,
   );
   const awaitInvocation = async (
     method: string,

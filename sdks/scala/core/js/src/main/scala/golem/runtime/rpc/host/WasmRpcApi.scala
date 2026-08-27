@@ -29,6 +29,7 @@ import golem.runtime.rpc.{
   RawCancellationToken
 }
 
+import scala.annotation.unused
 import scala.scalajs.js
 import scala.scalajs.js.annotation.{JSImport, JSName}
 
@@ -63,9 +64,7 @@ private[golem] object WasmRpcApi {
     agentConfig: js.Array[JsTypedAgentConfigValue]
   ): WasmRpcClient = {
     val phantomArg: js.Any = phantomId.getOrElse(js.undefined)
-    new WasmRpcClient(
-      RawWasmRpc.create(agentTypeName, constructorPayload, phantomArg, agentConfig)
-    )
+    new WasmRpcClient(new RawWasmRpc(agentTypeName, constructorPayload, phantomArg, agentConfig))
   }
 
   private def datetimeToJs(datetime: Datetime): JsDatetime = {
@@ -245,18 +244,12 @@ private[golem] object WasmRpcApi {
 
   @js.native
   @JSImport("golem:agent/host@2.0.0", "WasmRpc")
-  private object RawWasmRpc extends js.Object {
-    def create(
-      agentTypeName: String,
-      constructor_ : JsSchemaValueTree,
-      phantomId: js.Any,
-      agentConfig: js.Array[JsTypedAgentConfigValue]
-    ): RawWasmRpc = js.native
-  }
-
-  @js.native
-  @JSImport("golem:agent/host@2.0.0", "WasmRpc")
-  private final class RawWasmRpc extends js.Object {
+  private final class RawWasmRpc(
+    @unused agentTypeName: String,
+    @unused constructor_ : JsSchemaValueTree,
+    @unused phantomId: js.Any,
+    @unused agentConfig: js.Array[JsTypedAgentConfigValue]
+  ) extends js.Object {
     def invokeAndAwait(
       methodName: String,
       input: JsSchemaValueTree,

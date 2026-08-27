@@ -51,6 +51,20 @@ fn wasmImportCreateWebhook(
 ) = "golem:agent/host@2.0.0" "create-webhook"
 
 ///|
+fn wasmImportConstructorWasmRpc(
+  p0 : Int,
+  p1 : Int,
+  p2 : Int,
+  p3 : Int,
+  p4 : Int,
+  p5 : Int,
+  p6 : Int64,
+  p7 : Int64,
+  p8 : Int,
+  p9 : Int,
+) -> Int = "golem:agent/host@2.0.0" "[constructor]wasm-rpc"
+
+///|
 fn wasmImportStaticWasmRpcCreate(
   p0 : Int,
   p1 : Int,

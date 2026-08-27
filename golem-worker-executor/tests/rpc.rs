@@ -148,6 +148,60 @@ async fn rust_rpc_missing_target(
             .contains("Agent type not registered")
     );
 
+    let oplog = executor
+        .get_oplog(&parent, golem_common::model::oplog::OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().any(|entry| matches!(
+        entry.entry,
+        golem_common::model::oplog::PublicOplogEntry::Error(_)
+    )));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn rust_rpc_missing_target_is_recoverable_with_fallible_create(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let parent_agent_id = agent_id!("RustParent", "fallible-create-missing-target");
+    let parent = executor
+        .start_agent(&component.id, parent_agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &parent_agent_id,
+            "inspect_missing_rpc_type",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+
+    assert!(result.contains("RemoteAgentError"));
+    assert!(result.contains("InvalidType"));
+    assert!(result.contains("MissingReflectedType"));
+
+    let oplog = executor
+        .get_oplog(&parent, golem_common::model::oplog::OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().all(|entry| !matches!(
+        entry.entry,
+        golem_common::model::oplog::PublicOplogEntry::Error(_)
+    )));
+
     Ok(())
 }
 

@@ -40,9 +40,17 @@ declare module 'golem:agent/host@2.0.0' {
   export function getConfigValue(key: string[], expected: SchemaGraph): SchemaValueTree;
   export class WasmRpc {
     /**
+     * Creates a fail-fast RPC client connecting to the given target agent.
+     * This constructor is intended for statically generated clients, where a
+     * mismatch between the generated client and the deployed agent is a
+     * terminal failure rather than a recoverable result.
+     */
+    constructor(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]);
+    /**
      * Creates an RPC client connecting to the given target agent.
      * `constructor` is a value tree whose root encodes the target agent
-     * constructor's parameter list.
+     * constructor's parameter list. This fallible form is intended for
+     * reflective and other dynamic clients that can adapt to the error.
      * @throws RpcError
      */
     static create(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]): WasmRpc;
