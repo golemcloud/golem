@@ -5043,7 +5043,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         let status = self.last_known_status.load_full().as_ref().clone();
-        let maybe_result = self.invocation_results.read().await.get(key).cloned();
+        let maybe_result = self
+            .invocation_results
+            .read()
+            .await
+            .get(key)
+            .cloned()
+            .or_else(|| {
+                status
+                    .invocation_results
+                    .get(key)
+                    .map(|oplog_idx| InvocationResult::Lazy {
+                        oplog_idx: *oplog_idx,
+                    })
+            });
         if let Some(mut result) = maybe_result {
             result
                 .cache(

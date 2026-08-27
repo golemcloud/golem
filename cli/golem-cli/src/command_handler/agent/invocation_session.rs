@@ -372,7 +372,11 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     Ok(Ok(())) => bail!("agent invocation session connection closed before completion"),
                     Ok(Err(error)) if is_connection_closed(&error) => {
                         wire_complete = true;
-                        input_cancelled.cancel();
+                        if validate_discarded_input {
+                            input_discarded.cancel();
+                        } else {
+                            input_cancelled.cancel();
+                        }
                         input_rx.close();
                         while input_rx.try_recv().is_ok() {}
                         pending_input_request = None;
