@@ -25,8 +25,16 @@ if [[ ${GOLEM_MOONRUN_DISPATCH:-} == 1 ]]; then
   exec "$GOLEM_REAL_MOONRUN" "$@"
 fi
 
+test_paths=("$@")
+if (( ${#test_paths[@]} == 0 )); then
+  cd "$script_dir/.."
+  while IFS= read -r -d '' manifest; do
+    test_paths+=("${manifest%/moon.pkg}")
+  done < <(find . -name moon.pkg -print0)
+fi
+
 real_moonrun=$(command -v moonrun)
 GOLEM_MOONRUN_DISPATCH=1 \
   GOLEM_REAL_MOONRUN=$real_moonrun \
   MOONRUN_OVERRIDE=$script_dir/run-sdk-tests.sh \
-  moon test --target wasm "$@"
+  moon test --target wasm "${test_paths[@]}"
