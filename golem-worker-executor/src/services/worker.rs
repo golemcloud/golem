@@ -257,14 +257,9 @@ pub struct GetWorkerMetadataResult {
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
 pub trait WorkerService: Send + Sync {
-    async fn get(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError>;
+    async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult>;
 
-    async fn get_running_workers_in_shards(
-        &self,
-    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError>;
+    async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult>;
 
     async fn remove(&self, owned_agent_id: &OwnedAgentId);
 
@@ -393,10 +388,7 @@ impl DefaultWorkerService {
         }
     }
 
-    async fn enum_workers_at_key(
-        &self,
-        key: &str,
-    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
+    async fn enum_workers_at_key(&self, key: &str) -> Vec<GetWorkerMetadataResult> {
         record_worker_call("enum");
 
         let value: Vec<OwnedAgentId> = self
@@ -411,12 +403,12 @@ impl DefaultWorkerService {
         for owned_agent_id in value {
             let metadata = self
                 .get(&owned_agent_id)
-                .await?
-                .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+                .await
+                .unwrap_or_else(|| panic!("failed to get worker metadata from KV storage"));
             workers.push(metadata);
         }
 
-        Ok(workers)
+        workers
     }
 
     /// Namespace holding the agent's split cached status (one per-agent hash whose fields are
@@ -688,15 +680,10 @@ impl DefaultWorkerService {
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
-    async fn get(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+    async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
         record_worker_call("get");
 
-        let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await else {
-            return Ok(None);
-        };
+        let agent_mode = self.get_agent_mode(owned_agent_id).await?;
 
         let initial_oplog_entry = self
             .oplog_service
@@ -708,7 +695,7 @@ impl WorkerService for DefaultWorkerService {
         debug!("Found initial oplog entry for worker: {initial_oplog_entry:?}");
 
         match initial_oplog_entry {
-            None => Ok(None),
+            None => None,
             Some((
                 _,
                 OplogEntry::Create {
@@ -731,15 +718,20 @@ impl WorkerService for DefaultWorkerService {
                 debug_assert_eq!(persisted_agent_mode, agent_mode);
                 let agent_mode = persisted_agent_mode;
                 let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
-                let component_metadata = match self
+                let component_metadata = self
                     .component_service
                     .get_metadata(agent_id.component_id, Some(component_revision))
                     .await
-                {
-                    Ok(metadata) => metadata,
-                    Err(WorkerExecutorError::ComponentNotFound { .. }) => return Ok(None),
-                    Err(error) => return Err(error),
-                };
+                    .map_or_else(
+                        |e| match e {
+                            WorkerExecutorError::ComponentNotFound { .. } => Ok(None),
+                            other => Err(other),
+                        },
+                        |v| Ok(Some(v)),
+                    )
+                    .unwrap_or_else(|err| {
+                        panic!("failed to get component metadata for {owned_agent_id}: {err}")
+                    })?;
 
                 let config = local_agent_config
                     .into_iter()
@@ -747,11 +739,9 @@ impl WorkerService for DefaultWorkerService {
                         lac.enrich_with_type(&component_metadata.metadata, agent_type_name.as_ref())
                     })
                     .collect::<Result<Vec<_>, _>>()
-                    .map_err(|error| {
-                        WorkerExecutorError::runtime(format!(
-                            "failed enriching local agent config for {owned_agent_id}: {error}"
-                        ))
-                    })?;
+                    .unwrap_or_else(|err| {
+                        panic!("failed enriching local agent config for {owned_agent_id}: {err}")
+                    });
 
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
@@ -797,11 +787,7 @@ impl WorkerService for DefaultWorkerService {
                             || self.read_status_checkpoint(owned_agent_id, agent_mode),
                         )
                         .await
-                        .ok_or_else(|| {
-                            WorkerExecutorError::runtime(format!(
-                                "Failed to recompute status for existing worker {owned_agent_id}"
-                            ))
-                        })?;
+                        .expect("Failed to recompute worker status for existing worker");
 
                         // Cold path: no in-memory previous, reconcile against stored fields.
                         self.update_cached_status(owned_agent_id, None, last_known_status.clone())
@@ -811,31 +797,26 @@ impl WorkerService for DefaultWorkerService {
                     }
                 };
 
-                Ok(Some(GetWorkerMetadataResult {
+                Some(GetWorkerMetadataResult {
                     initial_worker_metadata,
                     last_known_status,
-                }))
+                })
             }
-            Some((_, entry)) => Err(WorkerExecutorError::unexpected_oplog_entry(
-                "Create",
-                format!("{entry:?}"),
-            )),
+            Some(_) => panic!("Encountered malformed oplog without create oplog entry"),
         }
     }
 
-    async fn get_running_workers_in_shards(
-        &self,
-    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
+    async fn get_running_workers_in_shards(&self) -> Vec<GetWorkerMetadataResult> {
         let shard_assignment = self.shard_service.try_get_current_assignment();
         let mut result: Vec<GetWorkerMetadataResult> = vec![];
         if let Some(shard_assignment) = shard_assignment {
             for shard_id in shard_assignment.shard_ids {
                 let key = Self::running_in_shard_key(&shard_id);
-                let mut shard_worker = self.enum_workers_at_key(&key).await?;
+                let mut shard_worker = self.enum_workers_at_key(&key).await;
                 result.append(&mut shard_worker);
             }
         }
-        Ok(result)
+        result
     }
 
     async fn remove(&self, owned_agent_id: &OwnedAgentId) {

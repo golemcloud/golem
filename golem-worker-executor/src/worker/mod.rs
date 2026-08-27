@@ -594,13 +594,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_latest_metadata<T: HasAll<Ctx>>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-    ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
+    ) -> Option<AgentMetadata> {
         if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
-            Ok(Some(worker.get_latest_worker_metadata().await))
+            Some(worker.get_latest_worker_metadata().await)
         } else if let Some(GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
-        }) = deps.worker_service().get(owned_agent_id).await?
+        }) = deps.worker_service().get(owned_agent_id).await
         {
             // update with latest data from oplog
             let agent_mode = initial_worker_metadata.agent_mode;
@@ -611,17 +611,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 last_known_status,
             )
             .await
-            .ok_or_else(|| {
-                WorkerExecutorError::runtime(format!(
-                    "Failed to calculate status for existing worker {owned_agent_id}"
-                ))
-            })?;
+            .expect("Failed to calculate worker status for worker even though it is initialized");
 
             initial_worker_metadata.last_known_status = last_known_status;
 
-            Ok(Some(initial_worker_metadata))
+            Some(initial_worker_metadata)
         } else {
-            Ok(None)
+            None
         }
     }
 
@@ -1399,7 +1395,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 agent_id = %self.owned_agent_id.agent_id,
                 idempotency_key = %idempotency_key,
             ))
-            .await?;
+            .await;
         let (result, enqueue_epoch) = match output {
             LookupResult::Complete(output) => (ResultOrSubscription::Finished(output), None),
             LookupResult::Interrupted => {
@@ -1505,15 +1501,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && ro.cacheable
             && !is_no_cache(&ro.cfg.cache_policy)
         {
-            let lookup = async { self.lookup_invocation_result(&idempotency_key).await }
-                .instrument(span!(
-                    Level::INFO,
-                    "lookup_invocation_result",
-                    agent_id = %self.owned_agent_id.agent_id,
-                    idempotency_key = %idempotency_key,
-                ))
-                .await?;
-            Some((ro, lookup))
+            Some((
+                ro,
+                async { self.lookup_invocation_result(&idempotency_key).await }
+                    .instrument(span!(
+                        Level::INFO,
+                        "lookup_invocation_result",
+                        agent_id = %self.owned_agent_id.agent_id,
+                        idempotency_key = %idempotency_key,
+                    ))
+                    .await,
+            ))
         } else {
             None
         };
@@ -1547,7 +1545,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Ok(LookupResult::New) => Err(WorkerExecutorError::unknown(
                         "Unexpected missing result after invoke",
                     )),
-                    Err(error) => Err(error),
+                    Err(recv_error) => Err(WorkerExecutorError::unknown(format!(
+                        "Failed waiting for invocation result: {recv_error}"
+                    ))),
                 };
             }
             _ => {}
@@ -1743,7 +1743,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Ok(LookupResult::New) => Err(WorkerExecutorError::unknown(
                         "Unexpected missing result after invoke",
                     )),
-                    Err(error) => Err(error),
+                    Err(recv_error) => Err(WorkerExecutorError::unknown(format!(
+                        "Failed waiting for invocation result: {recv_error}"
+                    ))),
                 }
             }
         }
@@ -2943,7 +2945,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        let status = self.state_actor.attached_status().await?;
+        let status = self.state_actor.attached_status().await;
         if let Some(received) = status.received_card_transfers.get(&transfer_id) {
             return match received {
                 golem_common::model::ReceivedCardTransferState::Received {
@@ -2986,7 +2988,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 instance_guard,
                 boundary_guard,
             )
-            .await?;
+            .await;
 
         Ok(())
     }
@@ -3196,7 +3198,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // this commit will detach the worker status, immediately reattach it so we see the up to date status.
             self.add_and_commit_oplog_internal(&instance_guard, OplogEntry::revert(region), None)
                 .await;
-            self.reattach_worker_status().await?;
+            self.reattach_worker_status().await;
 
             if let WorkerInstance::Running(running) = &*instance_guard {
                 running.sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -3210,9 +3212,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         key: &IdempotencyKey,
         mut subscription: EventsSubscription,
-    ) -> Result<LookupResult, WorkerExecutorError> {
+    ) -> Result<LookupResult, RecvError> {
         loop {
-            match self.lookup_invocation_result(key).await? {
+            match self.lookup_invocation_result(key).await {
                 LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
                 LookupResult::New | LookupResult::Pending => {
                     let wait_result = subscription
@@ -3235,11 +3237,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             continue;
                         }
-                        Err(RecvError::Closed) => {
-                            break Err(WorkerExecutorError::unknown(
-                                "Invocation result event channel closed",
-                            ));
-                        }
+                        Err(RecvError::Closed) => break Err(RecvError::Closed),
                     }
                 }
                 LookupResult::Complete(result) => break Ok(LookupResult::Complete(result)),
@@ -3247,10 +3245,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn lookup_invocation_result(
-        &self,
-        key: &IdempotencyKey,
-    ) -> Result<LookupResult, WorkerExecutorError> {
+    pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
         let status = self.last_known_status.load_full().as_ref().clone();
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
@@ -3261,8 +3256,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.initial_worker_metadata.fingerprint,
                     self,
                 )
-                .await?;
-            Ok(lookup_result_from_cached_result(&status, key, result))
+                .await;
+            lookup_result_from_cached_result(&status, key, result)
         } else {
             let is_pending = status
                 .pending_invocations
@@ -3270,9 +3265,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .any(|entry| entry.has_idempotency_key(key));
             let is_current = status.current_idempotency_key.as_ref() == Some(key);
             if is_pending || is_current {
-                Ok(LookupResult::Pending)
+                LookupResult::Pending
             } else {
-                Ok(LookupResult::New)
+                LookupResult::New
             }
         }
     }
@@ -3645,7 +3640,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 None
             } else {
                 // Note: this also checks the oplog for the existence of the create entry.
-                this.worker_service().get(owned_agent_id).await?
+                this.worker_service().get(owned_agent_id).await
             };
 
         match existing_worker_metadata {
@@ -3663,11 +3658,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     last_known_status,
                 )
                 .await
-                .ok_or_else(|| {
-                    WorkerExecutorError::runtime(
-                        "Failed to calculate worker status for existing worker",
-                    )
-                })?;
+                .expect("Failed to calculate worker status for existing worker");
 
                 // Use the CREATE-time revision: `agent_id` parsing and
                 // `resolve_agent_properties` must stay tied to the metadata
@@ -3923,8 +3914,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     // TODO: should be private, exposed for the invocation loop for now.
-    pub async fn reattach_worker_status(&self) -> Result<(), WorkerExecutorError> {
-        self.state_actor.reattach_worker_status().await
+    pub async fn reattach_worker_status(&self) {
+        self.state_actor.reattach_worker_status().await;
     }
 
     async fn start_waiting_worker(
@@ -4557,7 +4548,7 @@ impl RunningWorker {
         let component_id = parent.owned_agent_id.component_id();
 
         // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
-        parent.reattach_worker_status().await?;
+        parent.reattach_worker_status().await;
 
         let worker_metadata = parent.get_latest_worker_metadata().await;
         debug!("Creating instance with parent metadata {worker_metadata:?}");
@@ -4874,7 +4865,7 @@ impl InvocationResult {
         agent_mode: AgentMode,
         agent_fingerprint: AgentFingerprint,
         services: &T,
-    ) -> Result<(), WorkerExecutorError> {
+    ) {
         if let Self::Lazy { oplog_idx } = self {
             let oplog_idx = *oplog_idx;
             let entry = services.oplog().read(oplog_idx).await;
@@ -4945,7 +4936,6 @@ impl InvocationResult {
 
             *self = Self::Cached { result }
         }
-        Ok(())
     }
 }
 

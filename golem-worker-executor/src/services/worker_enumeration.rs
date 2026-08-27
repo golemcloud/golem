@@ -225,7 +225,7 @@ impl DefaultWorkerEnumerationService {
                 .worker_service
                 .get(&owned_agent_id)
                 .instrument(tracing::info_span!("get_worker_metadata"))
-                .await?;
+                .await;
 
             if let Some(worker_metadata) = worker_metadata {
                 let metadata = if precise {
@@ -238,11 +238,7 @@ impl DefaultWorkerEnumerationService {
                     )
                     .instrument(tracing::info_span!("calculate_last_known_status"))
                     .await
-                    .ok_or_else(|| {
-                        WorkerExecutorError::runtime(
-                            "Failed to calculate worker status for existing worker",
-                        )
-                    })?;
+                    .expect("Failed to calculate worker status for existing worker");
 
                     AgentMetadata {
                         last_known_status,
