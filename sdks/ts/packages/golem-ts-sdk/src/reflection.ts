@@ -40,6 +40,10 @@ import {
 } from './internal/schema-model';
 import { SchemaRef, type JsonValue } from './schema/ref';
 import { Uuid } from './uuid';
+import { registerClientIdentity } from './clientIdentity';
+
+export { clientIdentity } from './clientIdentity';
+export type { AgentClientIdentity } from './clientIdentity';
 
 export interface ReflectedInvocation<T> {
   readonly metadata: InvocationMetadata;
@@ -110,12 +114,10 @@ export class ReflectedAgentClientFactory {
   }
 
   getPhantom(input: JsonValue, phantomId: Uuid): ReflectedAgentClient {
-    this.requireMode('durable', 'getPhantom');
     return this.create(this.agentType.constructorInput.packJson(input), phantomId);
   }
 
   getPhantomValue(input: SchemaValue, phantomId: Uuid): ReflectedAgentClient {
-    this.requireMode('durable', 'getPhantomValue');
     return this.create(input, phantomId);
   }
 
@@ -136,6 +138,7 @@ export class ReflectedAgentClientFactory {
     return new ReflectedAgentClient(
       this.agentType,
       resolveRemoteAgentFallibly(this.agentType.name, input, phantomId, [], this.agentType.mode),
+      phantomId,
     );
   }
 
@@ -152,8 +155,10 @@ export class ReflectedAgentClient {
   constructor(
     private readonly agentType: AgentType,
     private readonly remote: RemoteAgentHandle,
+    phantomId?: Uuid,
   ) {
     this.agentId = remote.agentId;
+    registerClientIdentity(this, { agentId: this.agentId, phantomId });
   }
 
   method(name: string): ReflectedAgentMethod {
@@ -223,6 +228,10 @@ export class DynamicAgentClient {
       schemaValueFromWit(constructorValue.value),
       phantomId === undefined ? undefined : Uuid.from(phantomId),
     );
+    registerClientIdentity(this, {
+      agentId: agentId.agentId,
+      phantomId: phantomId === undefined ? undefined : Uuid.from(phantomId),
+    });
   }
 
   method(name: string): DynamicAgentMethod {

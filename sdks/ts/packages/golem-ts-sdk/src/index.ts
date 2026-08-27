@@ -74,6 +74,7 @@ export * from './host/durable';
 export { defineAgent } from './defineAgent';
 export type {
   AgentDefinition,
+  AgentClientDefinition,
   AgentImpl,
   AgentImplementation,
   AgentSpec,
@@ -168,8 +169,12 @@ export type {
   UniversalToolUnderlyingInvoke,
 } from './tool';
 export type { ToolCallErrorCause, ToolClientOptions } from './toolClient';
-export { clientFor, RemoteCallError } from './client';
+export { clientFor, defineAgentClient, RemoteCallError } from './client';
 export type {
+  AgentClientFactory,
+  AgentClientSpec,
+  AgentClientFactory,
+  AgentClientSpec,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
   PhantomClientDetails,
@@ -181,6 +186,8 @@ export {
   golemTool010ToolMiddlewareGuest,
   toolMiddlewareGuest,
 } from './internal/tool/middlewareGuest';
+export { clientIdentity } from './clientIdentity';
+export type { AgentClientIdentity } from './clientIdentity';
 export * from './keyvalue';
 export * from './blobstore';
 export * from './websocket';

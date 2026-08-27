@@ -31,6 +31,8 @@ import {
 } from '../src/internal/schema-model';
 import { dynamicClient, getAgentType, getAgentTypeByAgentId } from '../src/reflection';
 import { RemoteCallError } from '../src/client';
+import { clientIdentity } from '../src/clientIdentity';
+import { Uuid } from '../src/uuid';
 
 const stringGraph: SchemaGraph = { defs: new Map(), root: t.string() };
 
@@ -186,5 +188,17 @@ describe('agent reflection', () => {
       expect(error).toBeInstanceOf(RemoteCallError);
       expect(error).toMatchObject({ rpcError, cause: rpcError });
     }
+  });
+
+  it('supports known and new phantom clients for ephemeral reflected types', () => {
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType('ephemeral'));
+    const reflected = getAgentType('ReflectedEcho')!;
+    const phantomId = new Uuid(1n, 2n);
+    const known = reflected.client.getPhantom({ id: 'one' }, phantomId);
+    const fresh = reflected.client.newPhantom({ id: 'two' });
+
+    expect(clientIdentity(known)).toEqual({ agentId: 'ReflectedEcho', phantomId });
+    expect(fresh).toBeInstanceOf(Object);
+    expect('client' in fresh).toBe(false);
   });
 });

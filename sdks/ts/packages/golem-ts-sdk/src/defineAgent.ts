@@ -31,6 +31,8 @@ import type { MountSpecCovering, WebhookVarsValid } from './httpTypes';
 import type { MarkerKindOf, SecretInnerOf } from './schema/markers';
 import type { Secret } from './secret';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
+import { clientFor } from './client';
+import type { AgentClientFactory } from './client';
 
 export type { ConfigSpec } from './config';
 
@@ -166,11 +168,10 @@ export interface AgentImpl {
   readonly name: string;
 }
 
-export interface AgentDefinition<
+export interface AgentClientContract<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
-  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
   Mode extends 'durable' | 'ephemeral' = 'durable',
 > {
   readonly name: string;
@@ -179,6 +180,25 @@ export interface AgentDefinition<
   readonly mode: Mode;
   /** The agent's config schema (used by `clientFor` to encode config overrides). */
   readonly config?: Config;
+}
+
+export interface AgentClientDefinition<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+> extends AgentClientContract<Id, Methods, Config, Mode> {
+  /** A client factory compiled from this definition's local schemas. */
+  readonly client: AgentClientFactory<Id, Methods, Mode>;
+}
+
+export interface AgentDefinition<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+> extends AgentClientDefinition<Id, Methods, Config, Mode> {
   /** Supply the runtime behaviour. Registers the agent at module-load time. */
   implement<State extends object & StandardSchemaV1.InferOutput<StateSchema>>(
     impl: AgentImplementation<Id, Methods, Config, State>,
@@ -328,8 +348,7 @@ export function defineAgent<
       `Definition failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  let implemented = false;
-  return {
+  const clientContract: AgentClientContract<Id, Methods, Config, Mode> = {
     name,
     id: spec.id,
     methods: spec.methods,
@@ -337,6 +356,14 @@ export function defineAgent<
     // Expose the config schema on the def so `clientFor` can encode config
     // overrides for RPC (config-on-RPC); undefined when the agent has no config.
     config: spec.config,
+  };
+  let implemented = false;
+  let client: AgentClientFactory<Id, Methods, Mode> | undefined;
+  return {
+    ...clientContract,
+    get client() {
+      return (client ??= clientFor(clientContract));
+    },
     implement(impl) {
       if (implemented) {
         AgentTypeRegistry.recordRegistrationError(

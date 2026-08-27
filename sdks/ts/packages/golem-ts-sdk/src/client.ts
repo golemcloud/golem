@@ -33,9 +33,21 @@ import { compileSchema } from './schema/adapter';
 import { SchemaCodec } from './schema/codec';
 import { StandardSchemaV1 } from './schema/standardSchema';
 import type { MarkerKindOf } from './schema/markers';
-import { AgentDefinition, ConfigSpec, IdRecord, MethodsRecord } from './defineAgent';
+import type {
+  AgentClientContract,
+  AgentClientDefinition,
+  ConfigSpec,
+  IdRecord,
+  MethodsRecord,
+} from './defineAgent';
 import { MethodSpec } from './method';
-import { resolveRemoteAgent, RemoteCallError, type AgentConfigEntry } from './bridge/agent';
+import {
+  resolveRemoteAgent,
+  resolveRemoteAgentFallibly,
+  RemoteCallError,
+  type AgentConfigEntry,
+} from './bridge/agent';
+import { registerClientIdentity } from './clientIdentity';
 
 export { RemoteCallError } from './bridge/agent';
 
@@ -128,11 +140,21 @@ export interface PhantomClientDetails<Methods extends MethodsRecord> {
 
 /** Address existing agents or create a fresh phantom agent client. */
 export interface RemoteClientFactory<Id extends IdRecord, Methods extends MethodsRecord> {
+  /** Legacy shorthand for `getPhantom` when a phantom id is supplied, or `get` otherwise. */
   (
     id: InferRecord<CallerInput<Id>>,
     phantomId?: Uuid,
     config?: Record<string, unknown>,
   ): RemoteClient<Methods>;
+  /** Address the durable agent with this constructor identity. */
+  get(id: InferRecord<CallerInput<Id>>, config?: Record<string, unknown>): RemoteClient<Methods>;
+  /** Address a known phantom instance. */
+  getPhantom(
+    id: InferRecord<CallerInput<Id>>,
+    phantomId: Uuid,
+    config?: Record<string, unknown>,
+  ): RemoteClient<Methods>;
+  /** Create a client with a newly generated phantom id. */
   newPhantom(
     id: InferRecord<CallerInput<Id>>,
     config?: Record<string, unknown>,
@@ -141,10 +163,59 @@ export interface RemoteClientFactory<Id extends IdRecord, Methods extends Method
 
 /** Creates logical ephemeral clients whose final identity is allocated per invocation. */
 export interface EphemeralRemoteClientFactory<Id extends IdRecord, Methods extends MethodsRecord> {
+  /** Address a known ephemeral phantom instance. */
+  getPhantom(
+    id: InferRecord<CallerInput<Id>>,
+    phantomId: Uuid,
+    config?: Record<string, unknown>,
+  ): RemoteClient<Methods, 'ephemeral'>;
+  /** Create a logical client whose final identity is returned by each invocation. */
   newPhantom(
     id: InferRecord<CallerInput<Id>>,
     config?: Record<string, unknown>,
   ): RemoteClient<Methods, 'ephemeral'>;
+}
+
+export type AgentClientFactory<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Mode extends 'durable' | 'ephemeral',
+> = Mode extends 'ephemeral'
+  ? EphemeralRemoteClientFactory<Id, Methods>
+  : RemoteClientFactory<Id, Methods>;
+
+export type AgentClientSpec<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+> = {
+  readonly name: string;
+  readonly id: Id;
+  readonly methods: Methods;
+  readonly config?: Config;
+} & (Mode extends 'ephemeral' ? { readonly mode: 'ephemeral' } : { readonly mode?: 'durable' });
+
+/**
+ * Build a typed client definition without registering or implementing an agent.
+ * Its Standard Schema inputs may come from any schema library supported by the SDK.
+ */
+export function defineAgentClient<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+>(
+  spec: AgentClientSpec<Id, Methods, Config, Mode>,
+): AgentClientDefinition<Id, Methods, Config, Mode> {
+  const contract: AgentClientContract<Id, Methods, Config, Mode> = {
+    name: spec.name,
+    id: spec.id,
+    methods: spec.methods,
+    config: spec.config,
+    mode: (spec.mode ?? 'durable') as Mode,
+  };
+  return Object.freeze({ ...contract, client: buildClientFactory(contract, true) });
 }
 
 interface NamedCodec {
@@ -237,10 +308,23 @@ export function clientFor<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec,
-  StateSchema extends StandardSchemaV1,
   Mode extends 'durable' | 'ephemeral',
 >(
-  def: AgentDefinition<Id, Methods, Config, StateSchema, Mode>,
+  def: AgentClientContract<Id, Methods, Config, Mode>,
+): Mode extends 'ephemeral'
+  ? EphemeralRemoteClientFactory<Id, Methods>
+  : RemoteClientFactory<Id, Methods> {
+  return buildClientFactory(def, false);
+}
+
+function buildClientFactory<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec,
+  Mode extends 'durable' | 'ephemeral',
+>(
+  def: AgentClientContract<Id, Methods, Config, Mode>,
+  fallible: boolean,
 ): Mode extends 'ephemeral'
   ? EphemeralRemoteClientFactory<Id, Methods>
   : RemoteClientFactory<Id, Methods> {
@@ -271,7 +355,7 @@ export function clientFor<
     config?: Record<string, unknown>,
   ): RemoteClient<Methods, Mode> => {
     const agentConfig = config ? encodeConfigOverrides(configDecls, config) : [];
-    const remote = resolveRemoteAgent(
+    const remote = (fallible ? resolveRemoteAgentFallibly : resolveRemoteAgent)(
       def.name,
       encodeRecord(idCodecs, id as Record<string, unknown>),
       phantomId,
@@ -326,6 +410,7 @@ export function clientFor<
         },
       });
     }
+    registerClientIdentity(client, { agentId, phantomId });
     return client as RemoteClient<Methods, Mode>;
   };
 
@@ -339,6 +424,19 @@ export function clientFor<
     const phantomId = Uuid.generate();
     return { client: createClient(id, phantomId, config) as RemoteClient<Methods>, phantomId };
   };
+
+  if (def.mode === 'ephemeral') {
+    (createClient as unknown as EphemeralRemoteClientFactory<Id, Methods>).getPhantom = (
+      id,
+      phantomId,
+      config,
+    ) => createClient(id, phantomId, config) as RemoteClient<Methods, 'ephemeral'>;
+  } else {
+    const durable = createClient as RemoteClientFactory<Id, Methods>;
+    durable.get = (id, config) => createClient(id, undefined, config) as RemoteClient<Methods>;
+    durable.getPhantom = (id, phantomId, config) =>
+      createClient(id, phantomId, config) as RemoteClient<Methods>;
+  }
 
   return createClient as Mode extends 'ephemeral'
     ? EphemeralRemoteClientFactory<Id, Methods>

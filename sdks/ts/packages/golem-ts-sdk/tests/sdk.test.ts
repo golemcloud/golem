@@ -19,7 +19,8 @@ import type { CancellationToken, Datetime } from 'golem:agent/host@2.0.0';
 import { defineAgent } from '../src/defineAgent';
 import type { AgentSpec } from '../src/defineAgent';
 import { method } from '../src/method';
-import { clientFor, RemoteCallError } from '../src/client';
+import { clientFor, defineAgentClient, RemoteCallError } from '../src/client';
+import { clientIdentity } from '../src/clientIdentity';
 import { compileSchema } from '../src/schema/adapter';
 import type { StandardSchemaV1 } from '../src/schema/standardSchema';
 import { s } from '../src/schema/markers';
@@ -45,9 +46,11 @@ function remoteClientTypeChecks(): void {
   });
   const factory = clientFor(def);
   const client = factory({ name: 'counter' });
+  const definitionClient = def.client.get({ name: 'counter' });
   const controller = new AbortController();
   void client.ping({ signal: controller.signal });
   void client.add({ by: 1 }, { signal: controller.signal });
+  void definitionClient.ping();
   // @ts-expect-error cancellation is an option on the normal call, not a separate operation
   void client.ping.abortable(controller.signal);
   const at: Datetime = { seconds: 1n, nanoseconds: 0 };
@@ -70,6 +73,8 @@ function remoteClientTypeChecks(): void {
   void ephemeral.ping().then(({ metadata, value }) => ({ metadata, value }));
   const ephemeralMetadata = ephemeral.ping.trigger();
   const ephemeralReceipt = ephemeral.ping.schedule(at);
+  const knownEphemeral = ephemeralDef.client.getPhantom({ name: 'counter' }, new Uuid(1n, 2n));
+  void knownEphemeral.ping();
   // @ts-expect-error ephemeral factories cannot address a stable agent directly
   ephemeralFactory({ name: 'counter' });
   // @ts-expect-error ephemeral clients have no reusable pre-invocation phantom id
@@ -522,6 +527,56 @@ describe('RPC client', () => {
       scheduleInvocation: ReturnType<typeof vi.fn>;
       scheduleCancelableInvocation: ReturnType<typeof vi.fn>;
     };
+
+  it('exposes a cached client factory on authored agent definitions', () => {
+    expect(clientDef.client).toBe(clientDef.client);
+    const client = clientDef.client.get({ name: 'counter' }, { greeting: 'hello' });
+
+    expect(client.ping).toBeTypeOf('function');
+    expect(vi.mocked(WasmRpc).mock.calls.at(-1)![3]).toHaveLength(1);
+  });
+
+  it('builds a client-only definition from Standard Schema libraries without registration', () => {
+    const name = 'RuntimeBuiltClientOnlyAgent';
+    const before = AgentTypeRegistry.getRegisteredAgents().length;
+    const definition = defineAgentClient({
+      name,
+      id: { name: z.string() },
+      methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
+    });
+    const client = definition.client.get({ name: 'counter' });
+
+    expect(client.ping).toBeTypeOf('function');
+    expect(AgentTypeRegistry.getRegisteredAgents()).toHaveLength(before);
+    expect(AgentTypeRegistry.exists(new AgentClassName(name))).toBe(false);
+  });
+
+  it('surfaces client creation failures for runtime-built reflection definitions', () => {
+    const rpcError = { tag: 'not-found' as const, val: 'missing deployment' };
+    const definition = defineAgentClient({
+      name: 'FallibleClientDefinitionAgent',
+      id: {},
+      methods: { ping: method({ input: {}, returns: z.string() }) },
+    });
+    vi.mocked(WasmRpc.create).mockImplementationOnce(() => {
+      throw rpcError;
+    });
+
+    expect(() => definition.client.get({})).toThrow(RemoteCallError);
+  });
+
+  it('reads client identity externally even when method names would collide', () => {
+    const phantomId = new Uuid(1n, 2n);
+    const def = defineAgentClient({
+      name: 'ClientIdentityAgent',
+      id: {},
+      methods: { agentId: method({ input: {}, returns: z.string() }) },
+    });
+    const client = def.client.getPhantom({}, phantomId);
+
+    expect(client.agentId).toBeTypeOf('function');
+    expect(clientIdentity(client)).toEqual({ agentId: 'MockAgent()', phantomId });
+  });
 
   it('creates a fresh phantom client and exposes the generated id', () => {
     const phantomId = new Uuid(1n, 2n);
