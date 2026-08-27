@@ -893,19 +893,36 @@ scenarios:
       # early and leaves the tail of the fault phase measuring a healed
       # cluster, which is how the first S16 run came to report 16.87% of
       # baseline throughput during a total outage.
-      durationSecs: 180
+      durationSecs: 60
 
     phases:
       # Long enough for cold starts, component loading and route warm-up to
       # settle, and for the scheduler to be firing steadily, so the cut lands on
       # a cluster in steady state.
       baselineSecs: 300
-      # Has to comfortably exceed the caller's 120s attempt timeout, for the
-      # same reason S3's does: an operation that never reaches its timeout
-      # inside the window leaves the stall invisible in the fault-window cells.
-      # It also has to be long enough for the executors' connection pools to
-      # give up and start retrying rather than merely block.
-      faultSecs: 180
+      # Sized to the outage this scenario models rather than to the caller's
+      # timeout: the worst case an AWS storage failover imposes, which is an
+      # Aurora reader promotion of about a minute and an ElastiCache Multi-AZ
+      # promotion of about thirty seconds. The key-value retry budget is built
+      # to cover exactly that, so an outage of this length is one the platform
+      # is expected to absorb without losing an executor.
+      #
+      # Deliberately shorter than S3's 180s, and not for the reason S3 gives.
+      # S3 needs the caller's 120s attempt timeout to fire inside the window
+      # because pending-then-timeout is the behaviour it exists to show. Here
+      # the opposite is the claim: invocations issued during the cut should
+      # still be waiting when the link returns and then complete. Throughput is
+      # attributed by completion, so the fault window still reads as a collapse
+      # and the recovery window as the catch-up, which is what says the
+      # partition took hold.
+      #
+      # Do not raise this past the retry budget without meaning to. The budget
+      # is 15 attempts, ~93s of capped backoff plus a 5s pool acquire apiece
+      # against a blackholed endpoint, so roughly 168s. Beyond that the
+      # recovery-index write in `status_flusher` exhausts and panics by design,
+      # and the scenario stops measuring absorption and starts measuring the
+      # crash it is supposed to have removed.
+      faultSecs: 60
       # Every stream has to get several whole operations after the heal, so a
       # stream that recovered slowly is distinguishable from one that never
       # did. Scheduled actions registered during the outage also have to fall
