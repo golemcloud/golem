@@ -19,7 +19,12 @@ import type { CancellationToken, Datetime } from 'golem:agent/host@2.0.0';
 import { defineAgent } from '../src/defineAgent';
 import type { AgentSpec } from '../src/defineAgent';
 import { method } from '../src/method';
-import { defineAgentClient, RemoteCallError } from '../src/client';
+import {
+  defineAgentClient,
+  isRemoteCallError,
+  RemoteCallError,
+  RemoteOutputError,
+} from '../src/client';
 import { compileSchema } from '../src/schema/adapter';
 import type { StandardSchemaV1 } from '../src/schema/standardSchema';
 import { s } from '../src/schema/markers';
@@ -703,7 +708,7 @@ describe('RPC client', () => {
       },
     });
 
-    await expect(client.ping()).rejects.toBeInstanceOf(RemoteCallError);
+    await expect(client.ping()).rejects.toBeInstanceOf(RemoteOutputError);
   });
 
   it('preserves RemoteCallError when a remote custom error contains bigint values', async () => {
@@ -734,7 +739,31 @@ describe('RPC client', () => {
       },
     });
 
-    await expect(client.ping()).rejects.toBeInstanceOf(RemoteCallError);
+    try {
+      await client.ping();
+      throw new Error('expected the remote call to fail');
+    } catch (error) {
+      expect(isRemoteCallError(error)).toBe(true);
+      if (!isRemoteCallError(error)) throw error;
+      expect(error.cause).toMatchObject({
+        tag: 'remote-agent-error',
+        error: {
+          tag: 'custom-error',
+          value: { value: { tag: 'u64', value: 1n } },
+        },
+      });
+    }
+  });
+
+  it('narrows RemoteCallError structurally across package entry identities', () => {
+    expect(
+      isRemoteCallError({
+        _tag: 'RemoteCallError',
+        message: 'Remote call failed',
+        cause: { tag: 'denied', details: 'not allowed' },
+      }),
+    ).toBe(true);
+    expect(isRemoteCallError(new Error('not remote'))).toBe(false);
   });
 
   it('omits auto-injected principal fields from RPC constructor input', () => {

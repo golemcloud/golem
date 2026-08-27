@@ -185,7 +185,9 @@ describe('agent reflection', () => {
       throw new Error('expected client creation to fail');
     } catch (error) {
       expect(error).toBeInstanceOf(RemoteCallError);
-      expect(error).toMatchObject({ rpcError, cause: rpcError });
+      expect(error).toMatchObject({
+        cause: { tag: 'not-found', details: rpcError.val },
+      });
     }
   });
 
