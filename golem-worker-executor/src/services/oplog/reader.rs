@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::serialization::{deserialize, serialize};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -138,10 +139,10 @@ pub fn exact_from_source<T: PartialEq>(
     read.finish()
 }
 
-pub fn verify_persisted_entries<T: PartialEq>(
+pub fn verify_persisted_entries(
     source: OplogReadSource,
-    expected: &[(OplogIndex, T)],
-    actual: BTreeMap<OplogIndex, T>,
+    expected: &[(OplogIndex, OplogEntry)],
+    actual: BTreeMap<OplogIndex, OplogEntry>,
 ) -> Result<(), OplogReadError> {
     let Some((start, _)) = expected.first() else {
         return if actual.is_empty() {
@@ -153,9 +154,45 @@ pub fn verify_persisted_entries<T: PartialEq>(
             ))
         };
     };
+
     let actual = exact_from_source(source, *start, expected.len() as u64, actual)?;
+    let mut requires_normalization = false;
     for ((expected_index, expected_entry), (actual_index, actual_entry)) in
         expected.iter().zip(actual.iter())
+    {
+        if expected_index != actual_index {
+            return Err(OplogReadError::corruption(
+                source,
+                format!("persisted transfer differs at oplog index {expected_index}"),
+            ));
+        }
+        requires_normalization |= expected_entry != actual_entry;
+    }
+    if !requires_normalization {
+        return Ok(());
+    }
+
+    // Archive encoding is the source of truth for a persisted transfer. In-memory source caches
+    // can retain values that the binary codec normalizes, such as sub-millisecond timestamps. Keep
+    // the common already-normalized path allocation-free and only encode again after a mismatch.
+    let expected_entries: Vec<_> = expected.iter().map(|(_, entry)| entry.clone()).collect();
+    let encoded = serialize(&expected_entries).map_err(|error| {
+        OplogReadError::corruption(
+            source,
+            format!("failed to encode transferred oplog entries: {error}"),
+        )
+    })?;
+    let expected_entries: Vec<OplogEntry> = deserialize(&encoded).map_err(|error| {
+        OplogReadError::corruption(
+            source,
+            format!("failed to decode transferred oplog entries: {error}"),
+        )
+    })?;
+
+    for (((expected_index, _), expected_entry), (actual_index, actual_entry)) in expected
+        .iter()
+        .zip(expected_entries.iter())
+        .zip(actual.iter())
     {
         if expected_index != actual_index || expected_entry != actual_entry {
             return Err(OplogReadError::corruption(

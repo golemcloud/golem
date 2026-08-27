@@ -3497,6 +3497,48 @@ async fn compressed_transfer_verification_bypasses_append_cache(_tracing: &Traci
 }
 
 #[test]
+async fn blob_transfer_verifies_the_persisted_entry_representation(_tracing: &Tracing) {
+    let entry = OplogEntry::NoOp {
+        timestamp: "2026-08-27T13:09:36.123456Z".parse().unwrap(),
+    };
+    assert_ne!(entry, entry.clone().rounded());
+
+    let expected = BTreeMap::from([(OplogIndex::INITIAL, entry.clone())]);
+    let source = Arc::new(TransferTestArchive::new(
+        "source",
+        expected.clone(),
+        Arc::new(std::sync::Mutex::new(Vec::new())),
+    ));
+    let target_service = BlobOplogArchiveService::new(Arc::new(InMemoryBlobStorage::new()), 2);
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "persisted-transfer-representation".to_string(),
+        },
+    );
+    let target = target_service
+        .open_fresh(&owned_agent_id, AgentMode::Ephemeral)
+        .await;
+
+    transfer_between_lower_layers(
+        0,
+        OplogIndex::INITIAL,
+        nev![
+            source.clone() as Arc<dyn OplogArchive + Send + Sync>,
+            target.clone()
+        ],
+    )
+    .await;
+
+    assert!(source.entries.lock().unwrap().is_empty());
+    assert_eq!(
+        target.read_source(OplogIndex::INITIAL, 1).await,
+        BTreeMap::from([(OplogIndex::INITIAL, entry.rounded())])
+    );
+}
+
+#[test]
 async fn deleting_worker_fences_in_flight_archive_transfers(_tracing: &Tracing) {
     deleting_worker_fences_in_flight_archive_transfers_impl(AgentMode::Durable).await;
 }
