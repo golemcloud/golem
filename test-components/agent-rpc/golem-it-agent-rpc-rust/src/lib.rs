@@ -567,11 +567,8 @@ impl RpcAuthTester for RpcAuthTesterImpl {
         let constructor = encode_single_parameter(counter_name);
 
         // Connect to the RpcCounter agent in the same component.
-        // WasmRpc::create resolves the component_id from the registered agent type.
-        let rpc = match WasmRpc::create("RpcCounter", constructor, None, Vec::new()) {
-            Ok(rpc) => rpc,
-            Err(error) => return RpcCallOutcome::from(error),
-        };
+        // WasmRpc::new resolves the component_id from the registered agent type.
+        let rpc = WasmRpc::new("RpcCounter", constructor, None, Vec::new());
 
         let arg = encode_single_parameter(1u64);
 

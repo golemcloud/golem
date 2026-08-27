@@ -403,9 +403,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Durable lookup of the registered agent type associated with an existing
-    /// agent instance. The worker's persisted component revision selects the
-    /// schema without exposing revision identifiers through the host API.
     pub(crate) async fn get_agent_type_by_agent_id(
         &mut self,
         agent_id: AgentId,
