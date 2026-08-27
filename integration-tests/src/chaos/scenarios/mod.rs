@@ -14,9 +14,11 @@
 
 //! Chaos scenario implementations.
 //!
-//! One module per scenario code. Each one owns its phase choreography — which
-//! is the part that differs, and the part worth reading — while everything
-//! around it lives here: where artifacts go, how a signal failure becomes a
+//! One module per scenario code, except where two codes are the same
+//! choreography under different settings: `storage_outage` runs both S16 and
+//! S22, which differ only in how long the storage is taken away for. Each
+//! module owns its phase choreography — which is the part that differs, and the
+//! part worth reading — while everything around it lives here: where artifacts go, how a signal failure becomes a
 //! termination reason, how a routing table is sampled, and how a result is
 //! assembled.
 //!
@@ -30,13 +32,13 @@ pub mod s10;
 pub mod s11;
 pub mod s12;
 pub mod s13;
-pub mod s16;
 pub mod s3;
 pub mod s5;
 pub mod s6;
 pub mod s7;
 pub mod s8;
 pub mod s9;
+pub mod storage_outage;
 
 use crate::chaos::ScenarioConfig;
 use crate::chaos::history::{OperationHistory, OperationRecord, Stream};

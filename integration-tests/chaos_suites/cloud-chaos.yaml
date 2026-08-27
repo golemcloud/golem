@@ -1011,3 +1011,89 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # S22 — the long-outage companion to S16 (GOL-499). Same cut, same driver,
+  # held past the point where the platform can absorb it.
+  #
+  # S16 asks whether golem rides out a storage failover. This asks what happens
+  # when the storage does not come back in time. The key-value retry budget is
+  # 15 attempts, roughly 93s of capped backoff plus a 5s pool acquire apiece
+  # against a blackholed endpoint, so about 168s. Past that the recovery-index
+  # write in `status_flusher` panics on purpose, on the grounds that an executor
+  # which cannot maintain its own running-workers index should be replaced
+  # rather than left running with agents it can no longer account for.
+  #
+  # So executor restarts are the *expected* outcome here, not a defect, and
+  # nothing in this entry treats them as one. What the run has to establish is
+  # that the exit is the intended one and that nothing is lost across it: the
+  # scheduled-fire account and the exactly-once account are the same assertions
+  # S16 makes, and they are the ones that fail the build.
+  - code: S22
+    name: keyvalue-postgres-outage-past-budget
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # Every executor, as in S16. A budget exhausted on only some of them would
+      # leave the survivors serving and make the replay cost unreadable.
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 300
+
+    phases:
+      # Same as S16: long enough for cold starts, component loading and route
+      # warm-up to settle, and for the scheduler to be firing steadily.
+      baselineSecs: 300
+      # Comfortably past the ~168s budget rather than just over it. A window
+      # that only just exceeds the budget would make the run's outcome depend
+      # on which second an operation happened to start in, so a rerun could
+      # come back with restarts or without them for no reason worth reporting.
+      # At 300s every tracked transition in the window exhausts.
+      faultSecs: 300
+      # Longer than S16's 420s, and for a reason S16 does not have: the
+      # executors are replaced here, so recovery is not just a pool noticing
+      # its database came back. It is pods rescheduling, rejoining the routing
+      # table, and every agent that was on them replaying from oplog or
+      # snapshot. Scheduled actions registered during the outage also have to
+      # fall due and fire inside the run rather than after it.
+      recoverySecs: 600
+
+    workload:
+      # Identical to S16 on purpose. The two runs are meant to be read side by
+      # side, and a different population would make the difference between them
+      # a question about the workload rather than about the outage length.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # Wider than S16's 240s. The lease has to outlast the outage plus the
+      # replay behind it, or actions would be judged late for the recovery this
+      # scenario exists to measure.
+      leaseBudgetSecs: 480
+
+    storage:
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+      # Same floor as S16, and it should be met even more comfortably: an
+      # outage this long leaves the streams silent for nearly the whole window.
+      outageQuietFloorPercent: 50
+      # Recorded, not asserted, as everywhere else — but read differently here.
+      # In S16 this measures a connection pool noticing. Here it measures a
+      # cluster rebuilding itself, and it is the number that says whether the
+      # deliberate crash is an acceptable trade.
+      recoveryBudgetSecs: 300
+
+    retryPolicy:
+      # Identical to S16's, for the same reason.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

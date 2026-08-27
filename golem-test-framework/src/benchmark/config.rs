@@ -254,8 +254,11 @@ pub enum ChaosScenarioArg {
     S6,
     /// Executor pod kill while a component rollback is in flight.
     S9,
-    /// Executors cut off from the key-value PostgreSQL cluster.
+    /// Executors cut off from the key-value PostgreSQL cluster for about as
+    /// long as an AWS storage failover takes.
     S16,
+    /// The same cut, held for longer than the key-value retry budget.
+    S22,
 }
 
 /// Density subcommand action.

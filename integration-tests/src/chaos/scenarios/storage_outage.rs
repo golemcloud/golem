@@ -12,7 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! S16 — key-value PostgreSQL outage recovery (GOL-379).
+//! Key-value storage outage: the shared choreography behind S16 and S22.
+//!
+//! Both codes run this module. They differ only in how long the storage is
+//! taken away for, which is a suite setting, and in what a reader should expect
+//! of the result:
+//!
+//! * **S16** (GOL-379) cuts for the length of an AWS storage failover, about a
+//!   minute. The key-value retry budget covers that, so the claim is that the
+//!   platform absorbs it: operations stall and then complete, and no executor
+//!   is lost.
+//! * **S22** (GOL-499) cuts for longer than the retry budget. The budget is
+//!   then exhausted, the recovery-index write in `status_flusher` panics on
+//!   purpose, and executors are replaced. The claim is not survival but that
+//!   the exit is the intended one and nothing is lost across it.
+//!
+//! The driver is the same either way because the difference is one of
+//! expectation, not of choreography. Nothing below asserts on which of the two
+//! happened: the account it produces answers both questions, and the oracles
+//! that fail the build — the scheduled-fire account and the exactly-once
+//! account — are the ones both scenarios share.
 //!
 //! The first scenario in the suite that breaks something the platform depends
 //! on rather than something the platform *is*. Every fault before this one
@@ -135,6 +154,7 @@ const SETTLE_MARGIN: Duration = Duration::from_secs(30);
 const FIRE_PROOF_SAMPLE: usize = 5;
 
 pub async fn run(
+    code: ScenarioCode,
     config: &ScenarioConfig,
     manifest: &ChaosPrepManifest,
     deps: &BenchmarkTestDependencies,
@@ -145,8 +165,8 @@ pub async fn run(
     let workload_config = config.require_workload()?;
     let scheduled_config = config.require_scheduled()?;
     let storage_config = config.require_storage()?;
-    let history = OperationHistory::new(ScenarioCode::S16.as_str());
-    let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S16);
+    let history = OperationHistory::new(code.as_str());
+    let key_prefix = crate::chaos::scenario_key_prefix(code);
 
     let user = manifest.user_context(deps);
     let counters = user
@@ -237,16 +257,16 @@ pub async fn run(
     routing_snapshots.push(snapshot_routing(deps, "before-warmup").await);
     attention_extra.push(wait_for_settled_routing(deps, &mut routing_snapshots).await);
     info!(
-        "S16: warming {} schedule emitters and targets before the baseline",
+        "{code}: warming {} schedule emitters and targets before the baseline",
         targets.len()
     );
     let warmed = scheduled::warm(&ctx, &targets).await;
-    info!("S16: warmed {warmed} agents, settling {WARMUP_SETTLE:?}");
+    info!("{code}: warmed {warmed} agents, settling {WARMUP_SETTLE:?}");
     tokio::time::sleep(WARMUP_SETTLE).await;
 
     // ── Baseline ────────────────────────────────────────────────────────────
     info!(
-        "S16: baseline phase, mixed workload at {} ops/s plus {} schedule targets, for {:?}",
+        "{code}: baseline phase, mixed workload at {} ops/s plus {} schedule targets, for {:?}",
         workload_config.rate_per_sec,
         targets.len(),
         config.phases.baseline()
@@ -274,7 +294,7 @@ pub async fn run(
     if baseline_operations == 0 {
         // Taking a database away from a workload that never worked would
         // measure nothing. Stop before touching the cluster.
-        warn!("S16: baseline produced no confirmed operations, aborting before injection");
+        warn!("{code}: baseline produced no confirmed operations, aborting before injection");
         stop_workloads!();
         let records = history.snapshot();
         finish!(
@@ -293,9 +313,11 @@ pub async fn run(
     // this scenario is about, and a platform that accepted every registration
     // and ran none of them would otherwise reach read-back and report a
     // flawless account of a mechanism that never worked.
-    let sampled = sample_fire_count(&ctx, &targets).await;
+    let sampled = sample_fire_count(code, &ctx, &targets).await;
     if sampled == 0 {
-        warn!("S16: {baseline_operations} operations confirmed and no scheduled action has fired");
+        warn!(
+            "{code}: {baseline_operations} operations confirmed and no scheduled action has fired"
+        );
         stop_workloads!();
         let records = history.snapshot();
         finish!(
@@ -310,14 +332,14 @@ pub async fn run(
         );
     }
     info!(
-        "S16: baseline complete ({baseline_operations} confirmed ops, {sampled} fires across a \
+        "{code}: baseline complete ({baseline_operations} confirmed ops, {sampled} fires across a \
          sample of {} targets), signalling readiness",
         FIRE_PROOF_SAMPLE.min(targets.len())
     );
 
     // ── Signal: ready for the fault ─────────────────────────────────────────
     signals.write_baseline_ready(&BaselineReady {
-        scenario_code: ScenarioCode::S16.as_str().to_string(),
+        scenario_code: code.as_str().to_string(),
         ready_at: Utc::now(),
         baseline_operations,
         // Nothing to aim. The partition is between every executor and one
@@ -330,7 +352,7 @@ pub async fn run(
     let injected = match signals.await_fault_injected(config.signal_timeout()).await {
         Ok(injected) => injected,
         Err(e) => {
-            warn!("S16: no fault-injected signal arrived: {e}");
+            warn!("{code}: no fault-injected signal arrived: {e}");
             stop_workloads!();
             let records = history.snapshot();
             finish!(
@@ -344,7 +366,7 @@ pub async fn run(
         }
     };
     info!(
-        "S16: fault {} ({} on {}) reported active at {}, {} is now unreachable from the executors",
+        "{code}: fault {} ({} on {}) reported active at {}, {} is now unreachable from the executors",
         injected.fault_id,
         injected.kind,
         injected.target,
@@ -360,7 +382,7 @@ pub async fn run(
     let recovered = match signals.await_fault_recovered(config.signal_timeout()).await {
         Ok(recovered) => recovered,
         Err(e) => {
-            warn!("S16: no fault-recovered signal arrived: {e}");
+            warn!("{code}: no fault-recovered signal arrived: {e}");
             stop_workloads!();
             let records = history.snapshot();
             finish!(
@@ -374,7 +396,7 @@ pub async fn run(
         }
     };
     info!(
-        "S16: fault cleared at {} ({})",
+        "{code}: fault cleared at {} ({})",
         recovered.recovered_at, recovered.termination_reason
     );
     fault_recovered_at = Some(recovered.recovered_at);
@@ -384,7 +406,7 @@ pub async fn run(
 
     // ── Recovery ────────────────────────────────────────────────────────────
     info!(
-        "S16: recovery phase, running for a further {:?}",
+        "{code}: recovery phase, running for a further {:?}",
         config.phases.recovery()
     );
     ctx.phase.set(Phase::Recovery);
@@ -413,7 +435,7 @@ pub async fn run(
 
     // ── Read-back ───────────────────────────────────────────────────────────
     let settle = settle_before_readback(scheduled_config);
-    info!("S16: letting the last actions fall due and fire, {settle:?} before read-back");
+    info!("{code}: letting the last actions fall due and fire, {settle:?} before read-back");
     tokio::time::sleep(settle).await;
 
     let records = history.snapshot();
@@ -438,7 +460,7 @@ pub async fn run(
         scheduled_config.lease_budget(),
     );
     info!(
-        "S16: scheduled-fire account — {} registrations accepted, {} fired once, {} \
+        "{code}: scheduled-fire account — {} registrations accepted, {} fired once, {} \
          inconclusive, {} unverifiable, {} findings",
         fires.registrations_confirmed,
         fires.fired_once,
@@ -455,7 +477,7 @@ pub async fn run(
         storage_config.recovery_budget(),
     );
     info!(
-        "S16: storage account — the least quiet stream answered nothing for {:?}% of the fault \
+        "{code}: storage account — the least quiet stream answered nothing for {:?}% of the fault \
          window (floor {}%) while {} was unreachable, holding {:?}% of baseline throughput, {} \
          findings",
         outage.quietest_stream_percent,
@@ -465,7 +487,7 @@ pub async fn run(
         outage.findings.len()
     );
     for finding in &outage.findings {
-        warn!("S16: {}: {}", finding.violation, finding.detail);
+        warn!("{code}: {}: {}", finding.violation, finding.detail);
     }
 
     let readback = read_back(&ctx, &records, workload_config, &logs).await;
@@ -485,7 +507,7 @@ pub async fn run(
         &after_probe,
     );
     info!(
-        "S16: exactly-once account — {} keys checked, {} with a final result, {} recovered by \
+        "{code}: exactly-once account — {} keys checked, {} with a final result, {} recovered by \
          the probe, {} findings",
         exactly_once.keys_checked,
         exactly_once.keys_with_final_result,
@@ -594,12 +616,12 @@ async fn read_back(
 }
 
 /// Reads the fire count of a few targets, to prove actions are firing at all.
-async fn sample_fire_count(ctx: &WorkloadContext, targets: &[String]) -> u64 {
+async fn sample_fire_count(code: ScenarioCode, ctx: &WorkloadContext, targets: &[String]) -> u64 {
     let mut total = 0u64;
     for target in targets.iter().take(FIRE_PROOF_SAMPLE) {
         match workload::read_polls(ctx, target).await {
             Ok(polls) => total += polls,
-            Err(e) => warn!("S16: could not sample fires on {target}: {e}"),
+            Err(e) => warn!("{code}: could not sample fires on {target}: {e}"),
         }
     }
     total

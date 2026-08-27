@@ -90,8 +90,12 @@ pub enum ScenarioCode {
     S6,
     /// Executor pod kill while a component rollback is in flight.
     S9,
-    /// Executors cut off from the key-value PostgreSQL cluster.
+    /// Executors cut off from the key-value PostgreSQL cluster for about as
+    /// long as an AWS storage failover takes.
     S16,
+    /// The same cut, held for longer than the key-value retry budget, so the
+    /// executors are expected to be replaced rather than to ride it out.
+    S22,
 }
 
 impl ScenarioCode {
@@ -109,13 +113,14 @@ impl ScenarioCode {
             ScenarioCode::S6 => "S6",
             ScenarioCode::S9 => "S9",
             ScenarioCode::S16 => "S16",
+            ScenarioCode::S22 => "S22",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 12] = [
+    pub const ALL: [ScenarioCode; 13] = [
         ScenarioCode::S1,
         ScenarioCode::S3,
         ScenarioCode::S5,
@@ -128,6 +133,7 @@ impl ScenarioCode {
         ScenarioCode::S12,
         ScenarioCode::S13,
         ScenarioCode::S16,
+        ScenarioCode::S22,
     ];
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -1483,7 +1489,7 @@ mod tests {
                     entry.require_workload().unwrap();
                     entry.require_rollback().unwrap();
                 }
-                ScenarioCode::S16 => {
+                ScenarioCode::S16 | ScenarioCode::S22 => {
                     entry.require_workload().unwrap();
                     entry.require_scheduled().unwrap();
                     entry.require_storage().unwrap();
