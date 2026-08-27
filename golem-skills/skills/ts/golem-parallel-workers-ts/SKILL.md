@@ -39,9 +39,6 @@ export const WorkerImpl = Worker.implement({
     },
 });
 
-// A typed RPC client factory for the remote Worker (built once, caches codecs).
-const workerClient = Worker.client;
-
 export const Coordinator = defineAgent({
     name: 'Coordinator',
     id: { name: z.string() },
@@ -55,7 +52,7 @@ export const CoordinatorImpl = Coordinator.implement({
     methods: {
         async fanOut({ items }) {
             // Spawn one child per item and call concurrently.
-            const promises = items.map((item, i) => workerClient.get({ id: i }).process({ data: item }));
+            const promises = items.map((item, i) => Worker.client.get({ id: i }).process({ data: item }));
             // Wait for all children to finish.
             return await Promise.all(promises);
         },
@@ -73,7 +70,7 @@ async fanOutChunked({ ids }) {
     const results: number[] = [];
 
     for (const chunk of chunks) {
-        const promises = chunk.map((id) => workerClient.get({ id }).compute({ n: id }));
+        const promises = chunk.map((id) => Worker.client.get({ id }).compute({ n: id }));
         results.push(...await Promise.all(promises));
     }
     return results;
@@ -128,8 +125,6 @@ export const RegionWorkerImpl = RegionWorker.implement({
     },
 });
 
-const regionClient = RegionWorker.client;
-
 // Inside a coordinator method handler:
 async dispatchAndCollect({ regions }) {
     // Create one promise per child.
@@ -137,7 +132,7 @@ async dispatchAndCollect({ regions }) {
 
     // Fire-and-forget: trigger each child with its (encoded) promise ID.
     regions.forEach((region, i) => {
-        regionClient.get({ region }).runReport.trigger({ promiseId: encodePromiseId(promiseIds[i]) });
+        RegionWorker.client.get({ region }).runReport.trigger({ promiseId: encodePromiseId(promiseIds[i]) });
     });
 
     // Collect all results (the agent suspends until each promise completes).
@@ -153,7 +148,7 @@ Use `Promise.allSettled` to handle partial failures:
 
 ```typescript
 async fanOutWithErrors({ items }) {
-    const promises = items.map((item, i) => workerClient.get({ id: i }).process({ data: item }));
+    const promises = items.map((item, i) => Worker.client.get({ id: i }).process({ data: item }));
     const settled = await Promise.allSettled(promises);
 
     const successes: string[] = [];

@@ -327,9 +327,6 @@ export const BarAgentImpl = BarAgent.implement({
   },
 });
 
-// A typed RPC client factory for the remote BarAgent (mirrors `Client<BarAgent>`).
-const barAgentClient = BarAgent.client;
-
 // ---------------------------------------------------------------------------
 // FooAgent — forwards every call to its BarAgent client and returns the result.
 // ---------------------------------------------------------------------------
@@ -350,7 +347,7 @@ export const FooAgentImpl = FooAgent.implement({
   // (constructor params optionalStringType = "foooo", optionalUnionType = 1).
   init: ({ id }) => ({
     input: id.input,
-    barAgent: barAgentClient.get({ optionalStringType: 'foooo', optionalUnionType: 1 }),
+    barAgent: BarAgent.client.get({ optionalStringType: 'foooo', optionalUnionType: 1 }),
   }),
   methods: {
     funAll(input) {

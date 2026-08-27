@@ -12,11 +12,8 @@ Use the `.client` attached to the agent's **definition** (the value returned by
 ```typescript
 import { Counter } from './counter-agent.js';
 
-// Build the factory once (module scope is fine — it caches the codecs).
-const counterClient = Counter.client;
-
 // Get a handle to a specific instance by its id record.
-const c1 = counterClient.get({ name: 'my-counter' });
+const c1 = Counter.client.get({ name: 'my-counter' });
 ```
 
 The id argument is the record declared in the target agent's `id: { … }` (for a

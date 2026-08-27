@@ -48,8 +48,6 @@ export const BenchmarkAgentImpl = BenchmarkAgent.implement({
     },
 });
 
-const benchmarkClient = BenchmarkAgent.client;
-
 export const RpcBenchmarkAgent = defineAgent({
     name: 'RpcBenchmarkAgent',
     id: { name: z.string() },
@@ -65,16 +63,16 @@ export const RpcBenchmarkAgentImpl = RpcBenchmarkAgent.implement({
     init: ({ id }) => ({ name: id.name }),
     methods: {
         async echo({ message }) {
-            return await benchmarkClient.get({ name: this.name }).echo({ message });
+            return await BenchmarkAgent.client.get({ name: this.name }).echo({ message });
         },
         async largeInput({ input }) {
-            return await benchmarkClient.get({ name: this.name }).largeInput({ input });
+            return await BenchmarkAgent.client.get({ name: this.name }).largeInput({ input });
         },
         async cpuIntensive({ length }) {
-            return await benchmarkClient.get({ name: this.name }).cpuIntensive({ length });
+            return await BenchmarkAgent.client.get({ name: this.name }).cpuIntensive({ length });
         },
         async oplogHeavy({ length }) {
-            return await benchmarkClient.get({ name: this.name }).oplogHeavy({ length });
+            return await BenchmarkAgent.client.get({ name: this.name }).oplogHeavy({ length });
         },
     },
 });
