@@ -49,7 +49,7 @@ trait MiddlewareFixtureTool {
   def nested(prefix: String): MiddlewareFixtureNested
 }
 
-@toolDefinition(name = "middleware-fixture-nested", version = "1.0.0")
+@toolDefinition(name = "nested", version = "1.0.0")
 trait MiddlewareFixtureNested {
   def inspect(name: String): String
 }
