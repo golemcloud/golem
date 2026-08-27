@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { SchemaGraph, SchemaType, SchemaValue } from '../internal/schema-model';
+import {
+  freezeSchemaGraph,
+  type SchemaGraph,
+  type SchemaType,
+  type SchemaValue,
+} from '../internal/schema-model';
 import { schemaValueConforms } from '../internal/tool/validation';
 import { fromCanonicalJson, toCanonicalJson, toCanonicalJsonSchema } from './render';
 
 export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { readonly [key: string]: JsonValue };
+  null | boolean | number | string | JsonValue[] | { readonly [key: string]: JsonValue };
 
 export interface SchemaIssue {
   readonly message: string;
@@ -45,7 +45,8 @@ export class SchemaRef {
 
   validateJson(value: JsonValue): SchemaValidationResult<SchemaValue> {
     try {
-      return { success: true, value: this.packJson(value) };
+      const packed = this.packJson(value);
+      return this.validateValue(packed);
     } catch (error) {
       return { success: false, issues: [schemaIssue(error)] };
     }
@@ -88,32 +89,4 @@ export class SchemaRenderError extends TypeError {
     super(message);
     this.name = 'SchemaRenderError';
   }
-}
-
-function freezeSchemaGraph(graph: SchemaGraph): SchemaGraph {
-  const seen = new WeakSet<object>();
-  const freeze = (value: unknown): void => {
-    if (value === null || typeof value !== 'object' || seen.has(value)) return;
-    seen.add(value);
-    if (value instanceof Map) {
-      value.forEach((entryValue, key) => {
-        freeze(key);
-        freeze(entryValue);
-      });
-      Object.defineProperties(value, {
-        set: { value: immutableGraphMutation },
-        delete: { value: immutableGraphMutation },
-        clear: { value: immutableGraphMutation },
-      });
-    } else {
-      Reflect.ownKeys(value).forEach((key) => freeze(Reflect.get(value, key)));
-    }
-    Object.freeze(value);
-  };
-  freeze(graph);
-  return graph;
-}
-
-function immutableGraphMutation(): never {
-  throw new TypeError('Cannot mutate an immutable reflected schema graph');
 }

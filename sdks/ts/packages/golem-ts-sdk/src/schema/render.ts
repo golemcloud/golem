@@ -82,13 +82,13 @@ export function fromCanonicalJson(
     case 'binary':
       return decodeBinary(json, path);
     case 'path':
-      return { tag: 'path', value: expectString(json, path) };
+      return { tag: 'path', value: expectNonEmptyString(json, path) };
     case 'url':
-      return { tag: 'url', value: expectString(json, path) };
+      return { tag: 'url', value: expectNonEmptyString(json, path) };
     case 'datetime':
       return { tag: 'datetime', value: datetimeFromISOString(expectString(json, path)) };
     case 'duration':
-      return { tag: 'duration', nanoseconds: BigInt(expectString(json, path)) };
+      return { tag: 'duration', nanoseconds: decodeDuration(json, path) };
     case 'quantity':
       return decodeQuantity(json, path);
     case 'record': {
@@ -133,6 +133,12 @@ export function fromCanonicalJson(
       const selected = expectArray(json, path).map((entry, index) =>
         expectString(entry, [...path, index]),
       );
+      const seen = new Set<string>();
+      selected.forEach((name, index) => {
+        if (!body.names.includes(name)) fail([...path, index], `unknown flag '${name}'`);
+        if (seen.has(name)) fail([...path, index], `duplicate flag '${name}'`);
+        seen.add(name);
+      });
       return { tag: 'flags', flags: body.names.map((name) => selected.includes(name)) };
     }
     case 'tuple': {
@@ -249,9 +255,10 @@ export function toCanonicalJson(
     case 'url':
       return value.value;
     case 'text':
-      return value.language === undefined
-        ? value.text
-        : { text: value.text, language: value.language };
+      return {
+        text: value.text,
+        ...(value.language === undefined ? {} : { language: value.language }),
+      };
     case 'binary':
       return {
         bytes: bytesToBase64(value.bytes),
@@ -260,20 +267,24 @@ export function toCanonicalJson(
     case 'datetime':
       return datetimeToISOString(value.value);
     case 'duration':
-      return value.nanoseconds.toString();
+      return encodeDuration(value.nanoseconds);
     case 'quantity':
       return {
-        mantissa: value.value.mantissa.toString(),
+        mantissa: bigintToSafeJsonNumber(value.value.mantissa, path, 'quantity mantissa'),
         scale: value.value.scale,
         unit: value.value.unit,
       };
-    case 'record':
+    case 'record': {
+      const fields = (body as Extract<SchemaTypeBody, { tag: 'record' }>).fields;
+      if (value.fields.length !== fields.length)
+        fail(path, `expected ${fields.length} record fields, found ${value.fields.length}`);
       return Object.fromEntries(
-        (body as Extract<SchemaTypeBody, { tag: 'record' }>).fields.map((field, index) => [
+        fields.map((field, index) => [
           field.name,
           toCanonicalJson(graph, field.body, value.fields[index], [...path, field.name]),
         ]),
       );
+    }
     case 'variant': {
       const entry = (body as Extract<SchemaTypeBody, { tag: 'variant' }>).cases[value.caseIndex];
       if (!entry) fail(path, `variant case index ${value.caseIndex} is out of range`);
@@ -291,21 +302,24 @@ export function toCanonicalJson(
         (body as Extract<SchemaTypeBody, { tag: 'enum' }>).cases[value.caseIndex] ??
         fail(path, 'enum case index is out of range')
       );
-    case 'flags':
-      return (body as Extract<SchemaTypeBody, { tag: 'flags' }>).names.filter(
-        (_, index) => value.flags[index],
-      );
-    case 'tuple':
+    case 'flags': {
+      const names = (body as Extract<SchemaTypeBody, { tag: 'flags' }>).names;
+      if (value.flags.length !== names.length)
+        fail(path, `expected ${names.length} flag values, found ${value.flags.length}`);
+      return names.filter((_, index) => value.flags[index]);
+    }
+    case 'tuple': {
+      const elements = (body as Extract<SchemaTypeBody, { tag: 'tuple' }>).elements;
+      if (value.elements.length !== elements.length)
+        fail(path, `expected ${elements.length} tuple elements, found ${value.elements.length}`);
       return value.elements.map((entry, index) =>
-        toCanonicalJson(
-          graph,
-          (body as Extract<SchemaTypeBody, { tag: 'tuple' }>).elements[index],
-          entry,
-          [...path, index],
-        ),
+        toCanonicalJson(graph, elements[index], entry, [...path, index]),
       );
+    }
     case 'list':
     case 'fixed-list':
+      if (body.tag === 'fixed-list' && value.elements.length !== body.length)
+        fail(path, `expected ${body.length} elements, found ${value.elements.length}`);
       return value.elements.map((entry, index) =>
         toCanonicalJson(
           graph,
@@ -372,7 +386,15 @@ export function toCanonicalJsonSchema(
 ): JsonValue {
   const root = renderSchema(graph, type);
   const defs = Object.fromEntries(
-    [...graph.defs].map(([id, definition]) => [id, renderSchema(graph, definition.body)]),
+    [...graph.defs].map(([id, definition]) => {
+      const rendered = renderSchema(graph, definition.body);
+      return [
+        id,
+        definition.name === undefined || rendered.title !== undefined
+          ? rendered
+          : { ...rendered, title: definition.name },
+      ];
+    }),
   );
   return {
     ...(includeDraftMarker ? { $schema: 'https://json-schema.org/draft/2020-12/schema' } : {}),
@@ -385,64 +407,155 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
   const body = type.body;
   if (body.tag === 'ref')
     return { $ref: `#/$defs/${body.id.replaceAll('~', '~0').replaceAll('/', '~1')}` };
+  let rendered: Record<string, JsonValue>;
   switch (body.tag) {
     case 'bool':
-      return { type: 'boolean' };
+      rendered = { type: 'boolean' };
+      break;
     case 's8':
+      rendered = integerSchema(-128, 127);
+      break;
     case 's16':
+      rendered = integerSchema(-32768, 32767);
+      break;
     case 's32':
+      rendered = integerSchema(-(2 ** 31), 2 ** 31 - 1);
+      break;
     case 's64':
+      rendered = integerSchema(Number(-(2n ** 63n)), Number(2n ** 63n - 1n));
+      break;
     case 'u8':
+      rendered = integerSchema(0, 255);
+      break;
     case 'u16':
+      rendered = integerSchema(0, 65535);
+      break;
     case 'u32':
+      rendered = integerSchema(0, 2 ** 32 - 1);
+      break;
     case 'u64':
-      return { type: 'integer' };
+      rendered = integerSchema(0, Number(2n ** 64n - 1n));
+      break;
     case 'f32':
     case 'f64':
-      return { type: 'number' };
+      rendered = { type: 'number' };
+      break;
     case 'char':
-      return { type: 'string', minLength: 1, maxLength: 2 };
+      rendered = { type: 'string', minLength: 1, maxLength: 1 };
+      break;
     case 'string':
-    case 'text':
-    case 'path':
-    case 'url':
-    case 'datetime':
-    case 'duration':
-      return { type: 'string' };
+      rendered = { type: 'string' };
+      break;
+    case 'text': {
+      const text: Record<string, JsonValue> = { type: 'string' };
+      if (body.restrictions.minLength !== undefined) text.minLength = body.restrictions.minLength;
+      if (body.restrictions.maxLength !== undefined) text.maxLength = body.restrictions.maxLength;
+      if (body.restrictions.regex !== undefined) text.pattern = body.restrictions.regex;
+      rendered = {
+        type: 'object',
+        properties: { text, language: { type: 'string' } },
+        required: ['text'],
+        additionalProperties: false,
+        ...(body.restrictions.languages === undefined
+          ? {}
+          : { description: `Allowed languages: ${body.restrictions.languages.join(', ')}` }),
+      };
+      break;
+    }
     case 'binary':
-      return {
+      rendered = {
         type: 'object',
         required: ['bytes'],
         properties: {
-          bytes: { type: 'string', contentEncoding: 'base64' },
-          mimeType: { type: 'string' },
+          bytes: {
+            type: 'string',
+            contentEncoding: 'base64url',
+            ...(body.restrictions.minBytes === undefined
+              ? {}
+              : { minLength: base64UrlLength(body.restrictions.minBytes) }),
+            ...(body.restrictions.maxBytes === undefined
+              ? {}
+              : { maxLength: base64UrlLength(body.restrictions.maxBytes) }),
+          },
+          mimeType: { type: 'string', pattern: MIME_TYPE_PATTERN.source },
         },
         additionalProperties: false,
+        ...(body.restrictions.mimeTypes === undefined
+          ? {}
+          : { description: `Allowed MIME types: ${body.restrictions.mimeTypes.join(', ')}` }),
       };
+      break;
+    case 'path': {
+      const direction = body.spec.direction === 'in-out' ? 'inout' : body.spec.direction;
+      const descriptions = [
+        body.spec.allowedExtensions === undefined
+          ? undefined
+          : `Allowed extensions: ${body.spec.allowedExtensions.join(', ')}`,
+        body.spec.allowedMimeTypes === undefined
+          ? undefined
+          : `Allowed MIME types: ${body.spec.allowedMimeTypes.join(', ')}`,
+      ].filter((entry): entry is string => entry !== undefined);
+      rendered = {
+        type: 'string',
+        format: 'file-path',
+        title: `${direction} ${body.spec.kind} path`,
+        ...(descriptions.length ? { description: descriptions.join('; ') } : {}),
+      };
+      break;
+    }
+    case 'url': {
+      const descriptions = [
+        body.restrictions.allowedSchemes === undefined
+          ? undefined
+          : `Allowed schemes: ${body.restrictions.allowedSchemes.join(', ')}`,
+        body.restrictions.allowedHosts === undefined
+          ? undefined
+          : `Allowed hosts: ${body.restrictions.allowedHosts.join(', ')}`,
+      ].filter((entry): entry is string => entry !== undefined);
+      rendered = {
+        type: 'string',
+        format: 'uri',
+        title: 'URL',
+        ...(descriptions.length ? { description: descriptions.join('; ') } : {}),
+      };
+      break;
+    }
+    case 'datetime':
+      rendered = { type: 'string', format: 'date-time' };
+      break;
+    case 'duration':
+      rendered = { type: 'string', format: 'duration' };
+      break;
     case 'quantity':
-      return {
+      rendered = {
         type: 'object',
         required: ['mantissa', 'scale', 'unit'],
         properties: {
-          mantissa: { type: 'string', pattern: '^-?[0-9]+$' },
+          mantissa: { type: 'integer' },
           scale: { type: 'integer' },
           unit: { type: 'string' },
         },
         additionalProperties: false,
+        title: `Quantity (${body.spec.baseUnit})`,
       };
+      break;
     case 'record':
-      return {
+      rendered = {
         type: 'object',
         properties: Object.fromEntries(
-          body.fields.map((field) => [field.name, renderSchema(graph, field.body)]),
+          body.fields.map((field) => [
+            field.name,
+            attachMetadata(renderSchema(graph, field.body), field.metadata),
+          ]),
         ),
         required: body.fields
           .filter((field) => resolve(graph, field.body).body.tag !== 'option')
           .map((field) => field.name),
         additionalProperties: false,
       };
+      break;
     case 'variant':
-      return {
+      rendered = {
         oneOf: body.cases.map<JsonValue>((entry) => {
           if (!entry.payload) return { const: entry.name } as JsonValue;
           return {
@@ -453,40 +566,52 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
           } as JsonValue;
         }),
       };
+      break;
     case 'enum':
-      return { type: 'string', enum: body.cases };
+      rendered = { type: 'string', enum: body.cases };
+      break;
     case 'flags':
-      return { type: 'array', items: { type: 'string', enum: body.names }, uniqueItems: true };
+      rendered = { type: 'array', items: { type: 'string', enum: body.names }, uniqueItems: true };
+      break;
     case 'tuple':
-      return {
-        type: 'array',
-        prefixItems: body.elements.map((entry) => renderSchema(graph, entry)),
-        minItems: body.elements.length,
-        maxItems: body.elements.length,
-      };
+      rendered =
+        body.elements.length === 0
+          ? { type: 'array', minItems: 0, maxItems: 0 }
+          : {
+              type: 'array',
+              prefixItems: body.elements.map((entry) => renderSchema(graph, entry)),
+              items: false,
+              minItems: body.elements.length,
+            };
+      break;
     case 'list':
-      return { type: 'array', items: renderSchema(graph, body.element) };
+      rendered = { type: 'array', items: renderSchema(graph, body.element) };
+      break;
     case 'fixed-list':
-      return {
+      rendered = {
         type: 'array',
         items: renderSchema(graph, body.element),
         minItems: body.length,
         maxItems: body.length,
       };
+      break;
     case 'map':
-      return {
+      rendered = {
         type: 'array',
         items: {
           type: 'array',
           prefixItems: [renderSchema(graph, body.key), renderSchema(graph, body.value)],
+          items: false,
           minItems: 2,
           maxItems: 2,
         },
       };
+      break;
     case 'option':
-      return { anyOf: [renderSchema(graph, body.element), { type: 'null' }] };
+      rendered = { oneOf: [{ type: 'null' }, renderSchema(graph, body.element)] };
+      break;
     case 'result':
-      return {
+      rendered = {
         oneOf: [
           {
             type: 'object',
@@ -502,16 +627,100 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
           },
         ],
       };
+      break;
     case 'union':
-      return { oneOf: body.branches.map((entry) => renderSchema(graph, entry.body)) };
+      rendered = {
+        oneOf: body.branches.map((entry) =>
+          applyDiscriminator(renderSchema(graph, entry.body), entry.discriminator),
+        ),
+      };
+      break;
     case 'secret':
     case 'quota-token':
     case 'permission-card':
-      return { writeOnly: true, 'x-golem-capability': body.tag };
+      rendered = { writeOnly: true, 'x-golem-capability': body.tag };
+      break;
     case 'future':
     case 'stream':
-      return { 'x-golem-unsupported': body.tag };
+      rendered = { type: 'null', description: 'WASI P3 placeholder' };
+      break;
   }
+  return attachMetadata(rendered, type.metadata);
+}
+
+function integerSchema(minimum: number, maximum: number): Record<string, JsonValue> {
+  return { type: 'integer', minimum, maximum };
+}
+
+function base64UrlLength(bytes: number): number {
+  return 4 * Math.floor(bytes / 3) + (bytes % 3 === 0 ? 0 : bytes % 3 === 1 ? 2 : 3);
+}
+
+function attachMetadata(
+  schema: Record<string, JsonValue>,
+  metadata: SchemaType['metadata'],
+): Record<string, JsonValue> {
+  return {
+    ...schema,
+    ...(metadata.doc === undefined || schema.description !== undefined
+      ? {}
+      : { description: metadata.doc }),
+    ...(metadata.examples.length === 0 || schema.examples !== undefined
+      ? {}
+      : { examples: metadata.examples }),
+    ...(metadata.deprecated === undefined
+      ? {}
+      : {
+          deprecated: true,
+          'x-golem-deprecation-note': metadata.deprecated,
+        }),
+  };
+}
+
+function applyDiscriminator(
+  schema: Record<string, JsonValue>,
+  rule: { tag: string; val?: unknown },
+): Record<string, JsonValue> {
+  switch (rule.tag) {
+    case 'prefix':
+      return { ...schema, pattern: `^${escapeRegex(rule.val as string)}` };
+    case 'suffix':
+      return { ...schema, pattern: `${escapeRegex(rule.val as string)}$` };
+    case 'contains':
+      return { ...schema, pattern: escapeRegex(rule.val as string) };
+    case 'regex':
+      return { ...schema, pattern: rule.val as string };
+    case 'field-equals': {
+      const field = rule.val as { fieldName: string; literal?: string };
+      const properties = (schema.properties ?? {}) as Record<string, JsonValue>;
+      const fieldSchema = (properties[field.fieldName] ?? { type: 'string' }) as Record<
+        string,
+        JsonValue
+      >;
+      return {
+        ...schema,
+        required: [
+          ...new Set([...((schema.required as string[] | undefined) ?? []), field.fieldName]),
+        ],
+        ...(field.literal === undefined
+          ? {}
+          : {
+              properties: {
+                ...properties,
+                [field.fieldName]: { ...fieldSchema, const: field.literal },
+              },
+            }),
+      };
+    }
+    case 'field-absent':
+      return { ...schema, not: { required: [rule.val as string] } };
+    default:
+      return schema;
+  }
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/gu, '\\$&');
 }
 
 function expectBoolean(value: JsonValue, path: Path): boolean {
@@ -537,6 +746,11 @@ function expectString(value: JsonValue, path: Path): string {
   if (typeof value !== 'string') fail(path, 'expected a JSON string');
   return value;
 }
+function expectNonEmptyString(value: JsonValue, path: Path): string {
+  const string = expectString(value, path);
+  if (string.length === 0) fail(path, 'expected a non-empty JSON string');
+  return string;
+}
 function expectArray(value: JsonValue, path: Path): JsonValue[] {
   if (!Array.isArray(value)) fail(path, 'expected a JSON array');
   return value as JsonValue[];
@@ -547,8 +761,8 @@ function expectObject(value: JsonValue, path: Path): Record<string, JsonValue> {
   return value as Record<string, JsonValue>;
 }
 function decodeText(value: JsonValue, path: Path): SchemaValue {
-  if (typeof value === 'string') return { tag: 'text', text: value };
   const object = expectObject(value, path);
+  rejectUnknownFields(object, ['text', 'language'], path);
   return {
     tag: 'text',
     text: expectString(object.text, [...path, 'text']),
@@ -559,32 +773,120 @@ function decodeText(value: JsonValue, path: Path): SchemaValue {
 }
 function decodeBinary(value: JsonValue, path: Path): SchemaValue {
   const object = expectObject(value, path);
+  rejectUnknownFields(object, ['bytes', 'mimeType'], path);
+  const mimeType =
+    object.mimeType === undefined
+      ? undefined
+      : expectString(object.mimeType, [...path, 'mimeType']);
+  if (mimeType !== undefined && !MIME_TYPE_PATTERN.test(mimeType)) {
+    fail([...path, 'mimeType'], 'invalid MIME type');
+  }
   return {
     tag: 'binary',
-    bytes: base64ToBytes(expectString(object.bytes, [...path, 'bytes'])),
-    ...(object.mimeType === undefined
-      ? {}
-      : { mimeType: expectString(object.mimeType, [...path, 'mimeType']) }),
+    bytes: base64UrlToBytes(expectString(object.bytes, [...path, 'bytes']), [...path, 'bytes']),
+    ...(mimeType === undefined ? {} : { mimeType }),
   };
 }
 function decodeQuantity(value: JsonValue, path: Path): SchemaValue {
   const object = expectObject(value, path);
+  rejectUnknownFields(object, ['mantissa', 'scale', 'unit'], path);
   return {
     tag: 'quantity',
     value: {
-      mantissa: BigInt(expectString(object.mantissa, [...path, 'mantissa'])),
+      mantissa: BigInt(expectSafeInteger(object.mantissa, [...path, 'mantissa'])),
       scale: expectInteger(object.scale, [...path, 'scale'], -2147483648, 2147483647),
       unit: expectString(object.unit, [...path, 'unit']),
     },
   };
 }
+
+const I64_MIN = -(2n ** 63n);
+const I64_MAX = 2n ** 63n - 1n;
+const NS_PER_SECOND = 1_000_000_000n;
+const NS_PER_MINUTE = 60n * NS_PER_SECOND;
+const NS_PER_HOUR = 60n * NS_PER_MINUTE;
+const NS_PER_DAY = 24n * NS_PER_HOUR;
+
+function encodeDuration(nanoseconds: bigint): string {
+  if (nanoseconds === 0n) return 'PT0S';
+  const negative = nanoseconds < 0n;
+  let remaining = negative ? -nanoseconds : nanoseconds;
+  const days = remaining / NS_PER_DAY;
+  remaining %= NS_PER_DAY;
+  const hours = remaining / NS_PER_HOUR;
+  remaining %= NS_PER_HOUR;
+  const minutes = remaining / NS_PER_MINUTE;
+  remaining %= NS_PER_MINUTE;
+  const seconds = remaining / NS_PER_SECOND;
+  const nanos = remaining % NS_PER_SECOND;
+
+  let result = negative ? '-P' : 'P';
+  if (days !== 0n) result += `${days}D`;
+  if (hours !== 0n || minutes !== 0n || seconds !== 0n || nanos !== 0n) {
+    result += 'T';
+    if (hours !== 0n) result += `${hours}H`;
+    if (minutes !== 0n) result += `${minutes}M`;
+    if (seconds !== 0n || nanos !== 0n) {
+      result += `${seconds}`;
+      if (nanos !== 0n) result += `.${nanos.toString().padStart(9, '0').replace(/0+$/u, '')}`;
+      result += 'S';
+    }
+  }
+  return result;
+}
+
+function decodeDuration(value: JsonValue, path: Path): bigint {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    rejectUnknownFields(value, ['nanoseconds'], path);
+    return checkedI64(BigInt(expectSafeInteger(value.nanoseconds, [...path, 'nanoseconds'])), path);
+  }
+  const text = expectString(value, path);
+  const shorthand = text.match(/^(-?\d+)(ns|us|ms|s)$/u);
+  if (shorthand) {
+    const factor =
+      shorthand[2] === 'ns'
+        ? 1n
+        : shorthand[2] === 'us'
+          ? 1_000n
+          : shorthand[2] === 'ms'
+            ? 1_000_000n
+            : NS_PER_SECOND;
+    return checkedI64(BigInt(shorthand[1]) * factor, path);
+  }
+
+  const iso = text.match(
+    /^(-)?P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)(?:\.(\d{1,9}))?S)?)?$/u,
+  );
+  if (
+    !iso ||
+    (iso[2] === undefined && iso[3] === undefined && iso[4] === undefined && iso[5] === undefined)
+  ) {
+    fail(path, 'expected an ISO 8601 duration');
+  }
+  let result =
+    BigInt(iso[2] ?? 0) * NS_PER_DAY +
+    BigInt(iso[3] ?? 0) * NS_PER_HOUR +
+    BigInt(iso[4] ?? 0) * NS_PER_MINUTE +
+    BigInt(iso[5] ?? 0) * NS_PER_SECOND +
+    BigInt((iso[6] ?? '').padEnd(9, '0') || 0);
+  if (iso[1]) result = -result;
+  return checkedI64(result, path);
+}
+
+function checkedI64(value: bigint, path: Path): bigint {
+  if (value < I64_MIN || value > I64_MAX) fail(path, 'duration nanoseconds out of i64 range');
+  return value;
+}
+
 function discriminatorMatches(rule: { tag: string; val?: unknown }, value: JsonValue): boolean {
   if (rule.tag === 'prefix')
     return typeof value === 'string' && value.startsWith(rule.val as string);
   if (rule.tag === 'suffix') return typeof value === 'string' && value.endsWith(rule.val as string);
+  if (rule.tag === 'contains')
+    return typeof value === 'string' && value.includes(rule.val as string);
   if (rule.tag === 'regex')
     return typeof value === 'string' && new RegExp(rule.val as string, 'u').test(value);
-  if (rule.tag === 'field') {
+  if (rule.tag === 'field-equals') {
     const field = rule.val as { fieldName: string; literal?: string };
     return (
       value !== null &&
@@ -595,10 +897,20 @@ function discriminatorMatches(rule: { tag: string; val?: unknown }, value: JsonV
         (value as Record<string, JsonValue>)[field.fieldName] === field.literal)
     );
   }
+  if (rule.tag === 'field-absent') {
+    return (
+      value !== null &&
+      !Array.isArray(value) &&
+      typeof value === 'object' &&
+      !((rule.val as string) in value)
+    );
+  }
   return false;
 }
+const MIME_TYPE_PATTERN = /^[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+$/u;
+
 function bytesToBase64(bytes: Uint8Array): string {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
   let result = '';
   for (let index = 0; index < bytes.length; index += 3) {
     const first = bytes[index];
@@ -606,28 +918,41 @@ function bytesToBase64(bytes: Uint8Array): string {
     const third = bytes[index + 2];
     result += alphabet[first >> 2];
     result += alphabet[((first & 3) << 4) | ((second ?? 0) >> 4)];
-    result += second === undefined ? '=' : alphabet[((second & 15) << 2) | ((third ?? 0) >> 6)];
-    result += third === undefined ? '=' : alphabet[third & 63];
+    if (second !== undefined) result += alphabet[((second & 15) << 2) | ((third ?? 0) >> 6)];
+    if (third !== undefined) result += alphabet[third & 63];
   }
   return result;
 }
-function base64ToBytes(value: string): Uint8Array {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  if (
-    value.length % 4 !== 0 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
-  ) {
-    throw new SchemaRenderError('invalid base64');
+function base64UrlToBytes(value: string, path: Path): Uint8Array {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  if (!/^[A-Za-z0-9_-]*$/u.test(value) || value.length % 4 === 1) {
+    fail(path, 'invalid base64url without padding');
   }
   const bytes: number[] = [];
   for (let index = 0; index < value.length; index += 4) {
     const a = alphabet.indexOf(value[index]);
     const b = alphabet.indexOf(value[index + 1]);
-    const c = value[index + 2] === '=' ? 0 : alphabet.indexOf(value[index + 2]);
-    const d = value[index + 3] === '=' ? 0 : alphabet.indexOf(value[index + 3]);
+    const c = value[index + 2] === undefined ? 0 : alphabet.indexOf(value[index + 2]);
+    const d = value[index + 3] === undefined ? 0 : alphabet.indexOf(value[index + 3]);
     bytes.push((a << 2) | (b >> 4));
-    if (value[index + 2] !== '=') bytes.push(((b & 15) << 4) | (c >> 2));
-    if (value[index + 3] !== '=') bytes.push(((c & 3) << 6) | d);
+    if (value[index + 2] !== undefined) bytes.push(((b & 15) << 4) | (c >> 2));
+    if (value[index + 3] !== undefined) bytes.push(((c & 3) << 6) | d);
   }
   return Uint8Array.from(bytes);
+}
+
+function rejectUnknownFields(
+  object: Record<string, JsonValue>,
+  allowed: readonly string[],
+  path: Path,
+): void {
+  Object.keys(object).forEach((key) => {
+    if (!allowed.includes(key)) fail([...path, key], 'unknown field');
+  });
+}
+
+function bigintToSafeJsonNumber(value: bigint, path: Path, label: string): number {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number)) fail(path, `${label} cannot be represented losslessly`);
+  return number;
 }

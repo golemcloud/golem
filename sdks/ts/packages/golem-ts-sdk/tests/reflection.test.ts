@@ -108,7 +108,7 @@ describe('SchemaRef', () => {
       (schema.graph.defs as Map<string, unknown>).set('new-type', {
         body: t.string(),
       }),
-    ).toThrow('immutable reflected schema graph');
+    ).toThrow('immutable schema graph');
   });
 });
 
