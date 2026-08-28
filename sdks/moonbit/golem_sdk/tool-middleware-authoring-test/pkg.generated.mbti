@@ -1,0 +1,91 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/tool-middleware-authoring-test"
+
+import {
+  "golemcloud/golem_sdk/async-core",
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model",
+  "golemcloud/golem_sdk/tool-core",
+  "golemcloud/golem_sdk/tool-middleware",
+}
+
+// Values
+pub async fn audit(@tool-middleware.RawToolInvocation, @tool-middleware.UnderlyingTool) -> Result[@tool-middleware.RawInvocationResult, @tool-middleware.ToolInvokeError[@tool-middleware.RawTypedSchemaValue]]
+
+pub fn decode_run_error_payload_for_tests(@types.TypedSchemaValue) -> RunError raise
+
+pub fn generated_input_for_tests(Array[String], Array[(String, @schema_model.SchemaValue)]) -> @types.TypedSchemaValue raise
+
+pub fn register_generated_middlewares_for_tests() -> Unit raise
+
+pub fn run_error_payload_for_tests(String) -> @types.TypedSchemaValue raise
+
+// Errors
+
+// Types and methods
+type Adapter
+pub async fn Adapter::abandon_stdout(StorageUnderlying) -> Result[@async-core.Stream[Byte], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn Adapter::admin__run(StorageUnderlying, Bool, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn Adapter::io(StorageUnderlying, @tool-middleware.MiddlewareStdin, @common.Principal) -> Result[(String, @async-core.Stream[Byte]), @tool-middleware.ToolInvokeError[RunError]]
+pub async fn Adapter::retry(StorageUnderlying, String) -> Result[Int, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn Adapter::stdout(StorageUnderlying) -> Result[@async-core.Stream[Byte], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn Adapter::unit(StorageUnderlying) -> Result[Unit, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn Adapter::value(StorageUnderlying, String) -> Result[Int, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn Adapter::value_stdout(StorageUnderlying, String) -> Result[(Int, @async-core.Stream[Byte]), @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+
+type Nested
+pub fn Nested::run(String) -> String
+
+type Policy
+pub async fn Policy::abandon_stdout(PresentedUnderlying) -> Result[@async-core.Stream[Byte], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn Policy::admin__run(PresentedUnderlying, Bool, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn Policy::io(PresentedUnderlying, @tool-middleware.MiddlewareStdin, @common.Principal) -> Result[(String, @async-core.Stream[Byte]), @tool-middleware.ToolInvokeError[RunError]]
+pub async fn Policy::retry(PresentedUnderlying, String) -> Result[Int, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn Policy::stdout(PresentedUnderlying) -> Result[@async-core.Stream[Byte], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn Policy::unit(PresentedUnderlying) -> Result[Unit, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn Policy::value(PresentedUnderlying, String) -> Result[Int, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn Policy::value_stdout(PresentedUnderlying, String) -> Result[(Int, @async-core.Stream[Byte]), @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+
+type Presented
+pub fn Presented::abandon_stdout(@async-core.Sink[Byte]) -> Unit
+pub fn Presented::admin(Bool) -> Unit
+pub fn Presented::io(@async-core.Stream[Byte], @async-core.Sink[Byte], @common.Principal) -> Result[String, RunError]
+pub fn Presented::retry(String) -> Int
+pub fn Presented::stdout(@async-core.Sink[Byte]) -> Unit
+pub fn Presented::unit() -> Unit
+pub fn Presented::value(String) -> Int
+pub fn Presented::value_stdout(String, @async-core.Sink[Byte]) -> Int
+
+pub struct PresentedUnderlying {
+  // private fields
+}
+pub async fn PresentedUnderlying::abandon_stdout(Self) -> Result[@async-core.Stream[Byte], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::admin__run(Self, Bool, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::io(Self, @tool-middleware.MiddlewareStdin) -> Result[(String, @async-core.Stream[Byte]), @tool-middleware.ToolInvokeError[RunError]]
+pub async fn PresentedUnderlying::retry(Self, String) -> Result[Int, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::stdout(Self) -> Result[@async-core.Stream[Byte], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::unit(Self) -> Result[Unit, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::value(Self, String) -> Result[Int, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn PresentedUnderlying::value_stdout(Self, String) -> Result[(Int, @async-core.Stream[Byte]), @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+
+pub(all) enum RunError {
+  Broken(String)
+}
+pub impl @schema.FromSchema for RunError
+pub impl @schema.IntoSchema for RunError
+pub impl @tool-core.ToolErrorSchema for RunError
+
+type Storage
+pub fn Storage::fetch(String) -> String
+
+pub struct StorageUnderlying {
+  // private fields
+}
+pub async fn StorageUnderlying::fetch(Self, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+
+// Type aliases
+
+// Traits
+

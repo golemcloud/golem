@@ -112,23 +112,8 @@ fn wasmImportMethodDbTransactionCommit(p0 : Int, p1 : Int) = "golem:rdbms/postgr
 fn wasmImportMethodDbTransactionRollback(p0 : Int, p1 : Int) = "golem:rdbms/postgres@1.5.0" "[method]db-transaction.rollback"
 
 ///|
-#owned(array)
-extern "wasm" fn mbt_ffi_float_array2ptr(array : FixedArray[Float]) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
-
-///|
-#owned(array)
-extern "wasm" fn mbt_ffi_int_array2ptr(array : FixedArray[Int]) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
-
-///|
 #owned(bytes)
 extern "wasm" fn mbt_ffi_bytes2ptr(bytes : FixedArray[Byte]) -> Int =
-  #|(func (param i32) (result i32) local.get 0)
-
-///|
-#owned(str)
-extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
   #|(func (param i32) (result i32) local.get 0)
 
 ///|
@@ -140,8 +125,18 @@ extern "wasm" fn mbt_ffi_extend8(value : Int) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.extend8_s)
 
 ///|
+#owned(array)
+extern "wasm" fn mbt_ffi_float_array2ptr(array : FixedArray[Float]) -> Int =
+  #|(func (param i32) (result i32) local.get 0)
+
+///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
   #|(func (param i32) local.get 0 call $moonbit.decref)
+
+///|
+#owned(array)
+extern "wasm" fn mbt_ffi_int_array2ptr(array : FixedArray[Int]) -> Int =
+  #|(func (param i32) (result i32) local.get 0)
 
 ///|
 extern "wasm" fn mbt_ffi_load16(offset : Int) -> Int =
@@ -236,3 +231,8 @@ extern "wasm" fn mbt_ffi_storef32(offset : Int, value : Float) =
 ///|
 extern "wasm" fn mbt_ffi_storef64(offset : Int, value : Double) =
   #|(func (param i32) (param f64) local.get 0 local.get 1 f64.store)
+
+///|
+#owned(str)
+extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
+  #|(func (param i32) (result i32) local.get 0)
