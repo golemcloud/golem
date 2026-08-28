@@ -167,9 +167,19 @@ pub enum OutageViolation {
     /// [`Self::UnexpectedStall`] makes for a cut. A delay aimed at one half of
     /// the key-value layer is a claim about routing: these namespaces go to the
     /// store being slowed and those go elsewhere. A stream on the far side
-    /// moving with it says the claim is wrong — and a rule that only looked for
-    /// slowdown would have read that as its cleanest possible pass, because
-    /// everything the run aimed at did indeed get slower.
+    /// moving with it says something is wrong with that picture — and a rule
+    /// that only looked for slowdown would have read it as its cleanest
+    /// possible pass, because everything the run aimed at did indeed get
+    /// slower.
+    ///
+    /// It says *something* rather than *what*, and S15's first run is why the
+    /// wording is careful. `ephemeral` came out at 234.83x there, which cannot
+    /// be a route it takes itself: 46 seconds is ninety 500ms round trips, and
+    /// the stream makes none. It was queueing behind the three streams that do,
+    /// through a gate the executor shares across an account. So the three
+    /// readings are that the routing is wrong, that the fault landed wider than
+    /// the manifest names, or that the platform couples streams that the
+    /// storage layer keeps apart — and the third is not the least interesting.
     UnexpectedSlowdown,
     /// A stream that was confirming operations before the outage confirmed
     /// nothing at all after the heal.
@@ -699,8 +709,8 @@ impl StorageFaultReport {
                         detail: format!(
                             "{stream} does not depend on {} and was expected to run at its own \
                              pace through the delay, but ran at {most}x its own baseline median \
-                             against a {steady_ceiling}x ceiling — the storage this stream \
-                             actually reaches is not what the routing says it is",
+                             against a {steady_ceiling}x ceiling — so either it reaches that \
+                             storage after all, or it is queueing behind the streams that do",
                             self.endpoint
                         ),
                     });
@@ -734,17 +744,52 @@ impl StorageFaultReport {
 
         if let Some(&(stream, least)) = serving.first() {
             self.least_serving_stream_percent = Some(least);
-            if least < serving_floor {
-                self.findings.push(OutageFinding {
-                    violation: OutageViolation::UnexpectedStall,
-                    stream: Some(stream),
-                    detail: format!(
+            // Under a delay the two floors are not independent, and treating
+            // them as though they were reports the same fact twice.
+            //
+            // Throughput is concurrency over latency, and the workload offers a
+            // fixed in-flight budget per stream. So once a stream's latency
+            // rises far enough to saturate that budget, its throughput *must*
+            // fall in proportion, and the serving floor is then measuring the
+            // slowdown the run already reported rather than anything new. S15's
+            // first run made this concrete: promise held 11.88% of baseline
+            // while running 939x slower, which is 108 times more work in flight
+            // than at rest, not a stall.
+            //
+            // The invariant that separates them: share × slowdown is the ratio
+            // of during-fault concurrency to baseline concurrency. At or above
+            // 100% the stream carried more work than it did at rest and did not
+            // stop, whatever its throughput did. Below it, work is genuinely
+            // being lost, which is what this finding exists for.
+            let explained_by_slowdown = self
+                .expect
+                .slowdown_floor()
+                .and(self.median_ms(stream, Window::BeforeFault))
+                .zip(self.median_ms(stream, Window::DuringFault))
+                .map(|(before, during)| before > 0.0 && least * (during / before) >= 100.0)
+                .unwrap_or(false);
+            if least < serving_floor && !explained_by_slowdown {
+                let detail = if self.expect.slowdown_floor().is_some() {
+                    format!(
+                        "{stream} was expected to slow down while {} was delayed rather than \
+                         stop, but held only {least}% of its own baseline against a \
+                         {serving_floor}% floor, and its own latency does not account for the \
+                         shortfall — so the delay cost this stream work and not only time",
+                        self.endpoint
+                    )
+                } else {
+                    format!(
                         "{stream} does not depend on {} and was expected to carry on through \
                          the cut, but held only {least}% of its own baseline against a \
                          {serving_floor}% floor — the storage this stream actually reaches is \
                          not what the routing says it is",
                         self.endpoint
-                    ),
+                    )
+                };
+                self.findings.push(OutageFinding {
+                    violation: OutageViolation::UnexpectedStall,
+                    stream: Some(stream),
+                    detail,
                 });
             }
         }
@@ -1517,6 +1562,30 @@ mod tests {
                 .iter()
                 .any(|f| f.violation == OutageViolation::UnexpectedStall),
             "a stream serving 2 operations where it served 180 has stopped, got {:?}",
+            report.findings
+        );
+    }
+
+    /// The throughput drop a delay forces on its own, which is not a second
+    /// finding. The workload offers each stream a fixed in-flight budget, so a
+    /// stream running a hundred times slower cannot hold its baseline rate no
+    /// matter how healthy it is — and reporting that as a stall restates the
+    /// slowdown under another name. S15's first run hit exactly this: promise
+    /// held 11.88% of baseline at 939x, which is a hundred times more work in
+    /// flight than at rest.
+    #[test]
+    fn a_stream_too_slow_to_hold_its_rate_has_not_stopped() {
+        // 100x slower, and serving 5 operations where it served 180. That is
+        // 2.8% of baseline, far under the 50% floor — and 2.8% x 100 is 278% of
+        // its baseline concurrency, so it carried more work rather than less.
+        let report = build_latency(&latency_history(20_000, 5));
+
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.violation == OutageViolation::UnexpectedStall),
+            "a stream whose own latency accounts for its rate has not stalled, got {:?}",
             report.findings
         );
     }
