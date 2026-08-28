@@ -426,8 +426,18 @@ pub async fn run(
     // this scenario is about, and a platform that accepted every registration
     // and ran none of them would otherwise reach read-back and report a
     // flawless account of a mechanism that never worked.
-    let sampled = sample_fire_count(code, &ctx, &targets).await;
-    if sampled == 0 {
+    //
+    // Only when the run drives the stream at all. A scenario that registers
+    // nothing has no fire to observe, so holding it to this gate aborts it
+    // during the baseline and before the fault is ever injected. That is what
+    // happened to S15A's first run, and it cost a cluster run to learn.
+    let drives_scheduled = config.drives_stream(Stream::Scheduled);
+    let sampled = if drives_scheduled {
+        sample_fire_count(code, &ctx, &targets).await
+    } else {
+        0
+    };
+    if drives_scheduled && sampled == 0 {
         warn!(
             "{code}: {baseline_operations} operations confirmed and no scheduled action has fired"
         );
