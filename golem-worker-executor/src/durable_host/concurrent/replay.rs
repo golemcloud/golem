@@ -263,6 +263,10 @@ impl ConcurrentReplayResolver {
         self.pending.contains_key(&start_idx) || self.prefetched_terminals.contains_key(&start_idx)
     }
 
+    pub fn has_any_claims(&self) -> bool {
+        !self.pending.is_empty() || !self.prefetched_terminals.is_empty()
+    }
+
     /// Returns whether the registered resolution receiver is still alive. A dropped replay handle
     /// remains pending so its eventual terminal can be drained, but it cannot make further body
     /// progress and therefore is not an active consumer for structural-divergence detection.

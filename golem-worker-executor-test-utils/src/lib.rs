@@ -758,6 +758,17 @@ impl TestWorkerExecutor {
             .await
     }
 
+    /// Arms a one-shot gate immediately before the next discriminated p3 HTTP consume-body scope
+    /// `Start` is appended for `agent_id`.
+    pub async fn gate_next_consume_body_scope_start(
+        &self,
+        agent_id: &AgentId,
+    ) -> ConsumeBodyScopeStartGateHandle {
+        self.additional_test_deps
+            .gate_next_consume_body_scope_start(agent_id.clone())
+            .await
+    }
+
     /// Defers the first ready consume-body reply until the matching guest read
     /// is polled again, allowing a test to initiate `stream.cancel-read` while
     /// the reply is queued. Must be armed before the invocation creates its
@@ -2847,6 +2858,36 @@ impl TestOplog {
         permit.forget();
     }
 
+    fn is_consume_body_scope_start(entry: &OplogEntry) -> bool {
+        matches!(entry, OplogEntry::Start {
+            function_name: HostFunctionName::Custom(function_name),
+            ..
+        } if function_name.starts_with("<scope:batched-write:consume-body:"))
+    }
+
+    async fn pause_before_consume_body_scope_start(&self) -> bool {
+        let Some(gate) = self
+            .additional_test_deps
+            .consume_body_scope_start_gate(&self.owned_agent_id.agent_id)
+            .await
+        else {
+            return false;
+        };
+        if !gate.armed.swap(false, Ordering::SeqCst) {
+            return false;
+        }
+        if let Some(reached_tx) = gate.reached_tx.lock().unwrap().take() {
+            let _ = reached_tx.send(());
+        }
+        let permit = gate
+            .release
+            .acquire()
+            .await
+            .expect("the consume-body scope Start gate semaphore was closed");
+        permit.forget();
+        gate.abort_append.load(Ordering::SeqCst)
+    }
+
     async fn check_oplog_add(&self, entry: &OplogEntry) -> Result<(), String> {
         let entry_name = match entry {
             OplogEntry::BeginRemoteTransaction { .. } => "BeginRemoteTransaction",
@@ -2905,6 +2946,11 @@ impl TestOplog {
 #[async_trait]
 impl Oplog for TestOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
+        if Self::is_consume_body_scope_start(&entry)
+            && self.pause_before_consume_body_scope_start().await
+        {
+            return std::future::pending().await;
+        }
         let gated = self.is_consume_body_chunk_data_end(&entry);
         let index = self.oplog.add(entry).await;
         if gated {
@@ -3291,6 +3337,7 @@ pub struct AdditionalTestDeps {
     /// to deterministically race a guest-side body-reader drop against an
     /// already-persisted chunk delivery.
     consume_body_chunk_end_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyChunkEndGate>>>,
+    consume_body_scope_start_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeStartGate>>>,
     consume_body_reply_defer_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyReplyDeferGate>>>,
     /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
     /// read-only test helpers (`worker_is_loaded`,
@@ -3315,6 +3362,7 @@ impl AdditionalTestDeps {
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
+            consume_body_scope_start_gates: Arc::new(scc::HashMap::new()),
             consume_body_reply_defer_gates: Arc::new(scc::HashMap::new()),
             active_agents: Arc::new(std::sync::OnceLock::new()),
         }
@@ -3350,6 +3398,34 @@ impl AdditionalTestDeps {
         agent_id: &AgentId,
     ) -> Option<Arc<ConsumeBodyChunkEndGate>> {
         self.consume_body_chunk_end_gates
+            .read_async(agent_id, |_, gate| gate.clone())
+            .await
+    }
+
+    pub async fn gate_next_consume_body_scope_start(
+        &self,
+        agent_id: AgentId,
+    ) -> ConsumeBodyScopeStartGateHandle {
+        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ConsumeBodyScopeStartGate {
+            armed: AtomicBool::new(true),
+            abort_append: AtomicBool::new(false),
+            reached_tx: std::sync::Mutex::new(Some(reached_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        self.consume_body_scope_start_gates
+            .entry_async(agent_id)
+            .await
+            .and_modify(|existing| *existing = gate.clone())
+            .or_insert_with(|| gate.clone());
+        ConsumeBodyScopeStartGateHandle { reached_rx, gate }
+    }
+
+    async fn consume_body_scope_start_gate(
+        &self,
+        agent_id: &AgentId,
+    ) -> Option<Arc<ConsumeBodyScopeStartGate>> {
+        self.consume_body_scope_start_gates
             .read_async(agent_id, |_, gate| gate.clone())
             .await
     }
@@ -3503,6 +3579,43 @@ impl Drop for ConsumeBodyChunkEndGateHandle {
     /// not leave the gated producer blocked in `Oplog::add` forever, so dropping
     /// releases the gate. The extra permit is harmless after an explicit
     /// release because the gate fires at most once.
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+struct ConsumeBodyScopeStartGate {
+    armed: AtomicBool,
+    abort_append: AtomicBool,
+    reached_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+}
+
+pub struct ConsumeBodyScopeStartGateHandle {
+    reached_rx: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<ConsumeBodyScopeStartGate>,
+}
+
+impl ConsumeBodyScopeStartGateHandle {
+    pub async fn reached(&mut self) {
+        (&mut self.reached_rx)
+            .await
+            .expect("the consume-body scope Start gate was dropped without firing");
+    }
+
+    pub fn release(&self) {
+        self.gate.release.add_permits(1);
+    }
+
+    /// Leaves the append future pending after the gate is released, so dropping the executor
+    /// simulates process loss without ever writing the scope `Start` to the underlying oplog.
+    pub fn abort_append(&self) {
+        self.gate.abort_append.store(true, Ordering::SeqCst);
+        self.gate.release.add_permits(1);
+    }
+}
+
+impl Drop for ConsumeBodyScopeStartGateHandle {
     fn drop(&mut self) {
         self.gate.release.add_permits(1);
     }

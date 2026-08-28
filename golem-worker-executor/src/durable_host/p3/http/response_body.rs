@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::rebuild::resend_recorded_request;
 use super::rebuild::{AbortOnDropIoTask, P3HttpSendRebuild};
 use super::rebuild::{RebuildOutcome, ResendOutcome, reissue_recorded_request};
+use super::rebuild::{recorded_request_body_replayability, resend_recorded_request};
+use super::replay::ReplayedRequestBodyDrainProgress;
 use super::serialization::{deserialize_error_code, serialize_error_code};
 use super::serialization::{deserialize_headers, serialize_headers};
 use super::*;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CompletionDelivery, DemandDelivery, DemandDeliveryMode, DropEvent,
-    DurableDemandItem, DurableDemandStream, demand_channel,
+    DurableDemandItem, DurableDemandStream, ScopeReplayRecovery, demand_channel,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
@@ -56,9 +57,10 @@ use http_body_util::combinators::UnsyncBoxBody;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tracing::debug;
 use wasmtime::component::{
     Access, Accessor, AccessorTask, Destination, FutureProducer, FutureReader, Resource,
@@ -127,12 +129,6 @@ pub(super) fn register_open_response<Ctx: WorkerCtx, U: Send>(
     });
 }
 
-/// Whether the recorded request head declares a request body: a positive (or
-/// unparseable) `content-length`, or any `transfer-encoding`. The oplog does
-/// not record request body bytes, so such a request cannot be faithfully
-/// re-issued after a restart. This is best-effort detection from the head
-/// only — a streamed upload without `content-length` is indistinguishable
-/// from no body and slips through.
 impl<Ctx: WorkerCtx> types::HostResponse for DurableP3View<'_, Ctx> {
     fn get_status_code(&mut self, res: Resource<Response>) -> wasmtime::Result<StatusCode> {
         observe_function_call(&*self.0, "http::types::response", "get-status-code");
@@ -192,6 +188,65 @@ pub(super) enum HttpBodyChunkReply {
         message: String,
         trap_context: DurableCallTrapContext,
     },
+}
+
+#[derive(Default)]
+struct HttpBodyDemandSignal {
+    observed: AtomicBool,
+    notify: Notify,
+}
+
+impl HttpBodyDemandSignal {
+    fn observe(&self) {
+        self.observed.store(true, Ordering::Release);
+        self.notify.notify_one();
+    }
+
+    async fn observed(&self) {
+        while !self.observed.load(Ordering::Acquire) {
+            self.notify.notified().await;
+        }
+    }
+}
+
+async fn require_recording_before_response_demand(
+    readiness: impl Future<Output = Result<(), String>>,
+    demand_signal: Arc<HttpBodyDemandSignal>,
+    request_body_progress: Option<Arc<ReplayedRequestBodyDrainProgress>>,
+) -> Result<(), String> {
+    let Some(request_body_progress) = request_body_progress else {
+        return readiness.await;
+    };
+    tokio::pin!(readiness);
+    let mut response_demanded = demand_signal.observed.load(Ordering::Acquire);
+    loop {
+        let request_body_waiting = request_body_progress.is_waiting_for_guest_body();
+        if response_demanded && request_body_waiting {
+            tokio::select! {
+                biased;
+                result = &mut readiness => return result,
+                () = std::future::ready(()) => return Err(
+                    "response-body demand arrived while replay was waiting for more guest request-body data"
+                        .to_string(),
+                )
+            }
+        }
+
+        if response_demanded {
+            tokio::select! {
+                biased;
+                result = &mut readiness => return result,
+                () = request_body_progress.wait_for_change(request_body_waiting) => {}
+            }
+        } else {
+            tokio::select! {
+                biased;
+                result = &mut readiness => return result,
+                () = demand_signal.observed() => response_demanded = true,
+                () = request_body_progress.wait_for_change(request_body_waiting) => {}
+            }
+        }
+    }
 }
 
 /// Settles a persisted chunk completion at the producer's observation boundary rather than when
@@ -367,6 +422,7 @@ impl Drop for HttpTrailersDeliveryGuard {
 /// replay.
 pub(super) struct DurableHttpBodyProducer {
     demand_tx: mpsc::Sender<HttpBodyDemand>,
+    demand_signal: Arc<HttpBodyDemandSignal>,
     hook: Option<Arc<dyn P3HttpBodyProducerHook>>,
     pending: Option<PendingHttpBodyRead>,
     pending_cancel: Option<oneshot::Receiver<()>>,
@@ -384,10 +440,12 @@ pub(super) struct PendingHttpBodyRead {
 impl DurableHttpBodyProducer {
     fn new(
         demand_tx: mpsc::Sender<HttpBodyDemand>,
+        demand_signal: Arc<HttpBodyDemandSignal>,
         hook: Option<Arc<dyn P3HttpBodyProducerHook>>,
     ) -> Self {
         Self {
             demand_tx,
+            demand_signal,
             hook,
             pending: None,
             pending_cancel: None,
@@ -550,7 +608,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                 // oplog and fail on replay.
                 let (tx, rx) = oneshot::channel();
                 match self.demand_tx.try_send(HttpBodyDemand::Cancel(tx)) {
-                    Ok(()) => {}
+                    Ok(()) => self.demand_signal.observe(),
                     Err(mpsc::error::TrySendError::Closed(_)) => {
                         self.finished = true;
                         return Poll::Ready(Ok(StreamResult::Cancelled));
@@ -576,7 +634,7 @@ impl<D> StreamProducer<D> for DurableHttpBodyProducer {
                 cancel: cancel_rx,
                 cancel_ack: cancel_ack_tx,
             }) {
-                Ok(()) => {}
+                Ok(()) => self.demand_signal.observe(),
                 Err(mpsc::error::TrySendError::Closed(_)) => {
                     self.finished = true;
                     return Poll::Ready(Err(wasmtime::Error::msg(
@@ -882,6 +940,7 @@ pub(super) async fn skip_body_prefix(
 pub(super) struct HttpConsumeBodyTask<Ctx> {
     body: UnsyncBoxBody<Bytes, ErrorCode>,
     demand_rx: mpsc::Receiver<HttpBodyDemand>,
+    demand_signal: Arc<HttpBodyDemandSignal>,
     trailers_tx: oneshot::Sender<HttpTrailersResolution>,
     trailers_delivery: Arc<HttpTrailersDelivery>,
     /// Open-response state of the send that produced this response (its
@@ -899,6 +958,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
     fn new(
         body: UnsyncBoxBody<Bytes, ErrorCode>,
         demand_rx: mpsc::Receiver<HttpBodyDemand>,
+        demand_signal: Arc<HttpBodyDemandSignal>,
         trailers_tx: oneshot::Sender<HttpTrailersResolution>,
         trailers_delivery: Arc<HttpTrailersDelivery>,
         response_state: Option<OpenP3HttpResponseState>,
@@ -907,6 +967,7 @@ impl<Ctx> HttpConsumeBodyTask<Ctx> {
         Self {
             body,
             demand_rx,
+            demand_signal,
             trailers_tx,
             trailers_delivery,
             response_state,
@@ -925,12 +986,36 @@ where
         let HttpConsumeBodyTask {
             mut body,
             demand_rx,
+            demand_signal,
             trailers_tx,
             trailers_delivery,
-            response_state,
+            mut response_state,
             activity,
             ..
         } = self;
+
+        let scope_replay_recovery = match response_state.as_mut() {
+            Some(state) if state.body_is_placeholder && state.is_idempotent => {
+                match state.resend.as_mut() {
+                    Some(rebuild) => {
+                        let request_body_progress = rebuild
+                            .replayed_request_body_drain
+                            .as_ref()
+                            .map(|drain| drain.progress.clone());
+                        ScopeReplayRecovery::reexecute_when(
+                            require_recording_before_response_demand(
+                                recorded_request_body_replayability(accessor, rebuild),
+                                demand_signal.clone(),
+                                request_body_progress,
+                            ),
+                        )
+                    }
+                    None => ScopeReplayRecovery::Forbidden,
+                }
+            }
+            Some(state) if state.body_is_placeholder => ScopeReplayRecovery::Forbidden,
+            _ => ScopeReplayRecovery::Default,
+        };
 
         let (
             response_span,
@@ -994,6 +1079,7 @@ where
                 request_identity: None,
                 parent_start_index: None,
                 observational_owner,
+                scope_replay_recovery,
             },
             DemandDeliveryMode::Deferred,
             async |_| Ok(HostRequestNoInput {}),
@@ -1732,6 +1818,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         // Capacity 1 suffices (and bounds memory as defense in depth): the
         // producer keeps at most one demand in flight at a time.
         let (demand_tx, demand_rx) = demand_channel();
+        let demand_signal = Arc::new(HttpBodyDemandSignal::default());
         let (trailers_tx, trailers_rx) = oneshot::channel();
         let trailers_delivery = HttpTrailersDelivery::new();
         let producer_hook = {
@@ -1746,7 +1833,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         // handle construction fails.
         let mut stream = StreamReader::new(
             &mut store,
-            DurableHttpBodyProducer::new(demand_tx, producer_hook),
+            DurableHttpBodyProducer::new(demand_tx, demand_signal.clone(), producer_hook),
         )?;
         let mut trailers = match FutureReader::new(
             &mut store,
@@ -1776,6 +1863,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostResponseWithStore<U> for Dura
         store.spawn(HttpConsumeBodyTask::<Ctx>::new(
             body,
             demand_rx,
+            demand_signal,
             trailers_tx,
             trailers_delivery,
             response_state,
@@ -1825,6 +1913,66 @@ mod tests {
         DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
     };
     use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("10s")]
+    async fn missing_scope_readiness_refuses_pending_proof_after_response_demand() {
+        let demand_signal = Arc::new(HttpBodyDemandSignal::default());
+        demand_signal.observe();
+        let request_body_progress = Arc::new(ReplayedRequestBodyDrainProgress::default());
+        request_body_progress.set_waiting_for_guest_body(true);
+
+        let error = require_recording_before_response_demand(
+            std::future::pending::<Result<(), String>>(),
+            demand_signal,
+            Some(request_body_progress),
+        )
+        .await
+        .expect_err("response demand must bound a pending recording proof");
+
+        assert!(error.contains("response-body demand"));
+    }
+
+    #[test]
+    async fn missing_scope_readiness_prefers_an_already_completed_proof() {
+        let demand_signal = Arc::new(HttpBodyDemandSignal::default());
+        demand_signal.observe();
+        let request_body_progress = Arc::new(ReplayedRequestBodyDrainProgress::default());
+        request_body_progress.set_waiting_for_guest_body(true);
+
+        require_recording_before_response_demand(
+            async { Ok(()) },
+            demand_signal,
+            Some(request_body_progress),
+        )
+        .await
+        .expect("a completed recording proof must win over concurrent response demand");
+    }
+
+    #[test]
+    async fn missing_scope_readiness_ignores_demand_for_storage_only_validation() {
+        let demand_signal = Arc::new(HttpBodyDemandSignal::default());
+        demand_signal.observe();
+        let request_body_progress = Arc::new(ReplayedRequestBodyDrainProgress::default());
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let mut check = Box::pin(require_recording_before_response_demand(
+            async move {
+                ready_rx.await.expect("readiness sender dropped");
+                Ok(())
+            },
+            demand_signal,
+            Some(request_body_progress),
+        ));
+
+        assert!(
+            futures::poll!(check.as_mut()).is_pending(),
+            "response demand alone must not refuse bounded storage-only validation"
+        );
+        ready_tx.send(()).expect("readiness receiver dropped");
+        check
+            .await
+            .expect("storage-only validation must complete after becoming ready");
+    }
 
     /// Seeds `oplog` with the durable prefix a live consume-body loop leaves behind right before
     /// the guest-facing transfer of its first chunk: the parent consume-body `Start`, the child

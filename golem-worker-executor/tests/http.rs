@@ -1336,6 +1336,316 @@ async fn drive_gated_body_discard_round(
     Ok(())
 }
 
+/// A restart after the send completed but before its spawned consume-body task committed the scope
+/// `Start` must safely re-issue an idempotent request and continue the recorded invocation.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_recovers_missing_consume_body_scope_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const RESPONSE: &str = "recovered-body";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let http_server = spawn({
+        let request_count = request_count.clone();
+        async move {
+            let route = Router::new().route(
+                "/",
+                axum::routing::get(move || {
+                    let request_count = request_count.clone();
+                    async move {
+                        request_count.fetch_add(1, Ordering::SeqCst);
+                        RESPONSE
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let mut gate = executor
+        .gate_next_consume_body_scope_start(&worker_id)
+        .await;
+
+    executor
+        .invoke_agent_with_key(&component, &agent_id, &key, "get_idempotent", data_value!())
+        .await?;
+    timeout(Duration::from_secs(20), gate.reached()).await?;
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+    let before_restart = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        partition_starts(&before_restart, "http::client::send").counts(),
+        (0, 1, 0)
+    );
+    assert_eq!(
+        partition_starts(&before_restart, "http::types::response::consume-body").counts(),
+        (0, 0, 0)
+    );
+
+    gate.abort_append();
+    drop(gate);
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let result = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "get_idempotent",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+
+    assert_eq!(result, format!("200 {RESPONSE}"));
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        2,
+        "recovery must perform exactly one body re-issue"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        partition_starts(&oplog, "http::client::send").counts(),
+        (0, 1, 0),
+        "the body re-issue must not record a second guest-visible send"
+    );
+    assert_eq!(
+        partition_starts(&oplog, "http::types::response::consume-body").counts(),
+        (0, 1, 0)
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
+/// The same missing-scope crash window must never duplicate a non-idempotent POST.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_does_not_reissue_non_idempotent_missing_consume_body_scope(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let http_server = spawn({
+        let request_count = request_count.clone();
+        async move {
+            let route = Router::new().route(
+                "/",
+                post(move |body: Bytes| {
+                    let request_count = request_count.clone();
+                    async move {
+                        assert_eq!(body, Bytes::from_static(b"test-body"));
+                        request_count.fetch_add(1, Ordering::SeqCst);
+                        "post-response"
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let mut gate = executor
+        .gate_next_consume_body_scope_start(&worker_id)
+        .await;
+
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "post_non_idempotent",
+            data_value!(),
+        )
+        .await?;
+    timeout(Duration::from_secs(20), gate.reached()).await?;
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+    gate.abort_append();
+    drop(gate);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let invocation = spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    "post_non_idempotent",
+                    data_value!(),
+                )
+                .await
+        }
+        .in_current_span()
+    });
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Retrying, Duration::from_secs(20))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        1,
+        "a non-idempotent request must not be re-issued"
+    );
+    invocation.abort();
+    let _ = invocation.await;
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
+/// Missing-scope recovery must refuse instead of deadlocking or resending when the guest keeps
+/// its request body open until it can read the response body.
+#[test]
+#[tracing::instrument]
+async fn outgoing_http_missing_consume_scope_refuses_full_duplex_body_cycle(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let host_http_port = listener.local_addr()?.port();
+    let http_server = spawn({
+        let request_count = request_count.clone();
+        async move {
+            let route = Router::new().route(
+                "/early-response",
+                axum::routing::put(move || {
+                    let request_count = request_count.clone();
+                    async move {
+                        request_count.fetch_add(1, Ordering::SeqCst);
+                        "early-body"
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let mut gate = executor
+        .gate_next_consume_body_scope_start(&worker_id)
+        .await;
+
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "put_with_p3_body_open_until_response_read",
+            data_value!(),
+        )
+        .await?;
+    timeout(Duration::from_secs(20), gate.reached()).await?;
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+
+    gate.abort_append();
+    drop(gate);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let invocation = spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    "put_with_p3_body_open_until_response_read",
+                    data_value!(),
+                )
+                .await
+        }
+        .in_current_span()
+    });
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Retrying, Duration::from_secs(20))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        1,
+        "full-duplex recovery refusal must not re-issue the request"
+    );
+    invocation.abort();
+    let _ = invocation.await;
+
+    drop(executor);
+    http_server.abort();
+    Ok(())
+}
+
 /// A response-body chunk whose durable `End(Data)` is already persisted when
 /// the guest drops the body reader must not be delivered — live or on replay.
 /// The test pauses the consume-body producer between the chunk's durable `End`
