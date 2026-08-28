@@ -6471,19 +6471,40 @@ impl RunningWorker {
             .current_component
             .store(Arc::new(component_metadata.clone()));
 
-        let component_version_for_replay = worker_metadata
+        let automatic_snapshot = worker_metadata
             .last_known_status
-            .pending_updates
-            .front()
-            .and_then(|update| match update.kind {
-                PendingUpdateKind::SnapshotBased => Some(update.target_revision),
-                PendingUpdateKind::Automatic => None,
-            })
-            .unwrap_or(
+            .last_automatic_snapshot_index
+            .zip(
                 worker_metadata
                     .last_known_status
-                    .component_revision_for_replay,
-            );
+                    .last_automatic_snapshot_component_revision,
+            )
+            .filter(|(_, snapshot_revision)| {
+                *snapshot_revision == worker_metadata.last_known_status.component_revision
+            })
+            .filter(|_| {
+                pending_update.is_none()
+                    && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
+            });
+
+        let component_version_for_replay = automatic_snapshot.map_or_else(
+            || {
+                worker_metadata
+                    .last_known_status
+                    .pending_updates
+                    .front()
+                    .and_then(|update| match update.kind {
+                        PendingUpdateKind::SnapshotBased => Some(update.target_revision),
+                        PendingUpdateKind::Automatic => None,
+                    })
+                    .unwrap_or(
+                        worker_metadata
+                            .last_known_status
+                            .component_revision_for_replay,
+                    )
+            },
+            |(_, snapshot_revision)| snapshot_revision,
+        );
 
         let component_metadata_for_replay =
             if component_metadata.revision == component_version_for_replay {
@@ -6509,14 +6530,10 @@ impl RunningWorker {
             .last_known_status
             .last_manual_update_snapshot_index;
 
-        // automatic snapshots are only considered until the first failure.
-        // additionally, if there are updates, the automatic snapshot is temporarily ignored to catch issues earlier
-        if let Some(snapshot_idx) = worker_metadata
-            .last_known_status
-            .last_automatic_snapshot_index
-            && pending_update.is_none()
-            && !parent.snapshot_recovery_disabled.load(Ordering::Acquire)
-        {
+        // Automatic snapshots are only considered until the first failure and while they match
+        // the active component revision. Pending updates temporarily ignore them so compatibility
+        // is established by replaying from the authoritative manual-update baseline.
+        if let Some((snapshot_idx, _)) = automatic_snapshot {
             let snapshot_skip =
                 DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
                     OplogIndex::INITIAL.next()..=snapshot_idx,

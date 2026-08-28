@@ -13,17 +13,21 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::durability::assert_snapshot_recovery_loaded;
 use async_lock::Mutex;
 use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
 use golem_common::model::AgentStatus;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 
+use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    start_with_snapshot_policy,
 };
 use http::StatusCode;
 use log::info;
@@ -31,7 +35,7 @@ use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, debug};
@@ -278,6 +282,192 @@ async fn auto_update_on_idle(
     assert_eq!(result.into_typed::<u64>()?, 0);
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn auto_update_invalidates_snapshot_from_previous_revision(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let initial = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(initial.into_typed::<u32>()?, 0);
+
+    let snapshots_before_update = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count();
+    assert!(snapshots_before_update > 0);
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            updated_component.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+
+    let snapshots_after_update = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count();
+    assert_eq!(snapshots_after_update, snapshots_before_update);
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    let loaded_snapshot_revision = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    assert_eq!(loaded_snapshot_revision.into_typed::<u32>()?, 0);
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn snapshot_after_auto_update_recovers_with_updated_component_context(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            updated_component.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+
+    let snapshots_before_invocation = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count();
+    let before_snapshot = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(before_snapshot.into_typed::<u32>()?, 0);
+
+    let snapshot_count = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count();
+    assert_eq!(snapshot_count, snapshots_before_invocation + 1);
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    let revision = executor
+        .invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!())
+        .await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+    let loaded_snapshot_revision = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    assert_eq!(revision.into_typed::<u32>()?, 2);
+    assert_eq!(loaded_snapshot_revision.into_typed::<u32>()?, 2);
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
 }
 

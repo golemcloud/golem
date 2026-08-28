@@ -164,6 +164,47 @@ impl RevisionEnvAgent for RevisionEnvAgentImpl {
     }
 }
 
+#[agent_definition(snapshotting = "enabled")]
+pub trait SnapshotUpdateTest {
+    fn new() -> Self;
+    fn loaded_snapshot_revision(&self) -> u32;
+    fn revision_two_only(&self) -> u32;
+}
+
+struct SnapshotUpdateTestImpl {
+    loaded_snapshot_revision: u32,
+}
+
+#[agent_implementation]
+impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
+    fn new() -> Self {
+        Self {
+            loaded_snapshot_revision: 0,
+        }
+    }
+
+    fn loaded_snapshot_revision(&self) -> u32 {
+        self.loaded_snapshot_revision
+    }
+
+    fn revision_two_only(&self) -> u32 {
+        2
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        Ok(vec![2])
+    }
+
+    async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+        self.loaded_snapshot_revision = bytes
+            .first()
+            .copied()
+            .map(u32::from)
+            .ok_or_else(|| "Missing snapshot revision".to_string())?;
+        Ok(())
+    }
+}
+
 async fn report_f1(current: u64) {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
 
