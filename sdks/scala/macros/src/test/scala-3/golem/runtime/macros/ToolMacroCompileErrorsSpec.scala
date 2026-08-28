@@ -255,6 +255,219 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
         assertTrue(
           errors.exists(_.contains("a tool implementation class must have an empty primary constructor"))
         )
+      },
+      test("stateful tool middleware classes are rejected") {
+        val errors = errorsOf(
+          prelude + """
+          import golem.runtime.macros.ToolMiddlewareMacro
+          import golem.tool.*
+          import scala.concurrent.Future
+          @toolDefinition(version = "1.0.0")
+          trait Run { def run(input: String): String }
+          trait RunUnderlying
+          trait RunMiddleware extends RunMiddleware.Adapter[RunUnderlying]
+          object RunMiddleware {
+            trait Adapter[U] {
+              def run(underlying: U, input: String): Future[Either[ToolInvokeError[Nothing], String]]
+            }
+          }
+          final class RunPolicy(state: String) extends RunMiddleware {
+            def run(
+              underlying: RunUnderlying,
+              input: String
+            ): Future[Either[ToolInvokeError[Nothing], String]] = Future.successful(Right(input))
+          }
+          ToolMiddlewareMacro.transparentHandle[Run, RunUnderlying, RunMiddleware, RunPolicy](_ => null)
+          """
+        )
+        assertTrue(
+          errors.exists(_.contains("RunPolicy must have an empty primary constructor"))
+        )
+      },
+      test("generic tool middleware classes are rejected") {
+        val errors = errorsOf(
+          prelude + """
+          import golem.runtime.macros.ToolMiddlewareMacro
+          import golem.tool.*
+          import scala.concurrent.Future
+          @toolDefinition(version = "1.0.0")
+          trait Run { def run(input: String): String }
+          trait RunUnderlying
+          trait RunMiddleware extends RunMiddleware.Adapter[RunUnderlying]
+          object RunMiddleware {
+            trait Adapter[U] {
+              def run(underlying: U, input: String): Future[Either[ToolInvokeError[Nothing], String]]
+            }
+          }
+          final class RunPolicy[A] extends RunMiddleware {
+            def run(
+              underlying: RunUnderlying,
+              input: String
+            ): Future[Either[ToolInvokeError[Nothing], String]] = Future.successful(Right(input))
+          }
+          ToolMiddlewareMacro.transparentHandle[Run, RunUnderlying, RunMiddleware, RunPolicy[String]](_ => null)
+          """
+        )
+        assertTrue(
+          errors.exists(_.contains("tool middleware implementation must not have type parameters"))
+        )
+      },
+      test("middleware registration rejects a prefix-matching impostor surface") {
+        val errors = errorsOf(
+          prelude + """
+          import golem.runtime.macros.ToolMiddlewareMacro
+          import golem.tool.*
+          import scala.concurrent.Future
+          @toolDefinition(version = "1.0.0")
+          trait Run { def run(input: String): String }
+          trait RunUnderlying
+          trait RunMiddleware extends RunMiddleware.Adapter[RunUnderlying]
+          object RunMiddleware {
+            trait Adapter[U] {
+              def run(underlying: U, input: String): Future[Either[ToolInvokeError[Nothing], String]]
+            }
+          }
+          trait RunMiddlewareFake {
+            def run(
+              underlying: RunUnderlying,
+              input: String
+            ): Future[Either[ToolInvokeError[Nothing], String]]
+          }
+          final class RunPolicy extends RunMiddlewareFake {
+            def run(
+              underlying: RunUnderlying,
+              input: String
+            ): Future[Either[ToolInvokeError[Nothing], String]] = Future.successful(Right(input))
+          }
+          ToolMiddlewareMacro.transparentHandle[Run, RunUnderlying, RunMiddlewareFake, RunPolicy](_ => null)
+          """
+        )
+        assertTrue(errors.exists(_.contains("expected generated middleware surface")))
+      },
+      test("adapter middleware expected type must match its generated underlying") {
+        val errors = errorsOf(
+          prelude + """
+          import golem.runtime.macros.ToolMiddlewareMacro
+          import golem.tool.*
+          import scala.concurrent.Future
+          @toolDefinition(version = "1.0.0")
+          trait Run { def run(input: String): String }
+          @toolDefinition(version = "1.0.0")
+          trait Backend { def execute(input: String): String }
+          trait BackendUnderlying
+          object RunMiddleware {
+            trait Adapter[U] {
+              def run(underlying: U, input: String): Future[Either[ToolInvokeError[Nothing], String]]
+            }
+          }
+          final class RunPolicy extends RunMiddleware.Adapter[BackendUnderlying] {
+            def run(
+              underlying: BackendUnderlying,
+              input: String
+            ): Future[Either[ToolInvokeError[Nothing], String]] = Future.successful(Right(input))
+          }
+          ToolMiddlewareMacro.adapterHandle[
+            Run,
+            Run,
+            BackendUnderlying,
+            RunMiddleware.Adapter[BackendUnderlying],
+            RunPolicy
+          ](_ => null)
+          """
+        )
+        assertTrue(
+          errors.exists(message =>
+            message.contains("expected generated underlying type") && message.contains("RunUnderlying")
+          )
+        )
+      },
+      test("stateful universal tool middleware classes are rejected") {
+        val errors = errorsOf(
+          prelude + """
+          import golem.runtime.macros.ToolMiddlewareMacro
+          import golem.schema.TypedSchemaValue
+          import golem.tool.*
+          import scala.concurrent.Future
+          @universalToolMiddleware(name = "universal")
+          final class UniversalPolicy(state: String) extends UniversalToolMiddleware {
+            def invoke(
+              invocation: UniversalToolMiddlewareInvocation,
+              underlying: UniversalToolUnderlying
+            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+              underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
+          }
+          ToolMiddlewareMacro.universalHandle[UniversalPolicy]
+          """
+        )
+        assertTrue(
+          errors.exists(_.contains("UniversalPolicy must have an empty primary constructor"))
+        )
+      },
+      test("universal tool middleware classes must directly extend the universal surface") {
+        val errors = errorsOf(
+          prelude + """
+          import golem.runtime.macros.ToolMiddlewareMacro
+          import golem.schema.TypedSchemaValue
+          import golem.tool.*
+          import scala.concurrent.Future
+          abstract class StatefulUniversalPolicy(val state: String) extends UniversalToolMiddleware {
+            def invoke(
+              invocation: UniversalToolMiddlewareInvocation,
+              underlying: UniversalToolUnderlying
+            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+              underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
+          }
+          @universalToolMiddleware(name = "universal")
+          final class UniversalPolicy extends StatefulUniversalPolicy("state")
+          ToolMiddlewareMacro.universalHandle[UniversalPolicy]
+          """
+        )
+        assertTrue(
+          errors.exists(_.contains("UniversalPolicy must directly extend golem.tool.UniversalToolMiddleware"))
+        )
+      },
+      test("generic universal tool middleware classes are rejected") {
+        val errors = errorsOf(
+          prelude + """
+          import golem.runtime.macros.ToolMiddlewareMacro
+          import golem.schema.TypedSchemaValue
+          import golem.tool.*
+          import scala.concurrent.Future
+          @universalToolMiddleware(name = "universal")
+          final class UniversalPolicy[A] extends UniversalToolMiddleware {
+            def invoke(
+              invocation: UniversalToolMiddlewareInvocation,
+              underlying: UniversalToolUnderlying
+            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+              underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
+          }
+          ToolMiddlewareMacro.universalHandle[UniversalPolicy[String]]
+          """
+        )
+        assertTrue(
+          errors.exists(_.contains("tool middleware implementation must not have type parameters"))
+        )
+      },
+      test("universal tool middleware classes require their annotation") {
+        val errors = errorsOf(
+          prelude + """
+          import golem.runtime.macros.ToolMiddlewareMacro
+          import golem.schema.TypedSchemaValue
+          import golem.tool.*
+          import scala.concurrent.Future
+          final class UniversalPolicy extends UniversalToolMiddleware {
+            def invoke(
+              invocation: UniversalToolMiddlewareInvocation,
+              underlying: UniversalToolUnderlying
+            ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
+              underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
+          }
+          ToolMiddlewareMacro.universalHandle[UniversalPolicy]
+          """
+        )
+        assertTrue(
+          errors.exists(_.contains("must have exactly one @universalToolMiddleware annotation"))
+        )
       }
     )
 }

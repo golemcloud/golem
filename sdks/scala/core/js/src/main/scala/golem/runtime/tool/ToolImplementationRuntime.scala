@@ -16,18 +16,59 @@
 
 package golem.runtime.tool
 
-import golem.host.js.tool.{JsWasiInputStream, JsWasiOutputStream}
+import golem.FutureInterop
+import golem.host.js.tool.{JsByteStreamIterator, JsWasiInputStream, JsWasiOutputStream}
 import golem.schema.wire.SchemaWire
 import golem.tool._
 import golem.tool.wire.WitToolError
 
 import scala.concurrent.Future
+import scala.scalajs.js
 
 /** The stdin handle of a JS-guest tool invocation. */
-final class JsToolInputStream(val underlying: JsWasiInputStream) extends ToolInputStream
+final class JsToolInputStream(val underlying: JsWasiInputStream) extends ToolInputStream {
+  private val lifecycle = new JsToolStreamLifecycle(() => underlying.asyncIterator())
+
+  override private[golem] def close(): Future[Unit] = lifecycle.close()
+}
 
 /** The stdout handle of a JS-guest tool invocation. */
-final class JsToolOutputStream(val underlying: JsWasiOutputStream) extends ToolOutputStream
+final class JsToolOutputStream(val underlying: JsWasiOutputStream) extends ToolOutputStream {
+  private val lifecycle = new JsToolStreamLifecycle(() => underlying.asyncIterator())
+
+  override private[golem] def close(): Future[Unit] = lifecycle.close()
+}
+
+private final class JsToolStreamLifecycle(iterator: () => JsByteStreamIterator) {
+  private implicit val ec: scala.concurrent.ExecutionContext =
+    scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+
+  private var closed: Option[Future[Unit]] = None
+
+  def close(): Future[Unit] = synchronized {
+    closed.getOrElse {
+      val result =
+        try {
+          val rawIterator = iterator()
+          val returnFn    = rawIterator.asInstanceOf[js.Dynamic].selectDynamic("return")
+          if (js.typeOf(returnFn) == "function")
+            FutureInterop
+              .fromPromise(
+                returnFn
+                  .applyDynamic("call")(rawIterator)
+                  .asInstanceOf[js.Promise[js.Any]]
+              )
+              .map(_ => ())
+              .recover { case _ => () }
+          else Future.successful(())
+        } catch {
+          case _: Throwable => Future.successful(())
+        }
+      closed = Some(result)
+      result
+    }
+  }
+}
 
 /**
  * Registers macro-generated tool implementations into the [[ToolRegistry]],
@@ -85,27 +126,11 @@ private[golem] object ToolImplementationRuntime {
         )
     }
 
-  private[tool] def errorToWire(error: ToolInvokeError): WitToolError =
-    error match {
-      case ToolInvokeError.InvalidToolName(name)    => WitToolError.InvalidToolName(name)
-      case ToolInvokeError.InvalidCommandPath(path) => WitToolError.InvalidCommandPath(path)
-      case ToolInvokeError.InvalidInput(message)    => WitToolError.InvalidInput(message)
-      case ToolInvokeError.ConstraintViolation(m)   => WitToolError.ConstraintViolation(m)
-      case ToolInvokeError.InvalidResult(message)   => WitToolError.InvalidResult(message)
-      case ToolInvokeError.Custom(payload)          =>
-        WitToolError.CustomError(SchemaWire.typedSchemaValueToWit(payload))
-    }
+  private[tool] def errorToWire(error: ToolInvokeError[golem.schema.TypedSchemaValue]): WitToolError =
+    ToolInvokeError.toWire(error)
 
-  private[tool] def errorFromWire(error: WitToolError): ToolInvokeError =
-    error match {
-      case WitToolError.InvalidToolName(name)    => ToolInvokeError.InvalidToolName(name)
-      case WitToolError.InvalidCommandPath(path) => ToolInvokeError.InvalidCommandPath(path)
-      case WitToolError.InvalidInput(message)    => ToolInvokeError.InvalidInput(message)
-      case WitToolError.ConstraintViolation(m)   => ToolInvokeError.ConstraintViolation(m)
-      case WitToolError.InvalidResult(message)   => ToolInvokeError.InvalidResult(message)
-      case WitToolError.CustomError(payload)     =>
-        ToolInvokeError.Custom(SchemaWire.typedSchemaValueFromWit(payload))
-    }
+  private[tool] def errorFromWire(error: WitToolError): ToolInvokeError[golem.schema.TypedSchemaValue] =
+    ToolInvokeError.fromWire(error)
 
   /**
    * The JS-guest tool invocation environment: sibling tool lookup goes through
@@ -127,7 +152,7 @@ private[golem] object ToolImplementationRuntime {
             input: golem.schema.TypedSchemaValue,
             stdin: Option[ToolInputStream],
             principal: golem.Principal
-          ): Future[Either[ToolInvokeError, ToolInvokeResult]] =
+          ): Future[Either[ToolInvokeError[golem.schema.TypedSchemaValue], ToolInvokeResult]] =
             registryInvoker(
               commandPath,
               SchemaWire.typedSchemaValueToWit(input),
