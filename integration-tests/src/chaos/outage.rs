@@ -66,15 +66,29 @@
 //! So `ephemeral` stops and `durable`, `scheduled` and `promise` carry on, and
 //! the streams still answering are evidence rather than noise.
 //!
+//! S17 and S15 delay the two halves rather than cutting them, and the same
+//! split decides which streams move. Under S17 that is `ephemeral` alone, which
+//! its run confirmed at 6.59x against three streams that did not shift by a
+//! millisecond. Under S15 it is the other three: a durable invocation flips its
+//! agent between tracked and untracked in the running-workers index and waits
+//! for the write, a promise operation reads and writes promise keys, and
+//! registering a schedule writes to the scheduler's schema — all on the
+//! PostgreSQL half — while an ephemeral agent is excluded from that index by
+//! `AgentStatusFlusher::on_status_changed` and never touches it.
+//!
 //! ### What fails the run
 //!
-//! Three things, and all are statements about the experiment rather than about
+//! Five things, and all are statements about the experiment rather than about
 //! latency:
 //!
 //! * [`OutageViolation::OutageNotObserved`] — a stream the cut was supposed to
 //!   stop kept working, so the fault did not land where the run says it did.
 //! * [`OutageViolation::UnexpectedStall`] — a stream the cut was *not* supposed
 //!   to touch stopped anyway.
+//! * [`OutageViolation::SlowdownNotObserved`] — a stream a delay was aimed at
+//!   ran no slower than at rest, so the netem rule proved nothing.
+//! * [`OutageViolation::UnexpectedSlowdown`] — a stream a delay was *not* aimed
+//!   at slowed with it, which says the routing is not what the source says.
 //! * [`OutageViolation::StreamNeverRecovered`] — a stream that was working
 //!   before the outage produced nothing at all after the heal.
 //!
@@ -147,6 +161,16 @@ pub enum OutageViolation {
     /// netem rule that failed to apply leaves a run full of healthy numbers and
     /// no error anywhere — the worst artifact this suite can produce.
     SlowdownNotObserved,
+    /// A stream a delay was expected to leave alone slowed down with it.
+    ///
+    /// The counterpart to [`Self::SlowdownNotObserved`], and the same argument
+    /// [`Self::UnexpectedStall`] makes for a cut. A delay aimed at one half of
+    /// the key-value layer is a claim about routing: these namespaces go to the
+    /// store being slowed and those go elsewhere. A stream on the far side
+    /// moving with it says the claim is wrong — and a rule that only looked for
+    /// slowdown would have read that as its cleanest possible pass, because
+    /// everything the run aimed at did indeed get slower.
+    UnexpectedSlowdown,
     /// A stream that was confirming operations before the outage confirmed
     /// nothing at all after the heal.
     StreamNeverRecovered,
@@ -158,6 +182,7 @@ impl OutageViolation {
             OutageViolation::OutageNotObserved => "outage-not-observed",
             OutageViolation::UnexpectedStall => "unexpected-stall",
             OutageViolation::SlowdownNotObserved => "slowdown-not-observed",
+            OutageViolation::UnexpectedSlowdown => "unexpected-slowdown",
             OutageViolation::StreamNeverRecovered => "stream-never-recovered",
         }
     }
@@ -336,6 +361,15 @@ pub struct StorageFaultReport {
     /// another.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub least_slowdown_factor: Option<f64>,
+    /// The most any stream the delay was expected *not* to reach moved, as a
+    /// multiple of its own before-fault median. `None` unless the expectation
+    /// names steady streams.
+    ///
+    /// Read together with `least_slowdown_factor`, the pair is the whole
+    /// experiment in two numbers: how far the streams behind the delayed store
+    /// moved, and how far the ones that should not be behind it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub greatest_steady_factor: Option<f64>,
     pub cells: Vec<StreamThroughputCell>,
     /// What the outage began underneath, per stream. Empty for a run that never
     /// learned when the fault was.
@@ -485,6 +519,7 @@ impl StorageFaultReport {
             quietest_stream_percent: None,
             least_serving_stream_percent: None,
             least_slowdown_factor: None,
+            greatest_steady_factor: None,
             cells,
             caught_in_flight: caught_in_flight(records, fault),
             recovery: Vec::new(),
@@ -632,6 +667,40 @@ impl StorageFaultReport {
                             "{stream} was expected to slow down while {} was delayed and ran at \
                              {least}x its own baseline median against a {slowdown_floor}x floor \
                              — so this run has no evidence the delay reached the executors",
+                            self.endpoint
+                        ),
+                    });
+                }
+            }
+        }
+
+        // The far side of the same claim. A delay aimed at one store predicts
+        // both which streams move and which do not, and only the second half
+        // can catch a delay that landed somewhere wider than the run says.
+        if let Some(steady_ceiling) = self.expect.steady_ceiling() {
+            let mut steadies: Vec<(Stream, f64)> = served_before
+                .iter()
+                .copied()
+                .filter(|stream| self.expect.expects_steady(*stream))
+                .filter_map(|stream| {
+                    let baseline = self.median_ms(stream, Window::BeforeFault)?;
+                    let during = self.median_ms(stream, Window::DuringFault)?;
+                    (baseline > 0.0).then_some((stream, round2(during / baseline)))
+                })
+                .collect();
+            steadies.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+            if let Some(&(stream, most)) = steadies.first() {
+                self.greatest_steady_factor = Some(most);
+                if most > steady_ceiling {
+                    self.findings.push(OutageFinding {
+                        violation: OutageViolation::UnexpectedSlowdown,
+                        stream: Some(stream),
+                        detail: format!(
+                            "{stream} does not depend on {} and was expected to run at its own \
+                             pace through the delay, but ran at {most}x its own baseline median \
+                             against a {steady_ceiling}x ceiling — the storage this stream \
+                             actually reaches is not what the routing says it is",
                             self.endpoint
                         ),
                     });
@@ -799,6 +868,18 @@ impl StorageFaultReport {
                     "no stream had a before-fault baseline to be judged against".to_string()
                 }
             };
+            // The far side of a delay, when the scenario named one. Printed
+            // next to the slowdown rather than left in the cells, because the
+            // two numbers only mean anything together: a run where everything
+            // moved by the same multiple measured a slower cluster, not a
+            // slower store.
+            let steady = match (self.greatest_steady_factor, self.expect.steady_ceiling()) {
+                (Some(most), Some(ceiling)) => format!(
+                    ", the streams expected to be left alone ran at no more than {most}x theirs \
+                     (ceiling {ceiling}x)"
+                ),
+                _ => String::new(),
+            };
             let serving = match (
                 self.least_serving_stream_percent,
                 self.expect.serving_floor_percent(),
@@ -810,7 +891,7 @@ impl StorageFaultReport {
                 _ => String::new(),
             };
             lines.push(format!(
-                "Storage outage: {quiet}{serving} while {} was unreachable, and the workload held \
+                "Storage outage: {quiet}{steady}{serving} while {} was unreachable, and the workload held \
                  {share}% of its baseline throughput across that window",
                 self.endpoint
             ));
@@ -1111,18 +1192,30 @@ mod tests {
     }
 
     const SLOWDOWN_FLOOR: f64 = 2.0;
+    const STEADY_CEILING: f64 = 1.5;
 
     /// A workload where every stream keeps serving and `ephemeral` is the one
     /// the delay is aimed at. `ephemeral_ms` is what its operations take during
     /// the fault, against a 200ms baseline.
     fn latency_history(ephemeral_ms: u64, ephemeral_during: usize) -> Vec<OperationRecord> {
+        latency_history_with(ephemeral_ms, ephemeral_during, 50)
+    }
+
+    /// As [`latency_history`], with the far-side stream's during-fault duration
+    /// under the test's control too, so a run where the delay reached more than
+    /// it was aimed at can be built.
+    fn latency_history_with(
+        ephemeral_ms: u64,
+        ephemeral_during: usize,
+        durable_during_ms: u64,
+    ) -> Vec<OperationRecord> {
         let mut records = Vec::new();
         for second in 1..=300 {
             records.push(timed(Stream::Durable, -second, 50));
             records.push(timed(Stream::Ephemeral, -second, 200));
         }
         for i in 0..180 {
-            records.push(timed(Stream::Durable, i as i64, 50));
+            records.push(timed(Stream::Durable, i as i64, durable_during_ms));
         }
         for i in 0..ephemeral_during {
             records.push(timed(Stream::Ephemeral, i as i64, ephemeral_ms));
@@ -1152,6 +1245,26 @@ mod tests {
             OutageExpectation::LatencyDegradation {
                 slowed: vec![Stream::Ephemeral],
                 slowdown_floor: SLOWDOWN_FLOOR,
+                steady: Vec::new(),
+                steady_ceiling: STEADY_CEILING,
+                serving_floor_percent: SERVING_FLOOR,
+            },
+            Duration::from_secs(120),
+        )
+    }
+
+    /// The same delay, with the claim S15 and S17 both make about the streams
+    /// on the far side of the store written down.
+    fn build_latency_steady(records: &[OperationRecord]) -> StorageFaultReport {
+        StorageFaultReport::build(
+            records,
+            Some(fault()),
+            ENDPOINT,
+            OutageExpectation::LatencyDegradation {
+                slowed: vec![Stream::Ephemeral],
+                slowdown_floor: SLOWDOWN_FLOOR,
+                steady: vec![Stream::Durable],
+                steady_ceiling: STEADY_CEILING,
                 serving_floor_percent: SERVING_FLOOR,
             },
             Duration::from_secs(120),
@@ -1404,6 +1517,58 @@ mod tests {
                 .iter()
                 .any(|f| f.violation == OutageViolation::UnexpectedStall),
             "a stream serving 2 operations where it served 180 has stopped, got {:?}",
+            report.findings
+        );
+    }
+
+    /// Both halves of a delay's claim, held at once: the stream behind the
+    /// slowed store moved and the stream that is not behind it did not. This is
+    /// the shape S17 measured and the one S15 predicts with the streams
+    /// swapped, and it is what makes either run attributable to the store
+    /// rather than to a slower cluster.
+    #[test]
+    fn a_steady_stream_that_stayed_steady_is_what_makes_the_slowdown_attributable() {
+        let report = build_latency_steady(&latency_history_with(1_000, 180, 50));
+
+        assert!(
+            report.findings.is_empty(),
+            "one stream slower and the other unchanged is the expected outcome, got {:?}",
+            report.findings
+        );
+        assert_eq!(report.least_slowdown_factor, Some(5.0));
+        assert_eq!(
+            report.greatest_steady_factor,
+            Some(1.0),
+            "50ms against a 50ms baseline has not moved"
+        );
+    }
+
+    /// The finding a rule that only looks for slowdown cannot raise. Everything
+    /// the delay was aimed at did get slower, so the slowdown check passes and
+    /// the run reads as clean — while a stream the routing says is nowhere near
+    /// the delayed store moved with it, which means the routing is wrong or the
+    /// rule landed wider than the manifest says.
+    #[test]
+    fn a_stream_the_delay_should_not_have_touched_slowing_with_it_is_a_finding() {
+        // The delayed stream still clears its floor at 5x, so nothing else in
+        // the report objects.
+        let report = build_latency_steady(&latency_history_with(1_000, 180, 550));
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.violation == OutageViolation::UnexpectedSlowdown
+                    && f.stream == Some(Stream::Durable)),
+            "11x on a stream that does not depend on the delayed store is a finding, got {:?}",
+            report.findings
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.violation == OutageViolation::SlowdownNotObserved),
+            "the aimed-at stream did slow down, so that check should be quiet: {:?}",
             report.findings
         );
     }

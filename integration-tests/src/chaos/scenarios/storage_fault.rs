@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Storage fault: the shared choreography behind S14, S16, S17, S18 and S22.
+//! Storage fault: the shared choreography behind S14, S15, S16, S17, S18 and
+//! S22.
 //!
-//! All five codes run this module. They differ in which store the fault is
+//! All six codes run this module. They differ in which store the fault is
 //! aimed at, what it does to that store and for how long, all of which are
 //! suite settings, and in what a reader should expect of the result:
 //!
@@ -41,8 +42,14 @@
 //!   its worker-status store, but whether it degrades or breaks when that store
 //!   gets slower. Going quiet would be a failure here rather than the expected
 //!   result.
+//! * **S15** (GOL-374) slows the key-value cluster instead, so it is to S16
+//!   what S17 is to S18 and the mirror image of S17 at the same time. The
+//!   claim is the same one — degradation rather than breakage — but on the
+//!   opposite set of streams, and it carries a risk the Redis delay does not:
+//!   this side's connection pools are bounded and its failure path is a panic.
+//!   See the suite entry for the arithmetic.
 //!
-//! The driver is the same in all five because the difference is one of
+//! The driver is the same in all six because the difference is one of
 //! expectation, not of choreography. Nothing below asserts on which outcome
 //! happened: the account it produces answers all five questions, and the
 //! oracles that fail the build — the scheduled-fire account and the
@@ -87,13 +94,22 @@
 //! S17 slows the same part instead. Both Aurora clusters stay reachable
 //! throughout either.
 //!
-//! No stream is a control group under the Aurora cuts. A durable increment
+//! S15 aims at the back half of that same layer, which is the key-value cluster
+//! again, and the split decides its streams too. `durable` waits on the
+//! `RunningWorkers` recovery index, which `AgentStatusFlusher::on_status_changed`
+//! updates synchronously whenever an agent crosses between tracked and
+//! untracked; `promise` reads and writes promise keys; the scheduler registers
+//! into its own schema on the same cluster. `ephemeral` reaches none of it, and
+//! is the one stream that should not move.
+//!
+//! No stream is a control group under the Aurora *cuts*. A durable increment
 //! needs the running-workers set before it can start, the worker-status cache
 //! to resolve its mode, and the oplog before it can finish, so `durable`
-//! degrades under both of those and must not be read as untouched. The two
-//! Redis scenarios are the exception, and deliberately so: there the streams
-//! that keep working are evidence rather than noise, which is why they are
-//! judged by their own expectations. See [`crate::chaos::OutageExpectation`].
+//! degrades under both of those and must not be read as untouched. The three
+//! scenarios aimed at one half of the key-value layer are the exception, and
+//! deliberately so: there the streams that keep working — or keep their pace —
+//! are evidence rather than noise, which is why they are judged by their own
+//! expectations. See [`crate::chaos::OutageExpectation`].
 //!
 //! ## The control is the baseline, not another pod
 //!

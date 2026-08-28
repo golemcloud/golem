@@ -267,6 +267,9 @@ pub enum ChaosScenarioArg {
     S18,
     /// The same Redis cache slowed rather than removed.
     S17,
+    /// The key-value PostgreSQL cluster slowed rather than removed. S17's
+    /// mirror on the other half of the split key-value layer.
+    S15,
 }
 
 /// Density subcommand action.

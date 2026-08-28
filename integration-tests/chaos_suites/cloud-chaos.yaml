@@ -1435,6 +1435,19 @@ scenarios:
         # full of healthy numbers describing an experiment that never happened.
         slowdownFloor: 2.0
 
+        # The other three, and the claim that makes the 6.59x above attributable
+        # to this cache rather than to a slower cluster. Their agents are
+        # resident and durable, so `AgentStatusFlusher` keeps the status blob off
+        # the commit path and nothing they do crosses Redis synchronously — and
+        # the first run bore that out exactly, at 61ms, 100ms and 91ms in all
+        # three windows. S15 makes the mirror claim with the two lists swapped.
+        steady: [durable, promise, scheduled]
+
+        # Room for the spill of sharing executors and a runtime with a stream
+        # that is six times slower than usual, and nothing like the multiple a
+        # real dependency on this cache would produce. Measured at 1.00x.
+        steadyCeiling: 1.5
+
         # A delay should cost time, not work. Throughput is not expected to move
         # much: the per-stream in-flight budget is MAX_IN_FLIGHT/4 = 256, and at
         # 33 operations per second and 712ms each the stream sits around 23 in
@@ -1454,6 +1467,173 @@ scenarios:
       # because nothing should time out and so nothing should retry — but a
       # retry count above zero would itself be a finding, and leaving the policy
       # the same is what makes that comparable.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800
+
+  # ---------------------------------------------------------------------------
+  # S15 — key-value PostgreSQL latency degradation (GOL-374)
+  #
+  # S17 with the two halves of the key-value layer swapped. That fault slows the
+  # Redis cache and this one slows the Aurora cluster behind it, and because
+  # `NamespaceRoutedKeyValueStorage` splits the namespaces between them, the two
+  # runs should move opposite sets of streams. Reading them side by side is the
+  # point: each is the other's control.
+  #
+  # ── Which streams actually reach this cluster ──────────────────────────────
+  #
+  # Worth spelling out, because "the workload is promise- and schedule-heavy"
+  # undersells it and the durable stream is the surprise.
+  #
+  #   * durable — `AgentStatusFlusher::on_status_changed` updates the
+  #     `RunningWorkers` recovery index *synchronously on the hot path*, and
+  #     only when the tracking predicate flips. An idle agent invoked once goes
+  #     Idle → Running → Idle, so the predicate flips twice and the invocation
+  #     waits on two writes to this cluster. The status blob itself is off the
+  #     commit path; the recovery index deliberately is not.
+  #   * promise — `create` is one `set_if_not_exists` and `complete` is an
+  #     `exists` followed by another, all in the `Promise` namespace, which
+  #     routes here.
+  #   * scheduled — the emitter's `schedule_poll_at` registers into the
+  #     scheduler's own schema, which lives on this same cluster under
+  #     `GOLEM__SCHEDULER_STORAGE__CONFIG__HOST`.
+  #   * ephemeral — reaches none of it. `on_status_changed` returns immediately
+  #     for an ephemeral agent, and its status goes to the Redis cache, so this
+  #     is the one stream the delay should not touch. Under S17 it was the only
+  #     one that did.
+  #
+  # ── What the pool arithmetic says, which is the risk this run carries ──────
+  #
+  # The executors hold 64 connections to the key-value cluster and 32 to the
+  # scheduler schema, per pod. Under a 500ms egress delay every statement costs
+  # one delayed round trip, so a pool of 64 clears about 128 statements a second
+  # and one of 32 about 64.
+  #
+  # Demand, from S17's measured rates over two executors: durable 33.9/s × 2
+  # writes and promise 33.9/s × 3 gives about 85 statements per second per pod
+  # against the 128 the key-value pool can clear, and scheduled 50.8/s × 2 gives
+  # about 51 against the 64 the scheduler pool can. Both fit, neither by much.
+  #
+  # If either tips over, sqlx queues the acquire and gives up after its default
+  # 30s — and the key-value path has no retry policy in front of it, so
+  # `PoolTimedOut` reaches an `unwrap_or_else(panic!)` and takes the executor
+  # with it. That is the S16 finding (golemcloud/golem PR "keyvalue storage
+  # retries", still open), so an executor lost here is not a new defect but a
+  # second, sharper measurement of a known one: it would mean the panic is
+  # reachable from latency alone, without anything ever becoming unreachable.
+  # ---------------------------------------------------------------------------
+  - code: S15
+    name: keyvalue-postgres-latency
+    enabled: true
+
+    fault:
+      # As S17. Recorded for the archive rather than acted on: the workflow
+      # picks the manifest by scenario code and reads the Chaos Mesh kind out of
+      # the manifest itself.
+      kind: network-delay
+      target: worker-executor
+      # Every executor. A store that is slow for only some of them is a routing
+      # fault wearing a database's clothes.
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 300
+
+    phases:
+      # S17's, unchanged, so the two delays differ only in what they aim at.
+      baselineSecs: 300
+      # 300s for S17's reasons and one more. Nothing here should approach the
+      # 120s attempt timeout, so there is no caller clock to outrun; the length
+      # is for a memory series long enough to have a slope and for a steady
+      # state rather than a transient. The one more is the pool arithmetic
+      # above: a pool that is going to saturate does it by filling, and filling
+      # takes time that a 60s window does not give it.
+      faultSecs: 300
+      recoverySecs: 420
+
+    workload:
+      # Identical to the other five, deliberately, even though GOL-374 asks for
+      # "promise- and schedule-heavy" work and a reweighted population would
+      # press the pools harder. Two of the six storage runs are a matched pair
+      # and comparability is what makes the pair worth anything; and the durable
+      # stream turns out to be the heaviest user of this cluster anyway, at two
+      # synchronous writes per invocation. Deliberately overloading the pool is
+      # a different experiment — S22 is to S16 what that would be to this — and
+      # it should be its own scenario rather than a thumb on this one's scale.
+      durableAgents: 200
+      ephemeralAgents: 50
+      scheduledAgents: 0
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # As the others. Unlike S17 the scheduler is *inside* this delay, so its
+      # claims and acknowledgements each gain a round trip — but 240s of lease
+      # against a claim that costs milliseconds plus 500ms is not a number this
+      # run can approach, and a lease expiry here would be a real finding rather
+      # than a threshold that was set too tight.
+      leaseBudgetSecs: 240
+
+    storage:
+      # The key-value Aurora cluster, which is also where the scheduler keeps
+      # its schema. The same endpoint S16 and S22 cut. Neither Redis nor the
+      # indexed-oplog cluster is touched: slowing a second store would leave
+      # every finding unattributable.
+      endpoint: golem-postgres-dev-keyvalue.cluster-cgfyoqmjq7tc.us-east-1.rds.amazonaws.com
+
+      expect:
+        # As S17. Under a delay nothing is supposed to fall silent, so silence
+        # is not available as evidence that the fault landed and time has to
+        # stand in for it.
+        kind: latency-degradation
+
+        # The three streams that reach this cluster synchronously, per the
+        # walk-through above. All three should move by a lot: durable's baseline
+        # median was 61ms and it waits on two writes, so about 1061ms or 17x;
+        # promise's was 91ms against three, so about 1591ms or 17x; scheduled's
+        # was 100ms against one, so about 600ms or 6x.
+        slowed: [durable, promise, scheduled]
+
+        # 2.0, as S17, and for the same reason rather than for the arithmetic
+        # above: the floor exists to fail a run where the netem rule never
+        # applied, which leaves every stream near 1.0x. Setting it near the
+        # predicted 6x would instead be a second, unannounced assertion that the
+        # prediction is right, and the prediction is the thing under test.
+        slowdownFloor: 2.0
+
+        # The control, and the mirror image of S17's list. An ephemeral agent
+        # never enters the recovery index and its status goes to Redis, so if
+        # this stream slows with the others, the delay reached something wider
+        # than this cluster and the run cannot say what it measured.
+        steady: [ephemeral]
+
+        # As S17. Ephemeral is the noisiest stream in the suite at rest — its
+        # p99 runs to seven times its median — but the check is on medians, and
+        # the median has held at 202-212ms across every storage run so far.
+        steadyCeiling: 1.5
+
+        # A delay should cost time, not work. At 33.9 operations per second and
+        # about 1.6s each, promise sits around 54 of its 256 in-flight budget,
+        # and the other streams less, so nothing queues at the driver and
+        # throughput should hold. A stream falling below half its baseline means
+        # the latency broke something instead — and here that has a named
+        # candidate, which is the pool timeout above.
+        servingFloorPercent: 50
+
+      # Recorded, not asserted, and expected to be near zero: nothing was ever
+      # unreachable, so there is no reconnect to wait for. If an executor was
+      # lost to the pool timeout this will be the number that shows it, as the
+      # replacement has to reload its agents before it can serve.
+      recoveryBudgetSecs: 60
+
+    retryPolicy:
+      # Identical to the other five. Nothing should time out and so nothing
+      # should retry; a retry count above zero is itself a finding.
       transportOnly: true
       maxRetries: 1
       delaySecs: 5

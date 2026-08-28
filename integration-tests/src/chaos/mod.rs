@@ -106,6 +106,9 @@ pub enum ScenarioCode {
     /// The same Redis cache still reachable but slowed, to ask whether the
     /// platform degrades or breaks when its worker-status store gets slower.
     S17,
+    /// The key-value PostgreSQL cluster still reachable but slowed. S17's
+    /// mirror on the other half of the split key-value layer.
+    S15,
 }
 
 impl ScenarioCode {
@@ -127,13 +130,14 @@ impl ScenarioCode {
             ScenarioCode::S14 => "S14",
             ScenarioCode::S18 => "S18",
             ScenarioCode::S17 => "S17",
+            ScenarioCode::S15 => "S15",
         }
     }
 
     /// Every scenario this driver implements. The suite YAML is checked against
     /// this list, so a scenario cannot be enabled in YAML without code behind
     /// it, nor implemented without an operational switch in front of it.
-    pub const ALL: [ScenarioCode; 16] = [
+    pub const ALL: [ScenarioCode; 17] = [
         ScenarioCode::S1,
         ScenarioCode::S3,
         ScenarioCode::S5,
@@ -146,6 +150,7 @@ impl ScenarioCode {
         ScenarioCode::S12,
         ScenarioCode::S13,
         ScenarioCode::S14,
+        ScenarioCode::S15,
         ScenarioCode::S16,
         ScenarioCode::S17,
         ScenarioCode::S18,
@@ -800,6 +805,38 @@ pub enum OutageExpectation {
         /// 240ms on `ephemeral` — and a fixed ceiling would be slack for one
         /// and impossible for the other.
         slowdown_floor: f64,
+        /// The streams the delay is expected *not* to reach, and whose
+        /// steadiness is therefore the run's evidence that it reached only what
+        /// it aimed at.
+        ///
+        /// The latency counterpart to what
+        /// [`Self::PartialWorkload::serving_floor_percent`] does for a cut, and
+        /// it earns its place for the same reason. Both halves of the key-value
+        /// layer are delayed by a scenario in this suite, and each predicts a
+        /// different split: S17 slows the Redis half, where only a lifecycle
+        /// boundary crosses synchronously, so `ephemeral` moves and the other
+        /// three do not; S15 slows the PostgreSQL half, where the running-workers
+        /// recovery index, the promise keys and the scheduler's own schema all
+        /// live, so those three move and `ephemeral` does not. Naming the far
+        /// side turns each run into a test of that routing rather than a
+        /// measurement taken on faith.
+        ///
+        /// Optional, and empty means the run asserts nothing about the streams
+        /// it did not name.
+        #[serde(default)]
+        steady: Vec<Stream>,
+        /// The most a steady stream's during-fault median may be as a multiple
+        /// of its own before-fault median.
+        ///
+        /// Not 1.0. A stream on the far side of the delay still shares
+        /// executors, connection pools and a tokio runtime with the streams on
+        /// the near side, so some spill is expected and is not itself a finding.
+        /// The number has to sit above that spill and below the multiple a real
+        /// dependency would produce, and those are far apart: S17 measured 6.59x
+        /// on the stream it delayed and no movement at all — 61ms, 100ms and
+        /// 91ms, identical across all three windows — on the three it did not.
+        #[serde(default = "default_steady_ceiling")]
+        steady_ceiling: f64,
         /// The least of its own baseline rate *every* stream must still hold,
         /// including the slowed ones.
         ///
@@ -809,6 +846,14 @@ pub enum OutageExpectation {
         /// a pool drained, a queue filled — and that is worth failing on.
         serving_floor_percent: f64,
     },
+}
+
+/// Applied when a `latency-degradation` expectation names steady streams
+/// without saying how steady. Loose enough that ordinary run-to-run spread on
+/// an undelayed stream does not trip it, which matters because the finding it
+/// raises says the routing is wrong.
+fn default_steady_ceiling() -> f64 {
+    1.5
 }
 
 impl OutageExpectation {
@@ -841,6 +886,27 @@ impl OutageExpectation {
     pub fn slowdown_floor(&self) -> Option<f64> {
         match self {
             OutageExpectation::LatencyDegradation { slowdown_floor, .. } => Some(*slowdown_floor),
+            _ => None,
+        }
+    }
+
+    /// Whether this stream is one the delay is expected not to reach.
+    pub fn expects_steady(&self, stream: Stream) -> bool {
+        match self {
+            OutageExpectation::LatencyDegradation { steady, .. } => steady.contains(&stream),
+            _ => false,
+        }
+    }
+
+    /// The multiple of its own baseline median a steady stream may not exceed,
+    /// or `None` where the expectation names no steady streams to hold to it.
+    pub fn steady_ceiling(&self) -> Option<f64> {
+        match self {
+            OutageExpectation::LatencyDegradation {
+                steady,
+                steady_ceiling,
+                ..
+            } if !steady.is_empty() => Some(*steady_ceiling),
             _ => None,
         }
     }
@@ -1242,6 +1308,8 @@ impl ScenarioConfig {
             OutageExpectation::LatencyDegradation {
                 slowed,
                 slowdown_floor,
+                steady,
+                steady_ceiling,
                 serving_floor_percent,
             } => {
                 // A floor of 1.0 or less asks a stream to be no slower than it
@@ -1257,6 +1325,41 @@ impl ScenarioConfig {
                 }
                 self.check_serving_floor(*serving_floor_percent)?;
                 self.check_evidence_streams("slowed", slowed, "slowdown")?;
+                // The steady list is optional, so it is checked only when
+                // present — but a present one carries the same two ways of
+                // being useless as the slowed list, plus one of its own.
+                for stream in steady {
+                    if !self.drives_stream(*stream) {
+                        anyhow::bail!(
+                            "chaos scenario {}: expect.steady names `{stream}`, which this \
+                             scenario's workload never drives, so its steadiness during the \
+                             fault would prove nothing",
+                            self.code
+                        );
+                    }
+                    if slowed.contains(stream) {
+                        anyhow::bail!(
+                            "chaos scenario {}: expect names `{stream}` as both slowed and \
+                             steady, so the run would demand the same stream both move and \
+                             stay put",
+                            self.code
+                        );
+                    }
+                }
+                // A ceiling at or below 1.0 asks an undelayed stream to run no
+                // slower than its own baseline median, which run-to-run spread
+                // alone breaks. The finding it would then raise says the
+                // platform routes a namespace somewhere other than where the
+                // source says, and that is far too strong a claim to make on
+                // noise.
+                if !steady.is_empty() && (!steady_ceiling.is_finite() || *steady_ceiling <= 1.0) {
+                    anyhow::bail!(
+                        "chaos scenario {}: expect.steadyCeiling is {steady_ceiling}, and a \
+                         factor at or below 1.0 is broken by ordinary run-to-run spread on a \
+                         stream the delay never reached",
+                        self.code
+                    );
+                }
             }
         }
         if config.endpoint.trim().is_empty() {
@@ -1727,6 +1830,7 @@ mod tests {
         assert_eq!(ScenarioCode::parse("s14"), Some(ScenarioCode::S14));
         assert_eq!(ScenarioCode::parse("s18"), Some(ScenarioCode::S18));
         assert_eq!(ScenarioCode::parse("s17"), Some(ScenarioCode::S17));
+        assert_eq!(ScenarioCode::parse("s15"), Some(ScenarioCode::S15));
         assert_eq!(ScenarioCode::parse("S99"), None);
     }
 
@@ -1773,6 +1877,7 @@ mod tests {
                     entry.require_rollback().unwrap();
                 }
                 ScenarioCode::S14
+                | ScenarioCode::S15
                 | ScenarioCode::S16
                 | ScenarioCode::S17
                 | ScenarioCode::S18
