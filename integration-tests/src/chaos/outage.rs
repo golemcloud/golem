@@ -279,7 +279,7 @@ pub struct FaultWindowErrors {
 /// The storage-outage account.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StorageOutageReport {
+pub struct StorageFaultReport {
     /// The endpoint the workflow was asked to cut the executors off from,
     /// recorded so an archived result says which storage the run was about
     /// rather than leaving it to the scenario name.
@@ -346,7 +346,7 @@ struct Tally {
     served_at: Vec<DateTime<Utc>>,
 }
 
-impl StorageOutageReport {
+impl StorageFaultReport {
     /// Builds the account from the operation history.
     ///
     /// `fault` is what the workflow reported. Without it every record lands in
@@ -1034,8 +1034,8 @@ mod tests {
         records
     }
 
-    fn build_partial(records: &[OperationRecord]) -> StorageOutageReport {
-        StorageOutageReport::build(
+    fn build_partial(records: &[OperationRecord]) -> StorageFaultReport {
+        StorageFaultReport::build(
             records,
             Some(fault()),
             ENDPOINT,
@@ -1048,8 +1048,8 @@ mod tests {
         )
     }
 
-    fn build(records: &[OperationRecord]) -> StorageOutageReport {
-        StorageOutageReport::build(
+    fn build(records: &[OperationRecord]) -> StorageFaultReport {
+        StorageFaultReport::build(
             records,
             Some(fault()),
             ENDPOINT,
@@ -1277,7 +1277,7 @@ mod tests {
     /// An absorbed outage: silence across the window with the serving bunched
     /// into the seconds at its two edges, which is the shape the platform
     /// produces once storage failures are retried rather than fatal.
-    fn absorbed(fault_secs: i64) -> StorageOutageReport {
+    fn absorbed(fault_secs: i64) -> StorageFaultReport {
         let mut records = Vec::new();
         for second in 1..=300 {
             for _ in 0..10 {
@@ -1295,7 +1295,7 @@ mod tests {
             records.push(op(Stream::Durable, second, Outcome::Confirmed));
             records.push(op(Stream::Scheduled, second, Outcome::Confirmed));
         }
-        StorageOutageReport::build(
+        StorageFaultReport::build(
             &records,
             Some(FaultWindow {
                 injected_at: t0(),
@@ -1417,7 +1417,7 @@ mod tests {
     /// so the report carries counts and refuses to reach a verdict.
     #[test]
     fn without_a_fault_window_there_is_no_verdict() {
-        let report = StorageOutageReport::build(
+        let report = StorageFaultReport::build(
             &history(180, true),
             None,
             ENDPOINT,

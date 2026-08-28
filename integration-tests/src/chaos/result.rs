@@ -39,7 +39,14 @@ use std::path::Path;
 
 /// Bumped when the on-disk shape changes incompatibly. Archived results outlive
 /// the tooling that reads them, so the shape has to say which shape it is.
-pub const RESULT_SCHEMA_VERSION: u32 = 2;
+///
+/// 3: the storage scenarios stopped sharing one verdict. `storage` carries an
+/// `expect` block where it used to carry `outageQuietFloorPercent`, and the
+/// storage-fault account carries the same block plus
+/// `leastServingStreamPercent`. A version 2 result does not deserialise into
+/// the version 3 types, which is what the bump is for; the report generator
+/// reads both, because the runs already in the bucket are worth rendering.
+pub const RESULT_SCHEMA_VERSION: u32 = 3;
 
 /// A phase's wall-clock extent. These are the numbers the workflow pins Grafana
 /// time ranges to, so they are recorded in UTC with no ambiguity.

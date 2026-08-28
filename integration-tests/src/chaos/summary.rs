@@ -50,7 +50,7 @@
 
 use crate::chaos::fires::ScheduleFireReport;
 use crate::chaos::history::{Outcome, Phase, Stream};
-use crate::chaos::outage::StorageOutageReport;
+use crate::chaos::outage::StorageFaultReport;
 use crate::chaos::ownership::OwnershipSample;
 use crate::chaos::probe::KeyProbe;
 use crate::chaos::reachability::ReachabilityReport;
@@ -594,11 +594,23 @@ pub struct ChaosSummary {
     /// back. Absent for scenarios that do not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollback: Option<RollbackReport>,
-    /// The storage-outage account, for scenarios that take a storage dependency
-    /// away from every executor at once. Absent for scenarios that do not, for
-    /// the same reason as `scheduleFires`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub storage_outage: Option<StorageOutageReport>,
+    /// The storage-fault account, for scenarios that break a storage
+    /// dependency underneath every executor at once — by taking it away or by
+    /// slowing it down. Absent for scenarios that do not, for the same reason
+    /// as `scheduleFires`.
+    ///
+    /// Serialised as `storageOutage` rather than under the field's own name.
+    /// The wire name predates the scenarios that degrade a store rather than
+    /// removing one, and every archived result and the report generator that
+    /// reads them use it. Renaming the field would cost a schema bump and
+    /// silently stop rendering the runs already in the bucket, which is a worse
+    /// outcome than one name that has outlived its accuracy.
+    #[serde(
+        rename = "storageOutage",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub storage_fault: Option<StorageFaultReport>,
     /// Shard-ownership samples, in the order they were taken. Empty for
     /// scenarios that do not sample executor assignments.
     ///
@@ -734,7 +746,7 @@ impl ChaosSummary {
             truncation: None,
             resurrection: None,
             rollback: None,
-            storage_outage: None,
+            storage_fault: None,
             ownership: Vec::new(),
             attention,
             notes: Vec::new(),
@@ -855,10 +867,10 @@ impl ChaosSummary {
     /// outage-not-observed one: a partition that failed to take hold leaves
     /// every cell underneath it describing an undisturbed cluster, and that has
     /// to read as "this run tested nothing" rather than as a pass.
-    pub fn with_storage_outage(mut self, report: StorageOutageReport) -> Self {
+    pub fn with_storage_fault(mut self, report: StorageFaultReport) -> Self {
         self.attention.extend(report.attention_lines());
         self.notes.extend(report.note_lines());
-        self.storage_outage = Some(report);
+        self.storage_fault = Some(report);
         self
     }
 
@@ -990,6 +1002,40 @@ mod tests {
 
     fn at(secs: i64) -> chrono::DateTime<chrono::Utc> {
         Utc.timestamp_opt(1_800_000_000 + secs, 0).unwrap()
+    }
+
+    /// The field is `storage_fault` in Rust and `storageOutage` on disk, and
+    /// that mismatch is deliberate rather than an oversight.
+    ///
+    /// The wire name predates the scenarios that slow a store down instead of
+    /// removing one. Every result already in the bucket uses it, and so does
+    /// the report generator that renders them. Renaming it would stop those
+    /// runs rendering to buy nothing, so the `#[serde(rename)]` stays and this
+    /// test is what stops a later tidy-up from quietly dropping it.
+    #[test]
+    fn the_storage_fault_account_still_serialises_under_its_original_name() {
+        let summary = ChaosSummary::build(&[], Vec::new(), Vec::new(), None).with_storage_fault(
+            StorageFaultReport::build(
+                &[],
+                None,
+                "db.example",
+                crate::chaos::OutageExpectation::WholeWorkload {
+                    quiet_floor_percent: 50.0,
+                },
+                std::time::Duration::from_secs(120),
+            ),
+        );
+
+        let json = serde_json::to_value(&summary).unwrap();
+        assert!(
+            json.get("storageOutage").is_some(),
+            "the on-disk name must not drift, got keys: {:?}",
+            json.as_object().map(|o| o.keys().collect::<Vec<_>>())
+        );
+        assert!(
+            json.get("storageFault").is_none(),
+            "renaming this field silently orphans every archived result"
+        );
     }
 
     fn op(op_id: u64, stream: Stream, phase: Phase, outcome: Outcome) -> OperationRecord {

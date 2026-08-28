@@ -1475,7 +1475,7 @@ mod tests {
     /// off, so the verdict that exists to catch a fault which never landed
     /// would never fire.
     #[test]
-    fn a_storage_outage_quiet_floor_of_zero_is_refused() {
+    fn a_storage_fault_quiet_floor_of_zero_is_refused() {
         let error = storage_config("db.example", 0.0, 0, true)
             .require_storage()
             .unwrap_err()
@@ -1490,7 +1490,7 @@ mod tests {
     /// outage can be quiet for the whole window and the verdict would be stuck
     /// on for every run.
     #[test]
-    fn a_storage_outage_quiet_floor_of_a_whole_window_is_refused() {
+    fn a_storage_fault_quiet_floor_of_a_whole_window_is_refused() {
         assert!(
             storage_config("db.example", 100.0, 0, true)
                 .require_storage()

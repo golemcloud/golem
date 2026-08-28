@@ -655,7 +655,7 @@ async fn run_chaos(
                 | chaos::ScenarioCode::S16
                 | chaos::ScenarioCode::S18
                 | chaos::ScenarioCode::S22) => {
-                    chaos::scenarios::storage_outage::run(
+                    chaos::scenarios::storage_fault::run(
                         code, &config, &manifest, &deps, &signals, &outputs,
                     )
                     .await

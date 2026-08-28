@@ -198,7 +198,7 @@
 
 use crate::chaos::fires::{FaultWindow, ScheduleFireReport};
 use crate::chaos::history::{OperationHistory, OperationRecord, Outcome, Phase, Stream};
-use crate::chaos::outage::StorageOutageReport;
+use crate::chaos::outage::StorageFaultReport;
 use crate::chaos::prep::ChaosPrepManifest;
 use crate::chaos::probe;
 use crate::chaos::result::{ChaosResult, PhaseWindow, Phases, RunScope};
@@ -310,7 +310,7 @@ pub async fn run(
                 summary = summary.with_schedule_fires(report);
             }
             if let Some(report) = $outage {
-                summary = summary.with_storage_outage(report);
+                summary = summary.with_storage_fault(report);
             }
             if let Some(report) = $exactly {
                 summary = summary.with_exactly_once(report);
@@ -556,7 +556,7 @@ pub async fn run(
         fires.findings.len()
     );
 
-    let outage = StorageOutageReport::build(
+    let outage = StorageFaultReport::build(
         &records,
         fault_window,
         &storage_config.endpoint,
@@ -869,7 +869,7 @@ mod tests {
     /// experiment.
     #[test]
     fn a_storage_finding_does_not_change_the_termination_reason() {
-        let mut outage = StorageOutageReport::build(
+        let mut outage = StorageFaultReport::build(
             &[],
             None,
             "db.example",
