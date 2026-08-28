@@ -1390,7 +1390,7 @@ impl DurableStreamProducer {
         let current_index = oplog.current_oplog_index().await;
         if current_index.is_defined() {
             let entries = oplog
-                .read_many(OplogIndex::INITIAL, current_index.as_u64())
+                .read_exact(OplogIndex::INITIAL, current_index.as_u64())
                 .await;
             for (oplog_index, entry) in entries {
                 match entry {
@@ -1640,7 +1640,7 @@ impl DurableStreamProducer {
         if current.is_defined() {
             for (_, entry) in self
                 .oplog
-                .read_many(OplogIndex::INITIAL, current.as_u64())
+                .read_exact(OplogIndex::INITIAL, current.as_u64())
                 .await
             {
                 let OplogEntry::StreamSession { record, .. } = entry else {
@@ -2140,7 +2140,7 @@ impl DurableStreamProducer {
             if current.is_defined() {
                 for (_, entry) in self
                     .oplog
-                    .read_many(OplogIndex::INITIAL, current.as_u64())
+                    .read_exact(OplogIndex::INITIAL, current.as_u64())
                     .await
                 {
                     let OplogEntry::StreamSession { record, .. } = entry else {
@@ -2219,7 +2219,7 @@ impl DurableStreamProducer {
             if current.is_defined() {
                 for (_, entry) in self
                     .oplog
-                    .read_many(OplogIndex::INITIAL, current.as_u64())
+                    .read_exact(OplogIndex::INITIAL, current.as_u64())
                     .await
                 {
                     let OplogEntry::StreamSession { record, .. } = entry else {
@@ -4118,7 +4118,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         let mut pending_invocations = HashMap::new();
         for (oplog_index, entry) in self
             .oplog_service
-            .read(
+            .read_exact(
                 &session_owner,
                 session_mode,
                 OplogIndex::INITIAL,
@@ -4267,7 +4267,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         let mut deleting = false;
         for (_, entry) in self
             .oplog_service
-            .read(&consumer, agent_mode, OplogIndex::INITIAL, current.as_u64())
+            .read_exact(&consumer, agent_mode, OplogIndex::INITIAL, current.as_u64())
             .await
         {
             let OplogEntry::StreamSession { record, .. } = entry else {
@@ -4381,7 +4381,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         let mut overlay = None;
         for (_, entry) in self
             .oplog_service
-            .read(
+            .read_exact(
                 &consumer,
                 AgentMode::Durable,
                 OplogIndex::INITIAL,
@@ -5351,10 +5351,11 @@ pub(crate) mod tests {
         StreamAttachmentControl, StreamAttachmentStateV1, StreamSegmentSource, registration_record,
     };
     use crate::services::oplog::{
-        CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OrderedOplogStart,
-        PendingUpload,
+        CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogReadSource,
+        OrderedOplogStart, PendingUpload, checked_range_end, exact_from_source, fail_stop,
     };
     use async_trait::async_trait;
+    use futures::FutureExt;
     use golem_common::base_model::component::{ComponentId, ComponentRevision};
     use golem_common::base_model::durable_stream::{
         AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, InputStreamHighWaterV1,
@@ -5505,19 +5506,26 @@ pub(crate) mod tests {
                 .expect("missing test oplog entry")
         }
 
-        async fn read_many(
+        async fn read_exact(
             &self,
             oplog_index: OplogIndex,
             n: u64,
         ) -> BTreeMap<OplogIndex, OplogEntry> {
             let state = self.state.lock().unwrap();
-            state
-                .entries
-                .range(oplog_index..)
-                .take(n as usize)
-                .filter(|(index, _)| **index <= state.committed)
-                .map(|(index, entry)| (*index, entry.clone()))
-                .collect()
+            let end = fail_stop(checked_range_end(oplog_index, n));
+            let entries = end.map_or_else(BTreeMap::new, |end| {
+                state
+                    .entries
+                    .range(oplog_index..=end)
+                    .map(|(index, entry)| (*index, entry.clone()))
+                    .collect()
+            });
+            fail_stop(exact_from_source(
+                OplogReadSource::Other("durable stream test oplog"),
+                oplog_index,
+                n,
+                entries,
+            ))
         }
 
         async fn length(&self) -> u64 {
@@ -5578,6 +5586,49 @@ pub(crate) mod tests {
             let second = self.add(make_second(first)).await;
             (first, second)
         }
+    }
+
+    #[test]
+    async fn test_oplog_read_exact_includes_uncommitted_entries() {
+        let oplog = TestOplog::default();
+        let entry = OplogEntry::interrupted();
+        let index = oplog.add(entry.clone()).await;
+
+        let entries = oplog.read_exact(index, 1).await;
+
+        assert_eq!(entries.get(&index), Some(&entry));
+    }
+
+    #[test]
+    async fn test_oplog_read_exact_rejects_incomplete_range() {
+        let oplog = TestOplog::default();
+        let index = oplog.add(OplogEntry::interrupted()).await;
+
+        let result = std::panic::AssertUnwindSafe(oplog.read_exact(index, 2))
+            .catch_unwind()
+            .await;
+
+        assert!(
+            result.is_err(),
+            "read_exact accepted a range whose second entry is missing"
+        );
+    }
+
+    #[test]
+    async fn test_oplog_read_exact_accepts_single_entry_at_max_index() {
+        let oplog = TestOplog::default();
+        let index = OplogIndex::from_u64(u64::MAX);
+        let entry = OplogEntry::interrupted();
+        oplog
+            .state
+            .lock()
+            .unwrap()
+            .entries
+            .insert(index, entry.clone());
+
+        let entries = oplog.read_exact(index, 1).await;
+
+        assert_eq!(entries.get(&index), Some(&entry));
     }
 
     pub(crate) struct TestIdentity {
@@ -7269,7 +7320,7 @@ pub(crate) mod tests {
                 .replayed
         );
         assert_eq!(oplog.committed_length(), 3);
-        let entries = oplog.read_many(OplogIndex::INITIAL, 3).await;
+        let entries = oplog.read_exact(OplogIndex::INITIAL, 3).await;
         assert!(matches!(
             entries.get(&OplogIndex::from_u64(2)),
             Some(OplogEntry::StreamRegistered { .. })
