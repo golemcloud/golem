@@ -15,7 +15,8 @@
 // Type-only coverage for values crossing the package's public entrypoints.
 // Checked by the package typecheck script; NOT executed by vitest.
 
-import { AgentId, ComponentId, Uuid } from '../dist/index.mjs';
+import { AgentId, ComponentId, Uuid, defineAgentClient, method } from '../dist/index.mjs';
+import { z } from 'zod';
 import { v } from '../dist/schema.mjs';
 
 const componentId = new ComponentId(new Uuid(1n, 2n));
@@ -25,3 +26,8 @@ const id = AgentId.create({
   constructorValue: v.record([v.string('example')]),
 });
 AgentId.parse(id);
+const contract = defineAgentClient({
+  methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
+});
+id.client(contract).ping({ message: 'hello' });
+id.dynamicClient().method('ping').invokeValue(v.record([]));

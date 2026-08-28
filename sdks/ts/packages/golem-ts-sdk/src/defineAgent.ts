@@ -22,7 +22,7 @@ import { StandardSchemaV1 } from './schema/standardSchema';
 import { MethodSpec } from './method';
 import type { InputRecord, MethodHasHttpOf } from './method';
 import { ParsedAgentId } from './agentId';
-import type { AgentId } from './agentId';
+import { bindAgentClient, type AgentClientBinding, type AgentId } from './agentId';
 import { Principal } from './principal';
 import { Uuid } from './uuid';
 import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './runtime';
@@ -191,6 +191,12 @@ export interface AgentClientContract<
   readonly config?: Config;
 }
 
+export interface AgentClientBindingDefinition<Methods extends MethodsRecord>
+  extends AgentClientBinding<import('./client').RemoteClient<Methods>> {
+  readonly name?: string;
+  readonly methods: Methods;
+}
+
 export interface AgentClientDefinition<
   Id extends IdRecord,
   Methods extends MethodsRecord,
@@ -203,6 +209,7 @@ export interface AgentClientDefinition<
     : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => AgentId;
   /** A client factory compiled from this definition's local schemas. */
   readonly client: AgentClientFactory<Id, Methods, Mode>;
+  [bindAgentClient](agentId: AgentId): import('./client').RemoteClient<Methods, Mode>;
 }
 
 export interface AgentDefinition<
@@ -361,7 +368,10 @@ export function defineAgent<
       `Definition failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const clientContract: AgentClientContract<Id, Methods, Config, Mode> = {
+  const clientContract: AgentClientContract<Id, Methods, Config, Mode> & {
+    readonly name: string;
+    readonly id: Id;
+  } = {
     name,
     id: spec.id,
     methods: spec.methods,
@@ -375,6 +385,7 @@ export function defineAgent<
     | {
         client: AgentClientFactory<Id, Methods, Mode>;
         agentId: AgentClientDefinition<Id, Methods, Config, Mode>['agentId'];
+        [bindAgentClient]: AgentClientDefinition<Id, Methods, Config, Mode>[typeof bindAgentClient];
       }
     | undefined;
   const getSurface = () => (surface ??= buildAgentClientSurface(clientContract, false));
@@ -385,6 +396,9 @@ export function defineAgent<
     },
     get client() {
       return getSurface().client;
+    },
+    [bindAgentClient](agentId) {
+      return getSurface()[bindAgentClient](agentId);
     },
     implement(impl) {
       if (implemented) {

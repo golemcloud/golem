@@ -17,11 +17,24 @@ import { Uuid } from './uuid';
 import { Uuid as RawUuid } from 'golem:core/types@2.0.0';
 import { SchemaValue, schemaValueFromWit, schemaValueToWit } from './internal/schema-model';
 import { ComponentId } from './ids';
+import { DynamicAgentClient, type DynamicAgentClientSurface } from './dynamicClient';
+
+/** @internal Protocol implemented by typed contracts and reflected agent types. */
+export const bindAgentClient = '__golemBindAgentClient' as const;
+
+/** @internal A value that can bind itself to an existing agent identity. */
+export interface AgentClientBinding<Client> {
+  [bindAgentClient](agentId: AgentId): Client;
+}
 
 /** Globally unique identity of a Golem agent. */
 export interface AgentId {
   readonly componentId: ComponentId;
   readonly agentId: string;
+  /** Bind caller-supplied codecs or a reflected agent type to this identity. */
+  client<Client>(binding: AgentClientBinding<Client>): Client;
+  /** Invoke this identity with schema values and no discovery or typed contract. */
+  dynamicClient(): DynamicAgentClientSurface;
 }
 
 /** Explicit parts used to construct an {@link AgentId}. */
@@ -42,11 +55,18 @@ export interface AgentIdParts {
 
 /** Construct and inspect full agent identities. */
 export const AgentId = Object.freeze({
+  from(value: {
+    readonly componentId: { readonly uuid: RawUuid };
+    readonly agentId: string;
+  }): AgentId {
+    return new AgentIdValue(ComponentId.from(value.componentId), value.agentId);
+  },
+
   create(options: AgentIdCreateOptions): AgentId {
-    return {
-      componentId: options.componentId,
-      agentId: createAgentIdString(options.typeName, options.constructorValue, options.phantomId),
-    };
+    return new AgentIdValue(
+      options.componentId,
+      createAgentIdString(options.typeName, options.constructorValue, options.phantomId),
+    );
   },
 
   parse(value: AgentId): AgentIdParts {
@@ -59,6 +79,25 @@ export const AgentId = Object.freeze({
     };
   },
 });
+
+class AgentIdValue implements AgentId {
+  constructor(
+    readonly componentId: ComponentId,
+    readonly agentId: string,
+  ) {}
+
+  client<Client>(binding: AgentClientBinding<Client>): Client {
+    const bind = binding[bindAgentClient];
+    if (typeof bind !== 'function') {
+      throw new TypeError('Expected an agent client contract or reflected agent type');
+    }
+    return bind.call(binding, this);
+  }
+
+  dynamicClient(): DynamicAgentClientSurface {
+    return new DynamicAgentClient(this);
+  }
+}
 
 function createAgentIdString(
   agentTypeName: string,
