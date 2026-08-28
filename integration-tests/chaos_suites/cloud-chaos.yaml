@@ -1195,3 +1195,107 @@ scenarios:
       delaySecs: 5
 
     signalTimeoutSecs: 1800
+
+  # ---------------------------------------------------------------------------
+  # S18 — Redis outage (GOL-384)
+  #
+  # The fourth scenario on the storage driver and the first that does not cut a
+  # database. golem-dev runs the key-value layer as `NamespaceRouted`: the
+  # `Worker`, `AgentStatus` and `AgentStatusCheckpoint` namespaces go to a Redis
+  # cache and everything else goes to Postgres. S16 cut the Postgres half and
+  # left this one standing; S18 cuts exactly what S16 left.
+  #
+  # It is sized differently from the other three, and the reason is in the
+  # config rather than in the ambition. Those three are measured against a
+  # platform retry budget — S16 and S14 stay inside one, S22 runs past one. This
+  # client has no budget to run past: golem-dev sets the cache's
+  # RETRIES__MAX_ATTEMPTS to 0, which the code turns into a fred reconnect
+  # policy with unlimited attempts, and fred's defaults then give the client no
+  # command timeout and an unbounded command buffer. A cache write during the
+  # cut does not fail. It waits.
+  #
+  # So the only clock that can run out is the caller's, and the window is set
+  # against that instead: past the 120s attempt timeout, so operations time out
+  # and retry under the same idempotency key while the original write is still
+  # queued inside fred. Two landings of one operation is what this run is for.
+  # ---------------------------------------------------------------------------
+  - code: S18
+    name: redis-cache-outage
+    enabled: true
+
+    fault:
+      kind: network-partition
+      target: worker-executor
+      # Every executor, as in the other three: a cache outage only some
+      # executors could see would be a routing fault wearing a cache's clothes.
+      mode: all
+      # Must equal phases.faultSecs; see the note on S16.
+      durationSecs: 180
+
+    phases:
+      # Same as the other three, so all four are comparable.
+      baselineSecs: 300
+      # Past the workload's 120s ATTEMPT_TIMEOUT plus its 5s retry delay, so an
+      # operation that starts early in the window times out, retries, and has
+      # that retry still in flight when the heal arrives. At 60s nothing would
+      # time out and the run would only show slower operations completing, which
+      # the config already tells us without spending a run.
+      faultSecs: 180
+      # As the others. The drain here is larger than S14's — three minutes of
+      # coalesced status writes and queued commands come back at once — so this
+      # needs to cover a burst rather than a trickle.
+      recoverySecs: 420
+
+    workload:
+      # Identical to S16 and S14, deliberately, so the difference between the
+      # four results is the fault and not the population.
+      durableAgents: 200
+      ephemeralAgents: 50
+      # Zero for the same reason as the others: the scheduled stream comes from
+      # the block below. Setting both is refused at load time.
+      scheduledAgents: 0
+      # Expected to be one of the two streams that actually stops. Completing a
+      # promise suspends and wakes an agent, and a suspend is a lifecycle
+      # boundary, which is one of the few things that still crosses this cache
+      # synchronously.
+      promiseAgents: 50
+      quotaAgents: 0
+      ratePerSec: 100
+
+    scheduled:
+      targets: 100
+      intervalMillis: 2000
+      leadSecs: 10
+      # Raised from the 240 the other three use, because the window itself is
+      # 180s. A fire at the start of the outage is delayed by roughly the whole
+      # window before it can make progress, and then joins a drain queue behind
+      # three minutes of backlog. 300 leaves headroom for that tail without
+      # making a delay the platform should be ashamed of look acceptable.
+      leaseBudgetSecs: 300
+
+    storage:
+      # The Redis primary endpoint, not either Aurora writer. Both Postgres
+      # clusters stay reachable for the whole run.
+      endpoint: master.golem-redis-dev.intsie.use1.cache.amazonaws.com
+      # Same floor as the other three, and it means something slightly
+      # different here. The degradation is expected to be partial: `ephemeral`
+      # and `promise` should stop, `durable` may keep serving from memory
+      # because the status blob was taken off the commit path on purpose. The
+      # floor is checked against the quietest stream, so it still reports
+      # whether the cut landed even when the run-wide share stays high.
+      outageQuietFloorPercent: 50
+      # Recorded, not asserted. Expected to be larger than S14's: nothing is
+      # replaced, but three minutes of coalesced status writes and buffered
+      # commands all arrive at once when the connection returns.
+      recoveryBudgetSecs: 180
+
+    retryPolicy:
+      # Identical to the other three, and load-bearing here rather than
+      # incidental. Retrying transport errors once under the same idempotency
+      # key is the whole mechanism by which a stalled operation and its retry
+      # can both land, which is the question the run exists to answer.
+      transportOnly: true
+      maxRetries: 1
+      delaySecs: 5
+
+    signalTimeoutSecs: 1800

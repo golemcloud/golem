@@ -262,6 +262,9 @@ pub enum ChaosScenarioArg {
     /// Executors cut off from the indexed-oplog PostgreSQL cluster for the
     /// length of a writer failover.
     S14,
+    /// Executors cut off from the Redis cache in front of the key-value layer,
+    /// for longer than a caller is willing to wait.
+    S18,
 }
 
 /// Density subcommand action.

@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Storage outage: the shared choreography behind S14, S16 and S22.
+//! Storage outage: the shared choreography behind S14, S16, S18 and S22.
 //!
-//! All three codes run this module. They differ in which cluster is taken away
-//! and for how long, both of which are suite settings, and in what a reader
-//! should expect of the result:
+//! All four codes run this module. They differ in which store is taken away and
+//! for how long, both of which are suite settings, and in what a reader should
+//! expect of the result:
 //!
 //! * **S16** (GOL-379) cuts the key-value cluster for the length of an AWS
 //!   storage failover, about a minute. The key-value retry budget covers that,
@@ -30,10 +30,15 @@
 //!   oplog, again for the length of a failover. golem-dev gives the indexed
 //!   retry 200 attempts with a 10s cap, so the budget is not the question here
 //!   the way it is in the other two, and the claim is again absorption.
+//! * **S18** (GOL-384) cuts neither Aurora cluster but the Redis cache in front
+//!   of the key-value layer, and holds it past the caller's patience rather
+//!   than past any platform budget. There is no budget to exhaust: golem-dev
+//!   configures that client to retry forever. The claim is that a stall which
+//!   outlasts the caller does not turn one operation into two.
 //!
-//! The driver is the same in all three because the difference is one of
+//! The driver is the same in all four because the difference is one of
 //! expectation, not of choreography. Nothing below asserts on which outcome
-//! happened: the account it produces answers all three questions, and the
+//! happened: the account it produces answers all four questions, and the
 //! oracles that fail the build — the scheduled-fire account and the
 //! exactly-once account — are the ones every one of them shares.
 //!
@@ -46,8 +51,9 @@
 //!
 //! ## What the fault takes away
 //!
-//! Two different halves of the platform, depending on the code, and they are
-//! close to mirror images of each other.
+//! Three different pieces of the platform, depending on the code. The two
+//! Aurora cuts are close to mirror images of each other; the Redis cut is a
+//! third thing again.
 //!
 //! Reading the golem-dev executor deployment, the **key-value** cluster that
 //! S16 and S22 cut carries four things:
@@ -68,15 +74,22 @@
 //! commit anything durable at all, which is the opposite arrangement: the
 //! platform knows exactly what it is doing and cannot record any of it.
 //!
-//! Either way no stream is a control group. A durable increment needs the
-//! running-workers set before it can start and the oplog before it can finish,
-//! so `durable` degrades under both cuts and must not be read as untouched.
+//! The **Redis cache** that S18 cuts is not a cluster at all but the front half
+//! of the key-value layer. `NamespaceRoutedKeyValueStorage` sends the `Worker`,
+//! `AgentStatus` and `AgentStatusCheckpoint` namespaces to it and everything
+//! else to Postgres, so S18 removes exactly the part S16 leaves standing. Both
+//! Aurora clusters stay reachable throughout.
+//!
+//! No stream is a control group under any of them. A durable increment needs
+//! the running-workers set before it can start, the worker-status cache to
+//! resolve its mode, and the oplog before it can finish, so `durable` degrades
+//! under all three cuts and must not be read as untouched.
 //!
 //! ## The control is the baseline, not another pod
 //!
 //! S1 and S3 keep executors on the healthy side of the cut and read the verdict
 //! off the disagreement between the two groups. There is no healthy side here:
-//! all three executors share one cluster. So the comparison runs along time
+//! all three executors share one store. So the comparison runs along time
 //! instead, and every stream is measured against its own before-fault rate. See
 //! [`crate::chaos::outage`] for what that costs and what it still answers.
 //!
@@ -85,6 +98,52 @@
 //! and no error anywhere, which is the worst artifact this suite can produce,
 //! so [`OutageViolation::OutageNotObserved`] is a named finding rather than
 //! something a reader is left to infer from the cells.
+//!
+//! ## Why S18 is held longer than the others
+//!
+//! The first three scenarios are sized against a platform budget: S16 and S14
+//! stay inside one, S22 deliberately runs past it. S18 has no budget to run
+//! past. golem-dev sets
+//! `GOLEM__KEY_VALUE_STORAGE__CONFIG__CACHE__CONFIG__RETRIES__MAX_ATTEMPTS` to
+//! `0`, which `RedisPool::configured` hands to fred as a `ReconnectPolicy` with
+//! unlimited attempts, and it passes no performance or connection config, so
+//! fred's defaults apply: no command timeout and an unbounded command buffer.
+//! A cache write during the cut therefore never fails. It waits, for as long as
+//! the cut lasts.
+//!
+//! That makes the `unwrap_or_else(|err| panic!(...))` on the cache path in
+//! `WorkerService` unreachable through this fault, and it makes a short cut
+//! uninformative: at 60s every caller is still inside its 120s attempt timeout,
+//! so the run would only show operations taking a minute longer and completing.
+//! The window is set past that timeout instead, so callers give up and retry
+//! under the same idempotency key while the original write is still sitting in
+//! fred's buffer. Whether those two land as one operation or two is the
+//! question the scenario exists to answer, and the exactly-once account is
+//! where it shows.
+//!
+//! ## What is expected to stall, and what is not
+//!
+//! Less than the whole platform, and this is the part worth reading the result
+//! carefully for. `AgentStatusFlusher` took the status blob off the commit path
+//! deliberately: a status change only marks the agent dirty, and a background
+//! sweeper coalesces the writes. So a durable agent that is already resident
+//! commits to the oplog without touching Redis synchronously, and the blob it
+//! cannot flush is derivable from the oplog anyway, which is what makes the
+//! staleness safe rather than merely tolerated.
+//!
+//! What does cross Redis synchronously is a lifecycle boundary — suspend, evict,
+//! reattach — and a `get_agent_mode` miss. So the prediction is a *partial*
+//! degradation: `ephemeral`, whose agents are created and torn down per
+//! operation, and `promise`, whose agents suspend, should go quiet; `durable`
+//! may keep serving from memory throughout.
+//!
+//! Two consequences for reading the report. `shareOfBaselinePercent` should sit
+//! higher here than in S16 or S14 without that meaning the fault was weaker,
+//! and `quietestStreamPercent` is the number that shows the cut landed, because
+//! it reports the stream that stopped rather than the average of one that did
+//! and one that did not. Whether a durable agent that kept committing against a
+//! frozen status cache still recovers correctly is the second open question of
+//! the run, after the exactly-once one.
 //!
 //! ## Why the scheduled stream is driven separately
 //!
